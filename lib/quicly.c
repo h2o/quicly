@@ -1311,6 +1311,9 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     ptls_aead_context_t *aead = NULL;
     int ret;
 
+    /* FIXME check peer address */
+    conn->super.connection_id = packet->connection_id;
+
     /* ignore packets having wrong connection id */
     if (packet->connection_id != conn->super.connection_id) {
         ret = QUICLY_ERROR_PACKET_IGNORED;
