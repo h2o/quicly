@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -1138,7 +1139,8 @@ static int send_core(quicly_conn_t *conn, quicly_stream_t *stream, struct st_qui
     while (stream->sendbuf.unacked != stream->sendbuf.buf.off) {
         uint8_t type;
         uint8_t encoded_id_offset[QUICLY_STREAM_HEADER_SIZE_MAX];
-        size_t encoded_id_offset_size = encode_stream_frame_id_offset(&type, encoded_id_offset, stream->stream_id, stream->sendbuf.unacked);
+        size_t encoded_id_offset_size =
+            encode_stream_frame_id_offset(&type, encoded_id_offset, stream->stream_id, stream->sendbuf.unacked);
         size_t min_required_space = encoded_id_offset_size + (stream->sendbuf.buf.off != 0) - stream->send_fin;
 
         if ((ret = prepare_packet(conn, s, min_required_space)) != 0)
@@ -1283,8 +1285,14 @@ static int handle_stream_frame(quicly_conn_t *conn, struct st_quicly_decoded_fra
 
     if (stream != NULL) {
         ptls_iovec_t v = ptls_iovec_init(frame->data.stream.data.base, frame->data.stream.data.len);
-        if ((ret = stream->on_receive(conn, stream, &v, v.len != 0, frame->data.stream.fin)) != 0)
-            goto Exit;
+        /* FIXME ignore duplicates accurately */
+        if (stream->max_received_offset < frame->data.stream.offset + frame->data.stream.data.len) {
+            fprintf(stderr, "receiving stream_id: %" PRIu32 ", offset: %" PRIu64 ", len: %zu\n", stream->stream_id,
+                    frame->data.stream.offset, frame->data.stream.data.len);
+            stream->max_received_offset += frame->data.stream.offset + frame->data.stream.data.len;
+            if ((ret = stream->on_receive(conn, stream, &v, v.len != 0, frame->data.stream.fin)) != 0)
+                goto Exit;
+        }
     }
 
 Exit:

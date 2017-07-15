@@ -32,13 +32,15 @@ static quicly_context_t ctx = {&tlsctx, 1280, {}, quicly_default_alloc_packet, q
 
 static int send_data(quicly_stream_t *stream, const char *s)
 {
-    return quicly_write_stream(stream, s, strlen(s), 1);
+    return quicly_write_stream(stream, s, strlen(s), 0);
 }
 
 static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t count, int is_fin)
 {
     if (is_fin)
         return send_data(stream, "HTTP/1.0 200 OK\r\n\r\nhello world\n");
+    else
+        return send_data(stream, ".");
     return 0;
 }
 
@@ -79,7 +81,7 @@ static int send_pending(int fd, quicly_conn_t *conn)
             struct iovec vec;
             memset(&mess, 0, sizeof(mess));
             mess.msg_name = &packets[i]->sa;
-            mess.msg_namelen =  packets[i]->salen;
+            mess.msg_namelen = packets[i]->salen;
             vec.iov_base = packets[i]->data.base;
             vec.iov_len = packets[i]->data.len;
             mess.msg_iov = &vec;

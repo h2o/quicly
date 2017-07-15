@@ -152,6 +152,7 @@ struct st_quicly_stream_t {
          */
         ptls_buffer_t buf;
     } sendbuf;
+    uint64_t max_received_offset;
     void *data;
     int (*on_receive)(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t nvec, int fin);
 };
