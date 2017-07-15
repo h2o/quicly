@@ -803,7 +803,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     int ret;
 
     if (slots[0].type == UINT16_MAX) {
-        ret = PTLS_ALERT_MISSING_EXTENSION;
+        ret = 0; // allow abcense of the extension for the time being PTLS_ALERT_MISSING_EXTENSION;
         goto Exit;
     }
     assert(slots[0].type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS);
@@ -879,7 +879,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     int ret;
 
     if (slots[0].type == UINT16_MAX) {
-        ret = PTLS_ALERT_MISSING_EXTENSION;
+        ret = 0; // allow abcense of the extension for the time being PTLS_ALERT_MISSING_EXTENSION;
         goto Exit;
     }
     assert(slots[0].type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS);
