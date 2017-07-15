@@ -37,11 +37,14 @@ static int send_data(quicly_stream_t *stream, const char *s)
 
 static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t count, int is_fin)
 {
-    if (is_fin)
+    if (is_fin) {
         return send_data(stream, "HTTP/1.0 200 OK\r\n\r\nhello world\n");
-    else
-        return send_data(stream, ".");
-    return 0;
+    } else {
+        int ret;
+        if ((ret = send_data(stream, "you said:")) != 0)
+            return ret;
+        return quicly_write_stream(stream, vec[0].base, vec[0].len, 0);
+    }
 }
 
 static int on_resp_receive(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t count, int is_fin)
