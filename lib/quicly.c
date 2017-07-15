@@ -369,7 +369,7 @@ static int decode_frame(struct st_quicly_decoded_frame_t *frame, const uint8_t *
         }
 
         { /* obtain offset */
-            unsigned offset_length = (type_flags & 3) != 0 ? 1 << (type_flags & 3) : 0;
+            unsigned offset_length = (type_flags & 6) != 0 ? 1 << (type_flags >> 1 & 3) : 0;
             if (end - *src < offset_length)
                 goto CorruptFrame;
             frame->data.stream.offset = 0;
@@ -471,7 +471,7 @@ static size_t encode_stream_frame_id_offset(uint8_t *type, uint8_t *dst, uint32_
     {
         static const unsigned bits_table[] = {32, 24, 16, 8, 8};
         unsigned bits = bits_table[clz32(stream_id) / 8];
-        *type |= (bits - 1) / 8;
+        *type |= bits - 8;
         do {
             *p++ = (uint8_t)(stream_id >> (bits -= 8));
         } while (bits != 0);
@@ -480,7 +480,7 @@ static size_t encode_stream_frame_id_offset(uint8_t *type, uint8_t *dst, uint32_
     if (offset != 0) {
         static const uint8_t flag_table[] = {3, 3, 2, 1};
         uint8_t flag = flag_table[clz64(offset) / 16];
-        *type |= flag << 2;
+        *type |= flag << 1;
         unsigned bits = 8 << flag;
         do {
             *p++ = (uint8_t)(offset >> (bits -= 8));
