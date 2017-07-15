@@ -962,6 +962,8 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
 
     if ((conn = create_connection(ctx, NULL, sa, salen, handshake_properties, &crypto_stream)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
+    if ((ret = acker_record(&conn->ingress.acker, packet->packet_number)) != 0)
+        goto Exit;
     crypto_data = crypto_stream->data;
 
     { /* handshake */
