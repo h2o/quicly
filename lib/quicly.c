@@ -1136,7 +1136,7 @@ static int send_core(quicly_conn_t *conn, quicly_stream_t *stream, struct st_qui
     while (stream->sendbuf.unacked != stream->sendbuf.buf.off) {
         uint8_t type;
         uint8_t encoded_id_offset[QUICLY_STREAM_HEADER_SIZE_MAX];
-        size_t encoded_id_offset_size = encode_stream_frame_id_offset(&type, encoded_id_offset, stream->stream_id, stream->offset);
+        size_t encoded_id_offset_size = encode_stream_frame_id_offset(&type, encoded_id_offset, stream->stream_id, stream->sendbuf.unacked);
         size_t min_required_space = encoded_id_offset_size + (stream->sendbuf.buf.off != 0) - stream->send_fin;
 
         if ((ret = prepare_packet(conn, s, min_required_space)) != 0)
