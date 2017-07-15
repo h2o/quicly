@@ -148,7 +148,7 @@ struct st_quicly_stream_t {
          */
         size_t unacked;
         /**
-         * unacked and unsent data
+         * unacked and unsent data (note: FIN is pushed as a byte)
          */
         ptls_buffer_t buf;
     } sendbuf;
@@ -181,6 +181,10 @@ static quicly_state_t quicly_get_state(quicly_conn_t *conn);
  *
  */
 static int quicly_is_client(quicly_conn_t *conn);
+/**
+ *
+ */
+static uint32_t quicly_get_next_stream_id(quicly_conn_t *conn);
 /**
  *
  */
@@ -218,6 +222,10 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream);
 /**
  *
  */
+int quicly_write_stream(quicly_stream_t *stream, const void *data, size_t len, int is_fin);
+/**
+ *
+ */
 quicly_raw_packet_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
 /**
  *
@@ -242,6 +250,12 @@ inline int quicly_is_client(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (void *)conn;
     return c->host.next_stream_id % 2 != 0;
+}
+
+inline uint32_t quicly_get_next_stream_id(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (void *)conn;
+    return c->host.next_stream_id;
 }
 
 inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen)

@@ -30,6 +30,7 @@
 #include "picotls.h"
 #include "picotls/openssl.h"
 #include "quicly.h"
+#include "../lib/quicly.c"
 #include "picotest.h"
 
 #define RSA_PRIVATE_KEY                                                                                                            \
@@ -89,6 +90,48 @@ static ptls_context_t tls_ctx = {
 static quicly_context_t quic_ctx = {
     &tls_ctx, 1280, {8192, 64, 100, 60, 0}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open};
 
+static void test_acker(void)
+{
+    struct st_quicly_acker_t acker;
+    int ret;
+
+    memset(&acker, 0, sizeof(acker));
+
+    ret = acker_record(&acker, 333);
+    ok(ret == 0);
+    ok(acker.num_blocks == 1);
+    ok(acker.blocks[0].start == 333);
+    ok(acker.blocks[0].end == 334);
+
+    ret = acker_record(&acker, 334);
+    ok(ret == 0);
+    ok(acker.num_blocks == 1);
+    ok(acker.blocks[0].start == 333);
+    ok(acker.blocks[0].end == 335);
+
+    ret = acker_record(&acker, 337);
+    ok(ret == 0);
+    ok(acker.num_blocks == 2);
+    ok(acker.blocks[0].start == 333);
+    ok(acker.blocks[0].end == 335);
+    ok(acker.blocks[1].start == 337);
+    ok(acker.blocks[1].end == 338);
+
+    ret = acker_record(&acker, 336);
+    ok(ret == 0);
+    ok(acker.num_blocks == 2);
+    ok(acker.blocks[0].start == 333);
+    ok(acker.blocks[0].end == 335);
+    ok(acker.blocks[1].start == 336);
+    ok(acker.blocks[1].end == 338);
+
+    ret = acker_record(&acker, 335);
+    ok(ret == 0);
+    ok(acker.num_blocks == 1);
+    ok(acker.blocks[0].start == 333);
+    ok(acker.blocks[0].end == 338);
+}
+
 static void free_packets(quicly_raw_packet_t **packets, size_t cnt)
 {
     size_t i;
@@ -107,18 +150,13 @@ static void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t
 
 static int send_data(quicly_stream_t *stream, const char *s)
 {
-    return ptls_buffer__do_pushv(&stream->sendbuf.buf, s, strlen(s));
+    return quicly_write_stream(stream, s, strlen(s), 1);
 }
 
 static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t count, int is_fin)
 {
-    if (is_fin) {
-        int ret;
-        if ((ret = send_data(stream, "HTTP/1.0 200 OK\r\n\r\nhello world\n")) != 0)
-            return ret;
-        stream->send_fin = 1;
-    }
-
+    if (is_fin)
+        return send_data(stream, "HTTP/1.0 200 OK\r\n\r\nhello world\n");
     return 0;
 }
 
@@ -153,6 +191,8 @@ int main(int argc, char **argv)
     ENGINE_register_all_ciphers();
     ENGINE_register_all_digests();
 #endif
+
+    subtest("acker", test_acker);
 
     {
         BIO *bio = BIO_new_mem_buf(RSA_CERTIFICATE, strlen(RSA_CERTIFICATE));
@@ -213,7 +253,6 @@ int main(int argc, char **argv)
     ok(ret == 0);
     client_stream->on_receive = on_resp_receive;
     ret = send_data(client_stream, "GET / HTTP/1.0\r\n\r\n");
-    client_stream->send_fin = 1;
     ok(ret == 0);
 
     /* send ClientFinished and the request */

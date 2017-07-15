@@ -17,7 +17,6 @@
 		E9CC44111EB85E0B00DC7D3E /* khash.h in Headers */ = {isa = PBXBuildFile; fileRef = E9CC44101EB85E0B00DC7D3E /* khash.h */; };
 		E9CC441B1EC195DF00DC7D3E /* openssl.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448271EA48D0000390927 /* openssl.c */; };
 		E9CC441C1EC195DF00DC7D3E /* picotls.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448281EA48D0000390927 /* picotls.c */; };
-		E9CC441E1EC195DF00DC7D3E /* libquicly.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E98448171EA48BD400390927 /* libquicly.a */; };
 		E9CC44251EC1962700DC7D3E /* test.c in Sources */ = {isa = PBXBuildFile; fileRef = E9CC44241EC1962700DC7D3E /* test.c */; };
 		E9CC44261EC1963100DC7D3E /* picotest.c in Sources */ = {isa = PBXBuildFile; fileRef = E9CC44151EC195CA00DC7D3E /* picotest.c */; };
 /* End PBXBuildFile section */
@@ -80,7 +79,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				E9CC441E1EC195DF00DC7D3E /* libquicly.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
