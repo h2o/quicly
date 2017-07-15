@@ -358,15 +358,6 @@ static int decode_frame(struct st_quicly_decoded_frame_t *frame, const uint8_t *
         /* stream frame */
         frame->type = QUICLY_FRAME_TYPE_STREAM;
 
-        /* record location of data_length */
-        const uint8_t *data_length_at = NULL;
-        if ((type_flags & QUICLY_FRAME_TYPE_STREAM_BIT_DATA_LENGTH) != 0) {
-            if (end - *src < 2)
-                goto CorruptFrame;
-            data_length_at = *src;
-            *src += 2;
-        }
-
         { /* obtain stream_id */
             unsigned stream_id_length = ((type_flags >> 2) & 3) + 1;
             if (end - *src < stream_id_length)
@@ -387,8 +378,10 @@ static int decode_frame(struct st_quicly_decoded_frame_t *frame, const uint8_t *
         }
 
         /* obtain data */
-        if (data_length_at != NULL) {
-            uint16_t data_length = decode16(&data_length_at);
+        if ((type_flags & QUICLY_FRAME_TYPE_STREAM_BIT_DATA_LENGTH) != 0) {
+            if (end - *src < 2)
+                goto CorruptFrame;
+            uint16_t data_length = decode16(src);
             if (end - *src < data_length)
                 goto CorruptFrame;
             frame->data.stream.data = ptls_iovec_init(*src, data_length);
@@ -1154,22 +1147,16 @@ static int send_core(quicly_conn_t *conn, quicly_stream_t *stream, struct st_qui
         /* emit stream header as well as calculating the size of the data to send */
         size_t capacity = s->dst_end - s->dst - encoded_id_offset_size;
         size_t avail = stream->sendbuf.buf.off - stream->sendbuf.unacked - stream->send_fin;
-        size_t copysize;
-        if (capacity <= avail) {
-            copysize = capacity;
-        } else {
-            copysize = avail;
-            /* set data_length if there's a chance to store more frames in the current packet */
-            if (capacity - avail > 2) {
-                type |= QUICLY_FRAME_TYPE_STREAM_BIT_DATA_LENGTH;
-                s->dst = encode16(s->dst, (uint16_t)copysize);
-            }
-        }
+        size_t copysize = capacity <= avail ? capacity : avail;
         if (stream->send_fin && stream->sendbuf.unacked + copysize + 1 == stream->sendbuf.buf.off)
             type |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
-        *type_at = type;
         memcpy(s->dst, encoded_id_offset, encoded_id_offset_size);
         s->dst += encoded_id_offset_size;
+        if (copysize + 2 < capacity) {
+            type |= QUICLY_FRAME_TYPE_STREAM_BIT_DATA_LENGTH;
+            s->dst = encode16(s->dst, (uint16_t)copysize);
+        }
+        *type_at = type;
 
         /* encrypt stream header if necessary */
         if (s->aead != NULL)
