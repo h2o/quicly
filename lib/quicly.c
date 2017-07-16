@@ -360,7 +360,7 @@ static int decode_frame(struct st_quicly_decoded_frame_t *frame, const uint8_t *
         frame->type = QUICLY_FRAME_TYPE_STREAM;
 
         { /* obtain stream_id */
-            unsigned stream_id_length = ((type_flags >> 2) & 3) + 1;
+            unsigned stream_id_length = ((type_flags >> 3) & 3) + 1;
             if (end - *src < stream_id_length)
                 goto CorruptFrame;
             frame->data.stream.stream_id = 0;
