@@ -1361,6 +1361,10 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             goto Exit;
         }
         break;
+    case QUICLY_PACKET_TYPE_CLIENT_INITIAL:
+        /* FIXME ignore for time being */
+        ret = 0;
+        goto Exit;
     default:
         ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
         goto Exit;
