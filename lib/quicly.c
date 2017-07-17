@@ -624,6 +624,7 @@ static int crypto_stream_on_handshake_receive(quicly_conn_t *conn, quicly_stream
 
     switch (ret) {
     case 0:
+        fprintf(stderr, "handshake done!!!\n");
         stream->on_receive = crypto_stream_post_handshake_receive;
         /* state is 1RTT_ENCRYPTED when handling ClientFinished */
         if (conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
@@ -944,6 +945,10 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     }
     {
         const uint8_t *p = packet->payload.base, *end = p + packet->payload.len;
+        for (; p < end; ++p) {
+            if (*p != QUICLY_FRAME_TYPE_PADDING)
+                break;
+        }
         if ((ret = decode_frame(&frame, &p, end)) != 0)
             goto Exit;
         if (frame.type != QUICLY_FRAME_TYPE_STREAM) {
@@ -1176,6 +1181,7 @@ static int send_core(quicly_conn_t *conn, quicly_stream_t *stream, struct st_qui
                 memcpy(s->dst, stream->sendbuf.buf.base + stream->sendbuf.unacked, copysize);
             }
             s->dst += copysize;
+fprintf(stderr, "emitting %zu bytes of stream %" PRIu32 "\n", copysize, stream->stream_id);
             stream->sendbuf.unacked += copysize + stream->send_fin;
         }
     }
