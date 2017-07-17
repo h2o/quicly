@@ -89,6 +89,7 @@ static int send_pending(int fd, quicly_conn_t *conn)
             vec.iov_len = packets[i]->data.len;
             mess.msg_iov = &vec;
             mess.msg_iovlen = 1;
+            fprintf(stderr, "sending %zu bytes\n", vec.iov_len);
             while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
                 ;
             if (ret == -1)
@@ -151,10 +152,10 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
             mess.msg_iov = &vec;
             mess.msg_iovlen = 1;
             ssize_t rret;
-            while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+            while ((rret = recvmsg(fd, &mess, 0)) <= 0)
                 ;
-            assert(rret != 0);
-
+//            assert(rret != 0);
+fprintf(stderr, "received %zd bytes!\n", rret);
             quicly_decoded_packet_t packet;
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
                 if (conn == NULL) {
