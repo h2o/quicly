@@ -26,27 +26,9 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include "picotls.h"
-
-#define QUICLY_TRANSPORT_ERROR_BASE 1024
-#define QUICLY_TRANSPORT_ERROR_CODE(n) (QUICLY_TRANSPORT_ERROR_BASE + (n))
-#define QUICLY_ERROR_INVALID_PACKET_HEADER QUICLY_TRANSPORT_ERROR_CODE(0x3)
-#define QUICLY_ERROR_INVALID_FRAME_DATA QUICLY_TRANSPORT_ERROR_CODE(0x4)
-#define QUICLY_ERROR_CLOSED_CRITICAL_STREAM QUICLY_TRANSPORT_ERROR_CODE(0x7)
-#define QUICLY_ERROR_MISSING_PAYLOAD QUICLY_TRANSPORT_ERROR_CODE(0x30)
-#define QUICLY_ERROR_INVALID_STREAM_DATA QUICLY_TRANSPORT_ERROR_CODE(0x2e)
-#define QUICLY_ERROR_UNENCRYPTED_STREAM_DATA QUICLY_TRANSPORT_ERROR_CODE(0x3d)
-#define QUICLY_ERROR_DECRYPTION_FAILURE QUICLY_TRANSPORT_ERROR_CODE(0xc)
-#define QUICLY_ERROR_TOO_MANY_OPEN_STREAMS QUICLY_TRANSPORT_ERROR_CODE(0x12)
-#define QUICLY_ERROR_INVALID_VERSION QUICLY_TRANSPORT_ERROR_CODE(0x14)
-#define QUICLY_ERROR_EMPTY_STREAM_FRAME_NO_FIN QUICLY_TRANSPORT_ERROR_CODE(0x32)
-#define QUICLY_ERROR_VERSION_NEGOTIATION_MISMATCH (0x37)
-
-#define QUICLY_INTERNAL_ERROR_BASE 1280
-#define QUICLY_INTERNAL_ERROR_CODE(n) (QUICLY_INTERNAL_ERROR_BASE + (n))
-#define QUICLY_ERROR_HANDSHAKE_TOO_LARGE QUICLY_INTERNAL_ERROR_CODE(1)
-#define QUICLY_ERROR_PACKET_IGNORED QUICLY_INTERNAL_ERROR_CODE(2)
-
-#define QUICLY_BUILD_ASSERT(condition) ((void)sizeof(char[2 * !!(!__builtin_constant_p(condition) || (condition)) - 1]))
+#include "quicly/error.h"
+#include "quicly/recvbuf.h"
+#include "quicly/sendbuf.h"
 
 typedef struct st_quicly_raw_packet_t {
     ptls_iovec_t data;
@@ -129,32 +111,12 @@ struct _st_quicly_conn_public_t {
     } peer;
 };
 
-typedef struct st_quicly_data_hole_t {
-    uint64_t offset;
-    ptls_iovec_t data; /* data.base may point to a buffer within sendbuf/recvbuf */
-} quicly_data_hole_t;
-
 struct st_quicly_stream_t {
     uint32_t stream_id;
-    uint64_t offset;
-    unsigned send_fin : 1;
-    struct {
-        /**
-         * number of contiguous bytes acked by peer
-         */
-        uint64_t acked;
-        /**
-         * number of bytes sent but not acked (yet)
-         */
-        size_t unacked;
-        /**
-         * unacked and unsent data (note: FIN is pushed as a byte)
-         */
-        ptls_buffer_t buf;
-    } sendbuf;
-    uint64_t max_received_offset;
+    quicly_sendbuf_t sendbuf;
+    quicly_recvbuf_t recvbuf;
     void *data;
-    int (*on_receive)(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t nvec, int fin);
+    int (*on_receive)(quicly_conn_t *conn, quicly_stream_t *stream);
 };
 
 typedef struct st_quicly_decode_packet_t {
@@ -223,7 +185,11 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream);
 /**
  *
  */
-int quicly_write_stream(quicly_stream_t *stream, const void *data, size_t len, int is_fin);
+int quicly_write_stream(quicly_stream_t *stream, const void *p, size_t len, int fin, quicly_buffer_free_cb free_cb);
+/**
+ *
+ */
+int quicly_reset_stream(quicly_stream_t *stream);
 /**
  *
  */

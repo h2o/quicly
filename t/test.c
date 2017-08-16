@@ -31,7 +31,7 @@
 #include "picotls/openssl.h"
 #include "quicly.h"
 #include "../lib/quicly.c"
-#include "picotest.h"
+#include "test.h"
 
 #define RSA_PRIVATE_KEY                                                                                                            \
     "-----BEGIN RSA PRIVATE KEY-----\n"                                                                                            \
@@ -90,48 +90,6 @@ static ptls_context_t tls_ctx = {
 static quicly_context_t quic_ctx = {
     &tls_ctx, 1280, {8192, 64, 100, 60, 0}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open};
 
-static void test_acker(void)
-{
-    struct st_quicly_acker_t acker;
-    int ret;
-
-    memset(&acker, 0, sizeof(acker));
-
-    ret = acker_record(&acker, 333);
-    ok(ret == 0);
-    ok(acker.num_blocks == 1);
-    ok(acker.blocks[0].start == 333);
-    ok(acker.blocks[0].end == 334);
-
-    ret = acker_record(&acker, 334);
-    ok(ret == 0);
-    ok(acker.num_blocks == 1);
-    ok(acker.blocks[0].start == 333);
-    ok(acker.blocks[0].end == 335);
-
-    ret = acker_record(&acker, 337);
-    ok(ret == 0);
-    ok(acker.num_blocks == 2);
-    ok(acker.blocks[0].start == 333);
-    ok(acker.blocks[0].end == 335);
-    ok(acker.blocks[1].start == 337);
-    ok(acker.blocks[1].end == 338);
-
-    ret = acker_record(&acker, 336);
-    ok(ret == 0);
-    ok(acker.num_blocks == 2);
-    ok(acker.blocks[0].start == 333);
-    ok(acker.blocks[0].end == 335);
-    ok(acker.blocks[1].start == 336);
-    ok(acker.blocks[1].end == 338);
-
-    ret = acker_record(&acker, 335);
-    ok(ret == 0);
-    ok(acker.num_blocks == 1);
-    ok(acker.blocks[0].start == 333);
-    ok(acker.blocks[0].end == 338);
-}
-
 static void free_packets(quicly_raw_packet_t **packets, size_t cnt)
 {
     size_t i;
@@ -150,12 +108,17 @@ static void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t
 
 static int send_data(quicly_stream_t *stream, const char *s)
 {
-    return quicly_write_stream(stream, s, strlen(s), 1);
+    return quicly_write_stream(stream, s, strlen(s), 1, NULL);
 }
 
-static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t count, int is_fin)
+static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
 {
-    if (is_fin)
+    ptls_iovec_t input;
+
+    while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0)
+        quicly_recvbuf_shift(&stream->recvbuf, input.len);
+
+    if (quicly_recvbuf_is_eos(&stream->recvbuf))
         return send_data(stream, "HTTP/1.0 200 OK\r\n\r\nhello world\n");
     return 0;
 }
@@ -166,14 +129,16 @@ static int on_stream_open(quicly_context_t *ctx, quicly_conn_t *conn, quicly_str
     return 0;
 }
 
-static int on_resp_receive(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t count, int is_fin)
+static int on_resp_receive(quicly_conn_t *conn, quicly_stream_t *stream)
 {
-    size_t i;
+    ptls_iovec_t input;
 
-    for (i = 0; i != count; ++i)
-        fwrite(vec[0].base, 1, vec[0].len, stderr);
+    while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
+        fwrite(input.base, 1, input.len, stderr);
+        quicly_recvbuf_shift(&stream->recvbuf, input.len);
+    }
 
-    if (is_fin) {
+    if (quicly_recvbuf_is_eos(&stream->recvbuf)) {
         done_testing();
         exit(0);
     }
@@ -202,7 +167,7 @@ int main(int argc, char **argv)
 #endif
 
     subtest("mozquic", test_mozquic);
-    subtest("acker", test_acker);
+    subtest("ranges", test_ranges);
 
     {
         BIO *bio = BIO_new_mem_buf(RSA_CERTIFICATE, strlen(RSA_CERTIFICATE));

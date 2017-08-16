@@ -69,25 +69,50 @@ struct st_quicly_packet_protection_t {
     uint8_t secret[PTLS_MAX_DIGEST_SIZE];
 };
 
-struct st_quicly_ack_block_t {
-    uint64_t start;
-    uint64_t end; /* non-inclusive */
+struct st_quicly_on_ack_t {
+    uint64_t packet_number;
+    int (*acked)(quicly_conn_t *conn, int is_acked, struct st_quicly_on_ack_t *on_ack);
+    union {
+        struct {
+            uint32_t stream_id;
+            quicly_sendbuf_ackargs_t args;
+        } stream;
+    } data;
 };
 
-struct st_quicly_acker_t {
-    struct st_quicly_ack_block_t *blocks;
-    size_t num_blocks;
+struct st_quicly_on_ack_block_t {
+    struct st_quicly_on_ack_block_t *next;
+    size_t count, unacked;
+    struct st_quicly_on_ack_t actions[16];
 };
 
 struct st_quicly_conn_t {
     struct _st_quicly_conn_public_t super;
+    /**
+     * hashtable of streams
+     */
     khash_t(quicly_stream_t) * streams;
     struct {
+        /**
+         * crypto parameters
+         */
         struct st_quicly_packet_protection_t pp;
-        struct st_quicly_acker_t acker;
+        /**
+         * acks to be sent to peer
+         */
+        struct st_quicly_ranges_t ack_queue;
     } ingress;
     struct {
+        /**
+         * crypto parameters
+         */
         struct st_quicly_packet_protection_t pp;
+        /**
+         * contains actions that needs to be performed when an ack is being received
+         */
+        struct {
+            struct st_quicly_on_ack_block_t *head, **tail_ref;
+        } acks_inflight;
     } egress;
     uint64_t in_packet_number;
     uint64_t out_packet_number;
@@ -114,10 +139,11 @@ struct st_quicly_decoded_frame_t {
         } stream;
         struct {
             uint64_t largest_acknowledged;
+            uint64_t smallest_acknowledged;
             uint16_t ack_delay;
-            unsigned ack_block_length_octets;
-            ptls_iovec_t ack_block_section;
-            ptls_iovec_t timestamp_section;
+            uint8_t num_gaps;
+            uint64_t ack_block_lengths[257];
+            uint8_t gaps[256];
         } ack;
     } data;
 };
@@ -144,16 +170,18 @@ static uint64_t decode64(const uint8_t **src)
     return v;
 }
 
-static uint8_t *encode16(uint8_t *p, uint16_t v)
+static uint64_t decodev(const uint8_t **src, unsigned size)
 {
-    *p++ = (uint8_t)(v >> 8);
-    *p++ = (uint8_t)v;
-    return p;
+    uint64_t v = 0;
+
+    do {
+        v = v << 8 | *(*src)++;
+    } while (--size != 0);
+    return v;
 }
 
-static uint8_t *encode24(uint8_t *p, uint32_t v)
+static uint8_t *encode16(uint8_t *p, uint16_t v)
 {
-    *p++ = (uint8_t)(v >> 16);
     *p++ = (uint8_t)(v >> 8);
     *p++ = (uint8_t)v;
     return p;
@@ -223,64 +251,6 @@ static int verify_cleartext_packet(quicly_decoded_packet_t *packet)
     return calced == received;
 }
 
-static int acker_record(struct st_quicly_acker_t *acker, uint64_t packet_number)
-{
-    size_t slot;
-
-    /* maintain ordered list of received packets with gaps */
-    for (slot = 0; slot != acker->num_blocks; ++slot) {
-        if (acker->blocks[slot].end <= packet_number) {
-            if (acker->blocks[slot].end == packet_number) {
-                /* expand forwards */
-                acker->blocks[slot].end = packet_number + 1;
-                if (slot + 1 != acker->num_blocks && packet_number + 1 == acker->blocks[slot + 1].start) {
-                    /* merge */
-                    acker->blocks[slot].end = acker->blocks[slot + 1].end;
-                    for (slot += 2; slot < acker->num_blocks; ++slot)
-                        acker->blocks[slot - 1] = acker->blocks[slot];
-                    acker->num_blocks -= 1;
-                }
-                return 0;
-            }
-        } else if (acker->blocks[slot].start >= packet_number + 1) {
-            if (acker->blocks[slot].start == packet_number + 1) {
-                /* expand backwards */
-                acker->blocks[slot].start -= 1;
-                return 0;
-            }
-            break;
-        }
-    }
-
-    assert(slot == 0 || acker->blocks[slot - 1].end < packet_number);
-    assert(slot == acker->num_blocks || acker->blocks[slot].end < packet_number);
-
-    struct st_quicly_ack_block_t *new_blocks;
-    if ((new_blocks = malloc(sizeof(*new_blocks) * acker->num_blocks + 1)) == NULL)
-        return PTLS_ERROR_NO_MEMORY;
-    size_t i;
-    for (i = 0; i < slot; ++i)
-        new_blocks[i] = acker->blocks[i];
-    new_blocks[i].start = packet_number;
-    new_blocks[i].end = packet_number + 1;
-    for (; i < acker->num_blocks; ++i)
-        new_blocks[i + 1] = acker->blocks[i];
-    free(acker->blocks);
-    acker->blocks = new_blocks;
-    acker->num_blocks += 1;
-
-    return 0;
-}
-
-static void acker_flush(struct st_quicly_acker_t *acker)
-{
-    if (acker->blocks != NULL) {
-        free(acker->blocks);
-        acker->blocks = NULL;
-    }
-    acker->num_blocks = 0;
-}
-
 static void free_packet_protection(struct st_quicly_packet_protection_t *pp)
 {
     if (pp->aead.early_data != NULL)
@@ -325,21 +295,19 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
         } else {
             packet->has_connection_id = 0;
         }
-        switch (first_byte & 0x1f) {
+        unsigned type = first_byte & 0x1f, packet_number_size;
+        switch (type) {
         case 1:
-            if (src_end - src < 1)
-                return QUICLY_ERROR_INVALID_PACKET_HEADER;
-            packet->packet_number = *src++;
-            break;
         case 2:
-            packet->packet_number = decode16(&src);
-            break;
         case 3:
-            packet->packet_number = decode32(&src);
+            packet_number_size = 1 << (type - 1);
             break;
         default:
             return QUICLY_ERROR_INVALID_PACKET_HEADER;
         }
+        if (src_end - src < packet_number_size)
+            return QUICLY_ERROR_INVALID_PACKET_HEADER;
+        packet->packet_number = decodev(&src, packet_number_size);
     }
 
     packet->header.len = src - packet->header.base;
@@ -370,12 +338,15 @@ static int decode_frame(struct st_quicly_decoded_frame_t *frame, const uint8_t *
         }
 
         { /* obtain offset */
-            unsigned offset_length = (type_flags & 6) != 0 ? 1 << (type_flags >> 1 & 3) : 0;
-            if (end - *src < offset_length)
-                goto CorruptFrame;
-            frame->data.stream.offset = 0;
-            for (; offset_length != 0; --offset_length)
-                frame->data.stream.offset = (frame->data.stream.offset << 8) | *(*src)++;
+            unsigned offset_mode = type_flags >> 1 & 3;
+            if (offset_mode == 0) {
+                frame->data.stream.offset = 0;
+            } else {
+                unsigned offset_length = 1 << offset_mode;
+                if (end - *src < offset_length)
+                    goto CorruptFrame;
+                frame->data.stream.offset = decodev(src, offset_length);
+            }
         }
 
         /* obtain data */
@@ -402,40 +373,40 @@ static int decode_frame(struct st_quicly_decoded_frame_t *frame, const uint8_t *
     } else if (type_flags >= QUICLY_FRAME_TYPE_ACK) {
 
         /* ACK frame */
-        unsigned num_blocks, num_ts;
+        unsigned num_ack_block_lengths, num_ts, largest_ack_size, ack_block_length_size, i;
 
         frame->type = QUICLY_FRAME_TYPE_ACK;
 
-        /* obtain num_blocks */
-        if ((type_flags & 0x10) != 0) {
-            if (end - *src < 1)
-                goto CorruptFrame;
-            num_blocks = *(*src)++;
-        } else {
-            num_blocks = 1;
-        }
-
-        /* obtain Largest Acknowledged Length and check of the frame up to first ack block */
-        unsigned ll = 1 << (type_flags >> 3 & 3);
-        if (end - *src < 3 + ll)
+        /* obtain num_gaps, num_ts, largest_ack_size, ack_block_size */
+        if (end - *src < 4)
             goto CorruptFrame;
+        if ((type_flags & 0x10) != 0) {
+            num_ack_block_lengths = 1 + *(*src)++;
+        } else {
+            num_ack_block_lengths = 1;
+        }
         num_ts = *(*src)++;
-        frame->data.ack.largest_acknowledged = 0;
-        do {
-            frame->data.ack.largest_acknowledged = (frame->data.ack.largest_acknowledged << 8) | *(*src)++;
-        } while (--ll != 0);
+        largest_ack_size = 1 << (type_flags >> 3 & 3);
+        ack_block_length_size = 1 << (type_flags & 3);
+
+        /* size check */
+        unsigned remaining =
+            largest_ack_size + 2 + (1 + ack_block_length_size) * num_ack_block_lengths - 1 + (num_ts != 0 ? 2 + 3 * num_ts : 0);
+        if (end - *src < remaining)
+            goto CorruptFrame;
+
+        frame->data.ack.largest_acknowledged = decodev(src, largest_ack_size);
         frame->data.ack.ack_delay = decode16(src);
 
-        /* obtain size of ack block length field */
-        frame->data.ack.ack_block_length_octets = 1 << (type_flags & 3);
-
-        /* determine the positions of the sections */
-        frame->data.ack.ack_block_section = ptls_iovec_init(*src, (1 + frame->data.ack.ack_block_length_octets) * num_blocks - 1);
-        frame->data.ack.timestamp_section =
-            ptls_iovec_init(*src + frame->data.ack.ack_block_section.len, num_ts != 0 ? 2 + 3 * num_ts : 0);
-        if (end - *src < frame->data.ack.ack_block_section.len + frame->data.ack.timestamp_section.len)
-            goto CorruptFrame;
-        *src += frame->data.ack.ack_block_section.len + frame->data.ack.timestamp_section.len;
+        frame->data.ack.smallest_acknowledged = frame->data.ack.largest_acknowledged + 1;
+        frame->data.ack.ack_block_lengths[0] = decodev(src, ack_block_length_size);
+        frame->data.ack.smallest_acknowledged -= frame->data.ack.ack_block_lengths[0];
+        for (i = 1; i != num_ack_block_lengths; ++i) {
+            frame->data.ack.gaps[i - 1] = *(*src)++;
+            frame->data.ack.smallest_acknowledged -= frame->data.ack.gaps[i - 1];
+            frame->data.ack.ack_block_lengths[i] = decodev(src, ack_block_length_size);
+            frame->data.ack.smallest_acknowledged -= frame->data.ack.ack_block_lengths[i];
+        }
 
         return 0;
 
@@ -519,9 +490,11 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
 
     if ((stream = malloc(sizeof(*stream))) == NULL)
         return NULL;
-    memset(stream, 0, sizeof(*stream));
     stream->stream_id = stream_id;
-    ptls_buffer_init(&stream->sendbuf.buf, "", 0);
+    quicly_sendbuf_init(&stream->sendbuf);
+    quicly_recvbuf_init(&stream->recvbuf);
+    stream->data = NULL;
+    stream->on_receive = NULL;
 
     int r;
     khiter_t iter = kh_put(quicly_stream_t, conn->streams, stream_id, &r);
@@ -537,9 +510,8 @@ void destroy_stream(quicly_conn_t *conn, quicly_stream_t *stream)
     assert(iter != kh_end(conn->streams));
     kh_del(quicly_stream_t, conn->streams, iter);
 
-    stream->on_receive(conn, stream, NULL, 0, 1);
-    if (stream->sendbuf.buf.base != NULL)
-        ptls_buffer_dispose(&stream->sendbuf.buf);
+    quicly_sendbuf_dispose(&stream->sendbuf);
+    quicly_recvbuf_dispose(&stream->recvbuf);
     free(stream);
 }
 
@@ -563,12 +535,6 @@ void quicly_free(quicly_conn_t *conn)
 
     free(conn->super.peer.sa);
     free(conn);
-}
-
-static int crypto_stream_post_handshake_receive(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t veccnt,
-                                                int fin)
-{
-    assert(!"FIXME");
 }
 
 static int setup_1rtt_secret(struct st_quicly_packet_protection_t *pp, ptls_t *tls, const char *label, int is_enc)
@@ -602,30 +568,45 @@ Exit:
     return 0;
 }
 
-static int crypto_stream_on_handshake_receive(quicly_conn_t *conn, quicly_stream_t *stream, ptls_iovec_t *vec, size_t veccnt,
-                                              int fin)
+static void senddata_free(struct st_quicly_buffer_vec_t *vec)
 {
-    struct st_quicly_crypto_stream_data_t *data = stream->data;
-    size_t i;
+    free(vec->p);
+    free(vec);
+}
+
+static int write_tlsbuf(quicly_stream_t *stream, ptls_buffer_t *tlsbuf)
+{
     int ret;
 
-    if (fin) {
-        ret = QUICLY_ERROR_INVALID_FRAME_DATA;
-        goto Exit;
+    if (tlsbuf->off != 0) {
+        assert(tlsbuf->is_allocated);
+        if ((ret = quicly_write_stream(stream, tlsbuf->base, tlsbuf->off, 0, senddata_free)) != 0)
+            return ret;
+        ptls_buffer_init(tlsbuf, "", 0);
+    } else {
+        assert(!tlsbuf->is_allocated);
     }
 
-    ret = PTLS_ERROR_IN_PROGRESS;
-    for (i = 0; i < veccnt; ++i) {
-        size_t inlen = vec[0].len;
-        if ((ret = ptls_handshake(data->tls, &stream->sendbuf.buf, vec[0].base, &inlen, &data->handshake_properties)) !=
-            PTLS_ERROR_IN_PROGRESS)
-            break;
+    return 0;
+}
+
+static int crypto_stream_receive_handshake(quicly_conn_t *conn, quicly_stream_t *stream)
+{
+    struct st_quicly_crypto_stream_data_t *data = stream->data;
+    ptls_iovec_t input;
+    ptls_buffer_t buf;
+    int ret = PTLS_ERROR_IN_PROGRESS;
+
+    ptls_buffer_init(&buf, "", 0);
+    while (ret == PTLS_ERROR_IN_PROGRESS && (input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
+        ret = ptls_handshake(data->tls, &buf, input.base, &input.len, &data->handshake_properties);
+        quicly_recvbuf_shift(&stream->recvbuf, input.len);
     }
+    write_tlsbuf(stream, &buf);
 
     switch (ret) {
     case 0:
         fprintf(stderr, "handshake done!!!\n");
-        stream->on_receive = crypto_stream_post_handshake_receive;
         /* state is 1RTT_ENCRYPTED when handling ClientFinished */
         if (conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
             if ((ret = setup_1rtt(conn, data->tls)) != 0)
@@ -642,6 +623,47 @@ static int crypto_stream_on_handshake_receive(quicly_conn_t *conn, quicly_stream
     }
 
 Exit:
+    return ret;
+}
+
+static int apply_stream_frame(quicly_conn_t *conn, quicly_stream_t *stream, struct st_quicly_decoded_frame_t *frame)
+{
+    int ret;
+
+    if (frame->data.stream.fin &&
+        (ret = quicly_recvbuf_mark_eos(&stream->recvbuf, frame->data.stream.offset + frame->data.stream.data.len)) != 0)
+        return ret;
+
+    /* try the fast (copyless) path */
+    if (stream->recvbuf.data_off == frame->data.stream.offset && stream->recvbuf.data.len == 0) {
+        struct st_quicly_buffer_vec_t vec;
+        assert(stream->recvbuf.received.num_ranges == 1);
+        assert(stream->recvbuf.received.ranges[0].end == stream->recvbuf.data_off);
+
+        stream->recvbuf.received.ranges[0].end += frame->data.stream.data.len;
+        quicly_buffer_set_fast_external(&stream->recvbuf.data, &vec, frame->data.stream.data.base, frame->data.stream.data.len);
+
+        if ((ret = stream->on_receive(conn, stream)) != 0)
+            return ret;
+        assert(vec.next == NULL);
+
+        if (stream->recvbuf.data.len != 0) {
+            size_t keeplen = stream->recvbuf.data.len;
+            quicly_buffer_init(&stream->recvbuf.data);
+            if ((ret = quicly_buffer_push(&stream->recvbuf.data,
+                                          frame->data.stream.data.base + frame->data.stream.data.len - keeplen, keeplen, NULL)) !=
+                0)
+                return ret;
+        }
+        return 0;
+    }
+
+    uint64_t prev_end = stream->recvbuf.received.ranges[0].end;
+    if ((ret = quicly_recvbuf_write(&stream->recvbuf, frame->data.stream.offset, frame->data.stream.data.base,
+                                    frame->data.stream.data.len)) != 0)
+        return ret;
+    if (prev_end != stream->recvbuf.received.ranges[0].end || prev_end == frame->data.stream.fin)
+        ret = stream->on_receive(conn, stream);
     return ret;
 }
 
@@ -761,6 +783,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
     conn->streams = kh_init(quicly_stream_t);
+    quicly_ranges_init(&conn->ingress.ack_queue);
+    conn->egress.acks_inflight.tail_ref = &conn->egress.acks_inflight.head;
+
     if (set_peeraddr(conn, sa, salen) != 0)
         goto Fail;
 
@@ -770,7 +795,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     if ((crypto_data = malloc(sizeof(*crypto_data))) == NULL)
         goto Fail;
     (*crypto_stream)->data = crypto_data;
-    (*crypto_stream)->on_receive = crypto_stream_on_handshake_receive;
+    (*crypto_stream)->on_receive = crypto_stream_receive_handshake;
     crypto_data->conn = conn;
     if ((crypto_data->tls = ptls_new(ctx->tls, server_name == NULL)) == NULL)
         goto Fail;
@@ -841,6 +866,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     quicly_conn_t *conn;
     quicly_stream_t *crypto_stream;
     struct st_quicly_crypto_stream_data_t *crypto_data;
+    ptls_buffer_t buf;
     int ret;
 
     if ((conn = create_connection(ctx, server_name, sa, salen, handshake_properties, &crypto_stream)) == NULL) {
@@ -861,9 +887,11 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     crypto_data->transport_parameters.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
     crypto_data->handshake_properties.additional_extensions = crypto_data->transport_parameters.ext;
     crypto_data->handshake_properties.collected_extensions = client_collected_extensions;
-    if ((ret = ptls_handshake(crypto_data->tls, &crypto_stream->sendbuf.buf, NULL, 0, &crypto_data->handshake_properties)) !=
-        PTLS_ERROR_IN_PROGRESS)
+
+    ptls_buffer_init(&buf, "", 0);
+    if ((ret = ptls_handshake(crypto_data->tls, &buf, NULL, 0, &crypto_data->handshake_properties)) != PTLS_ERROR_IN_PROGRESS)
         goto Exit;
+    write_tlsbuf(crypto_stream, &buf);
 
     *_conn = conn;
     ret = 0;
@@ -970,32 +998,18 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
 
     if ((conn = create_connection(ctx, NULL, sa, salen, handshake_properties, &crypto_stream)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    if ((ret = acker_record(&conn->ingress.acker, packet->packet_number)) != 0)
-        goto Exit;
     crypto_data = crypto_stream->data;
+    crypto_data->handshake_properties.collected_extensions = server_collected_extensions;
 
-    { /* handshake */
-        size_t len = frame.data.stream.data.len;
-        crypto_data->handshake_properties.collected_extensions = server_collected_extensions;
-        ret = ptls_handshake(crypto_data->tls, &crypto_stream->sendbuf.buf, frame.data.stream.data.base, &len,
-                             &crypto_data->handshake_properties);
-        switch (ret) {
-        case 0:
-        case PTLS_ERROR_IN_PROGRESS:
-            if (len != frame.data.stream.data.len) {
-                ret = QUICLY_ERROR_INVALID_STREAM_DATA;
-                goto Exit;
-            }
-            if (ret == 0) {
-                if ((ret = setup_1rtt(conn, crypto_data->tls)) != 0)
-                    goto Exit;
-            } else {
-                conn->super.state = QUICLY_STATE_BEFORE_SF;
-            }
-            break;
-        default:
-            goto Exit;
-        }
+    if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number, packet->packet_number + 1)) != 0)
+        goto Exit;
+
+    if ((ret = apply_stream_frame(conn, crypto_stream, &frame)) != 0)
+        goto Exit;
+    if (crypto_stream->recvbuf.data_off != frame.data.stream.data.len) {
+        /* garbage after clienthello? */
+        ret = QUICLY_ERROR_TBD;
+        goto Exit;
     }
 
     *_conn = conn;
@@ -1006,6 +1020,44 @@ Exit:
             quicly_free(conn);
     }
     return ret;
+}
+
+static struct st_quicly_on_ack_t *allocate_on_ack(quicly_conn_t *conn, int (*cb)(quicly_conn_t *, int, struct st_quicly_on_ack_t *))
+{
+    struct st_quicly_on_ack_block_t *block;
+
+    if ((block = *conn->egress.acks_inflight.tail_ref) == NULL ||
+        block->count == sizeof(block->actions) / sizeof(block->actions[0])) {
+        if ((block = malloc(sizeof(*block))) == NULL)
+            return NULL;
+        block->next = NULL;
+        block->count = 0;
+        block->unacked = 0;
+        *conn->egress.acks_inflight.tail_ref = block;
+    }
+
+    struct st_quicly_on_ack_t *on_ack = block->actions + block->count++;
+    on_ack->packet_number = conn->out_packet_number;
+    on_ack->acked = cb;
+    ++block->unacked;
+
+    return on_ack;
+}
+
+static int on_ack_stream(quicly_conn_t *conn, int acked, struct st_quicly_on_ack_t *on_ack)
+{
+    quicly_stream_t *stream;
+
+    /* TODO cache pointer to stream (using a generation counter?) */
+    if ((stream = quicly_get_stream(conn, on_ack->data.stream.stream_id)) == NULL)
+        return 0;
+
+    if (acked) {
+        return quicly_sendbuf_acked(&stream->sendbuf, &on_ack->data.stream.args);
+    } else {
+        /* FIXME resend */
+        return 0;
+    }
 }
 
 struct st_quicly_send_context_t {
@@ -1019,7 +1071,7 @@ struct st_quicly_send_context_t {
     uint8_t *dst_end;
 };
 
-static void commit_send_packet(struct st_quicly_send_context_t *s)
+static void commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
 {
     if (s->aead != NULL) {
         s->dst += ptls_aead_encrypt_final(s->aead, s->dst);
@@ -1029,6 +1081,8 @@ static void commit_send_packet(struct st_quicly_send_context_t *s)
     }
     s->target->data.len = s->dst - s->target->data.base;
     s->packets[s->num_packets++] = s->target;
+    ++conn->out_packet_number;
+
     s->target = NULL;
     s->dst = NULL;
     s->dst_end = NULL;
@@ -1041,7 +1095,7 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
         if (s->target != NULL) {
             while (s->dst != s->dst_end)
                 *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
-            commit_send_packet(s);
+            commit_send_packet(conn, s);
         }
         if (s->num_packets >= s->max_packets)
             return 0;
@@ -1060,7 +1114,6 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
             s->dst_end -= 8; /* space for fnv1a-64 */
         }
         assert(s->dst < s->dst_end);
-        ++conn->out_packet_number;
     }
 
     return 0;
@@ -1082,24 +1135,24 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
     unsigned largest_acknowledged_mode, block_length_mode;
     int ret;
 
-    if (conn->ingress.acker.num_blocks == 0)
+    if (conn->ingress.ack_queue.num_ranges == 0)
         return 0;
 
     /* calculate modes and maximum size of the frame */
-    largest_acknowledged = conn->ingress.acker.blocks[conn->ingress.acker.num_blocks - 1].end - 1;
+    largest_acknowledged = conn->ingress.ack_queue.ranges[conn->ingress.ack_queue.num_ranges - 1].end - 1;
     largest_acknowledged_mode = encoding_mode[clz64(largest_acknowledged) / 8];
     {
         uint64_t max_ack_block_length = 0;
         size_t i;
-        for (i = 0; i != conn->ingress.acker.num_blocks; ++i) {
-            size_t bl = conn->ingress.acker.blocks[i].end - conn->ingress.acker.blocks[i].start;
+        for (i = 0; i != conn->ingress.ack_queue.num_ranges; ++i) {
+            size_t bl = conn->ingress.ack_queue.ranges[i].end - conn->ingress.ack_queue.ranges[i].start;
             if (bl > max_ack_block_length)
                 max_ack_block_length = bl;
         }
         block_length_mode = encoding_mode[clz64(max_ack_block_length) / 8];
     }
-    size_t max_frame_size = 1 + (conn->ingress.acker.num_blocks != 1) + 1 + (1 << largest_acknowledged) + 2 +
-                            (1 + (1 << block_length_mode)) * conn->ingress.acker.num_blocks - 1;
+    size_t max_frame_size = 1 + (conn->ingress.ack_queue.num_ranges != 1) + 1 + (1 << largest_acknowledged) + 2 +
+                            (1 + (1 << block_length_mode)) * conn->ingress.ack_queue.num_ranges - 1;
 
     /* allocate */
     if ((ret = prepare_packet(conn, s, max_frame_size)) != 0)
@@ -1108,85 +1161,112 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
         return 0;
 
     /* emit */
-    *s->dst++ = QUICLY_FRAME_TYPE_ACK | (conn->ingress.acker.num_blocks != 1 ? 0x10 : 0) | (largest_acknowledged_mode << 2) |
+    *s->dst++ = QUICLY_FRAME_TYPE_ACK | (conn->ingress.ack_queue.num_ranges != 1 ? 0x10 : 0) | (largest_acknowledged_mode << 2) |
                 block_length_mode;
     uint8_t *num_blocks_at = NULL;
-    if (conn->ingress.acker.num_blocks != 1)
+    if (conn->ingress.ack_queue.num_ranges != 1)
         num_blocks_at = s->dst++;
     *s->dst++ = 0; /* TODO num_ts */
     emit_ackv64(s, largest_acknowledged_mode, largest_acknowledged);
     s->dst = encode16(s->dst, 0); /* TODO ack delay */
-    size_t slot = conn->ingress.acker.num_blocks - 1;
+    size_t slot = conn->ingress.ack_queue.num_ranges - 1;
     do {
-        if (slot != conn->ingress.acker.num_blocks - 1) {
+        if (slot != conn->ingress.ack_queue.num_ranges - 1) {
             if (s->dst_end - s->dst < 1 + (1 << block_length_mode))
                 break;
-            uint64_t gap = conn->ingress.acker.blocks[slot + 1].start - conn->ingress.acker.blocks[slot].end;
+            uint64_t gap = conn->ingress.ack_queue.ranges[slot + 1].start - conn->ingress.ack_queue.ranges[slot].end;
             if (gap > 255)
                 break;
             *s->dst++ = (uint8_t)gap;
         }
-        emit_ackv64(s, block_length_mode, conn->ingress.acker.blocks[slot].end - conn->ingress.acker.blocks[slot].start);
+        emit_ackv64(s, block_length_mode, conn->ingress.ack_queue.ranges[slot].end - conn->ingress.ack_queue.ranges[slot].start);
     } while (slot-- != 0);
     if (num_blocks_at != NULL)
-        *num_blocks_at = conn->ingress.acker.num_blocks - slot - 1;
+        *num_blocks_at = conn->ingress.ack_queue.num_ranges - slot - 1;
 
     assert(s->dst < s->dst_end);
-    acker_flush(&conn->ingress.acker);
+    quicly_ranges_clear(&conn->ingress.ack_queue);
+
+    return 0;
+}
+
+static int send_stream_frame(quicly_conn_t *conn, quicly_stream_t *stream, struct st_quicly_send_context_t *s,
+                             quicly_sendbuf_dataiter_t *iter, size_t max_bytes)
+{
+    uint8_t type;
+    uint8_t encoded_id_offset[QUICLY_STREAM_HEADER_SIZE_MAX];
+    size_t encoded_id_offset_size = encode_stream_frame_id_offset(&type, encoded_id_offset, stream->stream_id, iter->stream_off);
+    size_t min_required_space = encoded_id_offset_size + (iter->stream_off != stream->sendbuf.eos);
+    int ret;
+
+    if ((ret = prepare_packet(conn, s, min_required_space)) != 0)
+        return ret;
+    if (s->dst == NULL)
+        return 0;
+
+    uint8_t *type_at = s->dst++;
+
+    /* emit stream header as well as calculating the size of the data to send */
+    size_t capacity = s->dst_end - s->dst - encoded_id_offset_size;
+    size_t avail = max_bytes - (iter->stream_off + max_bytes > stream->sendbuf.eos);
+    size_t copysize = capacity <= avail ? capacity : avail;
+    if (iter->stream_off + copysize >= stream->sendbuf.eos) {
+        assert(iter->stream_off + avail == stream->sendbuf.eos);
+        type |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+    }
+    memcpy(s->dst, encoded_id_offset, encoded_id_offset_size);
+    s->dst += encoded_id_offset_size;
+    if (copysize + 2 < capacity) {
+        type |= QUICLY_FRAME_TYPE_STREAM_BIT_DATA_LENGTH;
+        s->dst = encode16(s->dst, (uint16_t)copysize);
+    }
+    *type_at = type;
+
+    /* encrypt stream header if necessary */
+    if (s->aead != NULL)
+        ptls_aead_encrypt_update(s->aead, type_at, type_at, s->dst - type_at);
+
+    fprintf(stderr, "emitting %zu bytes of stream %" PRIu32 "\n", copysize, stream->stream_id);
+
+    /* send data */
+    struct st_quicly_on_ack_t *on_ack = allocate_on_ack(conn, on_ack_stream);
+    if (on_ack == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+    on_ack->data.stream.stream_id = stream->stream_id;
+    quicly_sendbuf_send(&stream->sendbuf, iter, copysize, s->dst, &on_ack->data.stream.args, s->aead);
+    s->dst += copysize;
 
     return 0;
 }
 
 static int send_core(quicly_conn_t *conn, quicly_stream_t *stream, struct st_quicly_send_context_t *s)
 {
-    int ret = 0;
+    quicly_sendbuf_dataiter_t iter;
+    size_t i;
 
-    while (stream->sendbuf.unacked != stream->sendbuf.buf.off) {
-        uint8_t type;
-        uint8_t encoded_id_offset[QUICLY_STREAM_HEADER_SIZE_MAX];
-        size_t encoded_id_offset_size =
-            encode_stream_frame_id_offset(&type, encoded_id_offset, stream->stream_id, stream->sendbuf.unacked);
-        size_t min_required_space = encoded_id_offset_size + (stream->sendbuf.buf.off != 0) - stream->send_fin;
+    quicly_sendbuf_init_dataiter(&stream->sendbuf, &iter);
 
-        if ((ret = prepare_packet(conn, s, min_required_space)) != 0)
-            return ret;
-        if (s->dst == NULL)
-            break;
-
-        uint8_t *type_at = s->dst++;
-
-        /* emit stream header as well as calculating the size of the data to send */
-        size_t capacity = s->dst_end - s->dst - encoded_id_offset_size;
-        size_t avail = stream->sendbuf.buf.off - stream->sendbuf.unacked - stream->send_fin;
-        size_t copysize = capacity <= avail ? capacity : avail;
-        if (stream->send_fin && stream->sendbuf.unacked + copysize + 1 == stream->sendbuf.buf.off)
-            type |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
-        memcpy(s->dst, encoded_id_offset, encoded_id_offset_size);
-        s->dst += encoded_id_offset_size;
-        if (copysize + 2 < capacity) {
-            type |= QUICLY_FRAME_TYPE_STREAM_BIT_DATA_LENGTH;
-            s->dst = encode16(s->dst, (uint16_t)copysize);
+    for (i = 0; i != stream->sendbuf.pending.num_ranges; ++i) {
+        uint64_t start = stream->sendbuf.pending.ranges[i].start, end = stream->sendbuf.pending.ranges[i].end;
+        if (iter.stream_off != start) {
+            assert(iter.stream_off <= start);
+            quicly_sendbuf_advance_dataiter(&iter, start - iter.stream_off);
         }
-        *type_at = type;
-
-        /* encrypt stream header if necessary */
-        if (s->aead != NULL)
-            ptls_aead_encrypt_update(s->aead, type_at, type_at, s->dst - type_at);
-
-        /* emit data */
-        if (copysize != 0) {
-            if (s->aead != NULL) {
-                ptls_aead_encrypt_update(s->aead, s->dst, stream->sendbuf.buf.base + stream->sendbuf.unacked, copysize);
-            } else {
-                memcpy(s->dst, stream->sendbuf.buf.base + stream->sendbuf.unacked, copysize);
+        while (start != end) {
+            int ret = send_stream_frame(conn, stream, s, &iter, end - start);
+            if (ret != 0)
+                return ret;
+            start = iter.stream_off;
+            if (s->dst == NULL) {
+                stream->sendbuf.pending.ranges[i].start = iter.stream_off;
+                quicly_ranges_shrink(&stream->sendbuf.pending, 0, i);
+                return 0;
             }
-            s->dst += copysize;
-fprintf(stderr, "emitting %zu bytes of stream %" PRIu32 "\n", copysize, stream->stream_id);
-            stream->sendbuf.unacked += copysize + stream->send_fin;
         }
     }
 
-    return ret;
+    quicly_ranges_clear(&stream->sendbuf.pending);
+    return 0;
 }
 
 static int send_crytpo_stream(quicly_conn_t *conn, quicly_stream_t *stream, struct st_quicly_send_context_t *s)
@@ -1214,7 +1294,7 @@ static int send_crytpo_stream(quicly_conn_t *conn, quicly_stream_t *stream, stru
         assert(s->dst - s->target->data.base <= max_size);
         memset(s->dst, 0, s->target->data.base + max_size - s->dst);
         s->dst = s->target->data.base + max_size;
-        commit_send_packet(s);
+        commit_send_packet(conn, s);
     }
 
     return 0;
@@ -1249,7 +1329,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         goto Exit;
 
     if (s.target != NULL)
-        commit_send_packet(&s);
+        commit_send_packet(conn, &s);
 
     /* send data in other streams (TODO respect priorities between streams) */
     kh_foreach_value(conn->streams, stream, {
@@ -1259,7 +1339,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         }
     });
     if (s.target != NULL)
-        commit_send_packet(&s);
+        commit_send_packet(conn, &s);
 
     *num_packets = s.num_packets;
     ret = 0;
@@ -1290,15 +1370,8 @@ static int handle_stream_frame(quicly_conn_t *conn, struct st_quicly_decoded_fra
     }
 
     if (stream != NULL) {
-        ptls_iovec_t v = ptls_iovec_init(frame->data.stream.data.base, frame->data.stream.data.len);
-        /* FIXME ignore duplicates accurately */
-        if (stream->max_received_offset < frame->data.stream.offset + frame->data.stream.data.len) {
-            fprintf(stderr, "receiving stream_id: %" PRIu32 ", offset: %" PRIu64 ", len: %zu\n", stream->stream_id,
-                    frame->data.stream.offset, frame->data.stream.data.len);
-            stream->max_received_offset += frame->data.stream.offset + frame->data.stream.data.len;
-            if ((ret = stream->on_receive(conn, stream, &v, v.len != 0, frame->data.stream.fin)) != 0)
-                goto Exit;
-        }
+        if ((ret = apply_stream_frame(conn, stream, frame)) != 0)
+            goto Exit;
     }
 
 Exit:
@@ -1307,7 +1380,63 @@ Exit:
 
 static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_decoded_frame_t *frame)
 {
-    /* TODO */
+    struct st_quicly_on_ack_block_t *on_ack_block = conn->egress.acks_inflight.head,
+                                    **on_ack_block_ref = &conn->egress.acks_inflight.head;
+    size_t on_ack_block_off = 0;
+    uint64_t packet_number = frame->data.ack.smallest_acknowledged;
+    int ret;
+
+#define NEXT_ON_ACK(unused_counter)                                                                                                \
+    do {                                                                                                                           \
+        if (++on_ack_block_off == on_ack_block->count) {                                                                           \
+            if (on_ack_block->next == NULL)                                                                                        \
+                return 0;                                                                                                          \
+            on_ack_block_ref = &on_ack_block->next;                                                                                \
+            on_ack_block = on_ack_block->next;                                                                                     \
+            on_ack_block_off = 0;                                                                                                  \
+        }                                                                                                                          \
+    } while (0)
+
+    if (on_ack_block == NULL)
+        return 0;
+
+    size_t i = frame->data.ack.num_gaps;
+    while (1) {
+        uint64_t block_length = frame->data.ack.ack_block_lengths[i];
+        if (block_length != 0) {
+            do {
+                while (on_ack_block->actions[on_ack_block_off].packet_number < packet_number)
+                    NEXT_ON_ACK();
+                while (on_ack_block->actions[on_ack_block_off].packet_number == packet_number) {
+                    struct st_quicly_on_ack_t *on_ack = on_ack_block->actions + on_ack_block_off;
+                    if (on_ack->acked != NULL) {
+                        if ((ret = on_ack->acked(conn, 1, on_ack)) != 0)
+                            return ret;
+                        if (--on_ack_block->unacked == 0) {
+                            *on_ack_block_ref = on_ack_block->next;
+                            free(on_ack_block);
+                            if (*on_ack_block_ref == NULL) {
+                                conn->egress.acks_inflight.tail_ref = on_ack_block_ref;
+                                return 0;
+                            }
+                            on_ack_block_off = 0;
+                            continue;
+                        }
+                    } else {
+                        /* TODO handle duplicate ack */
+                        fprintf(stderr, "got duplicate ack\n");
+                    }
+                    NEXT_ON_ACK();
+                }
+            } while (++packet_number, --block_length != 0);
+        }
+        if (i-- == 0)
+            break;
+        packet_number += frame->data.ack.gaps[i];
+    }
+
+#undef NEXT_ON_ACK
+
     return 0;
 }
 
@@ -1408,7 +1537,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
     } while (p != end);
     if (should_ack) {
-        if ((ret = acker_record(&conn->ingress.acker, packet->packet_number)) != 0)
+        if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number, packet->packet_number + 1)) != 0)
             goto Exit;
     }
 
@@ -1430,24 +1559,23 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
     return 0;
 }
 
-int quicly_write_stream(quicly_stream_t *stream, const void *data, size_t len, int is_fin)
+int quicly_write_stream(quicly_stream_t *stream, const void *p, size_t len, int fin, quicly_buffer_free_cb free_cb)
 {
     int ret;
 
-    assert(!stream->send_fin);
-
-    if ((ret = ptls_buffer_reserve(&stream->sendbuf.buf, len + (is_fin != 0))) != 0)
+    if (len != 0 && (ret = quicly_sendbuf_push(&stream->sendbuf, p, len, free_cb)) != 0)
+        return ret;
+    if (fin && (ret = quicly_sendbuf_pushclose(&stream->sendbuf)) != 0)
         return ret;
 
-    memcpy(stream->sendbuf.buf.base + stream->sendbuf.buf.off, data, len);
-    stream->sendbuf.buf.off += len;
-    if (is_fin) {
-        /* push fake byte to ease the handling of fin */
-        stream->sendbuf.buf.base[stream->sendbuf.buf.off++] = 'X';
-        stream->send_fin = 1;
-    }
-
+    /* TODO schedule for write */
     return 0;
+}
+
+int quicly_reset_stream(quicly_stream_t *stream)
+{
+    /* TODO */
+    return QUICLY_ERROR_TBD;
 }
 
 quicly_raw_packet_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize)
