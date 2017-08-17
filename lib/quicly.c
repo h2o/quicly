@@ -307,7 +307,7 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
         }
         if (src_end - src < packet_number_size)
             return QUICLY_ERROR_INVALID_PACKET_HEADER;
-        packet->packet_number = decodev(&src, packet_number_size);
+        packet->packet_number = (uint32_t)decodev(&src, packet_number_size);
     }
 
     packet->header.len = src - packet->header.base;
