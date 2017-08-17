@@ -29,6 +29,7 @@
 #include "quicly/error.h"
 #include "quicly/recvbuf.h"
 #include "quicly/sendbuf.h"
+#include "quicly/maxsender.h"
 
 typedef struct st_quicly_raw_packet_t {
     ptls_iovec_t data;
@@ -112,11 +113,42 @@ struct _st_quicly_conn_public_t {
 };
 
 struct st_quicly_stream_t {
+    /**
+     *
+     */
+    quicly_conn_t *conn;
+    /**
+     * stream id
+     */
     uint32_t stream_id;
+    /**
+     * send buffer
+     */
     quicly_sendbuf_t sendbuf;
+    /**
+     * receive buffer
+     */
     quicly_recvbuf_t recvbuf;
+    /**
+     * application data pointer
+     */
     void *data;
+    /**
+     * the receive callback
+     */
     int (*on_receive)(quicly_conn_t *conn, quicly_stream_t *stream);
+    /**
+     * receive window size
+     */
+    uint32_t recv_window_size;
+    /**
+     * sends receive window updates to peer
+     */
+    quicly_maxsender_t _max_stream_data_sender;
+    /**
+     * send window
+     */
+    uint64_t _peer_max_stream_data;
 };
 
 typedef struct st_quicly_decode_packet_t {

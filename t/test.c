@@ -106,45 +106,29 @@ static void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t
     }
 }
 
-static void send_data(quicly_stream_t *stream, const char *s)
+static int on_receive(quicly_conn_t *conn, quicly_stream_t *stream)
 {
-    quicly_sendbuf_write(&stream->sendbuf, s, strlen(s), NULL);
-    quicly_sendbuf_shutdown(&stream->sendbuf);
-}
-
-static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
-{
-    ptls_iovec_t input;
-
-    while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0)
-        quicly_recvbuf_shift(&stream->recvbuf, input.len);
-
-    if (quicly_recvbuf_is_shutdown(&stream->recvbuf))
-        send_data(stream, "HTTP/1.0 200 OK\r\n\r\nhello world\n");
     return 0;
 }
 
 static int on_stream_open(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream)
 {
-    stream->on_receive = on_req_receive;
+    stream->on_receive = on_receive;
     return 0;
 }
 
-static int on_resp_receive(quicly_conn_t *conn, quicly_stream_t *stream)
+static int recvbuf_is(quicly_recvbuf_t *buf, const char *s)
 {
-    ptls_iovec_t input;
-
-    while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
-        fwrite(input.base, 1, input.len, stderr);
-        quicly_recvbuf_shift(&stream->recvbuf, input.len);
+    for (; *s != '\0'; ++s) {
+        ptls_iovec_t input = quicly_recvbuf_get(buf);
+        if (input.len == 0)
+            return 0;
+        if (*s != input.base[0])
+            return 0;
+        quicly_recvbuf_shift(buf, 1);
     }
 
-    if (quicly_recvbuf_is_shutdown(&stream->recvbuf)) {
-        done_testing();
-        exit(0);
-    }
-
-    return 0;
+    return 1;
 }
 
 static void test_mozquic(void)
@@ -154,6 +138,89 @@ static void test_mozquic(void)
     static const uint8_t *p;
     p = (void *)mess;
     decode_frame(&frame, &p, p + 10);
+}
+
+static void transmit(quicly_conn_t *src, quicly_conn_t *dst)
+{
+    quicly_raw_packet_t *packets[32];
+    size_t num_packets, i;
+    quicly_decoded_packet_t decoded[32];
+    int ret;
+
+    num_packets = sizeof(packets) / sizeof(packets[0]);
+    ret = quicly_send(src, packets, &num_packets);
+    ok(ret == 0);
+    ok(num_packets != 0);
+
+    decode_packets(decoded, packets, num_packets);
+    for (i = 0; i != num_packets; ++i) {
+        ret = quicly_receive(dst, decoded + i);
+        ok(ret == 0);
+    }
+    free_packets(packets, num_packets);
+}
+
+static quicly_conn_t *client, *server;
+
+static void simple_http(void)
+{
+    const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
+    quicly_stream_t *client_stream, *server_stream;
+    int ret;
+
+    ret = quicly_open_stream(client, &client_stream);
+    ok(ret == 0);
+    client_stream->on_receive = on_receive;
+    quicly_sendbuf_write(&client_stream->sendbuf, req, strlen(req), NULL);
+    quicly_sendbuf_shutdown(&client_stream->sendbuf);
+
+    transmit(client, server);
+
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    ok(recvbuf_is(&server_stream->recvbuf, req));
+    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
+    quicly_sendbuf_write(&server_stream->sendbuf, resp, strlen(resp), NULL);
+    quicly_sendbuf_shutdown(&server_stream->sendbuf);
+
+    transmit(server, client);
+
+    ok(recvbuf_is(&client_stream->recvbuf, resp));
+    ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
+}
+
+static void tiny_window(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    int ret;
+
+    quic_ctx.transport_params.initial_max_stream_data = 4;
+
+    ret = quicly_open_stream(client, &client_stream);
+    ok(ret == 0);
+    client_stream->_peer_max_stream_data = 4;
+
+    quicly_sendbuf_write(&client_stream->sendbuf, "hello world", 11, NULL);
+    quicly_sendbuf_shutdown(&client_stream->sendbuf);
+
+    transmit(client, server);
+
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    recvbuf_is(&server_stream->recvbuf, "hel");
+    ok(quicly_recvbuf_available(&server_stream->recvbuf) == 1);
+
+    transmit(server, client);
+    transmit(client, server);
+
+    recvbuf_is(&server_stream->recvbuf, "lo w");
+    ok(quicly_recvbuf_available(&server_stream->recvbuf) == 0);
+
+    transmit(server, client);
+    transmit(client, server);
+
+    recvbuf_is(&server_stream->recvbuf, "orld");
+    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
 }
 
 int main(int argc, char **argv)
@@ -188,8 +255,6 @@ int main(int argc, char **argv)
         EVP_PKEY_free(pkey);
     }
 
-    quicly_conn_t *client, *server;
-    static quicly_stream_t *client_stream;
     quicly_raw_packet_t *packets[32];
     size_t num_packets;
     quicly_decoded_packet_t decoded[32];
@@ -224,40 +289,8 @@ int main(int argc, char **argv)
     free_packets(packets, num_packets);
     ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
 
-    /* enqueue HTTP request */
-    ret = quicly_open_stream(client, &client_stream);
-    ok(ret == 0);
-    client_stream->on_receive = on_resp_receive;
-    send_data(client_stream, "GET / HTTP/1.0\r\n\r\n");
+    subtest("simple-http", simple_http);
+    subtest("tiny-window", tiny_window);
 
-    /* send ClientFinished and the request */
-    num_packets = sizeof(packets) / sizeof(packets[0]);
-    ret = quicly_send(client, packets, &num_packets);
-    ok(ret == 0);
-    ok(num_packets != 0);
-
-    /* recieve ClientFinish and request */
-    decode_packets(decoded, packets, num_packets);
-    for (i = 0; i != num_packets; ++i) {
-        ret = quicly_receive(server, decoded + i);
-        ok(ret == 0);
-    }
-    free_packets(packets, num_packets);
-
-    /* send response */
-    num_packets = sizeof(packets) / sizeof(packets[0]);
-    ret = quicly_send(server, packets, &num_packets);
-    ok(ret == 0);
-    ok(num_packets != 0);
-
-    /* receive response */
-    decode_packets(decoded, packets, num_packets);
-    for (i = 0; i != num_packets; ++i) {
-        ret = quicly_receive(client, decoded + i);
-        ok(ret == 0);
-    }
-
-    ok(!"unreachable");
-
-    return 111;
+    return done_testing();
 }

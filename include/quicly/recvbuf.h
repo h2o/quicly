@@ -54,13 +54,9 @@ typedef struct st_quicly_recvbuf_t {
     quicly_recvbuf_change_cb on_change;
 } quicly_recvbuf_t;
 
-typedef struct st_quicly_recvbuf_iter_t {
-    quicly_buffer_iter_t d;
-    size_t left_len;
-} quicly_recvbuf_iter_t;
-
 void quicly_recvbuf_init(quicly_recvbuf_t *buf, quicly_recvbuf_change_cb on_change);
 void quicly_recvbuf_dispose(quicly_recvbuf_t *buf);
+static size_t quicly_recvbuf_available(quicly_recvbuf_t *buf);
 static ptls_iovec_t quicly_recvbuf_get(quicly_recvbuf_t *buf);
 static int quicly_recvbuf_is_shutdown(quicly_recvbuf_t *buf);
 static void quicly_recvbuf_shift(quicly_recvbuf_t *buf, size_t delta);
@@ -69,9 +65,14 @@ int quicly_recvbuf_write(quicly_recvbuf_t *buf, uint64_t offset, const void *p, 
 
 /* inline definitions */
 
+inline size_t quicly_recvbuf_available(quicly_recvbuf_t *buf)
+{
+    return buf->received.ranges[0].end - buf->data_off;
+}
+
 inline ptls_iovec_t quicly_recvbuf_get(quicly_recvbuf_t *buf)
 {
-    size_t avail = buf->received.ranges[0].end - buf->data_off;
+    size_t avail = quicly_recvbuf_available(buf);
     if (avail == 0)
         return ptls_iovec_init(NULL, 0);
     ptls_iovec_t ret = ptls_iovec_init(buf->data.first->p + buf->data.skip, buf->data.first->len - buf->data.skip);
