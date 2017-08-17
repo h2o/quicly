@@ -27,15 +27,15 @@ void test_ranges()
     quicly_ranges_t ranges;
     int ret;
 
-#define CHECK(...) \
-    do { \
-        static const struct st_quicly_range_t expected[] = {__VA_ARGS__}; \
-        ok(ranges.num_ranges == sizeof(expected) / sizeof(expected[0])); \
-        size_t i; \
-        for (i = 0; i != ranges.num_ranges; ++i) { \
-            ok(ranges.ranges[i].start == expected[i].start); \
-            ok(ranges.ranges[i].end == expected[i].end); \
-        } \
+#define CHECK(...)                                                                                                                 \
+    do {                                                                                                                           \
+        static const struct st_quicly_range_t expected[] = {__VA_ARGS__};                                                          \
+        ok(ranges.num_ranges == sizeof(expected) / sizeof(expected[0]));                                                           \
+        size_t i;                                                                                                                  \
+        for (i = 0; i != ranges.num_ranges; ++i) {                                                                                 \
+            ok(ranges.ranges[i].start == expected[i].start);                                                                       \
+            ok(ranges.ranges[i].end == expected[i].end);                                                                           \
+        }                                                                                                                          \
     } while (0)
 
     quicly_ranges_init(&ranges);

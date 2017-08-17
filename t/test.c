@@ -108,7 +108,11 @@ static void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t
 
 static int send_data(quicly_stream_t *stream, const char *s)
 {
-    return quicly_write_stream(stream, s, strlen(s), 1, NULL);
+    int ret;
+
+    if ((ret = quicly_write_stream(stream, s, strlen(s), NULL)) != 0)
+        return ret;
+    return quicly_shutdown_stream(stream);
 }
 
 static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)

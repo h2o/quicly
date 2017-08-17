@@ -185,7 +185,11 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream);
 /**
  *
  */
-int quicly_write_stream(quicly_stream_t *stream, const void *p, size_t len, int fin, quicly_buffer_free_cb free_cb);
+int quicly_write_stream(quicly_stream_t *stream, const void *p, size_t len, quicly_buffer_free_cb free_cb);
+/**
+ *
+ */
+int quicly_shutdown_stream(quicly_stream_t *stream);
 /**
  *
  */

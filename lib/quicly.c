@@ -580,7 +580,7 @@ static int write_tlsbuf(quicly_stream_t *stream, ptls_buffer_t *tlsbuf)
 
     if (tlsbuf->off != 0) {
         assert(tlsbuf->is_allocated);
-        if ((ret = quicly_write_stream(stream, tlsbuf->base, tlsbuf->off, 0, senddata_free)) != 0)
+        if ((ret = quicly_write_stream(stream, tlsbuf->base, tlsbuf->off, senddata_free)) != 0)
             return ret;
         ptls_buffer_init(tlsbuf, "", 0);
     } else {
@@ -1545,6 +1545,12 @@ Exit:
     return ret;
 }
 
+static int schedule_stream_for_write(quicly_stream_t *stream)
+{
+    /* TODO */
+    return 0;
+}
+
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
 {
     if (conn->super.host.next_stream_id == 0)
@@ -1559,17 +1565,24 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
     return 0;
 }
 
-int quicly_write_stream(quicly_stream_t *stream, const void *p, size_t len, int fin, quicly_buffer_free_cb free_cb)
+int quicly_write_stream(quicly_stream_t *stream, const void *p, size_t len, quicly_buffer_free_cb free_cb)
 {
     int ret;
 
-    if (len != 0 && (ret = quicly_sendbuf_push(&stream->sendbuf, p, len, free_cb)) != 0)
-        return ret;
-    if (fin && (ret = quicly_sendbuf_pushclose(&stream->sendbuf)) != 0)
+    if ((ret = quicly_sendbuf_push(&stream->sendbuf, p, len, free_cb)) != 0)
         return ret;
 
-    /* TODO schedule for write */
-    return 0;
+    return schedule_stream_for_write(stream);
+}
+
+int quicly_shutdown_stream(quicly_stream_t *stream)
+{
+    int ret;
+
+    if ((ret = quicly_sendbuf_pushclose(&stream->sendbuf)) != 0)
+        return ret;
+
+    return schedule_stream_for_write(stream);
 }
 
 int quicly_reset_stream(quicly_stream_t *stream)

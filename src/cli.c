@@ -32,7 +32,11 @@ static quicly_context_t ctx = {&tlsctx, 1280, {}, quicly_default_alloc_packet, q
 
 static int send_data(quicly_stream_t *stream, const char *s)
 {
-    return quicly_write_stream(stream, s, strlen(s), 1, NULL);
+    int ret;
+
+    if ((ret = quicly_write_stream(stream, s, strlen(s), NULL)) != 0)
+        return ret;
+    return quicly_shutdown_stream(stream);
 }
 
 static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
@@ -42,16 +46,16 @@ static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
 
     if (stream->recvbuf.data_off == 0) {
         const char *s = "HTTP/1.0 200 OK\r\n\r\n";
-        if ((ret = quicly_write_stream(stream, s, strlen(s), 0, NULL)) != 0)
+        if ((ret = quicly_write_stream(stream, s, strlen(s), NULL)) != 0)
             return ret;
     }
     while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
-        if ((ret = quicly_write_stream(stream, input.base, input.len, 0, NULL)) != 0)
+        if ((ret = quicly_write_stream(stream, input.base, input.len, NULL)) != 0)
             return ret;
         quicly_recvbuf_shift(&stream->recvbuf, input.len);
     }
     if (quicly_recvbuf_is_eos(&stream->recvbuf)) {
-        if ((ret = quicly_write_stream(stream, NULL, 0, 1, NULL)) != 0)
+        if ((ret = quicly_shutdown_stream(stream)) != 0)
             return ret;
     }
 
