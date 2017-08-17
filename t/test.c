@@ -155,7 +155,7 @@ static void test_mozquic(void)
     struct st_quicly_decoded_frame_t frame;
     static const char *mess = "\xc5\0\0\0\0\0\0\xb6\x16\x03";
     static const uint8_t *p;
-    p = mess;
+    p = (void *)mess;
     decode_frame(&frame, &p, p + 10);
 }
 
