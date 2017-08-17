@@ -42,7 +42,7 @@ void quicly_sendbuf_dispose(quicly_sendbuf_t *buf)
     quicly_ranges_dispose(&buf->pending);
 }
 
-void quicly_sendbuf_push(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
+void quicly_sendbuf_write(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
 {
     uint64_t end_off;
     int ret;
@@ -73,7 +73,7 @@ Exit:
     buf->on_change(buf, ret);
 }
 
-void quicly_sendbuf_send(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
+void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
                          quicly_sendbuf_ackargs_t *ackargs, ptls_aead_context_t *aead)
 {
     ackargs->start = iter->stream_off;

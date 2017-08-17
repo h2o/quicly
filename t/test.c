@@ -108,7 +108,7 @@ static void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t
 
 static void send_data(quicly_stream_t *stream, const char *s)
 {
-    quicly_sendbuf_push(&stream->sendbuf, s, strlen(s), NULL);
+    quicly_sendbuf_write(&stream->sendbuf, s, strlen(s), NULL);
     quicly_sendbuf_shutdown(&stream->sendbuf);
 }
 

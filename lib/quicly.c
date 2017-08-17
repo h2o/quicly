@@ -588,7 +588,7 @@ static void write_tlsbuf(quicly_stream_t *stream, ptls_buffer_t *tlsbuf)
 {
     if (tlsbuf->off != 0) {
         assert(tlsbuf->is_allocated);
-        quicly_sendbuf_push(&stream->sendbuf, tlsbuf->base, tlsbuf->off, senddata_free);
+        quicly_sendbuf_write(&stream->sendbuf, tlsbuf->base, tlsbuf->off, senddata_free);
         ptls_buffer_init(tlsbuf, "", 0);
     } else {
         assert(!tlsbuf->is_allocated);
@@ -1238,7 +1238,7 @@ static int send_stream_frame(quicly_conn_t *conn, quicly_stream_t *stream, struc
     if (on_ack == NULL)
         return PTLS_ERROR_NO_MEMORY;
     on_ack->data.stream.stream_id = stream->stream_id;
-    quicly_sendbuf_send(&stream->sendbuf, iter, copysize, s->dst, &on_ack->data.stream.args, s->aead);
+    quicly_sendbuf_emit(&stream->sendbuf, iter, copysize, s->dst, &on_ack->data.stream.args, s->aead);
     s->dst += copysize;
 
     return 0;

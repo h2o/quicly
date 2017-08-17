@@ -32,7 +32,7 @@ static quicly_context_t ctx = {&tlsctx, 1280, {}, quicly_default_alloc_packet, q
 
 static void send_data(quicly_stream_t *stream, const char *s)
 {
-    quicly_sendbuf_push(&stream->sendbuf, s, strlen(s), NULL);
+    quicly_sendbuf_write(&stream->sendbuf, s, strlen(s), NULL);
     quicly_sendbuf_shutdown(&stream->sendbuf);
 }
 
@@ -42,10 +42,10 @@ static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
 
     if (stream->recvbuf.data_off == 0) {
         const char *s = "HTTP/1.0 200 OK\r\n\r\n";
-        quicly_sendbuf_push(&stream->sendbuf, s, strlen(s), NULL);
+        quicly_sendbuf_write(&stream->sendbuf, s, strlen(s), NULL);
     }
     while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
-        quicly_sendbuf_push(&stream->sendbuf, input.base, input.len, NULL);
+        quicly_sendbuf_write(&stream->sendbuf, input.base, input.len, NULL);
         quicly_recvbuf_shift(&stream->recvbuf, input.len);
     }
     if (quicly_recvbuf_is_shutdown(&stream->recvbuf))
