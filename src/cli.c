@@ -30,34 +30,26 @@ static int on_stream_open(quicly_context_t *ctx, quicly_conn_t *conn, quicly_str
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx = {&tlsctx, 1280, {}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open};
 
-static int send_data(quicly_stream_t *stream, const char *s)
+static void send_data(quicly_stream_t *stream, const char *s)
 {
-    int ret;
-
-    if ((ret = quicly_write_stream(stream, s, strlen(s), NULL)) != 0)
-        return ret;
-    return quicly_shutdown_stream(stream);
+    quicly_sendbuf_push(&stream->sendbuf, s, strlen(s), NULL);
+    quicly_sendbuf_shutdown(&stream->sendbuf);
 }
 
 static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
 {
     ptls_iovec_t input;
-    int ret;
 
     if (stream->recvbuf.data_off == 0) {
         const char *s = "HTTP/1.0 200 OK\r\n\r\n";
-        if ((ret = quicly_write_stream(stream, s, strlen(s), NULL)) != 0)
-            return ret;
+        quicly_sendbuf_push(&stream->sendbuf, s, strlen(s), NULL);
     }
     while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
-        if ((ret = quicly_write_stream(stream, input.base, input.len, NULL)) != 0)
-            return ret;
+        quicly_sendbuf_push(&stream->sendbuf, input.base, input.len, NULL);
         quicly_recvbuf_shift(&stream->recvbuf, input.len);
     }
-    if (quicly_recvbuf_is_eos(&stream->recvbuf)) {
-        if ((ret = quicly_shutdown_stream(stream)) != 0)
-            return ret;
-    }
+    if (quicly_recvbuf_is_shutdown(&stream->recvbuf))
+        quicly_sendbuf_shutdown(&stream->sendbuf);
 
     return 0;
 }
@@ -71,7 +63,7 @@ static int on_resp_receive(quicly_conn_t *conn, quicly_stream_t *stream)
         quicly_recvbuf_shift(&stream->recvbuf, input.len);
     }
 
-    if (quicly_recvbuf_is_eos(&stream->recvbuf))
+    if (quicly_recvbuf_is_shutdown(&stream->recvbuf))
         exit(0);
 
     return 0;
@@ -185,7 +177,7 @@ fprintf(stderr, "received %zd bytes!\n", rret);
                         ret = quicly_open_stream(conn, &stream);
                         assert(ret == 0);
                         stream->on_receive = on_resp_receive;
-                        ret = send_data(stream, "GET / HTTP/1.0\r\n\r\n");
+                        send_data(stream, "GET / HTTP/1.0\r\n\r\n");
                     }
                 }
                 if (conn != NULL)

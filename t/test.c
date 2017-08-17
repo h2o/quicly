@@ -106,13 +106,10 @@ static void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t
     }
 }
 
-static int send_data(quicly_stream_t *stream, const char *s)
+static void send_data(quicly_stream_t *stream, const char *s)
 {
-    int ret;
-
-    if ((ret = quicly_write_stream(stream, s, strlen(s), NULL)) != 0)
-        return ret;
-    return quicly_shutdown_stream(stream);
+    quicly_sendbuf_push(&stream->sendbuf, s, strlen(s), NULL);
+    quicly_sendbuf_shutdown(&stream->sendbuf);
 }
 
 static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
@@ -122,8 +119,8 @@ static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
     while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0)
         quicly_recvbuf_shift(&stream->recvbuf, input.len);
 
-    if (quicly_recvbuf_is_eos(&stream->recvbuf))
-        return send_data(stream, "HTTP/1.0 200 OK\r\n\r\nhello world\n");
+    if (quicly_recvbuf_is_shutdown(&stream->recvbuf))
+        send_data(stream, "HTTP/1.0 200 OK\r\n\r\nhello world\n");
     return 0;
 }
 
@@ -142,7 +139,7 @@ static int on_resp_receive(quicly_conn_t *conn, quicly_stream_t *stream)
         quicly_recvbuf_shift(&stream->recvbuf, input.len);
     }
 
-    if (quicly_recvbuf_is_eos(&stream->recvbuf)) {
+    if (quicly_recvbuf_is_shutdown(&stream->recvbuf)) {
         done_testing();
         exit(0);
     }
@@ -231,8 +228,7 @@ int main(int argc, char **argv)
     ret = quicly_open_stream(client, &client_stream);
     ok(ret == 0);
     client_stream->on_receive = on_resp_receive;
-    ret = send_data(client_stream, "GET / HTTP/1.0\r\n\r\n");
-    ok(ret == 0);
+    send_data(client_stream, "GET / HTTP/1.0\r\n\r\n");
 
     /* send ClientFinished and the request */
     num_packets = sizeof(packets) / sizeof(packets[0]);

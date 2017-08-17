@@ -25,13 +25,14 @@
 #include "picotls.h"
 #include "quicly/sendbuf.h"
 
-void quicly_sendbuf_init(quicly_sendbuf_t *buf)
+void quicly_sendbuf_init(quicly_sendbuf_t *buf, quicly_sendbuf_change_cb on_change)
 {
     quicly_ranges_init(&buf->acked);
     quicly_ranges_update(&buf->acked, 0, 0);
     quicly_ranges_init(&buf->pending);
     quicly_buffer_init(&buf->data);
     buf->eos = UINT64_MAX;
+    buf->on_change = on_change;
 }
 
 void quicly_sendbuf_dispose(quicly_sendbuf_t *buf)
@@ -41,25 +42,35 @@ void quicly_sendbuf_dispose(quicly_sendbuf_t *buf)
     quicly_ranges_dispose(&buf->pending);
 }
 
-int quicly_sendbuf_push(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
+void quicly_sendbuf_push(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
 {
+    uint64_t end_off;
     int ret;
 
     assert(buf->eos == UINT64_MAX);
 
     if ((ret = quicly_buffer_push(&buf->data, p, len, free_cb)) != 0)
-        return ret;
+        goto Exit;
+    end_off = buf->acked.ranges[0].end + buf->data.len;
+    if ((ret = quicly_ranges_update(&buf->pending, end_off - len, end_off)) != 0)
+        goto Exit;
 
-    uint64_t end_off = buf->acked.ranges[0].end + buf->data.len;
-    return quicly_ranges_update(&buf->pending, end_off - len, end_off);
+Exit:
+    buf->on_change(buf, ret);
 }
 
-int quicly_sendbuf_pushclose(quicly_sendbuf_t *buf)
+void quicly_sendbuf_shutdown(quicly_sendbuf_t *buf)
 {
+    int ret;
+
     assert(buf->eos == UINT64_MAX);
 
     buf->eos = buf->acked.ranges[0].end + buf->data.len;
-    return quicly_ranges_update(&buf->pending, buf->eos, buf->eos + 1);
+    if ((ret = quicly_ranges_update(&buf->pending, buf->eos, buf->eos + 1)) != 0)
+        goto Exit;
+
+Exit:
+    buf->on_change(buf, ret);
 }
 
 void quicly_sendbuf_send(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,

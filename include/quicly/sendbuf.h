@@ -25,6 +25,9 @@
 #include "quicly/buffer.h"
 #include "quicly/ranges.h"
 
+typedef struct st_quicly_sendbuf_t quicly_sendbuf_t;
+typedef void (*quicly_sendbuf_change_cb)(quicly_sendbuf_t *buf, int err);
+
 typedef struct st_quicly_sendbuf_t {
     /**
      * ranges that have been acked (guaranteed to be non-empty; i.e., acked.ranges[0].end == contiguous_acked_offset)
@@ -42,6 +45,10 @@ typedef struct st_quicly_sendbuf_t {
      * end_of_stream offset (or UINT64_MAX)
      */
     uint64_t eos;
+    /**
+     * callback
+     */
+    quicly_sendbuf_change_cb on_change;
 } quicly_sendbuf_t;
 
 typedef struct st_quicly_sendbuf_ackargs_t {
@@ -54,10 +61,10 @@ typedef struct st_quicly_sendbuf_dataiter_t {
     uint64_t stream_off;
 } quicly_sendbuf_dataiter_t;
 
-void quicly_sendbuf_init(quicly_sendbuf_t *buf);
+void quicly_sendbuf_init(quicly_sendbuf_t *buf, quicly_sendbuf_change_cb on_change);
 void quicly_sendbuf_dispose(quicly_sendbuf_t *buf);
-int quicly_sendbuf_push(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb);
-int quicly_sendbuf_pushclose(quicly_sendbuf_t *buf);
+void quicly_sendbuf_push(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb);
+void quicly_sendbuf_shutdown(quicly_sendbuf_t *buf);
 void quicly_sendbuf_send(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
                          quicly_sendbuf_ackargs_t *ackargs, ptls_aead_context_t *aead);
 int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args);

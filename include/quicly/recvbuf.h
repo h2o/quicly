@@ -28,6 +28,9 @@
 #include "quicly/buffer.h"
 #include "quicly/ranges.h"
 
+typedef struct st_quicly_recvbuf_t quicly_recvbuf_t;
+typedef void (*quicly_recvbuf_change_cb)(quicly_recvbuf_t *buf, int err);
+
 typedef struct st_quicly_recvbuf_t {
     /**
      * ranges that have been received (guaranteed to be non-empty; first element always start from zero)
@@ -45,6 +48,10 @@ typedef struct st_quicly_recvbuf_t {
      * end_of_stream offset (or UINT64_MAX)
      */
     uint64_t eos;
+    /**
+     * callback
+     */
+    quicly_recvbuf_change_cb on_change;
 } quicly_recvbuf_t;
 
 typedef struct st_quicly_recvbuf_iter_t {
@@ -52,12 +59,12 @@ typedef struct st_quicly_recvbuf_iter_t {
     size_t left_len;
 } quicly_recvbuf_iter_t;
 
-void quicly_recvbuf_init(quicly_recvbuf_t *buf);
+void quicly_recvbuf_init(quicly_recvbuf_t *buf, quicly_recvbuf_change_cb on_change);
 void quicly_recvbuf_dispose(quicly_recvbuf_t *buf);
 static ptls_iovec_t quicly_recvbuf_get(quicly_recvbuf_t *buf);
-static int quicly_recvbuf_is_eos(quicly_recvbuf_t *buf);
+static int quicly_recvbuf_is_shutdown(quicly_recvbuf_t *buf);
 static void quicly_recvbuf_shift(quicly_recvbuf_t *buf, size_t delta);
-static int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at);
+int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at);
 int quicly_recvbuf_write(quicly_recvbuf_t *buf, uint64_t offset, const void *p, size_t len);
 
 /* inline definitions */
@@ -73,25 +80,19 @@ inline ptls_iovec_t quicly_recvbuf_get(quicly_recvbuf_t *buf)
     return ret;
 }
 
-inline int quicly_recvbuf_is_eos(quicly_recvbuf_t *buf)
+inline int quicly_recvbuf_is_shutdown(quicly_recvbuf_t *buf)
 {
     return buf->data_off == buf->eos;
 }
 
 inline void quicly_recvbuf_shift(quicly_recvbuf_t *buf, size_t delta)
 {
+    if (delta == 0)
+        return;
+
     buf->data_off += delta;
     quicly_buffer_shift(&buf->data, delta);
-}
-
-inline int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at)
-{
-    if (buf->eos == UINT64_MAX) {
-        buf->eos = eos_at;
-    } else if (buf->eos != eos_at) {
-        return QUICLY_ERROR_TBD;
-    }
-    return 0;
+    (*buf->on_change)(buf, 0);
 }
 
 #endif

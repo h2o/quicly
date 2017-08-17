@@ -484,6 +484,16 @@ Exit:
     return ret;
 }
 
+static void on_sendbuf_change(quicly_sendbuf_t *buf, int err)
+{
+    /* TODO */
+}
+
+static void on_recvbuf_change(quicly_recvbuf_t *buf, int err)
+{
+    /* TODO */
+}
+
 static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
 {
     quicly_stream_t *stream;
@@ -491,8 +501,8 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
     if ((stream = malloc(sizeof(*stream))) == NULL)
         return NULL;
     stream->stream_id = stream_id;
-    quicly_sendbuf_init(&stream->sendbuf);
-    quicly_recvbuf_init(&stream->recvbuf);
+    quicly_sendbuf_init(&stream->sendbuf, on_sendbuf_change);
+    quicly_recvbuf_init(&stream->recvbuf, on_recvbuf_change);
     stream->data = NULL;
     stream->on_receive = NULL;
 
@@ -574,20 +584,15 @@ static void senddata_free(struct st_quicly_buffer_vec_t *vec)
     free(vec);
 }
 
-static int write_tlsbuf(quicly_stream_t *stream, ptls_buffer_t *tlsbuf)
+static void write_tlsbuf(quicly_stream_t *stream, ptls_buffer_t *tlsbuf)
 {
-    int ret;
-
     if (tlsbuf->off != 0) {
         assert(tlsbuf->is_allocated);
-        if ((ret = quicly_write_stream(stream, tlsbuf->base, tlsbuf->off, senddata_free)) != 0)
-            return ret;
+        quicly_sendbuf_push(&stream->sendbuf, tlsbuf->base, tlsbuf->off, senddata_free);
         ptls_buffer_init(tlsbuf, "", 0);
     } else {
         assert(!tlsbuf->is_allocated);
     }
-
-    return 0;
 }
 
 static int crypto_stream_receive_handshake(quicly_conn_t *conn, quicly_stream_t *stream)
@@ -1545,12 +1550,6 @@ Exit:
     return ret;
 }
 
-static int schedule_stream_for_write(quicly_stream_t *stream)
-{
-    /* TODO */
-    return 0;
-}
-
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
 {
     if (conn->super.host.next_stream_id == 0)
@@ -1563,26 +1562,6 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
         conn->super.host.next_stream_id = 0;
 
     return 0;
-}
-
-int quicly_write_stream(quicly_stream_t *stream, const void *p, size_t len, quicly_buffer_free_cb free_cb)
-{
-    int ret;
-
-    if ((ret = quicly_sendbuf_push(&stream->sendbuf, p, len, free_cb)) != 0)
-        return ret;
-
-    return schedule_stream_for_write(stream);
-}
-
-int quicly_shutdown_stream(quicly_stream_t *stream)
-{
-    int ret;
-
-    if ((ret = quicly_sendbuf_pushclose(&stream->sendbuf)) != 0)
-        return ret;
-
-    return schedule_stream_for_write(stream);
 }
 
 int quicly_reset_stream(quicly_stream_t *stream)

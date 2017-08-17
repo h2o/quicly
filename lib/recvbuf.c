@@ -21,13 +21,14 @@
  */
 #include "quicly/recvbuf.h"
 
-void quicly_recvbuf_init(quicly_recvbuf_t *buf)
+void quicly_recvbuf_init(quicly_recvbuf_t *buf, quicly_recvbuf_change_cb on_change)
 {
     quicly_ranges_init(&buf->received);
     quicly_ranges_update(&buf->received, 0, 0);
     quicly_buffer_init(&buf->data);
     buf->data_off = 0;
     buf->eos = UINT64_MAX;
+    buf->on_change = on_change;
 }
 
 void quicly_recvbuf_dispose(quicly_recvbuf_t *buf)
@@ -45,4 +46,13 @@ int quicly_recvbuf_write(quicly_recvbuf_t *buf, uint64_t offset, const void *p, 
     if ((ret = quicly_buffer_write(&buf->data, offset - buf->data_off, p, len)) != 0)
         return ret;
     return 0;
+}
+
+int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at)
+{
+    if (buf->eos == UINT64_MAX) {
+        buf->eos = eos_at;
+        return 0;
+    }
+    return buf->eos == eos_at ? 0 : QUICLY_ERROR_TBD;
 }
