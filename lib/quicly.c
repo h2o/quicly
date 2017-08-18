@@ -1327,16 +1327,21 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
 static int send_stream_frames(quicly_stream_t *stream, struct st_quicly_send_context_t *s)
 {
     quicly_sendbuf_dataiter_t iter;
+    uint64_t max_stream_data;
     size_t i;
+
+    max_stream_data = stream->_peer_max_stream_data;
+    if (max_stream_data == stream->sendbuf.eos)
+        ++max_stream_data;
 
     quicly_sendbuf_init_dataiter(&stream->sendbuf, &iter);
 
     for (i = 0; i != stream->sendbuf.pending.num_ranges; ++i) {
         uint64_t start = stream->sendbuf.pending.ranges[i].start, end = stream->sendbuf.pending.ranges[i].end;
-        if (stream->_peer_max_stream_data <= start)
+        if (max_stream_data <= start)
             goto ShrinkRanges;
-        if (stream->_peer_max_stream_data < end)
-            end = stream->_peer_max_stream_data;
+        if (max_stream_data < end)
+            end = max_stream_data;
 
         if (iter.stream_off != start) {
             assert(iter.stream_off <= start);
