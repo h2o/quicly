@@ -124,7 +124,11 @@ static void tiny_window(void)
 
 void test_simple(void)
 {
+    quicly_transport_parameters_t transport_params_backup = quic_ctx.transport_params;
+
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
     subtest("tiny-window", tiny_window);
+
+    quic_ctx.transport_params = transport_params_backup;
 }

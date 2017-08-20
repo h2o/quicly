@@ -25,6 +25,7 @@
 #include "quicly.h"
 #include "picotest.h"
 
+extern int64_t quic_now;
 extern quicly_context_t quic_ctx;
 
 void free_packets(quicly_raw_packet_t **packets, size_t cnt);
@@ -35,6 +36,8 @@ int recvbuf_is(quicly_recvbuf_t *buf, const char *s);
 size_t transmit(quicly_conn_t *src, quicly_conn_t *dst);
 
 void test_ranges(void);
+void test_ack(void);
 void test_simple(void);
+void test_loss(void);
 
 #endif

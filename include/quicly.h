@@ -44,6 +44,8 @@ typedef struct st_quicly_stream_t quicly_stream_t;
 typedef quicly_raw_packet_t *(*quicly_alloc_packet_cb)(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
 typedef void (*quicly_free_packet_cb)(quicly_context_t *ctx, quicly_raw_packet_t *packet);
 typedef int (*quicly_stream_open_cb)(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream);
+typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
+typedef int (*quicly_set_timeout_cb)(quicly_context_t *ctx, quicly_conn_t *conn, unsigned millis);
 
 typedef struct st_quicly_transport_parameters_t {
     /**
@@ -78,6 +80,10 @@ struct st_quicly_context_t {
      */
     uint16_t max_packet_size;
     /**
+     * initial retransmission timeout (in milliseconds)
+     */
+    uint16_t initial_rto;
+    /**
      * transport parameters
      */
     quicly_transport_parameters_t transport_params;
@@ -93,6 +99,14 @@ struct st_quicly_context_t {
      * callback called when a new stream is opened by peer
      */
     quicly_stream_open_cb on_stream_open;
+    /**
+     * returns current time in milliseconds
+     */
+    quicly_now_cb now;
+    /**
+     * called to register the timeout for the connection; the app should call quicly_send after specified milliseconds
+     */
+    quicly_set_timeout_cb set_timeout;
 };
 
 typedef enum { QUICLY_STATE_BEFORE_SH = 0, QUICLY_STATE_BEFORE_SF, QUICLY_STATE_1RTT_ENCRYPTED } quicly_state_t;
@@ -162,8 +176,10 @@ typedef struct st_quicly_decode_packet_t {
     ptls_iovec_t payload;
 } quicly_decoded_packet_t;
 
+/**
+ *
+ */
 int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, size_t len);
-
 /**
  *
  */

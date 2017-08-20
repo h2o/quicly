@@ -142,6 +142,7 @@ size_t quicly_buffer_shift(quicly_buffer_t *buf, size_t delta)
         if (vec->free_cb != NULL)
             vec->free_cb(vec);
     }
+    buf->tail_ref = &buf->first;
 
     return delta;
 }

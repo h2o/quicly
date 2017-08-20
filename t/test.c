@@ -81,12 +81,22 @@
     "sS919x2o8l97kaYf\n"                                                                                                           \
     "-----END CERTIFICATE-----\n"
 
+static int64_t get_now(quicly_context_t *ctx);
+
 static ptls_iovec_t cert;
 static ptls_openssl_sign_certificate_t cert_signer;
 static ptls_context_t tls_ctx = {
     ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL, &cert_signer.super};
+
+int64_t quic_now;
 quicly_context_t quic_ctx = {
-    &tls_ctx, 1280, {8192, 64, 100, 60, 0}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open_buffering};
+    &tls_ctx, 1280, 1000, {8192, 64, 100, 60, 0}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open_buffering,
+    get_now};
+
+static int64_t get_now(quicly_context_t *ctx)
+{
+    return quic_now;
+}
 
 void free_packets(quicly_raw_packet_t **packets, size_t cnt)
 {
@@ -192,7 +202,9 @@ int main(int argc, char **argv)
 
     subtest("mozquic", test_mozquic);
     subtest("ranges", test_ranges);
+    subtest("ack", test_ack);
     subtest("simple", test_simple);
+    subtest("loss", test_loss);
 
     return done_testing();
 }
