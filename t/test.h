@@ -22,8 +22,19 @@
 #ifndef test_h
 #define test_h
 
+#include "quicly.h"
 #include "picotest.h"
 
+extern quicly_context_t quic_ctx;
+
+void free_packets(quicly_raw_packet_t **packets, size_t cnt);
+void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt);
+int buffering_on_receive(quicly_conn_t *conn, quicly_stream_t *stream);
+int on_stream_open_buffering(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream);
+int recvbuf_is(quicly_recvbuf_t *buf, const char *s);
+size_t transmit(quicly_conn_t *src, quicly_conn_t *dst);
+
 void test_ranges(void);
+void test_simple(void);
 
 #endif

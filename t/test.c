@@ -81,23 +81,21 @@
     "sS919x2o8l97kaYf\n"                                                                                                           \
     "-----END CERTIFICATE-----\n"
 
-static int on_stream_open(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream);
-
 static ptls_iovec_t cert;
 static ptls_openssl_sign_certificate_t cert_signer;
 static ptls_context_t tls_ctx = {
     ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL, &cert_signer.super};
-static quicly_context_t quic_ctx = {
-    &tls_ctx, 1280, {8192, 64, 100, 60, 0}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open};
+quicly_context_t quic_ctx = {
+    &tls_ctx, 1280, {8192, 64, 100, 60, 0}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open_buffering};
 
-static void free_packets(quicly_raw_packet_t **packets, size_t cnt)
+void free_packets(quicly_raw_packet_t **packets, size_t cnt)
 {
     size_t i;
     for (i = 0; i != cnt; ++i)
         quicly_default_free_packet(&quic_ctx, packets[i]);
 }
 
-static void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt)
+void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt)
 {
     size_t i;
     for (i = 0; i != cnt; ++i) {
@@ -106,18 +104,18 @@ static void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t
     }
 }
 
-static int on_receive(quicly_conn_t *conn, quicly_stream_t *stream)
+int buffering_on_receive(quicly_conn_t *conn, quicly_stream_t *stream)
 {
     return 0;
 }
 
-static int on_stream_open(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream)
+int on_stream_open_buffering(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream)
 {
-    stream->on_receive = on_receive;
+    stream->on_receive = buffering_on_receive;
     return 0;
 }
 
-static int recvbuf_is(quicly_recvbuf_t *buf, const char *s)
+int recvbuf_is(quicly_recvbuf_t *buf, const char *s)
 {
     for (; *s != '\0'; ++s) {
         ptls_iovec_t input = quicly_recvbuf_get(buf);
@@ -131,16 +129,7 @@ static int recvbuf_is(quicly_recvbuf_t *buf, const char *s)
     return 1;
 }
 
-static void test_mozquic(void)
-{
-    struct st_quicly_decoded_frame_t frame;
-    static const char *mess = "\xc5\0\0\0\0\0\0\xb6\x16\x03";
-    static const uint8_t *p;
-    p = (void *)mess;
-    decode_frame(&frame, &p, p + 10);
-}
-
-static void transmit(quicly_conn_t *src, quicly_conn_t *dst)
+size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 {
     quicly_raw_packet_t *packets[32];
     size_t num_packets, i;
@@ -150,77 +139,26 @@ static void transmit(quicly_conn_t *src, quicly_conn_t *dst)
     num_packets = sizeof(packets) / sizeof(packets[0]);
     ret = quicly_send(src, packets, &num_packets);
     ok(ret == 0);
-    ok(num_packets != 0);
 
-    decode_packets(decoded, packets, num_packets);
-    for (i = 0; i != num_packets; ++i) {
-        ret = quicly_receive(dst, decoded + i);
-        ok(ret == 0);
+    if (num_packets != 0) {
+        decode_packets(decoded, packets, num_packets);
+        for (i = 0; i != num_packets; ++i) {
+            ret = quicly_receive(dst, decoded + i);
+            ok(ret == 0);
+        }
+        free_packets(packets, num_packets);
     }
-    free_packets(packets, num_packets);
+
+    return num_packets;
 }
 
-static quicly_conn_t *client, *server;
-
-static void simple_http(void)
+static void test_mozquic(void)
 {
-    const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
-    quicly_stream_t *client_stream, *server_stream;
-    int ret;
-
-    ret = quicly_open_stream(client, &client_stream);
-    ok(ret == 0);
-    client_stream->on_receive = on_receive;
-    quicly_sendbuf_write(&client_stream->sendbuf, req, strlen(req), NULL);
-    quicly_sendbuf_shutdown(&client_stream->sendbuf);
-
-    transmit(client, server);
-
-    server_stream = quicly_get_stream(server, client_stream->stream_id);
-    ok(server_stream != NULL);
-    ok(recvbuf_is(&server_stream->recvbuf, req));
-    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
-    quicly_sendbuf_write(&server_stream->sendbuf, resp, strlen(resp), NULL);
-    quicly_sendbuf_shutdown(&server_stream->sendbuf);
-
-    transmit(server, client);
-
-    ok(recvbuf_is(&client_stream->recvbuf, resp));
-    ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
-}
-
-static void tiny_window(void)
-{
-    quicly_stream_t *client_stream, *server_stream;
-    int ret;
-
-    quic_ctx.transport_params.initial_max_stream_data = 4;
-
-    ret = quicly_open_stream(client, &client_stream);
-    ok(ret == 0);
-    client_stream->_peer_max_stream_data = 4;
-
-    quicly_sendbuf_write(&client_stream->sendbuf, "hello world", 11, NULL);
-    quicly_sendbuf_shutdown(&client_stream->sendbuf);
-
-    transmit(client, server);
-
-    server_stream = quicly_get_stream(server, client_stream->stream_id);
-    ok(server_stream != NULL);
-    recvbuf_is(&server_stream->recvbuf, "hel");
-    ok(quicly_recvbuf_available(&server_stream->recvbuf) == 1);
-
-    transmit(server, client);
-    transmit(client, server);
-
-    recvbuf_is(&server_stream->recvbuf, "lo w");
-    ok(quicly_recvbuf_available(&server_stream->recvbuf) == 0);
-
-    transmit(server, client);
-    transmit(client, server);
-
-    recvbuf_is(&server_stream->recvbuf, "orld");
-    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
+    struct st_quicly_decoded_frame_t frame;
+    static const char *mess = "\xc5\0\0\0\0\0\0\xb6\x16\x03";
+    static const uint8_t *p;
+    p = (void *)mess;
+    decode_frame(&frame, &p, p + 10);
 }
 
 int main(int argc, char **argv)
@@ -233,9 +171,6 @@ int main(int argc, char **argv)
     ENGINE_register_all_ciphers();
     ENGINE_register_all_digests();
 #endif
-
-    subtest("mozquic", test_mozquic);
-    subtest("ranges", test_ranges);
 
     {
         BIO *bio = BIO_new_mem_buf(RSA_CERTIFICATE, strlen(RSA_CERTIFICATE));
@@ -255,42 +190,9 @@ int main(int argc, char **argv)
         EVP_PKEY_free(pkey);
     }
 
-    quicly_raw_packet_t *packets[32];
-    size_t num_packets;
-    quicly_decoded_packet_t decoded[32];
-    int ret, i;
-
-    /* send CH */
-    ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL);
-    ok(ret == 0);
-    num_packets = sizeof(packets) / sizeof(packets[0]);
-    ret = quicly_send(client, packets, &num_packets);
-    ok(ret == 0);
-    ok(num_packets == 1);
-    ok(packets[0]->data.len == 1280);
-
-    /* receive CH, send handshake upto ServerFinished */
-    decode_packets(decoded, packets, num_packets);
-    ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, decoded);
-    ok(ret == 0);
-    free_packets(packets, num_packets);
-    ok(quicly_get_state(server) == QUICLY_STATE_1RTT_ENCRYPTED);
-    num_packets = sizeof(packets) / sizeof(packets[0]);
-    ret = quicly_send(server, packets, &num_packets);
-    ok(ret == 0);
-    ok(num_packets != 0);
-
-    /* receive ServerFinished */
-    decode_packets(decoded, packets, num_packets);
-    for (i = 0; i != num_packets; ++i) {
-        ret = quicly_receive(client, decoded + i);
-        ok(ret == 0);
-    }
-    free_packets(packets, num_packets);
-    ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
-
-    subtest("simple-http", simple_http);
-    subtest("tiny-window", tiny_window);
+    subtest("mozquic", test_mozquic);
+    subtest("ranges", test_ranges);
+    subtest("simple", test_simple);
 
     return done_testing();
 }

@@ -22,7 +22,7 @@
 #include "quicly/ranges.h"
 #include "test.h"
 
-void test_ranges()
+void test_ranges(void)
 {
     quicly_ranges_t ranges;
     int ret;
