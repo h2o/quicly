@@ -107,10 +107,12 @@ struct st_quicly_conn_t {
         /**
          *
          */
+        uint64_t packet_number;
+        /**
+         *
+         */
         unsigned acks_require_encryption : 1;
     } egress;
-    uint64_t in_packet_number;
-    uint64_t out_packet_number;
 };
 
 struct st_quicly_crypto_stream_data_t {
@@ -1141,7 +1143,7 @@ static void commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_contex
     }
     s->target->data.len = s->dst - s->target->data.base;
     s->packets[s->num_packets++] = s->target;
-    ++conn->out_packet_number;
+    ++conn->egress.packet_number;
 
     s->target = NULL;
     s->dst = NULL;
@@ -1167,11 +1169,11 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
         memcpy(&s->target->sa, conn->super.peer.sa, conn->super.peer.salen);
         s->dst = s->target->data.base;
         s->dst_end = s->target->data.base + conn->super.ctx->max_packet_size;
-        s->dst = emit_long_header(conn, s->dst, s->packet_type, conn->super.connection_id, (uint32_t)conn->out_packet_number);
+        s->dst = emit_long_header(conn, s->dst, s->packet_type, conn->super.connection_id, (uint32_t)conn->egress.packet_number);
         s->dst_unencrypted_from = s->dst;
         if (s->aead != NULL) {
             s->dst_end -= s->aead->algo->tag_size;
-            ptls_aead_encrypt_init(s->aead, conn->out_packet_number, s->target->data.base, s->dst - s->target->data.base);
+            ptls_aead_encrypt_init(s->aead, conn->egress.packet_number, s->target->data.base, s->dst - s->target->data.base);
         } else {
             s->dst_end -= 8; /* space for fnv1a-64 */
         }
@@ -1274,8 +1276,8 @@ static int send_max_stream_data_frame(quicly_stream_t *stream, struct st_quicly_
     if (s->dst == NULL)
         return 0;
 
-    if ((ack = quicly_acks_allocate(&stream->conn->egress.acks, stream->conn->out_packet_number, s->now, on_ack_max_stream_data)) ==
-        NULL)
+    if ((ack = quicly_acks_allocate(&stream->conn->egress.acks, stream->conn->egress.packet_number, s->now,
+                                    on_ack_max_stream_data)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     new_value = stream->recvbuf.data_off + stream->recv_window_size;
@@ -1332,7 +1334,7 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
 
     /* send data */
     quicly_ack_t *ack;
-    if ((ack = quicly_acks_allocate(&stream->conn->egress.acks, stream->conn->out_packet_number, s->now, on_ack_stream)) == NULL)
+    if ((ack = quicly_acks_allocate(&stream->conn->egress.acks, stream->conn->egress.packet_number, s->now, on_ack_stream)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     ack->data.stream.stream_id = stream->stream_id;
     quicly_sendbuf_emit(&stream->sendbuf, iter, copysize, s->dst, &ack->data.stream.args, s->aead);
