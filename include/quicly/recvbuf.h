@@ -30,7 +30,7 @@
 #include "quicly/ranges.h"
 
 typedef struct st_quicly_recvbuf_t quicly_recvbuf_t;
-typedef void (*quicly_recvbuf_change_cb)(quicly_recvbuf_t *buf, int err);
+typedef void (*quicly_recvbuf_change_cb)(quicly_recvbuf_t *buf, int err, size_t shift_amount);
 
 struct st_quicly_recvbuf_t {
     /**
@@ -94,7 +94,7 @@ inline void quicly_recvbuf_shift(quicly_recvbuf_t *buf, size_t delta)
 
     buf->data_off += delta;
     quicly_buffer_shift(&buf->data, delta);
-    (*buf->on_change)(buf, 0);
+    (*buf->on_change)(buf, 0, delta);
 }
 
 #endif

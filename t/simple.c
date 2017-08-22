@@ -88,7 +88,7 @@ static void simple_http(void)
     ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
 }
 
-static void tiny_window(void)
+static void tiny_stream_window(void)
 {
     quicly_stream_t *client_stream, *server_stream;
     int ret;
@@ -106,20 +106,73 @@ static void tiny_window(void)
 
     server_stream = quicly_get_stream(server, client_stream->stream_id);
     ok(server_stream != NULL);
-    recvbuf_is(&server_stream->recvbuf, "hel");
+    ok(recvbuf_is(&server_stream->recvbuf, "hel"));
     ok(quicly_recvbuf_available(&server_stream->recvbuf) == 1);
 
     transmit(server, client);
     transmit(client, server);
 
-    recvbuf_is(&server_stream->recvbuf, "lo w");
+    ok(recvbuf_is(&server_stream->recvbuf, "lo w"));
     ok(quicly_recvbuf_available(&server_stream->recvbuf) == 0);
 
     transmit(server, client);
     transmit(client, server);
 
-    recvbuf_is(&server_stream->recvbuf, "orld");
+    ok(recvbuf_is(&server_stream->recvbuf, "orld"));
     ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
+}
+
+static void tiny_connection_window(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    size_t i;
+    int ret;
+    char testdata[1025];
+
+    quic_ctx.transport_params.initial_max_data_kb = 1;
+    for (i = 0; i < 1024 / 16; ++i)
+        strcpy(testdata + i * 16, "0123456789abcdef");
+
+    { /* transmit first flight */
+        quicly_raw_packet_t *raw;
+        size_t num_packets;
+        quicly_decoded_packet_t decoded;
+
+        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL);
+        ok(ret == 0);
+        num_packets = 1;
+        ret = quicly_send(client, &raw, &num_packets);
+        ok(ret == 0);
+        ok(num_packets == 1);
+        decode_packets(&decoded, &raw, 1);
+        ok(num_packets == 1);
+        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
+        ok(ret == 0);
+        free_packets(&raw, 1);
+    }
+
+    transmit(server, client);
+    ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
+
+    ret = quicly_open_stream(client, &client_stream);
+    ok(ret == 0);
+
+    for (i = 0; i < 16; ++i)
+        quicly_sendbuf_write(&client_stream->sendbuf, testdata, 1024, NULL);
+
+    transmit(client, server);
+
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    ok(recvbuf_is(&server_stream->recvbuf, testdata));
+    ok(server_stream->recvbuf.data.len == 0);
+
+    for (i = 1; i < 16; ++i) {
+        transmit(server, client);
+        transmit(client, server);
+        ok(recvbuf_is(&server_stream->recvbuf, testdata));
+        ok(server_stream->recvbuf.data.len == 0);
+    }
 }
 
 void test_simple(void)
@@ -128,7 +181,11 @@ void test_simple(void)
 
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
-    subtest("tiny-window", tiny_window);
+    subtest("tiny-stream-window", tiny_stream_window);
+
+    quic_ctx.transport_params = transport_params_backup;
+
+    subtest("tiny-connection-window", tiny_connection_window);
 
     quic_ctx.transport_params = transport_params_backup;
 }

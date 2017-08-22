@@ -55,7 +55,7 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      * in KB
      */
-    uint32_t initial_max_data;
+    uint32_t initial_max_data_kb;
     /**
      *
      */
@@ -155,6 +155,10 @@ struct st_quicly_stream_t {
      * receive window size
      */
     uint32_t recv_window_size;
+    /**
+     * 1 + maximum offset of data that has been sent at least once (not counting eos)
+     */
+    uint64_t _max_sent;
     /**
      * sends receive window updates to peer
      */
