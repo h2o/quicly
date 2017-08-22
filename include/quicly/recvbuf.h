@@ -23,6 +23,7 @@
 #define quicly_recvbuf_h
 
 #include <assert.h>
+#include <stddef.h>
 #include "picotls.h"
 #include "quicly/error.h"
 #include "quicly/buffer.h"
@@ -31,7 +32,7 @@
 typedef struct st_quicly_recvbuf_t quicly_recvbuf_t;
 typedef void (*quicly_recvbuf_change_cb)(quicly_recvbuf_t *buf, int err);
 
-typedef struct st_quicly_recvbuf_t {
+struct st_quicly_recvbuf_t {
     /**
      * ranges that have been received (guaranteed to be non-empty; first element always start from zero)
      */
@@ -52,7 +53,7 @@ typedef struct st_quicly_recvbuf_t {
      * callback
      */
     quicly_recvbuf_change_cb on_change;
-} quicly_recvbuf_t;
+};
 
 void quicly_recvbuf_init(quicly_recvbuf_t *buf, quicly_recvbuf_change_cb on_change);
 void quicly_recvbuf_dispose(quicly_recvbuf_t *buf);

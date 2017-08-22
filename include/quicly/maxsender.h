@@ -23,6 +23,7 @@
 #define quicly_maxsender_h
 
 #include <assert.h>
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct st_quicly_maxsender_t {

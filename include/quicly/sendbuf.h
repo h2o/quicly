@@ -28,7 +28,7 @@
 typedef struct st_quicly_sendbuf_t quicly_sendbuf_t;
 typedef void (*quicly_sendbuf_change_cb)(quicly_sendbuf_t *buf, int err);
 
-typedef struct st_quicly_sendbuf_t {
+struct st_quicly_sendbuf_t {
     /**
      * ranges that have been acked (guaranteed to be non-empty; i.e., acked.ranges[0].end == contiguous_acked_offset)
      */
@@ -49,7 +49,7 @@ typedef struct st_quicly_sendbuf_t {
      * callback
      */
     quicly_sendbuf_change_cb on_change;
-} quicly_sendbuf_t;
+};
 
 typedef struct st_quicly_sendbuf_ackargs_t {
     uint64_t start;

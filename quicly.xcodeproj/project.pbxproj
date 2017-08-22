@@ -231,12 +231,12 @@
 		E9CC44121EC1926000DC7D3E /* t */ = {
 			isa = PBXGroup;
 			children = (
+				E920D22D1F4981E500799777 /* ack.c */,
+				E920D22F1F49EE0B00799777 /* loss.c */,
+				E9F6A4291F3C3B7B0083F0B2 /* ranges.c */,
+				E920D2241F49412900799777 /* simple.c */,
 				E9F6A4281F3C3B3F0083F0B2 /* test.h */,
 				E9CC44241EC1962700DC7D3E /* test.c */,
-				E920D22D1F4981E500799777 /* ack.c */,
-				E9F6A4291F3C3B7B0083F0B2 /* ranges.c */,
-				E920D22F1F49EE0B00799777 /* loss.c */,
-				E920D2241F49412900799777 /* simple.c */,
 			);
 			path = t;
 			sourceTree = "<group>";

@@ -859,7 +859,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         assert(handshake_properties->collected_extensions == NULL);
         crypto_data->handshake_properties = *handshake_properties;
     } else {
-        crypto_data->handshake_properties = (ptls_handshake_properties_t){{{NULL}}};
+        crypto_data->handshake_properties = (ptls_handshake_properties_t){{{{NULL}}}};
     }
     crypto_data->handshake_properties.collect_extension = collect_transport_parameters;
     if (server_name != NULL) {
