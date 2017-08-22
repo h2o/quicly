@@ -50,7 +50,8 @@ void test_ack(void)
     for (at = 0; at < 10; ++at)
         for (i = 1; i <= 5; ++i)
             for (j = 0; j < 3; ++j)
-                quicly_acks_allocate(&acks, at * 5 + i, at, on_acked);
+                quicly_acks_allocate(&acks, at * 5 + i, at, j + 1, on_acked);
+    ok(acks.bytes_inflight == 50 * 6);
 
     /* check all acks */
     quicly_acks_iter_t iter;
@@ -92,6 +93,7 @@ void test_ack(void)
     }
     ok(cnt == 60);
     ok(num_blocks(&acks) == 30 / 16 + 1 + 1 + 30 / 16 + 1);
+    ok(acks.bytes_inflight == 20 * 6);
 
     quicly_acks_dispose(&acks);
 }

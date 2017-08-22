@@ -1276,7 +1276,7 @@ static int send_max_stream_data_frame(quicly_stream_t *stream, struct st_quicly_
     if (s->dst == NULL)
         return 0;
 
-    if ((ack = quicly_acks_allocate(&stream->conn->egress.acks, stream->conn->egress.packet_number, s->now,
+    if ((ack = quicly_acks_allocate(&stream->conn->egress.acks, stream->conn->egress.packet_number, s->now, FRAME_SIZE,
                                     on_ack_max_stream_data)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
@@ -1334,7 +1334,8 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
 
     /* send data */
     quicly_ack_t *ack;
-    if ((ack = quicly_acks_allocate(&stream->conn->egress.acks, stream->conn->egress.packet_number, s->now, on_ack_stream)) == NULL)
+    if ((ack = quicly_acks_allocate(&stream->conn->egress.acks, stream->conn->egress.packet_number, s->now,
+                                    s->dst - type_at + copysize, on_ack_stream)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     ack->data.stream.stream_id = stream->stream_id;
     quicly_sendbuf_emit(&stream->sendbuf, iter, copysize, s->dst, &ack->data.stream.args, s->aead);
