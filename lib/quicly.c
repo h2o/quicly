@@ -1666,8 +1666,9 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, struct st_quicly_de
     if (stream == NULL)
         return 0;
 
-    if (stream->_peer_max_stream_data < frame->data.max_stream_data.max_stream_data)
-        stream->_peer_max_stream_data = frame->data.max_stream_data.max_stream_data;
+    if (frame->data.max_stream_data.max_stream_data < stream->_peer_max_stream_data)
+        return QUICLY_ERROR_TBD; /* FLOW_CONTROL_ERROR */
+    stream->_peer_max_stream_data = frame->data.max_stream_data.max_stream_data;
 
     /* TODO schedule for delivery */
     return 0;
@@ -1675,7 +1676,13 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, struct st_quicly_de
 
 static int handle_max_data_frame(quicly_conn_t *conn, struct st_quicly_decoded_frame_t *frame)
 {
-    conn->egress.max_data.permitted = (__uint128_t)frame->data.max_data.max_data_kb * 1024;
+    __uint128_t new_value = (__uint128_t)frame->data.max_data.max_data_kb * 1024;
+
+    if (new_value < conn->egress.max_data.permitted)
+        return QUICLY_ERROR_TBD; /* FLOW_CONTROL_ERROR */
+    conn->egress.max_data.permitted = new_value;
+
+    /* TODO schedule for delivery */
     return 0;
 }
 
