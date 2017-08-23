@@ -120,14 +120,8 @@ struct st_quicly_conn_t {
          *
          */
         struct {
-            /**
-             * max_data received from peer
-             */
-            uint64_t max_data_kb;
-            /**
-             * remaining send window (in octets)
-             */
-            __uint128_t remaining_window;
+            __uint128_t permitted;
+            __uint128_t sent;
         } max_data;
         /**
          *
@@ -683,8 +677,7 @@ static int crypto_stream_receive_handshake(quicly_conn_t *conn, quicly_stream_t 
         QUICLY_DEBUG_LOG(conn, 0, "handshake complete");
         /* state is 1RTT_ENCRYPTED when handling ClientFinished */
         if (conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
-            conn->egress.max_data.max_data_kb = conn->super.peer.transport_params.initial_max_data_kb;
-            conn->egress.max_data.remaining_window = (__uint128_t)conn->egress.max_data.max_data_kb * 1024;
+            conn->egress.max_data.permitted = (__uint128_t)conn->super.peer.transport_params.initial_max_data_kb * 1024;
             if ((ret = setup_1rtt(conn, data->tls)) != 0)
                 goto Exit;
         }
@@ -1425,8 +1418,8 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
     if (stream->_max_sent < iter->stream_off + copysize) {
         if (stream->stream_id != 0) {
             uint64_t delta = iter->stream_off + copysize - stream->_max_sent;
-            assert(delta <= stream->conn->egress.max_data.remaining_window);
-            stream->conn->egress.max_data.remaining_window -= delta;
+            assert(stream->conn->egress.max_data.sent + delta <= stream->conn->egress.max_data.permitted);
+            stream->conn->egress.max_data.sent += delta;
         }
         stream->_max_sent = iter->stream_off + copysize;
     }
@@ -1448,11 +1441,10 @@ static int send_stream_frames(quicly_stream_t *stream, struct st_quicly_send_con
     if (stream->_max_sent + 1 >= stream->sendbuf.eos) {
         max_stream_data = stream->sendbuf.eos + 1;
     } else {
-        max_stream_data = stream->_peer_max_stream_data;
-        if (stream->stream_id != 0) {
-            if (max_stream_data > stream->_max_sent + stream->conn->egress.max_data.remaining_window)
-                max_stream_data = stream->_max_sent + stream->conn->egress.max_data.remaining_window;
-        }
+        uint64_t delta = stream->_peer_max_stream_data - stream->_max_sent;
+        if (stream->stream_id != 0 && stream->conn->egress.max_data.permitted - stream->conn->egress.max_data.sent < delta)
+            delta = (uint64_t)(stream->conn->egress.max_data.permitted - stream->conn->egress.max_data.sent);
+        max_stream_data = stream->_max_sent + delta;
         if (max_stream_data == stream->sendbuf.eos)
             ++max_stream_data;
     }
@@ -1683,11 +1675,7 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, struct st_quicly_de
 
 static int handle_max_data_frame(quicly_conn_t *conn, struct st_quicly_decoded_frame_t *frame)
 {
-    uint64_t delta = frame->data.max_data.max_data_kb - conn->egress.max_data.max_data_kb;
-
-    conn->egress.max_data.max_data_kb = frame->data.max_data.max_data_kb;
-    conn->egress.max_data.remaining_window += (__uint128_t)delta * 1024;
-
+    conn->egress.max_data.permitted = (__uint128_t)frame->data.max_data.max_data_kb * 1024;
     return 0;
 }
 
