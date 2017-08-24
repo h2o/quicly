@@ -162,15 +162,6 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     return num_packets;
 }
 
-static void test_mozquic(void)
-{
-    struct st_quicly_decoded_frame_t frame;
-    static const char *mess = "\xc5\0\0\0\0\0\0\xb6\x16\x03";
-    static const uint8_t *p;
-    p = (void *)mess;
-    decode_frame(&frame, &p, p + 10);
-}
-
 int main(int argc, char **argv)
 {
     ERR_load_crypto_strings();
@@ -200,8 +191,8 @@ int main(int argc, char **argv)
         EVP_PKEY_free(pkey);
     }
 
-    subtest("mozquic", test_mozquic);
     subtest("ranges", test_ranges);
+    subtest("frame", test_frame);
     subtest("ack", test_ack);
     subtest("simple", test_simple);
     subtest("loss", test_loss);

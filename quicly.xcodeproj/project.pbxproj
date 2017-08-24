@@ -29,6 +29,10 @@
 		E984483E1EA48E7200390927 /* cli.c in Sources */ = {isa = PBXBuildFile; fileRef = E984483D1EA48E7200390927 /* cli.c */; };
 		E98448401EA48F6B00390927 /* quicly.h in Headers */ = {isa = PBXBuildFile; fileRef = E984483F1EA48F6800390927 /* quicly.h */; };
 		E98448421EA490A500390927 /* quicly.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448411EA490A500390927 /* quicly.c */; };
+		E99F8C241F4E863200C26B3D /* frame.h in Headers */ = {isa = PBXBuildFile; fileRef = E99F8C231F4E863200C26B3D /* frame.h */; };
+		E99F8C261F4E9EBF00C26B3D /* frame.c in Sources */ = {isa = PBXBuildFile; fileRef = E99F8C251F4E9EBF00C26B3D /* frame.c */; };
+		E99F8C271F4E9F5D00C26B3D /* frame.c in Sources */ = {isa = PBXBuildFile; fileRef = E99F8C251F4E9EBF00C26B3D /* frame.c */; };
+		E99F8C291F4EAEF800C26B3D /* frame.c in Sources */ = {isa = PBXBuildFile; fileRef = E99F8C281F4EAEF800C26B3D /* frame.c */; };
 		E9CC44111EB85E0B00DC7D3E /* khash.h in Headers */ = {isa = PBXBuildFile; fileRef = E9CC44101EB85E0B00DC7D3E /* khash.h */; };
 		E9CC441B1EC195DF00DC7D3E /* openssl.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448271EA48D0000390927 /* openssl.c */; };
 		E9CC441C1EC195DF00DC7D3E /* picotls.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448281EA48D0000390927 /* picotls.c */; };
@@ -85,6 +89,9 @@
 		E984483D1EA48E7200390927 /* cli.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = cli.c; sourceTree = "<group>"; };
 		E984483F1EA48F6800390927 /* quicly.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = quicly.h; sourceTree = "<group>"; };
 		E98448411EA490A500390927 /* quicly.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = quicly.c; sourceTree = "<group>"; };
+		E99F8C231F4E863200C26B3D /* frame.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = frame.h; sourceTree = "<group>"; };
+		E99F8C251F4E9EBF00C26B3D /* frame.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = frame.c; sourceTree = "<group>"; };
+		E99F8C281F4EAEF800C26B3D /* frame.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = frame.c; sourceTree = "<group>"; };
 		E9CC44101EB85E0B00DC7D3E /* khash.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = khash.h; sourceTree = "<group>"; };
 		E9CC44151EC195CA00DC7D3E /* picotest.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = picotest.c; sourceTree = "<group>"; };
 		E9CC44161EC195CA00DC7D3E /* picotest.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = picotest.h; sourceTree = "<group>"; };
@@ -159,6 +166,7 @@
 			children = (
 				E920D22A1F49533800799777 /* ack.c */,
 				E920D2181F42E9CE00799777 /* buffer.c */,
+				E99F8C251F4E9EBF00C26B3D /* frame.c */,
 				E98448411EA490A500390927 /* quicly.c */,
 				E9F6A41F1F3C0B6D0083F0B2 /* ranges.c */,
 				E920D21D1F43E05000799777 /* recvbuf.c */,
@@ -232,6 +240,7 @@
 			isa = PBXGroup;
 			children = (
 				E920D22D1F4981E500799777 /* ack.c */,
+				E99F8C281F4EAEF800C26B3D /* frame.c */,
 				E920D22F1F49EE0B00799777 /* loss.c */,
 				E9F6A4291F3C3B7B0083F0B2 /* ranges.c */,
 				E920D2241F49412900799777 /* simple.c */,
@@ -256,6 +265,7 @@
 				E920D2281F4951BA00799777 /* ack.h */,
 				E920D2161F42E93200799777 /* buffer.h */,
 				E920D2201F44047C00799777 /* error.h */,
+				E99F8C231F4E863200C26B3D /* frame.h */,
 				E920D2221F4536CB00799777 /* maxsender.h */,
 				E9F6A4261F3C3B050083F0B2 /* ranges.h */,
 				E920D21B1F43DE4100799777 /* recvbuf.h */,
@@ -278,6 +288,7 @@
 				E984482C1EA48D1200390927 /* picotls.h in Headers */,
 				E9F6A4271F3C3B050083F0B2 /* ranges.h in Headers */,
 				E98448401EA48F6B00390927 /* quicly.h in Headers */,
+				E99F8C241F4E863200C26B3D /* frame.h in Headers */,
 				E92D43ED1F41DCF5002AC767 /* sendbuf.h in Headers */,
 				E920D21C1F43DE4100799777 /* recvbuf.h in Headers */,
 				E920D2211F44047C00799777 /* error.h in Headers */,
@@ -383,6 +394,7 @@
 				E9F6A4201F3C0B6D0083F0B2 /* ranges.c in Sources */,
 				E920D21E1F43E05000799777 /* recvbuf.c in Sources */,
 				E9F6A42E1F41375B0083F0B2 /* sendbuf.c in Sources */,
+				E99F8C261F4E9EBF00C26B3D /* frame.c in Sources */,
 				E984483E1EA48E7200390927 /* cli.c in Sources */,
 				E920D2191F42E9CE00799777 /* buffer.c in Sources */,
 				E98448421EA490A500390927 /* quicly.c in Sources */,
@@ -403,6 +415,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E99F8C291F4EAEF800C26B3D /* frame.c in Sources */,
 				E920D22C1F49533800799777 /* ack.c in Sources */,
 				E920D2301F49EE0B00799777 /* loss.c in Sources */,
 				E9F6A42F1F41375B0083F0B2 /* sendbuf.c in Sources */,
@@ -416,6 +429,7 @@
 				E920D22E1F4981E500799777 /* ack.c in Sources */,
 				E9CC44261EC1963100DC7D3E /* picotest.c in Sources */,
 				E9CC441C1EC195DF00DC7D3E /* picotls.c in Sources */,
+				E99F8C271F4E9F5D00C26B3D /* frame.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

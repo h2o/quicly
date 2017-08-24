@@ -35,7 +35,6 @@ typedef int (*quicly_ack_cb)(struct st_quicly_conn_t *conn, int is_acked, quicly
 struct st_quicly_ack_t {
     uint64_t packet_number;
     int64_t sent_at;
-    size_t size;
     quicly_ack_cb acked;
     union {
         struct {
@@ -60,7 +59,6 @@ struct st_quicly_ack_block_t {
 
 typedef struct st_quicly_acks_t {
     struct st_quicly_ack_block_t *head, *tail;
-    size_t bytes_inflight;
 } quicly_acks_t;
 
 typedef struct st_quicly_acks_iter_t {
@@ -71,8 +69,7 @@ typedef struct st_quicly_acks_iter_t {
 
 static void quicly_acks_init(quicly_acks_t *acks);
 void quicly_acks_dispose(quicly_acks_t *acks);
-static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, size_t size,
-                                          quicly_ack_cb acked);
+static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked);
 struct st_quicly_ack_block_t *quicly_acks__new_block(quicly_acks_t *acks);
 static void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter);
 static quicly_ack_t *quicly_acks_get(quicly_acks_iter_t *iter);
@@ -86,11 +83,9 @@ inline void quicly_acks_init(quicly_acks_t *acks)
 {
     acks->head = NULL;
     acks->tail = NULL;
-    acks->bytes_inflight = 0;
 }
 
-inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, size_t size,
-                                          quicly_ack_cb acked)
+inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked)
 {
     struct st_quicly_ack_block_t *block;
 
@@ -103,10 +98,7 @@ inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_n
     ++block->active;
     ack->packet_number = packet_number;
     ack->sent_at = now;
-    ack->size = size;
     ack->acked = acked;
-
-    acks->bytes_inflight += size;
 
     return ack;
 }
@@ -151,7 +143,6 @@ inline void quicly_acks_release(quicly_acks_t *acks, quicly_acks_iter_t *iter)
 {
     assert(iter->p->acked != NULL);
     iter->p->acked = NULL;
-    acks->bytes_inflight -= iter->p->size;
 
     struct st_quicly_ack_block_t *block = *iter->ref;
     if (--block->active == 0) {

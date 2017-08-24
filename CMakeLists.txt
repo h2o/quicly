@@ -18,6 +18,7 @@ SET(PICOTLS_OPENSSL_FILES
 SET(QUICLY_LIBRARY_FILES
     lib/ack.c
     lib/buffer.c
+    lib/frame.c
     lib/quicly.c
     lib/ranges.c
     lib/recvbuf.c
@@ -26,6 +27,7 @@ SET(QUICLY_LIBRARY_FILES
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
     t/ack.c
+    t/frame.c
     t/loss.c
     t/ranges.c
     t/simple.c

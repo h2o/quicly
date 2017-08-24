@@ -19,26 +19,18 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef test_h
-#define test_h
+#include "quicly/frame.h"
+#include "test.h"
 
-#include "quicly.h"
-#include "picotest.h"
+static void test_mozquic(void)
+{
+    quicly_stream_frame_t frame;
+    static const char *mess = "\xc5\0\0\0\0\0\0\xb6\x16\x03";
+    const uint8_t *p = (void *)mess, type_flags = *p++;
+    quicly_decode_stream_frame(type_flags, &p, p + 9, &frame);
+}
 
-extern int64_t quic_now;
-extern quicly_context_t quic_ctx;
-
-void free_packets(quicly_raw_packet_t **packets, size_t cnt);
-void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt);
-int buffering_on_receive(quicly_conn_t *conn, quicly_stream_t *stream);
-int on_stream_open_buffering(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream);
-int recvbuf_is(quicly_recvbuf_t *buf, const char *s);
-size_t transmit(quicly_conn_t *src, quicly_conn_t *dst);
-
-void test_ranges(void);
-void test_frame(void);
-void test_ack(void);
-void test_simple(void);
-void test_loss(void);
-
-#endif
+void test_frame(void)
+{
+    subtest("mozquic", test_mozquic);
+}
