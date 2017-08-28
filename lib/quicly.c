@@ -317,6 +317,7 @@ static void destroy_stream(quicly_stream_t *stream)
     kh_del(quicly_stream_t, conn->streams, iter);
 
     quicly_sendbuf_dispose(&stream->sendbuf);
+    conn->ingress.max_data.bytes_consumed += stream->recvbuf.data.len;
     quicly_recvbuf_dispose(&stream->recvbuf);
     quicly_maxsender_dispose(&stream->_send_aux.max_stream_data_sender);
 
@@ -349,6 +350,13 @@ quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint32_t stream_id)
     if (iter != kh_end(conn->streams))
         return kh_val(conn->streams, iter);
     return NULL;
+}
+
+void quicly_get_max_data(quicly_conn_t *conn, __uint128_t *send_permitted, __uint128_t *sent, __uint128_t *consumed)
+{
+    *send_permitted = conn->egress.max_data.permitted;
+    *sent = conn->egress.max_data.sent;
+    *consumed = conn->ingress.max_data.bytes_consumed;
 }
 
 void quicly_free(quicly_conn_t *conn)
@@ -865,23 +873,6 @@ Exit:
     return ret;
 }
 
-static void reset_sender(quicly_stream_t *stream, uint32_t reason)
-{
-    /* do nothing if we have sent all data (maybe we haven't sent FIN yet, but we can send it instead of an RST_STREAM) */
-    if (stream->_send_aux.max_sent == stream->sendbuf.eos)
-        return;
-
-    /* close the sender and mark the eos as the only byte that's not confirmed */
-    assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
-    quicly_sendbuf_shutdown(&stream->sendbuf);
-    quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
-    quicly_sendbuf_acked(&stream->sendbuf, &ackargs);
-
-    /* setup the sender */
-    stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
-    stream->_send_aux.rst.reason = reason;
-}
-
 static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
 {
     quicly_stream_t *stream;
@@ -1142,6 +1133,8 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
             stream->conn->egress.max_data.sent += delta;
         }
         stream->_send_aux.max_sent = iter->stream_off + copysize;
+        if (stream->_send_aux.max_sent == stream->sendbuf.eos)
+            ++stream->_send_aux.max_sent;
     }
 
     /* send */
@@ -1158,7 +1151,7 @@ static int send_stream_frames(quicly_stream_t *stream, struct st_quicly_send_con
     uint64_t max_stream_data;
     size_t i;
 
-    if (stream->_send_aux.max_sent + 1 >= stream->sendbuf.eos) {
+    if (stream->_send_aux.max_sent >= stream->sendbuf.eos) {
         max_stream_data = stream->sendbuf.eos + 1;
     } else {
         uint64_t delta = stream->_send_aux.max_stream_data - stream->_send_aux.max_sent;
@@ -1398,6 +1391,8 @@ static int handle_rst_stream_frame(quicly_conn_t *conn, quicly_rst_stream_frame_
             return QUICLY_ERROR_TBD;
         quicly_recvbuf_mark_eos(&stream->recvbuf, frame->final_offset);
         stream->_recv_aux.rst_reason = frame->reason;
+        conn->ingress.max_data.bytes_consumed +=
+            frame->final_offset - stream->recvbuf.received.ranges[stream->recvbuf.received.num_ranges - 1].end;
         if ((ret = stream->on_update(stream)) != 0)
             return ret;
     } else {
@@ -1478,8 +1473,7 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    reset_sender(stream, QUICLY_ERROR_TBD);
-    return 0;
+    return quicly_reset_sender(stream, QUICLY_ERROR_TBD);
 }
 
 static int handle_max_data_frame(quicly_conn_t *conn, quicly_max_data_frame_t *frame)
@@ -1652,6 +1646,25 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
     ++conn->super.host.num_streams;
     if ((conn->super.host.next_stream_id += 2) < 2)
         conn->super.host.next_stream_id = 0;
+
+    return 0;
+}
+
+int quicly_reset_sender(quicly_stream_t *stream, uint32_t reason)
+{
+    /* do nothing if we have sent all data upto eos */
+    if (stream->_send_aux.max_sent > stream->sendbuf.eos)
+        return 0;
+
+    /* close the sender and mark the eos as the only byte that's not confirmed */
+    assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
+    quicly_sendbuf_shutdown(&stream->sendbuf);
+    quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
+    quicly_sendbuf_acked(&stream->sendbuf, &ackargs);
+
+    /* setup the sender */
+    stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
+    stream->_send_aux.rst.reason = reason;
 
     return 0;
 }

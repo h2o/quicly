@@ -160,6 +160,7 @@ static void loss_core(int downstream_only)
                 quicly_sendbuf_shutdown(&client_stream->sendbuf);
             } else if (fully_received(&client_stream->recvbuf)) {
                 ok(recvbuf_is(&client_stream->recvbuf, resp));
+                ok(max_data_is_equal(client, server));
                 return;
             }
         }

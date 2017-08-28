@@ -34,6 +34,7 @@ int on_update_noop(quicly_stream_t *stream);
 int on_stream_open_buffering(quicly_stream_t *stream);
 int recvbuf_is(quicly_recvbuf_t *buf, const char *s);
 size_t transmit(quicly_conn_t *src, quicly_conn_t *dst);
+int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server);
 
 void test_ranges(void);
 void test_frame(void);

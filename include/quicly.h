@@ -170,7 +170,7 @@ struct st_quicly_stream_t {
          */
         uint64_t max_stream_data;
         /**
-         * 1 + maximum offset of data that has been sent at least once (not counting eos)
+         * 1 + maximum offset of data that has been sent at least once (counting eos)
          */
         uint64_t max_sent;
         /**
@@ -257,6 +257,10 @@ static void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
 /**
  *
  */
+void quicly_get_max_data(quicly_conn_t *conn, __uint128_t *send_permitted, __uint128_t *sent, __uint128_t *consumed);
+/**
+ *
+ */
 void quicly_free(quicly_conn_t *conn);
 /**
  *
@@ -284,6 +288,10 @@ quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint32_t stream_id);
  *
  */
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream);
+/**
+ *
+ */
+int quicly_reset_sender(quicly_stream_t *stream, uint32_t reason);
 /**
  *
  */
