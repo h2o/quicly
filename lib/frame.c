@@ -107,7 +107,7 @@ int quicly_decode_ack_frame(uint8_t type_flags, const uint8_t **src, const uint8
     for (i = 0; i != frame->num_gaps; ++i) {
         frame->gaps[i] = *(*src)++;
         frame->smallest_acknowledged -= frame->gaps[i];
-        frame->ack_block_lengths[i] = quicly_decodev(src, ack_block_length_size);
+        frame->ack_block_lengths[i + 1] = quicly_decodev(src, ack_block_length_size);
         frame->smallest_acknowledged -= frame->ack_block_lengths[i + 1];
     }
 
