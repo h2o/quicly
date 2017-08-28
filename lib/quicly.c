@@ -865,6 +865,23 @@ Exit:
     return ret;
 }
 
+static void reset_sender(quicly_stream_t *stream, uint32_t reason)
+{
+    /* do nothing if we have sent all data (maybe we haven't sent FIN yet, but we can send it instead of an RST_STREAM) */
+    if (stream->_send_aux.max_sent == stream->sendbuf.eos)
+        return;
+
+    /* close the sender and mark the eos as the only byte that's not confirmed */
+    assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
+    quicly_sendbuf_shutdown(&stream->sendbuf);
+    quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
+    quicly_sendbuf_acked(&stream->sendbuf, &ackargs);
+
+    /* setup the sender */
+    stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
+    stream->_send_aux.rst.reason = reason;
+}
+
 static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
 {
     quicly_stream_t *stream;
@@ -1461,12 +1478,7 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    if (stream->_send_aux.max_sent != stream->sendbuf.eos) {
-        /* reset the sending side if unsent data exists */
-        stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
-        stream->_send_aux.rst.reason = QUICLY_ERROR_TBD;
-    }
-
+    reset_sender(stream, QUICLY_ERROR_TBD);
     return 0;
 }
 
