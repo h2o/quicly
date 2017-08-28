@@ -42,12 +42,18 @@ static void free_noop(struct st_quicly_buffer_vec_t *vec)
 {
 }
 
+static void free_internal(struct st_quicly_buffer_vec_t *vec)
+{
+    free(vec);
+}
+
 void quicly_buffer_dispose(quicly_buffer_t *buf)
 {
     struct st_quicly_buffer_vec_t *vec;
 
     while ((vec = buf->first) != NULL) {
         buf->first = vec->next;
+        vec->len = 0; /* fast path of apply_stream_frame relies on the field reset on disposal */
         vec->free_cb(vec);
     }
 }
@@ -80,7 +86,7 @@ int quicly_buffer_push(quicly_buffer_t *buf, const void *p, size_t len, quicly_b
         memcpy(vec->p, p, len);
     }
     vec->len = len;
-    vec->free_cb = free_cb;
+    vec->free_cb = free_cb != NULL ? free_cb : free_internal;
     buf->len += len;
 
     return 0;
@@ -95,7 +101,7 @@ int quicly_buffer_allocate(quicly_buffer_t *buf, size_t len)
 
     vec->p = vec->_buf;
     vec->len = len;
-    vec->free_cb = NULL;
+    vec->free_cb = free_internal;
     buf->len += len;
 
     return 0;
@@ -138,9 +144,7 @@ size_t quicly_buffer_shift(quicly_buffer_t *buf, size_t delta)
         delta -= avail_in_vec;
         buf->first = vec->next;
         buf->skip = 0;
-
-        if (vec->free_cb != NULL)
-            vec->free_cb(vec);
+        vec->free_cb(vec);
     }
     buf->tail_ref = &buf->first;
 

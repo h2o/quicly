@@ -25,7 +25,6 @@
 #include <assert.h>
 #include <stddef.h>
 #include "picotls.h"
-#include "quicly/error.h"
 #include "quicly/buffer.h"
 #include "quicly/ranges.h"
 
@@ -57,6 +56,7 @@ struct st_quicly_recvbuf_t {
 
 void quicly_recvbuf_init(quicly_recvbuf_t *buf, quicly_recvbuf_change_cb on_change);
 void quicly_recvbuf_dispose(quicly_recvbuf_t *buf);
+static int quicly_recvbuf_transfer_complete(quicly_recvbuf_t *buf);
 static size_t quicly_recvbuf_available(quicly_recvbuf_t *buf);
 static ptls_iovec_t quicly_recvbuf_get(quicly_recvbuf_t *buf);
 static int quicly_recvbuf_is_shutdown(quicly_recvbuf_t *buf);
@@ -65,6 +65,11 @@ int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at);
 int quicly_recvbuf_write(quicly_recvbuf_t *buf, uint64_t offset, const void *p, size_t len);
 
 /* inline definitions */
+
+inline int quicly_recvbuf_transfer_complete(quicly_recvbuf_t *buf)
+{
+    return buf->received.ranges[0].end == buf->eos;
+}
 
 inline size_t quicly_recvbuf_available(quicly_recvbuf_t *buf)
 {

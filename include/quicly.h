@@ -43,7 +43,8 @@ typedef struct st_quicly_stream_t quicly_stream_t;
 
 typedef quicly_raw_packet_t *(*quicly_alloc_packet_cb)(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
 typedef void (*quicly_free_packet_cb)(quicly_context_t *ctx, quicly_raw_packet_t *packet);
-typedef int (*quicly_stream_open_cb)(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream);
+typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
+typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
 typedef int (*quicly_set_timeout_cb)(quicly_context_t *ctx, quicly_conn_t *conn, unsigned millis);
 
@@ -116,15 +117,24 @@ struct _st_quicly_conn_public_t {
     uint64_t connection_id;
     quicly_state_t state;
     struct {
+        uint32_t num_streams;
         uint32_t next_stream_id;
     } host;
     struct {
+        uint32_t num_streams;
         uint32_t next_stream_id;
         struct sockaddr *sa;
         socklen_t salen;
         quicly_transport_parameters_t transport_params;
     } peer;
 };
+
+typedef enum {
+    QUICLY_SENDER_STATE_NONE,
+    QUICLY_SENDER_STATE_SEND,
+    QUICLY_SENDER_STATE_UNACKED,
+    QUICLY_SENDER_STATE_ACKED,
+} quicly_sender_state_t;
 
 struct st_quicly_stream_t {
     /**
@@ -150,23 +160,55 @@ struct st_quicly_stream_t {
     /**
      * the receive callback
      */
-    int (*on_receive)(quicly_conn_t *conn, quicly_stream_t *stream);
+    quicly_stream_update_cb on_update;
     /**
-     * receive window size
+     *
      */
-    uint32_t recv_window_size;
+    struct {
+        /**
+         * send window
+         */
+        uint64_t max_stream_data;
+        /**
+         * 1 + maximum offset of data that has been sent at least once (not counting eos)
+         */
+        uint64_t max_sent;
+        /**
+         *
+         */
+        struct {
+            quicly_sender_state_t sender_state;
+            uint32_t reason;
+        } stop_sending;
+        /**
+         * rst_stream
+         */
+        struct {
+            quicly_sender_state_t sender_state;
+            uint32_t reason;
+        } rst;
+        /**
+         * sends receive window updates to peer
+         */
+        quicly_maxsender_t max_stream_data_sender;
+    } _send_aux;
     /**
-     * 1 + maximum offset of data that has been sent at least once (not counting eos)
+     *
      */
-    uint64_t _max_sent;
+    struct {
+        /**
+         * size of the receive window
+         */
+        uint32_t window;
+        /**
+         *
+         */
+        uint32_t rst_reason;
+    } _recv_aux;
     /**
-     * sends receive window updates to peer
+     *
      */
-    quicly_maxsender_t _max_stream_data_sender;
-    /**
-     * send window
-     */
-    uint64_t _peer_max_stream_data;
+    unsigned _close_called : 1;
 };
 
 typedef struct st_quicly_decode_packet_t {
@@ -187,11 +229,19 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
 /**
  *
  */
+static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
+/**
+ *
+ */
 static uint64_t quicly_get_connection_id(quicly_conn_t *conn);
 /**
  *
  */
 static quicly_state_t quicly_get_state(quicly_conn_t *conn);
+/**
+ *
+ */
+static uint32_t quicly_num_streams(quicly_conn_t *conn);
 /**
  *
  */
@@ -237,7 +287,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream);
 /**
  *
  */
-int quicly_reset_stream(quicly_stream_t *stream);
+int quicly_close_stream(quicly_stream_t *stream);
 /**
  *
  */
@@ -253,6 +303,18 @@ inline quicly_state_t quicly_get_state(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (void *)conn;
     return c->state;
+}
+
+inline uint32_t quicly_num_streams(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (void *)conn;
+    return 1 + c->host.num_streams + c->peer.num_streams;
+}
+
+inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (void *)conn;
+    return c->ctx;
 }
 
 inline uint64_t quicly_get_connection_id(quicly_conn_t *conn)

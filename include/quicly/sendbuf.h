@@ -63,6 +63,7 @@ typedef struct st_quicly_sendbuf_dataiter_t {
 
 void quicly_sendbuf_init(quicly_sendbuf_t *buf, quicly_sendbuf_change_cb on_change);
 void quicly_sendbuf_dispose(quicly_sendbuf_t *buf);
+static int quicly_sendbuf_transfer_complete(quicly_sendbuf_t *buf);
 void quicly_sendbuf_write(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb);
 void quicly_sendbuf_shutdown(quicly_sendbuf_t *buf);
 void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
@@ -73,6 +74,12 @@ static void quicly_sendbuf_init_dataiter(quicly_sendbuf_t *buf, quicly_sendbuf_d
 static void quicly_sendbuf_advance_dataiter(quicly_sendbuf_dataiter_t *iter, size_t nbytes);
 
 /* inline definitions */
+
+inline int quicly_sendbuf_transfer_complete(quicly_sendbuf_t *buf)
+{
+    /* end of the range is non-inclusive, hence one after the eos */
+    return buf->acked.ranges[0].end > buf->eos;
+}
 
 inline int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args)
 {

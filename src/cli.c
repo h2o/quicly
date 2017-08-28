@@ -25,7 +25,7 @@
 #include "quicly.h"
 #include "../deps/picotls/t/util.h"
 
-static int on_stream_open(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream);
+static int on_stream_open(quicly_stream_t *stream);
 
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx = {&tlsctx, 1280, 1000, {}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open};
@@ -36,7 +36,7 @@ static void send_data(quicly_stream_t *stream, const char *s)
     quicly_sendbuf_shutdown(&stream->sendbuf);
 }
 
-static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
+static int on_req_receive(quicly_stream_t *stream)
 {
     ptls_iovec_t input;
 
@@ -54,7 +54,7 @@ static int on_req_receive(quicly_conn_t *conn, quicly_stream_t *stream)
     return 0;
 }
 
-static int on_resp_receive(quicly_conn_t *conn, quicly_stream_t *stream)
+static int on_resp_receive(quicly_stream_t *stream)
 {
     ptls_iovec_t input;
 
@@ -69,9 +69,9 @@ static int on_resp_receive(quicly_conn_t *conn, quicly_stream_t *stream)
     return 0;
 }
 
-static int on_stream_open(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream)
+int on_stream_open(quicly_stream_t *stream)
 {
-    stream->on_receive = on_req_receive;
+    stream->on_update = on_req_receive;
     return 0;
 }
 
@@ -176,7 +176,7 @@ fprintf(stderr, "received %zd bytes!\n", rret);
                         quicly_stream_t *stream;
                         ret = quicly_open_stream(conn, &stream);
                         assert(ret == 0);
-                        stream->on_receive = on_resp_receive;
+                        stream->on_update = on_resp_receive;
                         send_data(stream, "GET / HTTP/1.0\r\n\r\n");
                     }
                 }

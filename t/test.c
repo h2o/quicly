@@ -114,14 +114,14 @@ void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw,
     }
 }
 
-int buffering_on_receive(quicly_conn_t *conn, quicly_stream_t *stream)
+int on_update_noop(quicly_stream_t *stream)
 {
     return 0;
 }
 
-int on_stream_open_buffering(quicly_context_t *ctx, quicly_conn_t *conn, quicly_stream_t *stream)
+int on_stream_open_buffering(quicly_stream_t *stream)
 {
-    stream->on_receive = buffering_on_receive;
+    stream->on_update = on_update_noop;
     return 0;
 }
 

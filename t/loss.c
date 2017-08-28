@@ -155,7 +155,7 @@ static void loss_core(int downstream_only)
             if (client_stream == NULL) {
                 ret = quicly_open_stream(client, &client_stream);
                 ok(ret == 0);
-                client_stream->on_receive = buffering_on_receive;
+                client_stream->on_update = on_update_noop;
                 quicly_sendbuf_write(&client_stream->sendbuf, req, strlen(req), NULL);
                 quicly_sendbuf_shutdown(&client_stream->sendbuf);
             } else if (fully_received(&client_stream->recvbuf)) {

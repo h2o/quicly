@@ -69,9 +69,10 @@ static void simple_http(void)
 
     ret = quicly_open_stream(client, &client_stream);
     ok(ret == 0);
-    client_stream->on_receive = buffering_on_receive;
+    client_stream->on_update = on_update_noop;
     quicly_sendbuf_write(&client_stream->sendbuf, req, strlen(req), NULL);
     quicly_sendbuf_shutdown(&client_stream->sendbuf);
+    ok(quicly_num_streams(client) == 2);
 
     transmit(client, server);
 
@@ -80,12 +81,58 @@ static void simple_http(void)
     ok(recvbuf_is(&server_stream->recvbuf, req));
     ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
     quicly_sendbuf_write(&server_stream->sendbuf, resp, strlen(resp), NULL);
-    quicly_sendbuf_shutdown(&server_stream->sendbuf);
+    ret = quicly_close_stream(server_stream);
+    ok(ret == 0);
+    ok(quicly_num_streams(server) == 2);
 
     transmit(server, client);
 
     ok(recvbuf_is(&client_stream->recvbuf, resp));
     ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
+    ret = quicly_close_stream(client_stream);
+    ok(ret == 0);
+    ok(quicly_num_streams(client) == 1);
+    ok(quicly_num_streams(server) == 2);
+
+    transmit(client, server);
+
+    ok(quicly_num_streams(server) == 1);
+}
+
+static void test_rst_then_close(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    uint32_t stream_id;
+    int ret;
+
+    /* client sends STOP_SENDING and RST_STREAM */
+    ret = quicly_open_stream(client, &client_stream);
+    ok(ret == 0);
+    client_stream->on_update = on_update_noop;
+    stream_id = client_stream->stream_id;
+    ret = quicly_close_stream(client_stream);
+
+    transmit(client, server);
+
+    /* server sends RST_STREAM and ACKs to the packets received */
+    ok(quicly_num_streams(client) == 2);
+    ok(quicly_num_streams(server) == 2);
+    server_stream = quicly_get_stream(server, stream_id);
+    ok(server_stream != NULL);
+    ok(server_stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_SEND);
+
+    transmit(server, client);
+
+    /* client closes the stream */
+    ok(quicly_num_streams(client) == 1);
+    ok(quicly_num_streams(server) == 2);
+
+    transmit(client, server);
+
+    /* server becomes ready to close the stream, by receiving the ACK to the RST_STREAM */
+    ok(quicly_num_streams(server) == 2);
+    quicly_close_stream(server_stream);
+    ok(quicly_num_streams(server) == 1);
 }
 
 static void tiny_stream_window(void)
@@ -97,7 +144,8 @@ static void tiny_stream_window(void)
 
     ret = quicly_open_stream(client, &client_stream);
     ok(ret == 0);
-    client_stream->_peer_max_stream_data = 4;
+    client_stream->on_update = on_update_noop;
+    client_stream->_send_aux.max_stream_data = 4;
 
     quicly_sendbuf_write(&client_stream->sendbuf, "hello world", 11, NULL);
     quicly_sendbuf_shutdown(&client_stream->sendbuf);
@@ -120,6 +168,26 @@ static void tiny_stream_window(void)
 
     ok(recvbuf_is(&server_stream->recvbuf, "orld"));
     ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
+
+    ret = quicly_close_stream(client_stream);
+    ok(ret == 0);
+
+    transmit(client, server);
+
+    /* client should have sent ACK(FIN),STOP_RESPONDING and waiting for response */
+    ok(quicly_num_streams(client) == 2);
+
+    transmit(server, client);
+
+    /* client destroys the stream immediately when it receives an RST_STREAM in response */
+    ok(quicly_num_streams(client) == 1);
+    ok(quicly_num_streams(server) == 2);
+
+    transmit(client, server);
+
+    /* server should have recieved ACK to the RST_STREAM it has sent */
+    quicly_close_stream(server_stream);
+    ok(quicly_num_streams(server) == 1);
 }
 
 static void tiny_connection_window(void)
@@ -181,11 +249,10 @@ void test_simple(void)
 
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
+    subtest("rst-then-close", test_rst_then_close);
+
     subtest("tiny-stream-window", tiny_stream_window);
-
     quic_ctx.transport_params = transport_params_backup;
-
     subtest("tiny-connection-window", tiny_connection_window);
-
     quic_ctx.transport_params = transport_params_backup;
 }
