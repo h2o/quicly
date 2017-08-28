@@ -382,15 +382,12 @@ static int setup_1rtt_secret(struct st_quicly_packet_protection_t *pp, ptls_t *t
 
 static int setup_1rtt(quicly_conn_t *conn, ptls_t *tls)
 {
+    static const char *labels[2] = {"EXPORTER-QUIC client 1-RTT Secret", "EXPORTER-QUIC server 1-RTT Secret"};
     int ret;
 
-    if ((ret = setup_1rtt_secret(&conn->ingress.pp, tls,
-                                 quicly_is_client(conn) ? "EXPORTER-QUIC server 1-RTT Secret" : "EXPORTER-QUIC client 1-RTT Secret",
-                                 0)) != 0)
+    if ((ret = setup_1rtt_secret(&conn->ingress.pp, tls, labels[quicly_is_client(conn)], 0)) != 0)
         goto Exit;
-    if ((ret = setup_1rtt_secret(&conn->egress.pp, tls,
-                                 quicly_is_client(conn) ? "EXPORTER-QUIC client 1-RTT Secret" : "EXPORTER-QUIC server 1-RTT Secret",
-                                 1)) != 0)
+    if ((ret = setup_1rtt_secret(&conn->egress.pp, tls, labels[!quicly_is_client(conn)], 1)) != 0)
         goto Exit;
 
     conn->super.state = QUICLY_STATE_1RTT_ENCRYPTED;
