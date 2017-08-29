@@ -274,6 +274,10 @@ static void on_recvbuf_change(quicly_recvbuf_t *buf, int err, size_t shift_amoun
         conn->ingress.max_data.bytes_consumed += shift_amount;
 }
 
+static void on_recvbuf_change_ignore(quicly_recvbuf_t *buf, int err, size_t shift_amount)
+{
+}
+
 static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
 {
     quicly_stream_t *stream;
@@ -465,6 +469,12 @@ Exit:
 static int do_apply_stream_frame(quicly_conn_t *conn, quicly_stream_t *stream, uint64_t off, ptls_iovec_t data)
 {
     int ret;
+
+    /* adjust the range of supplied data so that we not go above eos */
+    if (stream->recvbuf.eos <= off)
+        return 0;
+    if (stream->recvbuf.eos < off + data.len)
+        data.len = stream->recvbuf.eos - off;
 
     /* make adjustments for retransmit */
     if (off < stream->recvbuf.data_off) {
@@ -1392,10 +1402,13 @@ static int handle_rst_stream_frame(quicly_conn_t *conn, quicly_rst_stream_frame_
     if (stream->recvbuf.eos == UINT64_MAX) {
         if (frame->final_offset < stream->recvbuf.received.ranges[stream->recvbuf.received.num_ranges - 1].end)
             return QUICLY_ERROR_TBD;
-        quicly_recvbuf_mark_eos(&stream->recvbuf, frame->final_offset);
         stream->_recv_aux.rst_reason = frame->reason;
         conn->ingress.max_data.bytes_consumed +=
             frame->final_offset - stream->recvbuf.received.ranges[stream->recvbuf.received.num_ranges - 1].end;
+        /* reset receive buffer and mark eos at the start (TODO: retain the contiguous bytes that have been received?) */
+        quicly_recvbuf_dispose(&stream->recvbuf);
+        quicly_recvbuf_init(&stream->recvbuf, on_recvbuf_change_ignore);
+        quicly_recvbuf_mark_eos(&stream->recvbuf, 0);
         if ((ret = stream->on_update(stream)) != 0)
             return ret;
     } else {

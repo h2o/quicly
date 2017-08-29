@@ -142,6 +142,8 @@ static void tiny_stream_window(void)
 
     quic_ctx.transport_params.initial_max_stream_data = 4;
 
+    ok(max_data_is_equal(client, server));
+
     ret = quicly_open_stream(client, &client_stream);
     ok(ret == 0);
     client_stream->on_update = on_update_noop;
@@ -156,17 +158,20 @@ static void tiny_stream_window(void)
     ok(server_stream != NULL);
     ok(recvbuf_is(&server_stream->recvbuf, "hel"));
     ok(quicly_recvbuf_available(&server_stream->recvbuf) == 1);
+    ok(server_stream->recvbuf.data.len == 1);
 
     transmit(server, client);
     transmit(client, server);
 
     ok(recvbuf_is(&server_stream->recvbuf, "lo w"));
     ok(quicly_recvbuf_available(&server_stream->recvbuf) == 0);
+    ok(server_stream->recvbuf.data.len == 0);
 
     transmit(server, client);
     transmit(client, server);
 
     ok(recvbuf_is(&server_stream->recvbuf, "orld"));
+    ok(server_stream->recvbuf.data.len == 0);
     ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
 
     ret = quicly_close_stream(client_stream);
@@ -188,6 +193,78 @@ static void tiny_stream_window(void)
     /* server should have recieved ACK to the RST_STREAM it has sent */
     quicly_close_stream(server_stream);
     ok(quicly_num_streams(server) == 1);
+
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_rst_during_loss(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    quicly_raw_packet_t *reordered_packet;
+    int ret;
+    __uint128_t max_data_at_start, tmp;
+
+    quic_ctx.transport_params.initial_max_stream_data = 4;
+
+    ok(max_data_is_equal(client, server));
+    quicly_get_max_data(client, NULL, &max_data_at_start, NULL);
+
+    ret = quicly_open_stream(client, &client_stream);
+    ok(ret == 0);
+    client_stream->on_update = on_update_noop;
+    client_stream->_send_aux.max_stream_data = 4;
+    quicly_sendbuf_write(&client_stream->sendbuf, "hello world", 11, NULL);
+
+    /* transmit first 4 bytes */
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    ok(recvbuf_is(&server_stream->recvbuf, "hell"));
+
+    /* transmit ack */
+    transmit(server, client);
+
+    { /* loss of 4 bytes */
+        size_t cnt = 1;
+        ret = quicly_send(client, &reordered_packet, &cnt);
+        ok(ret == 0);
+        ok(cnt == 1);
+    }
+
+    /* transmit RST_STREAM */
+    quicly_reset_sender(client_stream, 12345);
+    transmit(client, server);
+
+    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
+    quicly_close_stream(server_stream);
+
+    quicly_get_max_data(client, NULL, &tmp, NULL);
+    ok(tmp == max_data_at_start + 8);
+    quicly_get_max_data(server, NULL, NULL, &tmp);
+    ok(tmp == max_data_at_start + 8);
+
+    {
+        quicly_decoded_packet_t decoded;
+        decode_packets(&decoded, &reordered_packet, 1);
+        ret = quicly_receive(server, &decoded);
+        ok(ret == 0);
+    }
+
+    quicly_get_max_data(server, NULL, NULL, &tmp);
+    ok(tmp == max_data_at_start + 8);
+
+    /* RST_STREAM for downstream is sent */
+    transmit(server, client);
+    ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
+    quicly_close_stream(client_stream);
+    ok(quicly_num_streams(client) == 1);
+    ok(quicly_num_streams(server) == 2);
+    transmit(client, server);
+    ok(quicly_num_streams(server) == 1);
+
+    quicly_get_max_data(server, NULL, NULL, &tmp);
+    ok(tmp == max_data_at_start + 8);
+    ok(max_data_is_equal(client, server));
 }
 
 static void tiny_connection_window(void)
@@ -253,6 +330,10 @@ void test_simple(void)
 
     subtest("tiny-stream-window", tiny_stream_window);
     quic_ctx.transport_params = transport_params_backup;
+
+    subtest("rst-during-loss", test_rst_during_loss);
+    quic_ctx.transport_params = transport_params_backup;
+
     subtest("tiny-connection-window", tiny_connection_window);
     quic_ctx.transport_params = transport_params_backup;
 }
