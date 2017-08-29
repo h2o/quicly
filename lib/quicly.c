@@ -354,9 +354,12 @@ quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint32_t stream_id)
 
 void quicly_get_max_data(quicly_conn_t *conn, __uint128_t *send_permitted, __uint128_t *sent, __uint128_t *consumed)
 {
-    *send_permitted = conn->egress.max_data.permitted;
-    *sent = conn->egress.max_data.sent;
-    *consumed = conn->ingress.max_data.bytes_consumed;
+    if (send_permitted != NULL)
+        *send_permitted = conn->egress.max_data.permitted;
+    if (sent != NULL)
+        *sent = conn->egress.max_data.sent;
+    if (consumed != NULL)
+        *consumed = conn->ingress.max_data.bytes_consumed;
 }
 
 void quicly_free(quicly_conn_t *conn)

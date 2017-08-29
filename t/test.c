@@ -164,11 +164,11 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 
 int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
 {
-    __uint128_t client_send_permitted, client_sent, client_consumed;
-    __uint128_t server_send_permitted, server_sent, server_consumed;
+    __uint128_t client_sent, client_consumed;
+    __uint128_t server_sent, server_consumed;
 
-    quicly_get_max_data(client, &client_send_permitted, &client_sent, &client_consumed);
-    quicly_get_max_data(server, &server_send_permitted, &server_sent, &server_consumed);
+    quicly_get_max_data(client, NULL, &client_sent, &client_consumed);
+    quicly_get_max_data(server, NULL, &server_sent, &server_consumed);
 
     if (client_sent != server_consumed)
         return 0;
