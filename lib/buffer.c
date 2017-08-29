@@ -25,6 +25,26 @@
 #include "picotls.h"
 #include "quicly/buffer.h"
 
+#define INTERNAL_MIN_CAPACITY (2048 - offsetof(struct st_quicly_buffer_vec_t, _buf))
+#define INTERNAL_EXACT_CAPACITY_THRESHOLD (1024 * 1024)
+
+static struct st_quicly_buffer_vec_t *get_tail(quicly_buffer_t *buf)
+{
+    return (void *)((char *)buf->tail_ref - offsetof(struct st_quicly_buffer_vec_t, next));
+}
+
+static size_t alloc_size(quicly_buffer_t *buf, size_t sz)
+{
+    size_t optimal = buf->len;
+    if (optimal < INTERNAL_MIN_CAPACITY) {
+        optimal = INTERNAL_MIN_CAPACITY;
+    } else if (optimal > INTERNAL_EXACT_CAPACITY_THRESHOLD) {
+        optimal = INTERNAL_EXACT_CAPACITY_THRESHOLD;
+    }
+
+    return sz < optimal ? optimal : sz;
+}
+
 static struct st_quicly_buffer_vec_t *new_vec(quicly_buffer_t *buf, size_t internal_capacity)
 {
     struct st_quicly_buffer_vec_t *vec;
@@ -35,6 +55,7 @@ static struct st_quicly_buffer_vec_t *new_vec(quicly_buffer_t *buf, size_t inter
     vec->next = NULL;
     *buf->tail_ref = vec;
     buf->tail_ref = &vec->next;
+    buf->capacity = internal_capacity;
     return vec;
 }
 
@@ -72,34 +93,51 @@ void quicly_buffer_set_fast_external(quicly_buffer_t *buf, struct st_quicly_buff
     buf->skip = 0;
 }
 
-int quicly_buffer_push(quicly_buffer_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
+static int push_external(quicly_buffer_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
 {
     struct st_quicly_buffer_vec_t *vec;
 
-    if ((vec = new_vec(buf, free_cb != NULL ? 0 : len)) == NULL)
+    assert(len != 0);
+
+    if ((vec = new_vec(buf, 0)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
-    if (free_cb != NULL) {
-        vec->p = (void *)p;
-    } else {
-        vec->p = vec->_buf;
-        memcpy(vec->p, p, len);
-    }
+    vec->p = (void *)p;
     vec->len = len;
-    vec->free_cb = free_cb != NULL ? free_cb : free_internal;
+    vec->free_cb = free_cb;
     buf->len += len;
 
     return 0;
 }
 
-int quicly_buffer_allocate(quicly_buffer_t *buf, size_t len)
+static int push_internal(quicly_buffer_t *buf, const void *p, size_t len)
 {
     struct st_quicly_buffer_vec_t *vec;
 
-    if ((vec = new_vec(buf, len)) == NULL)
-        return PTLS_ERROR_NO_MEMORY;
+    if (len == 0)
+        return 0;
 
+    /* push to current tail, if possible */
+    if (buf->first != NULL) {
+        vec = get_tail(buf);
+        if (vec->len < buf->capacity) {
+            size_t copysize = len;
+            if (copysize > buf->capacity - vec->len)
+                copysize = buf->capacity - vec->len;
+            memcpy(vec->_buf + vec->len, p, copysize);
+            vec->len += copysize;
+            buf->len += copysize;
+            p = (char *)p + copysize;
+            if ((len -= copysize) == 0)
+                return 0;
+        }
+    }
+
+    /* allocate new vec and save */
+    if ((vec = new_vec(buf, alloc_size(buf, len))) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
     vec->p = vec->_buf;
+    memcpy(vec->_buf, p, len);
     vec->len = len;
     vec->free_cb = free_internal;
     buf->len += len;
@@ -107,13 +145,49 @@ int quicly_buffer_allocate(quicly_buffer_t *buf, size_t len)
     return 0;
 }
 
+int quicly_buffer_push(quicly_buffer_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
+{
+
+    return free_cb != NULL ? push_external(buf, p, len, free_cb) : push_internal(buf, p, len);
+}
+
 int quicly_buffer_write(quicly_buffer_t *buf, size_t pos, const void *p, size_t len)
 {
     quicly_buffer_iter_t iter;
-    int ret;
 
-    if (pos + len > buf->len && (ret = quicly_buffer_allocate(buf, pos + len - buf->len)) != 0)
-        return ret;
+    if (len == 0)
+        return 0;
+
+    /* fast path */
+    if (buf->len == pos)
+        return quicly_buffer_push(buf, p, len, NULL);
+
+    if (buf->len < pos + len) {
+        size_t newlen = pos + len;
+        /* adjust the size of the current tail */
+        if (buf->capacity != 0) {
+            struct st_quicly_buffer_vec_t *tail = get_tail(buf);
+            size_t space_avail = buf->capacity - tail->len;
+            if (newlen <= buf->len + space_avail) {
+                tail->len += pos + len - buf->len;
+                buf->len = newlen;
+            } else {
+                buf->len += buf->capacity - tail->len;
+                tail->len = buf->capacity;
+            }
+        }
+        /* expand the buffer if necessary */
+        if (buf->len < newlen) {
+            struct st_quicly_buffer_vec_t *vec;
+            size_t veclen = newlen - buf->len;
+            if ((vec = new_vec(buf, alloc_size(buf, veclen))) == NULL)
+                return PTLS_ERROR_NO_MEMORY;
+            vec->p = vec->_buf;
+            vec->len = veclen;
+            vec->free_cb = free_internal;
+            buf->len = newlen;
+        }
+    }
 
     quicly_buffer_init_iter(buf, &iter);
     quicly_buffer_advance_iter(&iter, pos);
@@ -122,7 +196,7 @@ int quicly_buffer_write(quicly_buffer_t *buf, size_t pos, const void *p, size_t 
         if (len < copysize)
             copysize = len;
         memcpy(iter.vec->p + iter.vec_off, p, copysize);
-        p = (char *)p + copysize;
+        p = p + copysize;
         len -= copysize;
     }
 
@@ -146,7 +220,9 @@ size_t quicly_buffer_shift(quicly_buffer_t *buf, size_t delta)
         buf->skip = 0;
         vec->free_cb(vec);
     }
+    assert(buf->len == 0);
     buf->tail_ref = &buf->first;
+    buf->capacity = 0;
 
     return delta;
 }

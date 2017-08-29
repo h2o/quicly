@@ -30,16 +30,45 @@ struct st_quicly_buffer_vec_t;
 typedef void (*quicly_buffer_free_cb)(struct st_quicly_buffer_vec_t *vec);
 
 struct st_quicly_buffer_vec_t {
-    uint8_t *p;
-    size_t len;
+    /**
+     * pointer to next
+     */
     struct st_quicly_buffer_vec_t *next;
+    /**
+     * pointer to data (points to _buf if the vector is internal)
+     */
+    uint8_t *p;
+    /**
+     * offset to where the data is stored
+     */
+    size_t len;
+    /**
+     * callback that destroys the vec
+     */
     quicly_buffer_free_cb free_cb;
+    /**
+     * buffer used for internal vector
+     */
     uint8_t _buf[1];
 };
 
 typedef struct st_quicly_buffer_t {
-    size_t len, skip;
+    /**
+     * references to the linked list of vec
+     */
     struct st_quicly_buffer_vec_t *first, **tail_ref;
+    /**
+     * amount of data available
+     */
+    size_t len;
+    /**
+     * offset within the `first` where the data starts from
+     */
+    size_t skip;
+    /**
+     * capacity of the last vec
+     */
+    size_t capacity;
 } quicly_buffer_t;
 
 typedef struct st_quicly_buffer_iter_t {
@@ -51,7 +80,6 @@ static void quicly_buffer_init(quicly_buffer_t *buf);
 void quicly_buffer_dispose(quicly_buffer_t *buf);
 void quicly_buffer_set_fast_external(quicly_buffer_t *buf, struct st_quicly_buffer_vec_t *vec, const void *p, size_t len);
 int quicly_buffer_push(quicly_buffer_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb);
-int quicly_buffer_allocate(quicly_buffer_t *buf, size_t len);
 int quicly_buffer_write(quicly_buffer_t *buf, size_t pos, const void *p, size_t len);
 size_t quicly_buffer_shift(quicly_buffer_t *buf, size_t delta);
 void quicly_buffer_emit(quicly_buffer_iter_t *iter, size_t nbytes, void *_dst, ptls_aead_context_t *aead);
@@ -62,10 +90,11 @@ static void quicly_buffer_advance_iter(quicly_buffer_iter_t *iter, size_t nbytes
 
 inline void quicly_buffer_init(quicly_buffer_t *buf)
 {
-    buf->len = 0;
-    buf->skip = 0;
     buf->first = NULL;
     buf->tail_ref = &buf->first;
+    buf->len = 0;
+    buf->skip = 0;
+    buf->capacity = 0;
 }
 
 inline void quicly_buffer_init_iter(quicly_buffer_t *buf, quicly_buffer_iter_t *iter)
