@@ -112,7 +112,7 @@ int quicly_buffer_write(quicly_buffer_t *buf, size_t pos, const void *p, size_t 
     quicly_buffer_iter_t iter;
     int ret;
 
-    if (pos + len > buf->len && (ret = quicly_buffer_allocate(buf, pos + len)) != 0)
+    if (pos + len > buf->len && (ret = quicly_buffer_allocate(buf, pos + len - buf->len)) != 0)
         return ret;
 
     quicly_buffer_init_iter(buf, &iter);
