@@ -282,7 +282,7 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
 {
     quicly_stream_t *stream;
 
-    if ((stream = malloc(sizeof(*stream))) == NULL)
+    if ((stream = conn->super.ctx->alloc_stream(conn->super.ctx)) == NULL)
         return NULL;
 
     stream->conn = conn;
@@ -290,7 +290,6 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
     quicly_sendbuf_init(&stream->sendbuf, on_sendbuf_change);
     quicly_recvbuf_init(&stream->recvbuf, on_recvbuf_change);
     stream->data = NULL;
-    stream->on_update = NULL;
 
     stream->_send_aux.max_stream_data = conn->super.peer.transport_params.initial_max_stream_data;
     stream->_send_aux.max_sent = 0;
@@ -332,7 +331,7 @@ static void destroy_stream(quicly_stream_t *stream)
             --conn->super.peer.num_streams;
         }
     }
-    free(stream);
+    conn->super.ctx->free_stream(stream);
 }
 
 static inline int destroy_stream_if_unneeded(quicly_stream_t *stream)
@@ -1342,6 +1341,7 @@ static int get_stream_or_open_if_new(quicly_conn_t *conn, uint32_t stream_id, qu
                 goto Exit;
             }
             if ((ret = conn->super.ctx->on_stream_open(*stream)) != 0) {
+                destroy_stream(*stream);
                 *stream = NULL;
                 goto Exit;
             }
@@ -1692,4 +1692,14 @@ quicly_raw_packet_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_
 void quicly_default_free_packet(quicly_context_t *ctx, quicly_raw_packet_t *packet)
 {
     free(packet);
+}
+
+quicly_stream_t *quicly_default_alloc_stream(quicly_context_t *ctx)
+{
+    return malloc(sizeof(quicly_stream_t));
+}
+
+void quicly_default_free_stream(quicly_stream_t *stream)
+{
+    free(stream);
 }

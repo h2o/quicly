@@ -28,7 +28,15 @@
 static int on_stream_open(quicly_stream_t *stream);
 
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
-static quicly_context_t ctx = {&tlsctx, 1280, 1000, {}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open};
+static quicly_context_t ctx = {&tlsctx,
+                               1280,
+                               1000,
+                               {},
+                               quicly_default_alloc_packet,
+                               quicly_default_free_packet,
+                               quicly_default_alloc_stream,
+                               quicly_default_free_stream,
+                               on_stream_open};
 
 static void send_data(quicly_stream_t *stream, const char *s)
 {

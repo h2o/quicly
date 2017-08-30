@@ -89,9 +89,16 @@ static ptls_context_t tls_ctx = {
     ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL, &cert_signer.super};
 
 int64_t quic_now;
-quicly_context_t quic_ctx = {
-    &tls_ctx, 1280, 1000, {8192, 64, 100, 60, 0}, quicly_default_alloc_packet, quicly_default_free_packet, on_stream_open_buffering,
-    get_now};
+quicly_context_t quic_ctx = {&tls_ctx,
+                             1280,
+                             1000,
+                             {8192, 64, 100, 60, 0},
+                             quicly_default_alloc_packet,
+                             quicly_default_free_packet,
+                             quicly_default_alloc_stream,
+                             quicly_default_free_stream,
+                             on_stream_open_buffering,
+                             get_now};
 
 static int64_t get_now(quicly_context_t *ctx)
 {

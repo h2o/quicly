@@ -43,6 +43,8 @@ typedef struct st_quicly_stream_t quicly_stream_t;
 
 typedef quicly_raw_packet_t *(*quicly_alloc_packet_cb)(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
 typedef void (*quicly_free_packet_cb)(quicly_context_t *ctx, quicly_raw_packet_t *packet);
+typedef quicly_stream_t *(*quicly_alloc_stream_cb)(quicly_context_t *ctx);
+typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
@@ -96,6 +98,14 @@ struct st_quicly_context_t {
      * callback for freeing memory allocated by alloc_packet
      */
     quicly_free_packet_cb free_packet;
+    /**
+     * callback called to allocate memory for a new stream
+     */
+    quicly_alloc_stream_cb alloc_stream;
+    /**
+     * callback called to free memory allocated for a stream
+     */
+    quicly_free_stream_cb free_stream;
     /**
      * callback called when a new stream is opened by peer
      */
@@ -304,6 +314,14 @@ quicly_raw_packet_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_
  *
  */
 void quicly_default_free_packet(quicly_context_t *ctx, quicly_raw_packet_t *packet);
+/**
+ *
+ */
+quicly_stream_t *quicly_default_alloc_stream(quicly_context_t *ctx);
+/**
+ *
+ */
+void quicly_default_free_stream(quicly_stream_t *stream);
 
 /* inline definitions */
 
