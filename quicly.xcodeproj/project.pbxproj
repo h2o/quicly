@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E9056C081F56965300E2B96C /* linklist.h in Headers */ = {isa = PBXBuildFile; fileRef = E9056C071F56965300E2B96C /* linklist.h */; };
 		E920D2171F42E93200799777 /* buffer.h in Headers */ = {isa = PBXBuildFile; fileRef = E920D2161F42E93200799777 /* buffer.h */; };
 		E920D2191F42E9CE00799777 /* buffer.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D2181F42E9CE00799777 /* buffer.c */; };
 		E920D21A1F42E9CE00799777 /* buffer.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D2181F42E9CE00799777 /* buffer.c */; };
@@ -68,6 +69,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		E9056C071F56965300E2B96C /* linklist.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = linklist.h; sourceTree = "<group>"; };
 		E920D2161F42E93200799777 /* buffer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = buffer.h; sourceTree = "<group>"; };
 		E920D2181F42E9CE00799777 /* buffer.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = buffer.c; sourceTree = "<group>"; };
 		E920D21B1F43DE4100799777 /* recvbuf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = recvbuf.h; sourceTree = "<group>"; };
@@ -266,6 +268,7 @@
 				E920D2161F42E93200799777 /* buffer.h */,
 				E920D2201F44047C00799777 /* error.h */,
 				E99F8C231F4E863200C26B3D /* frame.h */,
+				E9056C071F56965300E2B96C /* linklist.h */,
 				E920D2221F4536CB00799777 /* maxsender.h */,
 				E9F6A4261F3C3B050083F0B2 /* ranges.h */,
 				E920D21B1F43DE4100799777 /* recvbuf.h */,
@@ -287,6 +290,7 @@
 				E920D2291F4951BA00799777 /* ack.h in Headers */,
 				E984482C1EA48D1200390927 /* picotls.h in Headers */,
 				E9F6A4271F3C3B050083F0B2 /* ranges.h in Headers */,
+				E9056C081F56965300E2B96C /* linklist.h in Headers */,
 				E98448401EA48F6B00390927 /* quicly.h in Headers */,
 				E99F8C241F4E863200C26B3D /* frame.h in Headers */,
 				E92D43ED1F41DCF5002AC767 /* sendbuf.h in Headers */,
