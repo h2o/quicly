@@ -164,10 +164,6 @@ struct st_quicly_stream_t {
      */
     quicly_recvbuf_t recvbuf;
     /**
-     * application data pointer
-     */
-    void *data;
-    /**
      * the receive callback
      */
     quicly_stream_update_cb on_update;

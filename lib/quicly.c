@@ -77,6 +77,9 @@ struct st_quicly_conn_t {
      * hashtable of streams
      */
     khash_t(quicly_stream_t) * streams;
+    /**
+     *
+     */
     struct {
         /**
          * crypto parameters
@@ -94,6 +97,9 @@ struct st_quicly_conn_t {
             quicly_maxsender_t sender;
         } max_data;
     } ingress;
+    /**
+     *
+     */
     struct {
         /**
          * crypto parameters
@@ -119,16 +125,18 @@ struct st_quicly_conn_t {
          */
         unsigned acks_require_encryption : 1;
     } egress;
-};
-
-struct st_quicly_crypto_stream_data_t {
-    quicly_conn_t *conn;
-    ptls_t *tls;
-    ptls_handshake_properties_t handshake_properties;
+    /**
+     * crypto data
+     */
     struct {
-        ptls_raw_extension_t ext[2];
-        ptls_buffer_t buf;
-    } transport_parameters;
+        quicly_stream_t stream;
+        ptls_t *tls;
+        ptls_handshake_properties_t handshake_properties;
+        struct {
+            ptls_raw_extension_t ext[2];
+            ptls_buffer_t buf;
+        } transport_parameters;
+    } crypto;
 };
 
 static const quicly_transport_parameters_t transport_params_before_handshake = {8192, 16, 100, 60, 0};
@@ -278,18 +286,12 @@ static void on_recvbuf_change_ignore(quicly_recvbuf_t *buf, int err, size_t shif
 {
 }
 
-static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
+static void init_stream(quicly_stream_t *stream, quicly_conn_t *conn, uint32_t stream_id)
 {
-    quicly_stream_t *stream;
-
-    if ((stream = conn->super.ctx->alloc_stream(conn->super.ctx)) == NULL)
-        return NULL;
-
     stream->conn = conn;
     stream->stream_id = stream_id;
     quicly_sendbuf_init(&stream->sendbuf, on_sendbuf_change);
     quicly_recvbuf_init(&stream->recvbuf, on_recvbuf_change);
-    stream->data = NULL;
 
     stream->_send_aux.max_stream_data = conn->super.peer.transport_params.initial_max_stream_data;
     stream->_send_aux.max_sent = 0;
@@ -308,7 +310,15 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
     khiter_t iter = kh_put(quicly_stream_t, conn->streams, stream_id, &r);
     assert(iter != kh_end(conn->streams));
     kh_val(conn->streams, iter) = stream;
+}
 
+static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
+{
+    quicly_stream_t *stream;
+
+    if ((stream = conn->super.ctx->alloc_stream(conn->super.ctx)) == NULL)
+        return NULL;
+    init_stream(stream, conn, stream_id);
     return stream;
 }
 
@@ -330,8 +340,8 @@ static void destroy_stream(quicly_stream_t *stream)
         } else {
             --conn->super.peer.num_streams;
         }
+        conn->super.ctx->free_stream(stream);
     }
-    conn->super.ctx->free_stream(stream);
 }
 
 static inline int destroy_stream_if_unneeded(quicly_stream_t *stream)
@@ -416,45 +426,44 @@ static void senddata_free(struct st_quicly_buffer_vec_t *vec)
     free(vec);
 }
 
-static void write_tlsbuf(quicly_stream_t *stream, ptls_buffer_t *tlsbuf)
+static void write_tlsbuf(quicly_conn_t *conn, ptls_buffer_t *tlsbuf)
 {
     if (tlsbuf->off != 0) {
         assert(tlsbuf->is_allocated);
-        quicly_sendbuf_write(&stream->sendbuf, tlsbuf->base, tlsbuf->off, senddata_free);
+        quicly_sendbuf_write(&conn->crypto.stream.sendbuf, tlsbuf->base, tlsbuf->off, senddata_free);
         ptls_buffer_init(tlsbuf, "", 0);
     } else {
         assert(!tlsbuf->is_allocated);
     }
 }
 
-static int crypto_stream_receive_handshake(quicly_stream_t *stream)
+static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
 {
-    struct st_quicly_crypto_stream_data_t *data = stream->data;
+    quicly_conn_t *conn = (void *)((char *)_stream - offsetof(quicly_conn_t, crypto.stream));
     ptls_iovec_t input;
     ptls_buffer_t buf;
     int ret = PTLS_ERROR_IN_PROGRESS;
 
     ptls_buffer_init(&buf, "", 0);
-    while (ret == PTLS_ERROR_IN_PROGRESS && (input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
-        ret = ptls_handshake(data->tls, &buf, input.base, &input.len, &data->handshake_properties);
-        quicly_recvbuf_shift(&stream->recvbuf, input.len);
+    while (ret == PTLS_ERROR_IN_PROGRESS && (input = quicly_recvbuf_get(&conn->crypto.stream.recvbuf)).len != 0) {
+        ret = ptls_handshake(conn->crypto.tls, &buf, input.base, &input.len, &conn->crypto.handshake_properties);
+        quicly_recvbuf_shift(&conn->crypto.stream.recvbuf, input.len);
     }
-    write_tlsbuf(stream, &buf);
+    write_tlsbuf(conn, &buf);
 
     switch (ret) {
     case 0:
-        QUICLY_DEBUG_LOG(stream->conn, 0, "handshake complete");
+        QUICLY_DEBUG_LOG(conn, 0, "handshake complete");
         /* state is 1RTT_ENCRYPTED when handling ClientFinished */
-        if (stream->conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
-            stream->conn->egress.max_data.permitted =
-                (__uint128_t)stream->conn->super.peer.transport_params.initial_max_data_kb * 1024;
-            if ((ret = setup_1rtt(stream->conn, data->tls)) != 0)
+        if (conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
+            conn->egress.max_data.permitted = (__uint128_t)conn->super.peer.transport_params.initial_max_data_kb * 1024;
+            if ((ret = setup_1rtt(conn, conn->crypto.tls)) != 0)
                 goto Exit;
         }
         break;
     case PTLS_ERROR_IN_PROGRESS:
-        if (stream->conn->super.state == QUICLY_STATE_BEFORE_SH)
-            stream->conn->super.state = QUICLY_STATE_BEFORE_SF;
+        if (conn->super.state == QUICLY_STATE_BEFORE_SH)
+            conn->super.state = QUICLY_STATE_BEFORE_SF;
         ret = 0;
         break;
     default:
@@ -630,48 +639,24 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
 }
 
 static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                                        ptls_handshake_properties_t *handshake_properties, quicly_stream_t **crypto_stream)
+                                        ptls_handshake_properties_t *handshake_properties)
 {
+    ptls_t *tls = NULL;
     quicly_conn_t *conn;
-    struct st_quicly_crypto_stream_data_t *crypto_data;
 
-    *crypto_stream = NULL;
-
-    if ((conn = malloc(sizeof(*conn))) == NULL)
+    if ((tls = ptls_new(ctx->tls, server_name == NULL)) == NULL)
         return NULL;
+    if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0) {
+        ptls_free(tls);
+        return NULL;
+    }
+    if ((conn = malloc(sizeof(*conn))) == NULL) {
+        ptls_free(tls);
+        return NULL;
+    }
 
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
-    conn->super.peer.transport_params = transport_params_before_handshake;
-    conn->streams = kh_init(quicly_stream_t);
-    quicly_ranges_init(&conn->ingress.ack_queue);
-    quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->transport_params.initial_max_data_kb);
-    quicly_acks_init(&conn->egress.acks);
-
-    if (set_peeraddr(conn, sa, salen) != 0)
-        goto Fail;
-
-    /* instantiate the crypto stream */
-    if ((*crypto_stream = open_stream(conn, 0)) == NULL)
-        goto Fail;
-    if ((crypto_data = malloc(sizeof(*crypto_data))) == NULL)
-        goto Fail;
-    (*crypto_stream)->data = crypto_data;
-    (*crypto_stream)->on_update = crypto_stream_receive_handshake;
-    crypto_data->conn = conn;
-    if ((crypto_data->tls = ptls_new(ctx->tls, server_name == NULL)) == NULL)
-        goto Fail;
-    if (server_name != NULL && ptls_set_server_name(crypto_data->tls, server_name, strlen(server_name)) != 0)
-        goto Fail;
-    if (handshake_properties != NULL) {
-        assert(handshake_properties->additional_extensions == NULL);
-        assert(handshake_properties->collect_extension == NULL);
-        assert(handshake_properties->collected_extensions == NULL);
-        crypto_data->handshake_properties = *handshake_properties;
-    } else {
-        crypto_data->handshake_properties = (ptls_handshake_properties_t){{{{NULL}}}};
-    }
-    crypto_data->handshake_properties.collect_extension = collect_transport_parameters;
     if (server_name != NULL) {
         conn->super.host.next_stream_id = 1;
         conn->super.peer.next_stream_id = 2;
@@ -679,18 +664,35 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         conn->super.host.next_stream_id = 2;
         conn->super.peer.next_stream_id = 1;
     }
+    conn->super.peer.transport_params = transport_params_before_handshake;
+    conn->streams = kh_init(quicly_stream_t);
+    quicly_ranges_init(&conn->ingress.ack_queue);
+    quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->transport_params.initial_max_data_kb);
+    quicly_acks_init(&conn->egress.acks);
+    init_stream(&conn->crypto.stream, conn, 0);
+    conn->crypto.stream.on_update = crypto_stream_receive_handshake;
+    conn->crypto.tls = tls;
+    if (handshake_properties != NULL) {
+        assert(handshake_properties->additional_extensions == NULL);
+        assert(handshake_properties->collect_extension == NULL);
+        assert(handshake_properties->collected_extensions == NULL);
+        conn->crypto.handshake_properties = *handshake_properties;
+    } else {
+        conn->crypto.handshake_properties = (ptls_handshake_properties_t){{{{NULL}}}};
+    }
+    conn->crypto.handshake_properties.collect_extension = collect_transport_parameters;
+
+    if (set_peeraddr(conn, sa, salen) != 0) {
+        quicly_free(conn);
+        return NULL;
+    }
 
     return conn;
-Fail:
-    if (conn != NULL)
-        quicly_free(conn);
-    return NULL;
 }
 
 static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t *properties, ptls_raw_extension_t *slots)
 {
-    struct st_quicly_crypto_stream_data_t *crypto_data =
-        (void *)((char *)properties - offsetof(struct st_quicly_crypto_stream_data_t, handshake_properties));
+    quicly_conn_t *conn = (void *)((char *)properties - offsetof(quicly_conn_t, crypto.handshake_properties));
     int ret;
 
     if (slots[0].type == UINT16_MAX) {
@@ -716,7 +718,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
             goto Exit;
         }
     });
-    ret = decode_transport_parameter_list(&crypto_data->conn->super.peer.transport_params, src, end);
+    ret = decode_transport_parameter_list(&conn->super.peer.transport_params, src, end);
 
 Exit:
     return ret;
@@ -726,34 +728,31 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
                    ptls_handshake_properties_t *handshake_properties)
 {
     quicly_conn_t *conn;
-    quicly_stream_t *crypto_stream;
-    struct st_quicly_crypto_stream_data_t *crypto_data;
     ptls_buffer_t buf;
     int ret;
 
-    if ((conn = create_connection(ctx, server_name, sa, salen, handshake_properties, &crypto_stream)) == NULL) {
+    if ((conn = create_connection(ctx, server_name, sa, salen, handshake_properties)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    crypto_data = crypto_stream->data;
 
     /* handshake */
-    ptls_buffer_init(&crypto_data->transport_parameters.buf, "", 0);
-    ptls_buffer_push32(&crypto_data->transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
-    ptls_buffer_push32(&crypto_data->transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
-    if ((ret = encode_transport_parameter_list(&ctx->transport_params, &crypto_data->transport_parameters.buf)) != 0)
+    ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
+    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
+    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
+    if ((ret = encode_transport_parameter_list(&ctx->transport_params, &conn->crypto.transport_parameters.buf)) != 0)
         goto Exit;
-    crypto_data->transport_parameters.ext[0] =
+    conn->crypto.transport_parameters.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
-                               {crypto_data->transport_parameters.buf.base, crypto_data->transport_parameters.buf.off}};
-    crypto_data->transport_parameters.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
-    crypto_data->handshake_properties.additional_extensions = crypto_data->transport_parameters.ext;
-    crypto_data->handshake_properties.collected_extensions = client_collected_extensions;
+                               {conn->crypto.transport_parameters.buf.base, conn->crypto.transport_parameters.buf.off}};
+    conn->crypto.transport_parameters.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
+    conn->crypto.handshake_properties.additional_extensions = conn->crypto.transport_parameters.ext;
+    conn->crypto.handshake_properties.collected_extensions = client_collected_extensions;
 
     ptls_buffer_init(&buf, "", 0);
-    if ((ret = ptls_handshake(crypto_data->tls, &buf, NULL, 0, &crypto_data->handshake_properties)) != PTLS_ERROR_IN_PROGRESS)
+    if ((ret = ptls_handshake(conn->crypto.tls, &buf, NULL, 0, &conn->crypto.handshake_properties)) != PTLS_ERROR_IN_PROGRESS)
         goto Exit;
-    write_tlsbuf(crypto_stream, &buf);
+    write_tlsbuf(conn, &buf);
 
     *_conn = conn;
     ret = 0;
@@ -768,8 +767,7 @@ Exit:
 
 static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t *properties, ptls_raw_extension_t *slots)
 {
-    struct st_quicly_crypto_stream_data_t *crypto_data =
-        (void *)((char *)properties - offsetof(struct st_quicly_crypto_stream_data_t, handshake_properties));
+    quicly_conn_t *conn = (void *)((char *)properties - offsetof(quicly_conn_t, crypto.handshake_properties));
     int ret;
 
     if (slots[0].type == UINT16_MAX) {
@@ -790,24 +788,23 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
             ret = QUICLY_ERROR_VERSION_NEGOTIATION_MISMATCH;
             goto Exit;
         }
-        if ((ret = decode_transport_parameter_list(&crypto_data->conn->super.peer.transport_params, src, end)) != 0)
+        if ((ret = decode_transport_parameter_list(&conn->super.peer.transport_params, src, end)) != 0)
             goto Exit;
     }
 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
-    ptls_buffer_init(&crypto_data->transport_parameters.buf, "", 0);
-    ptls_buffer_push_block(&crypto_data->transport_parameters.buf, 1,
-                           { ptls_buffer_push32(&crypto_data->transport_parameters.buf, QUICLY_PROTOCOL_VERSION); });
-    if ((ret = encode_transport_parameter_list(&crypto_data->conn->super.ctx->transport_params,
-                                               &crypto_data->transport_parameters.buf)) != 0)
+    ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
+    ptls_buffer_push_block(&conn->crypto.transport_parameters.buf, 1,
+                           { ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION); });
+    if ((ret = encode_transport_parameter_list(&conn->super.ctx->transport_params, &conn->crypto.transport_parameters.buf)) != 0)
         goto Exit;
-    properties->additional_extensions = crypto_data->transport_parameters.ext;
-    crypto_data->transport_parameters.ext[0] =
+    properties->additional_extensions = conn->crypto.transport_parameters.ext;
+    conn->crypto.transport_parameters.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
-                               {crypto_data->transport_parameters.buf.base, crypto_data->transport_parameters.buf.off}};
-    crypto_data->transport_parameters.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
-    crypto_data->handshake_properties.additional_extensions = crypto_data->transport_parameters.ext;
+                               {conn->crypto.transport_parameters.buf.base, conn->crypto.transport_parameters.buf.off}};
+    conn->crypto.transport_parameters.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
+    conn->crypto.handshake_properties.additional_extensions = conn->crypto.transport_parameters.ext;
 
     ret = 0;
 
@@ -819,8 +816,6 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
                   ptls_handshake_properties_t *handshake_properties, quicly_decoded_packet_t *packet)
 {
     quicly_conn_t *conn = NULL;
-    quicly_stream_t *crypto_stream;
-    struct st_quicly_crypto_stream_data_t *crypto_data;
     quicly_stream_frame_t frame;
     int ret;
 
@@ -859,17 +854,16 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         }
     }
 
-    if ((conn = create_connection(ctx, NULL, sa, salen, handshake_properties, &crypto_stream)) == NULL)
+    if ((conn = create_connection(ctx, NULL, sa, salen, handshake_properties)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    crypto_data = crypto_stream->data;
-    crypto_data->handshake_properties.collected_extensions = server_collected_extensions;
+    conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
 
     if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number, packet->packet_number + 1)) != 0)
         goto Exit;
 
-    if ((ret = apply_stream_frame(conn, crypto_stream, &frame)) != 0)
+    if ((ret = apply_stream_frame(conn, &conn->crypto.stream, &frame)) != 0)
         goto Exit;
-    if (crypto_stream->recvbuf.data_off != frame.data.len) {
+    if (conn->crypto.stream.recvbuf.data_off != frame.data.len) {
         /* garbage after clienthello? */
         ret = QUICLY_ERROR_TBD;
         goto Exit;
@@ -1279,7 +1273,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         if ((ret = send_ack(conn, &s)) != 0)
             goto Exit;
     }
-    if ((ret = send_stream(quicly_get_stream(conn, 0), &s)) != 0)
+    if ((ret = send_stream(&conn->crypto.stream, &s)) != 0)
         goto Exit;
     if (s.target != NULL) {
         if (s.packet_type == QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
@@ -1310,7 +1304,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &ack->data.max_data.args);
         }
         kh_foreach_value(conn->streams, stream, {
-            if (stream->stream_id != 0) {
+            if (stream != &conn->crypto.stream) {
                 if ((ret = send_stream(stream, &s)) != 0)
                     goto Exit;
             }
