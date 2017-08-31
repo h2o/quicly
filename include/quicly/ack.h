@@ -50,7 +50,6 @@ struct st_quicly_ack_t {
         } max_data;
         struct {
             uint32_t stream_id;
-            ptrdiff_t sender_state_offset;
         } stream_state_sender;
     } data;
 };

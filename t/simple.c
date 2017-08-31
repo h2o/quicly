@@ -81,21 +81,21 @@ static void simple_http(void)
     ok(recvbuf_is(&server_stream->recvbuf, req));
     ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
     quicly_sendbuf_write(&server_stream->sendbuf, resp, strlen(resp), NULL);
-    ret = quicly_close_stream(server_stream);
-    ok(ret == 0);
+    quicly_sendbuf_shutdown(&server_stream->sendbuf);
     ok(quicly_num_streams(server) == 2);
 
     transmit(server, client);
 
     ok(recvbuf_is(&client_stream->recvbuf, resp));
     ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
-    ret = quicly_close_stream(client_stream);
-    ok(ret == 0);
+    quicly_close_stream(client_stream);
     ok(quicly_num_streams(client) == 1);
-    ok(quicly_num_streams(server) == 2);
+    assert(!quicly_stream_is_closable(server_stream));
 
     transmit(client, server);
 
+    assert(quicly_stream_is_closable(server_stream));
+    quicly_close_stream(server_stream);
     ok(quicly_num_streams(server) == 1);
 }
 
@@ -110,12 +110,12 @@ static void test_rst_then_close(void)
     ok(ret == 0);
     client_stream->on_update = on_update_noop;
     stream_id = client_stream->stream_id;
-    ret = quicly_close_stream(client_stream);
+    quicly_reset_stream(client_stream, QUICLY_RESET_STREAM_BOTH_DIRECTIONS, 12345);
 
     transmit(client, server);
 
     /* server sends RST_STREAM and ACKs to the packets received */
-    ok(quicly_num_streams(client) == 2);
+    ok(!quicly_stream_is_closable(client_stream));
     ok(quicly_num_streams(server) == 2);
     server_stream = quicly_get_stream(server, stream_id);
     ok(server_stream != NULL);
@@ -124,13 +124,16 @@ static void test_rst_then_close(void)
     transmit(server, client);
 
     /* client closes the stream */
+    ok(!quicly_stream_is_closable(server_stream));
+    ok(quicly_stream_is_closable(client_stream));
+    quicly_close_stream(client_stream);
     ok(quicly_num_streams(client) == 1);
     ok(quicly_num_streams(server) == 2);
 
     transmit(client, server);
 
     /* server becomes ready to close the stream, by receiving the ACK to the RST_STREAM */
-    ok(quicly_num_streams(server) == 2);
+    ok(quicly_stream_is_closable(server_stream));
     quicly_close_stream(server_stream);
     ok(quicly_num_streams(server) == 1);
 }
@@ -174,8 +177,7 @@ static void tiny_stream_window(void)
     ok(server_stream->recvbuf.data.len == 0);
     ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
 
-    ret = quicly_close_stream(client_stream);
-    ok(ret == 0);
+    quicly_reset_stream(client_stream, QUICLY_RESET_STREAM_INGRESS, 12345);
 
     transmit(client, server);
 
@@ -184,13 +186,16 @@ static void tiny_stream_window(void)
 
     transmit(server, client);
 
-    /* client destroys the stream immediately when it receives an RST_STREAM in response */
+    /* client can close the stream when it receives an RST_STREAM in response */
+    ok(quicly_stream_is_closable(client_stream));
+    quicly_close_stream(client_stream);
     ok(quicly_num_streams(client) == 1);
     ok(quicly_num_streams(server) == 2);
 
     transmit(client, server);
 
     /* server should have recieved ACK to the RST_STREAM it has sent */
+    ok(quicly_stream_is_closable(server_stream));
     quicly_close_stream(server_stream);
     ok(quicly_num_streams(server) == 1);
 
@@ -232,11 +237,11 @@ static void test_rst_during_loss(void)
     }
 
     /* transmit RST_STREAM */
-    quicly_reset_sender(client_stream, 12345);
+    quicly_reset_stream(client_stream, QUICLY_RESET_STREAM_EGRESS, 12345);
     transmit(client, server);
 
     ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
-    quicly_close_stream(server_stream);
+    quicly_reset_stream(server_stream, QUICLY_RESET_STREAM_EGRESS, 12345);
 
     quicly_get_max_data(client, NULL, &tmp, NULL);
     ok(tmp == max_data_at_start + 8);
@@ -256,10 +261,14 @@ static void test_rst_during_loss(void)
     /* RST_STREAM for downstream is sent */
     transmit(server, client);
     ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
+    ok(quicly_stream_is_closable(client_stream));
     quicly_close_stream(client_stream);
     ok(quicly_num_streams(client) == 1);
     ok(quicly_num_streams(server) == 2);
+    ok(!quicly_stream_is_closable(server_stream));
     transmit(client, server);
+    ok(quicly_stream_is_closable(server_stream));
+    quicly_close_stream(server_stream);
     ok(quicly_num_streams(server) == 1);
 
     quicly_get_max_data(server, NULL, NULL, &tmp);

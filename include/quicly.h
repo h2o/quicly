@@ -211,10 +211,6 @@ struct st_quicly_stream_t {
          */
         uint32_t rst_reason;
     } _recv_aux;
-    /**
-     *
-     */
-    unsigned _close_called : 1;
 };
 
 typedef struct st_quicly_decode_packet_t {
@@ -227,6 +223,10 @@ typedef struct st_quicly_decode_packet_t {
     ptls_iovec_t header;
     ptls_iovec_t payload;
 } quicly_decoded_packet_t;
+
+#define QUICLY_RESET_STREAM_EGRESS 1
+#define QUICLY_RESET_STREAM_INGRESS 2
+#define QUICLY_RESET_STREAM_BOTH_DIRECTIONS (QUICLY_RESET_STREAM_INGRESS | QUICLY_RESET_STREAM_EGRESS)
 
 /**
  *
@@ -297,11 +297,15 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream);
 /**
  *
  */
-int quicly_reset_sender(quicly_stream_t *stream, uint32_t reason);
+static int quicly_stream_is_closable(quicly_stream_t *stream);
 /**
  *
  */
-int quicly_close_stream(quicly_stream_t *stream);
+void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint32_t reason);
+/**
+ *
+ */
+void quicly_close_stream(quicly_stream_t *stream);
 /**
  *
  */
@@ -362,6 +366,15 @@ inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
     struct _st_quicly_conn_public_t *c = (void *)conn;
     *sa = c->peer.sa;
     *salen = c->peer.salen;
+}
+
+inline int quicly_stream_is_closable(quicly_stream_t *stream)
+{
+    if (!quicly_sendbuf_transfer_complete(&stream->sendbuf))
+        return 0;
+    if (!quicly_recvbuf_transfer_complete(&stream->recvbuf))
+        return 0;
+    return 1;
 }
 
 #endif
