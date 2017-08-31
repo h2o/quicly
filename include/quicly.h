@@ -27,6 +27,7 @@
 #include <sys/types.h>
 #include "picotls.h"
 #include "quicly/error.h"
+#include "quicly/linklist.h"
 #include "quicly/recvbuf.h"
 #include "quicly/sendbuf.h"
 #include "quicly/maxsender.h"
@@ -197,6 +198,13 @@ struct st_quicly_stream_t {
          * sends receive window updates to peer
          */
         quicly_maxsender_t max_stream_data_sender;
+        /**
+         * linklist of pending streams
+         */
+        struct {
+            quicly_linklist_t control;
+            quicly_linklist_t data;
+        } pending_link;
     } _send_aux;
     /**
      *
