@@ -136,6 +136,8 @@ struct st_quicly_conn_t {
             ptls_raw_extension_t ext[2];
             ptls_buffer_t buf;
         } transport_parameters;
+        unsigned pending_control : 1;
+        unsigned pending_data : 1;
     } crypto;
     /**
      *
@@ -277,16 +279,22 @@ Exit:
 
 static void sched_stream_control(quicly_stream_t *stream)
 {
-    if (stream->stream_id != 0 && !quicly_linklist_is_linked(&stream->_send_aux.pending_link.control))
-        quicly_linklist_insert(&stream->conn->pending_link.control, &stream->_send_aux.pending_link.control);
+    if (stream->stream_id != 0) {
+        if (!quicly_linklist_is_linked(&stream->_send_aux.pending_link.control))
+            quicly_linklist_insert(&stream->conn->pending_link.control, &stream->_send_aux.pending_link.control);
+    } else {
+        stream->conn->crypto.pending_control = 1;
+    }
 }
 
 static void resched_stream_data(quicly_stream_t *stream)
 {
     quicly_linklist_t *target = NULL;
 
-    if (stream->stream_id == 0)
+    if (stream->stream_id == 0) {
+        stream->conn->crypto.pending_data = 1;
         return;
+    }
 
     /* unlink so that we would round-robin the streams */
     if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.stream))
@@ -1336,10 +1344,18 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         if ((ret = send_ack(conn, &s)) != 0)
             goto Exit;
     }
-    if ((ret = send_stream_control_frames(&conn->crypto.stream, &s)) != 0)
-        goto Exit;
-    if ((ret = send_stream_data(&conn->crypto.stream, &s)) != 0)
-        goto Exit;
+    if (conn->crypto.pending_control || conn->crypto.pending_data) {
+        if (conn->crypto.pending_control) {
+            if ((ret = send_stream_control_frames(&conn->crypto.stream, &s)) != 0)
+                goto Exit;
+            conn->crypto.pending_control = 0;
+        }
+        if (conn->crypto.pending_data) {
+            if ((ret = send_stream_data(&conn->crypto.stream, &s)) != 0)
+                goto Exit;
+            conn->crypto.pending_data = 0;
+        }
+    }
     if (s.target != NULL && (ret = commit_send_packet(conn, &s)) != 0)
         goto Exit;
 
