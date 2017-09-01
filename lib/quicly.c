@@ -321,7 +321,7 @@ static int should_update_max_stream_data(quicly_stream_t *stream)
                                           stream->_recv_aux.window, 512);
 }
 
-static void on_sendbuf_change(quicly_sendbuf_t *buf, int err)
+static void on_sendbuf_change(quicly_sendbuf_t *buf)
 {
     quicly_stream_t *stream = (void *)((char *)buf - offsetof(quicly_stream_t, sendbuf));
     assert(stream->stream_id != 0 || buf->eos == UINT64_MAX);
@@ -329,19 +329,18 @@ static void on_sendbuf_change(quicly_sendbuf_t *buf, int err)
     resched_stream_data(stream);
 }
 
-static void on_recvbuf_change(quicly_recvbuf_t *buf, int err, size_t shift_amount)
+static void on_recvbuf_change(quicly_recvbuf_t *buf, size_t shift_amount)
 {
     quicly_stream_t *stream = (void *)((char *)buf - offsetof(quicly_stream_t, recvbuf));
-    quicly_conn_t *conn = stream->conn;
 
     if (stream->stream_id != 0) {
-        conn->ingress.max_data.bytes_consumed += shift_amount;
+        stream->conn->ingress.max_data.bytes_consumed += shift_amount;
         if (should_update_max_stream_data(stream))
             sched_stream_control(stream);
     }
 }
 
-static void on_recvbuf_change_ignore(quicly_recvbuf_t *buf, int err, size_t shift_amount)
+static void on_recvbuf_change_ignore(quicly_recvbuf_t *buf, size_t shift_amount)
 {
 }
 

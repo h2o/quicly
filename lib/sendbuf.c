@@ -42,7 +42,7 @@ void quicly_sendbuf_dispose(quicly_sendbuf_t *buf)
     quicly_ranges_dispose(&buf->pending);
 }
 
-void quicly_sendbuf_write(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
+int quicly_sendbuf_write(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
 {
     uint64_t end_off;
     int ret;
@@ -55,11 +55,12 @@ void quicly_sendbuf_write(quicly_sendbuf_t *buf, const void *p, size_t len, quic
     if ((ret = quicly_ranges_update(&buf->pending, end_off - len, end_off)) != 0)
         goto Exit;
 
+    buf->on_change(buf);
 Exit:
-    buf->on_change(buf, ret);
+    return ret;
 }
 
-void quicly_sendbuf_shutdown(quicly_sendbuf_t *buf)
+int quicly_sendbuf_shutdown(quicly_sendbuf_t *buf)
 {
     int ret;
 
@@ -69,8 +70,9 @@ void quicly_sendbuf_shutdown(quicly_sendbuf_t *buf)
     if ((ret = quicly_ranges_update(&buf->pending, buf->eos, buf->eos + 1)) != 0)
         goto Exit;
 
+    buf->on_change(buf);
 Exit:
-    buf->on_change(buf, ret);
+    return ret;
 }
 
 void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
