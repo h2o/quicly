@@ -1075,13 +1075,12 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
 
 static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
 {
+    int ret;
+
     /* allocate and setup the new packet if necessary */
     if (s->dst_end - s->dst < min_space || GET_TYPE_FROM_PACKET_HEADER(s->target->data.base) != s->packet_type) {
-        if (s->target != NULL) {
-            while (s->dst != s->dst_end)
-                *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
-            commit_send_packet(conn, s);
-        }
+        if (s->target != NULL && (ret = commit_send_packet(conn, s)) != 0)
+            return ret;
         if (s->num_packets >= s->max_packets)
             return QUICLY_ERROR_SENDBUF_FULL;
         if ((s->target =
