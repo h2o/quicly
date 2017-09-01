@@ -938,10 +938,9 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
         /* FIXME handle rto error */
         if ((ret = quicly_sendbuf_lost(&stream->sendbuf, &ack->data.stream.args)) != 0)
             return ret;
+        if (can_send(stream) && stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE)
+            sched_stream_data(stream);
     }
-
-    if (can_send(stream) && stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE)
-        sched_stream_data(stream);
 
     return 0;
 }
