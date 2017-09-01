@@ -203,7 +203,7 @@ struct st_quicly_stream_t {
          */
         struct {
             quicly_linklist_t control;
-            quicly_linklist_t data;
+            quicly_linklist_t stream;
         } pending_link;
     } _send_aux;
     /**
