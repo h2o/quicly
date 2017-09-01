@@ -31,8 +31,9 @@ typedef struct st_quicly_linklist_t {
 
 static void quicly_linklist_init(quicly_linklist_t *l);
 static int quicly_linklist_is_linked(quicly_linklist_t *l);
-static void quicly_linklist_link(quicly_linklist_t *prev, quicly_linklist_t *n);
+static void quicly_linklist_insert(quicly_linklist_t *prev, quicly_linklist_t *n);
 static void quicly_linklist_unlink(quicly_linklist_t *l);
+static void quicly_linklist_insert_list(quicly_linklist_t *prev, quicly_linklist_t *l);
 
 /* inline functions */
 
@@ -46,7 +47,7 @@ inline int quicly_linklist_is_linked(quicly_linklist_t *l)
     return l->prev != l;
 }
 
-inline void quicly_linklist_link(quicly_linklist_t *prev, quicly_linklist_t *n)
+inline void quicly_linklist_insert(quicly_linklist_t *prev, quicly_linklist_t *n)
 {
     assert(!quicly_linklist_is_linked(n));
     n->prev = prev;
@@ -60,6 +61,17 @@ inline void quicly_linklist_unlink(quicly_linklist_t *l)
     l->prev->next = l->next;
     l->next->prev = l->prev;
     quicly_linklist_init(l);
+}
+
+inline void quicly_linklist_insert_list(quicly_linklist_t *prev, quicly_linklist_t *l)
+{
+    if (quicly_linklist_is_linked(l)) {
+        l->next->prev = prev;
+        l->prev->next = prev->next;
+        prev->next->prev = l->prev;
+        prev->next = l->next;
+        quicly_linklist_init(l);
+    }
 }
 
 #endif

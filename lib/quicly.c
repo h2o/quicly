@@ -277,13 +277,13 @@ Exit:
 static void sched_stream_control(quicly_stream_t *stream)
 {
     if (stream->stream_id != 0 && !quicly_linklist_is_linked(&stream->_send_aux.pending_link.control))
-        quicly_linklist_link(&stream->conn->pending_link.control, &stream->_send_aux.pending_link.control);
+        quicly_linklist_insert(&stream->conn->pending_link.control, &stream->_send_aux.pending_link.control);
 }
 
 static void sched_stream_data(quicly_stream_t *stream)
 {
     if (stream->stream_id != 0 && !quicly_linklist_is_linked(&stream->_send_aux.pending_link.data))
-        quicly_linklist_link(&stream->conn->pending_link.data, &stream->_send_aux.pending_link.data);
+        quicly_linklist_insert(&stream->conn->pending_link.data, &stream->_send_aux.pending_link.data);
 }
 
 static int should_update_max_stream_data(quicly_stream_t *stream)
@@ -1366,7 +1366,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             if ((ret = send_stream_data(stream, &s)) != 0)
                 goto Exit;
             if (can_send(stream))
-                quicly_linklist_link(conn->pending_link.data.prev, &stream->_send_aux.pending_link.data);
+                quicly_linklist_insert(conn->pending_link.data.prev, &stream->_send_aux.pending_link.data);
         }
         if (s.target != NULL)
             commit_send_packet(conn, &s);
