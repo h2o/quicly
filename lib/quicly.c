@@ -1031,13 +1031,21 @@ static inline void encrypt_packet(struct st_quicly_send_context_t *s)
     s->dst_unencrypted_from = s->dst;
 }
 
-static void commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
+static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
 {
     if (s->aead != NULL) {
         if (s->dst != s->dst_unencrypted_from)
             encrypt_packet(s);
         s->dst += ptls_aead_encrypt_final(s->aead, s->dst);
     } else {
+        if (s->packet_type == QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
+            if (s->num_packets != 0)
+                return QUICLY_ERROR_HANDSHAKE_TOO_LARGE;
+            const size_t max_size = 1272; /* max UDP packet size excluding fnv1a hash */
+            assert(s->dst - s->target->data.base <= max_size);
+            memset(s->dst, 0, s->target->data.base + max_size - s->dst);
+            s->dst = s->target->data.base + max_size;
+        }
         uint64_t hash = fnv1a(FNV1A_OFFSET_BASIS, s->target->data.base, s->dst);
         s->dst = quicly_encode64(s->dst, hash);
     }
@@ -1049,6 +1057,8 @@ static void commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_contex
     s->dst = NULL;
     s->dst_end = NULL;
     s->dst_unencrypted_from = NULL;
+
+    return 0;
 }
 
 static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
@@ -1061,7 +1071,7 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
             commit_send_packet(conn, s);
         }
         if (s->num_packets >= s->max_packets)
-            return 0;
+            return QUICLY_ERROR_SENDBUF_FULL;
         if ((s->target =
                  conn->super.ctx->alloc_packet(conn->super.ctx, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
@@ -1088,7 +1098,7 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
 {
     int ret;
 
-    if ((ret = prepare_packet(conn, s, min_space)) != 0 || s->dst == NULL)
+    if ((ret = prepare_packet(conn, s, min_space)) != 0)
         return ret;
     if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, ack_cb)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
@@ -1111,8 +1121,6 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
     do {
         if ((ret = prepare_packet(conn, s, quicly_ack_frame_get_minimum_capacity(&encode_params, range_index))) != 0)
             break;
-        if (s->dst == NULL)
-            break;
         s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, &conn->ingress.ack_queue, &range_index, &encode_params);
     } while (range_index != SIZE_MAX);
 
@@ -1126,7 +1134,7 @@ static int prepare_stream_state_sender(quicly_stream_t *stream, quicly_sender_st
     quicly_ack_t *ack;
     int ret;
 
-    if ((ret = prepare_acked_packet(stream->conn, s, min_space, &ack, ack_cb)) != 0 || s->dst == NULL)
+    if ((ret = prepare_acked_packet(stream->conn, s, min_space, &ack, ack_cb)) != 0)
         return ret;
     ack->data.stream_state_sender.stream_id = stream->stream_id;
     *sender = QUICLY_SENDER_STATE_UNACKED;
@@ -1141,8 +1149,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
     /* send STOP_SENDING if necessray */
     if (stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_SEND) {
         if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.stop_sending.sender_state, s,
-                                               QUICLY_STOP_SENDING_FRAME_SIZE, on_ack_stop_sending)) != 0 ||
-            s->dst == NULL)
+                                               QUICLY_STOP_SENDING_FRAME_SIZE, on_ack_stop_sending)) != 0)
             return ret;
         s->dst = quicly_encode_stop_sending_frame(s->dst, stream->stream_id, stream->_send_aux.stop_sending.reason);
     }
@@ -1152,8 +1159,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
         uint64_t new_value = stream->recvbuf.data_off + stream->_recv_aux.window;
         quicly_ack_t *ack;
         /* prepare */
-        if ((ret = prepare_acked_packet(stream->conn, s, QUICLY_MAX_STREAM_DATA_FRAME_SIZE, &ack, on_ack_max_stream_data)) != 0 ||
-            s->dst == NULL)
+        if ((ret = prepare_acked_packet(stream->conn, s, QUICLY_MAX_STREAM_DATA_FRAME_SIZE, &ack, on_ack_max_stream_data)) != 0)
             return ret;
         /* send */
         s->dst = quicly_encode_max_stream_data_frame(s->dst, stream->stream_id, new_value);
@@ -1165,8 +1171,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
     /* send RST_STREAM if necessary */
     if (stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_SEND) {
         if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.rst.sender_state, s, QUICLY_RST_FRAME_SIZE,
-                                               on_ack_rst_stream)) != 0 ||
-            s->dst == NULL)
+                                               on_ack_rst_stream)) != 0)
             return ret;
         s->dst =
             quicly_encode_rst_stream_frame(s->dst, stream->stream_id, stream->_send_aux.rst.reason, stream->_send_aux.max_sent);
@@ -1186,8 +1191,7 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
 
     if ((ret =
              prepare_acked_packet(stream->conn, s, 1 + stream_id_length + offset_length + (iter->stream_off != stream->sendbuf.eos),
-                                  &ack, on_ack_stream)) != 0 ||
-        s->dst == NULL)
+                                  &ack, on_ack_stream)) != 0)
         return ret;
 
     size_t capacity = s->dst_end - s->dst - (1 + stream_id_length + offset_length);
@@ -1229,6 +1233,7 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
     quicly_sendbuf_dataiter_t iter;
     uint64_t max_stream_data;
     size_t i;
+    int ret = 0;
 
     /* determine the maximum offset than can be sent */
     if (stream->_send_aux.max_sent >= stream->sendbuf.eos) {
@@ -1257,11 +1262,11 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
         }
         /* when end == eos, iter.stream_off becomes end+1 after calling send_steram_frame; hence `<` is used */
         while (iter.stream_off < end) {
-            int ret = send_stream_frame(stream, s, &iter, end - iter.stream_off);
-            if (ret != 0)
+            if ((ret = send_stream_frame(stream, s, &iter, end - iter.stream_off)) != 0) {
+                if (ret == QUICLY_ERROR_SENDBUF_FULL)
+                    goto ShrinkToIter;
                 return ret;
-            if (s->dst == NULL)
-                goto ShrinkToIter;
+            }
         }
 
         if (iter.stream_off < stream->sendbuf.pending.ranges[i].end)
@@ -1275,7 +1280,7 @@ ShrinkToIter:
     stream->sendbuf.pending.ranges[i].start = iter.stream_off;
 ShrinkRanges:
     quicly_ranges_shrink(&stream->sendbuf.pending, 0, i);
-    return 0;
+    return ret;
 }
 
 static int handle_timeouts(quicly_conn_t *conn, int64_t now)
@@ -1325,17 +1330,8 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         goto Exit;
     if ((ret = send_stream_data(&conn->crypto.stream, &s)) != 0)
         goto Exit;
-    if (s.target != NULL) {
-        if (s.packet_type == QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
-            if (s.num_packets != 0)
-                return QUICLY_ERROR_HANDSHAKE_TOO_LARGE;
-            const size_t max_size = 1272; /* max UDP packet size excluding fnv1a hash */
-            assert(s.dst - s.target->data.base <= max_size);
-            memset(s.dst, 0, s.target->data.base + max_size - s.dst);
-            s.dst = s.target->data.base + max_size;
-        }
-        commit_send_packet(conn, &s);
-    }
+    if (s.target != NULL && (ret = commit_send_packet(conn, &s)) != 0)
+        goto Exit;
 
     /* send encrypted frames */
     if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED) {
@@ -1372,9 +1368,12 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             commit_send_packet(conn, &s);
     }
 
-    *num_packets = s.num_packets;
     ret = 0;
 Exit:
+    if (ret == QUICLY_ERROR_SENDBUF_FULL)
+        ret = 0;
+    if (ret == 0)
+        *num_packets = s.num_packets;
     return ret;
 }
 
