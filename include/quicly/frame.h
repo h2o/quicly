@@ -32,6 +32,7 @@
 #define QUICLY_FRAME_TYPE_RST_STREAM 1
 #define QUICLY_FRAME_TYPE_MAX_DATA 4
 #define QUICLY_FRAME_TYPE_MAX_STREAM_DATA 5
+#define QUICLY_FRAME_TYPE_MAX_STREAM_ID 6
 #define QUICLY_FRAME_TYPE_STOP_SENDING 0xc
 #define QUICLY_FRAME_TYPE_STREAM 0xc0
 #define QUICLY_FRAME_TYPE_STREAM_BIT_FIN 0x20
@@ -40,6 +41,7 @@
 
 #define QUICLY_MAX_DATA_FRAME_SIZE (1 + 8)
 #define QUICLY_MAX_STREAM_DATA_FRAME_SIZE (1 + 4 + 8)
+#define QUICLY_MAX_STREAM_ID_FRAME_SIZE (1 + 4)
 #define QUICLY_RST_FRAME_SIZE (1 + 4 + 4 + 8)
 #define QUICLY_STOP_SENDING_FRAME_SIZE (1 + 4 + 4)
 
@@ -94,6 +96,14 @@ typedef struct st_quicly_max_stream_data_frame_t {
 } quicly_max_stream_data_frame_t;
 
 static int quicly_decode_max_stream_data_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_data_frame_t *frame);
+
+static uint8_t *quicly_encode_max_stream_id_frame(uint8_t *dst, uint32_t max_stream_id);
+
+typedef struct st_quicly_max_stream_id_frame_t {
+    uint32_t max_stream_id;
+} quicly_max_stream_id_frame_t;
+
+static int quicly_decode_max_stream_id_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_id_frame_t *frame);
 
 static uint8_t *quicly_encode_stop_sending_frame(uint8_t *dst, uint32_t stream_id, uint32_t reason);
 
@@ -324,6 +334,21 @@ inline int quicly_decode_max_stream_data_frame(const uint8_t **src, const uint8_
         return QUICLY_ERROR_INVALID_FRAME_DATA;
     frame->stream_id = quicly_decode32(src);
     frame->max_stream_data = quicly_decode64(src);
+    return 0;
+}
+
+inline uint8_t *quicly_encode_max_stream_id_frame(uint8_t *dst, uint32_t max_stream_id)
+{
+    *dst++ = QUICLY_FRAME_TYPE_MAX_STREAM_ID;
+    dst = quicly_encode32(dst, max_stream_id);
+    return dst;
+}
+
+inline int quicly_decode_max_stream_id_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_id_frame_t *frame)
+{
+    if (end - *src < 4)
+        return QUICLY_ERROR_INVALID_FRAME_DATA;
+    frame->max_stream_id = quicly_decode32(src);
     return 0;
 }
 

@@ -19,29 +19,31 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef test_h
-#define test_h
+#include "quicly/maxsender.h"
 
-#include "quicly.h"
-#include "picotest.h"
+uint32_t quicly_maxsender_should_update_stream_id(quicly_maxsender_t *m, uint32_t next_stream_id, uint32_t num_open_streams,
+                                                  uint32_t initial_max_stream_id, uint32_t update_ratio)
+{
+    uint32_t avail_sent, avail_actual, send_value;
 
-extern int64_t quic_now;
-extern quicly_context_t quic_ctx;
+    /* round-up */
+    next_stream_id = (next_stream_id + 1) & 0xfffffffe;
 
-void free_packets(quicly_raw_packet_t **packets, size_t cnt);
-void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt);
-int on_update_noop(quicly_stream_t *stream);
-int on_stream_open_buffering(quicly_stream_t *stream);
-int recvbuf_is(quicly_recvbuf_t *buf, const char *s);
-size_t transmit(quicly_conn_t *src, quicly_conn_t *dst);
-int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server);
+    avail_sent = (uint32_t)m->max_sent - (next_stream_id - 2);
+    avail_actual = initial_max_stream_id - num_open_streams * 2;
 
-void test_ranges(void);
-void test_frame(void);
-void test_maxsender(void);
-void test_ack(void);
-void test_simple(void);
-void test_loss(void);
-void test_stream_concurrency(void);
+    /* ratio check */
+    if (((uint64_t)avail_actual * update_ratio) / 1024 < avail_sent)
+        return 0;
 
-#endif
+    /* calculate the actual value to send as well as making adjustments */
+    send_value = next_stream_id + avail_actual - 2;
+    if (send_value >= 0xfffffffe)
+        send_value = 0xfffffffe;
+
+    /* do not send one value more than once */
+    if (send_value == m->max_sent)
+        return 0;
+
+    return (uint32_t)send_value;
+}

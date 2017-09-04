@@ -51,9 +51,30 @@ int quicly_recvbuf_write(quicly_recvbuf_t *buf, uint64_t offset, const void *p, 
 
 int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at)
 {
+    if (eos_at < buf->received.ranges[buf->received.num_ranges - 1].end)
+        return QUICLY_ERROR_TBD;
     if (buf->eos == UINT64_MAX) {
         buf->eos = eos_at;
         return 0;
     }
     return buf->eos == eos_at ? 0 : QUICLY_ERROR_TBD;
+}
+
+int quicly_recvbuf_reset(quicly_recvbuf_t *buf, uint64_t eos_at, uint64_t *bytes_missing)
+{
+    int ret;
+
+    if ((ret = quicly_recvbuf_mark_eos(buf, eos_at)) != 0)
+        return ret;
+    *bytes_missing = eos_at - buf->received.ranges[buf->received.num_ranges - 1].end;
+
+    quicly_buffer_dispose(&buf->data);
+    quicly_ranges_dispose(&buf->received);
+
+    quicly_ranges_init(&buf->received);
+    quicly_ranges_update(&buf->received, 0, eos_at);
+    quicly_buffer_init(&buf->data);
+    buf->data_off = eos_at;
+
+    return 0;
 }

@@ -92,7 +92,7 @@ int64_t quic_now;
 quicly_context_t quic_ctx = {&tls_ctx,
                              1280,
                              1000,
-                             {8192, 64, 100, 60, 0},
+                             {8192, 64, 10, 60, 0},
                              quicly_default_alloc_packet,
                              quicly_default_free_packet,
                              quicly_default_alloc_stream,
@@ -216,8 +216,10 @@ int main(int argc, char **argv)
 
     subtest("ranges", test_ranges);
     subtest("frame", test_frame);
+    subtest("maxsender", test_maxsender);
     subtest("ack", test_ack);
     subtest("simple", test_simple);
+    subtest("stream-concurrency", test_stream_concurrency);
     subtest("loss", test_loss);
 
     return done_testing();

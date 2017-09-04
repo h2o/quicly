@@ -40,6 +40,8 @@ static void quicly_maxsender_init(quicly_maxsender_t *m, uint64_t initial_value)
 static void quicly_maxsender_dispose(quicly_maxsender_t *m);
 static int quicly_maxsender_should_update(quicly_maxsender_t *m, uint64_t buffered_from, uint32_t window_size,
                                           uint32_t update_ratio);
+uint32_t quicly_maxsender_should_update_stream_id(quicly_maxsender_t *m, uint32_t next_stream_id, uint32_t num_open_streams,
+                                                  uint32_t initial_max_stream_id, uint32_t update_ratio);
 static void quicly_maxsender_record(quicly_maxsender_t *m, uint64_t value, quicly_maxsender_ackargs_t *args);
 static void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_ackargs_t *args);
 static void quicly_maxsender_lost(quicly_maxsender_t *m, quicly_maxsender_ackargs_t *args);
@@ -61,7 +63,8 @@ inline int quicly_maxsender_should_update(quicly_maxsender_t *m, uint64_t buffer
                                           uint32_t update_ratio)
 {
     /* ratio is permil (1/1024) */
-    return m->max_sent <= buffered_from + ((uint64_t)window_size * update_ratio) / 1024;
+    uint64_t threshold = buffered_from + ((uint64_t)window_size * update_ratio) / 1024;
+    return m->max_sent <= threshold;
 }
 
 inline void quicly_maxsender_record(quicly_maxsender_t *m, uint64_t value, quicly_maxsender_ackargs_t *args)

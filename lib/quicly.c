@@ -96,6 +96,10 @@ struct st_quicly_conn_t {
             __uint128_t bytes_consumed;
             quicly_maxsender_t sender;
         } max_data;
+        /**
+         *
+         */
+        quicly_maxsender_t max_stream_id;
     } ingress;
     /**
      *
@@ -120,6 +124,10 @@ struct st_quicly_conn_t {
             __uint128_t permitted;
             __uint128_t sent;
         } max_data;
+        /**
+         *
+         */
+        uint32_t max_stream_id;
         /**
          *
          */
@@ -340,10 +348,6 @@ static void on_recvbuf_change(quicly_recvbuf_t *buf, size_t shift_amount)
     }
 }
 
-static void on_recvbuf_change_ignore(quicly_recvbuf_t *buf, size_t shift_amount)
-{
-}
-
 static void init_stream(quicly_stream_t *stream, quicly_conn_t *conn, uint32_t stream_id)
 {
     stream->conn = conn;
@@ -429,6 +433,7 @@ void quicly_free(quicly_conn_t *conn)
     free_packet_protection(&conn->ingress.pp);
     quicly_ranges_dispose(&conn->ingress.ack_queue);
     quicly_maxsender_dispose(&conn->ingress.max_data.sender);
+    quicly_maxsender_dispose(&conn->ingress.max_stream_id);
     free_packet_protection(&conn->egress.pp);
     quicly_acks_dispose(&conn->egress.acks);
 
@@ -508,6 +513,7 @@ static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
         /* state is 1RTT_ENCRYPTED when handling ClientFinished */
         if (conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
             conn->egress.max_data.permitted = (__uint128_t)conn->super.peer.transport_params.initial_max_data_kb * 1024;
+            conn->egress.max_stream_id = conn->super.peer.transport_params.initial_max_stream_id;
             if ((ret = setup_1rtt(conn, conn->crypto.tls)) != 0)
                 goto Exit;
         }
@@ -723,6 +729,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->streams = kh_init(quicly_stream_t);
     quicly_ranges_init(&conn->ingress.ack_queue);
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->transport_params.initial_max_data_kb);
+    quicly_maxsender_init(&conn->ingress.max_stream_id, conn->super.ctx->transport_params.initial_max_stream_id);
     quicly_acks_init(&conn->egress.acks);
     init_stream(&conn->crypto.stream, conn, 0);
     conn->crypto.stream.on_update = crypto_stream_receive_handshake;
@@ -989,6 +996,17 @@ static int on_ack_max_data(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
         quicly_maxsender_acked(&conn->ingress.max_data.sender, &ack->data.max_data.args);
     } else {
         quicly_maxsender_lost(&conn->ingress.max_data.sender, &ack->data.max_data.args);
+    }
+
+    return 0;
+}
+
+static int on_ack_max_stream_id(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+{
+    if (acked) {
+        quicly_maxsender_acked(&conn->ingress.max_stream_id, &ack->data.max_stream_id.args);
+    } else {
+        quicly_maxsender_lost(&conn->ingress.max_stream_id, &ack->data.max_stream_id.args);
     }
 
     return 0;
@@ -1364,6 +1382,16 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         s.aead = conn->egress.pp.aead.key_phase0;
         if ((ret = send_ack(conn, &s)) != 0)
             goto Exit;
+        uint32_t max_stream_id;
+        if ((max_stream_id = quicly_maxsender_should_update_stream_id(
+                 &conn->ingress.max_stream_id, conn->super.peer.next_stream_id, conn->super.peer.num_streams,
+                 conn->super.ctx->transport_params.initial_max_stream_id, 768)) != 0) {
+            quicly_ack_t *ack;
+            if ((ret = prepare_acked_packet(conn, &s, QUICLY_MAX_STREAM_ID_FRAME_SIZE, &ack, on_ack_max_stream_id)) != 0)
+                goto Exit;
+            s.dst = quicly_encode_max_stream_id_frame(s.dst, max_stream_id);
+            quicly_maxsender_record(&conn->ingress.max_stream_id, max_stream_id, &ack->data.max_stream_id.args);
+        }
         if (quicly_maxsender_should_update(&conn->ingress.max_data.sender, (uint64_t)(conn->ingress.max_data.bytes_consumed / 1024),
                                            conn->super.ctx->transport_params.initial_max_data_kb, 512)) {
             quicly_ack_t *ack;
@@ -1454,27 +1482,16 @@ static int handle_stream_frame(quicly_conn_t *conn, quicly_stream_frame_t *frame
 static int handle_rst_stream_frame(quicly_conn_t *conn, quicly_rst_stream_frame_t *frame)
 {
     quicly_stream_t *stream;
+    uint64_t bytes_missing;
     int ret;
 
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    if (stream->recvbuf.eos == UINT64_MAX) {
-        if (frame->final_offset < stream->recvbuf.received.ranges[stream->recvbuf.received.num_ranges - 1].end)
-            return QUICLY_ERROR_TBD;
-        stream->_recv_aux.rst_reason = frame->reason;
-        conn->ingress.max_data.bytes_consumed +=
-            frame->final_offset - stream->recvbuf.received.ranges[stream->recvbuf.received.num_ranges - 1].end;
-        /* reset receive buffer and mark eos at the start (TODO: retain the contiguous bytes that have been received?) */
-        quicly_recvbuf_dispose(&stream->recvbuf);
-        quicly_recvbuf_init(&stream->recvbuf, on_recvbuf_change_ignore);
-        quicly_recvbuf_mark_eos(&stream->recvbuf, 0);
-        if ((ret = stream->on_update(stream)) != 0)
-            return ret;
-    } else {
-        if (frame->final_offset != stream->recvbuf.received.ranges[stream->recvbuf.received.num_ranges - 1].end)
-            return QUICLY_ERROR_TBD;
-    }
+    if ((ret = quicly_recvbuf_reset(&stream->recvbuf, frame->final_offset, &bytes_missing)) != 0)
+        return ret;
+    stream->_recv_aux.rst_reason = frame->reason;
+    conn->ingress.max_data.bytes_consumed += bytes_missing;
 
     if (quicly_stream_is_closable(stream))
         ret = stream->on_update(stream);
@@ -1536,12 +1553,21 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, quicly_max_stream_d
         return 0;
 
     if (frame->max_stream_data < stream->_send_aux.max_stream_data)
-        return QUICLY_ERROR_TBD; /* FLOW_CONTROL_ERROR */
+        return 0;
     stream->_send_aux.max_stream_data = frame->max_stream_data;
 
     if (stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE)
         resched_stream_data(stream);
 
+    return 0;
+}
+
+static int handle_max_stream_id_frame(quicly_conn_t *conn, quicly_max_stream_id_frame_t *frame)
+{
+    if (frame->max_stream_id < conn->egress.max_stream_id)
+        return 0;
+    conn->egress.max_stream_id = frame->max_stream_id;
+    /* TODO notify the app? */
     return 0;
 }
 
@@ -1562,7 +1588,7 @@ static int handle_max_data_frame(quicly_conn_t *conn, quicly_max_data_frame_t *f
     __uint128_t new_value = (__uint128_t)frame->max_data_kb * 1024;
 
     if (new_value < conn->egress.max_data.permitted)
-        return QUICLY_ERROR_TBD; /* FLOW_CONTROL_ERROR */
+        return 0;
     conn->egress.max_data.permitted = new_value;
 
     /* TODO schedule for delivery */
@@ -1691,6 +1717,13 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 if ((ret = handle_max_stream_data_frame(conn, &frame)) != 0)
                     goto Exit;
             } break;
+            case QUICLY_FRAME_TYPE_MAX_STREAM_ID: {
+                quicly_max_stream_id_frame_t frame;
+                if ((ret = quicly_decode_max_stream_id_frame(&src, end, &frame)) != 0)
+                    goto Exit;
+                if ((ret = handle_max_stream_id_frame(conn, &frame)) != 0)
+                    goto Exit;
+            } break;
             case QUICLY_FRAME_TYPE_STOP_SENDING: {
                 quicly_stop_sending_frame_t frame;
                 if ((ret = quicly_decode_stop_sending_frame(&src, end, &frame)) != 0)
@@ -1718,7 +1751,7 @@ Exit:
 
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
 {
-    if (conn->super.host.next_stream_id == 0)
+    if (conn->super.host.next_stream_id == 0 || conn->super.host.next_stream_id > conn->egress.max_stream_id)
         return QUICLY_ERROR_TOO_MANY_OPEN_STREAMS;
 
     if ((*stream = open_stream(conn, conn->super.host.next_stream_id)) == NULL)

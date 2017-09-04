@@ -19,6 +19,7 @@ SET(QUICLY_LIBRARY_FILES
     lib/ack.c
     lib/buffer.c
     lib/frame.c
+    lib/maxsender.c
     lib/quicly.c
     lib/ranges.c
     lib/recvbuf.c
@@ -28,9 +29,11 @@ SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
     t/ack.c
     t/frame.c
+    t/maxsender.c
     t/loss.c
     t/ranges.c
     t/simple.c
+    t/stream-concurrency.c
     t/test.c)
 
 ADD_LIBRARY(quicly ${QUICLY_LIBRARY_FILES})
