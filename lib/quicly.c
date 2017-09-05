@@ -1562,6 +1562,16 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, quicly_max_stream_d
     return 0;
 }
 
+static int handle_stream_blocked_frame(quicly_conn_t *conn, quicly_stream_blocked_frame_t *frame)
+{
+    quicly_stream_t *stream;
+
+    if ((stream = quicly_get_stream(conn, frame->stream_id)) != NULL)
+        quicly_maxsender_reset(&stream->_send_aux.max_stream_data_sender, 0);
+
+    return 0;
+}
+
 static int handle_max_stream_id_frame(quicly_conn_t *conn, quicly_max_stream_id_frame_t *frame)
 {
     if (frame->max_stream_id < conn->egress.max_stream_id)
@@ -1724,6 +1734,24 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 if ((ret = handle_max_stream_id_frame(conn, &frame)) != 0)
                     goto Exit;
             } break;
+            case QUICLY_FRAME_TYPE_PING:
+                ret = 0;
+                break;
+            case QUICLY_FRAME_TYPE_BLOCKED:
+                quicly_maxsender_reset(&conn->ingress.max_data.sender, 0);
+                ret = 0;
+                break;
+            case QUICLY_FRAME_TYPE_STREAM_BLOCKED: {
+                quicly_stream_blocked_frame_t frame;
+                if ((ret = quicly_decode_stream_blocked_frame(&src, end, &frame)) != 0)
+                    goto Exit;
+                if ((ret = handle_stream_blocked_frame(conn, &frame)) != 0)
+                    goto Exit;
+            } break;
+            case QUICLY_FRAME_TYPE_STREAM_ID_NEEDED:
+                quicly_maxsender_reset(&conn->ingress.max_stream_id, 0);
+                ret = 0;
+                break;
             case QUICLY_FRAME_TYPE_STOP_SENDING: {
                 quicly_stop_sending_frame_t frame;
                 if ((ret = quicly_decode_stop_sending_frame(&src, end, &frame)) != 0)

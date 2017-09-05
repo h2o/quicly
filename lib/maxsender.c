@@ -29,7 +29,7 @@ uint32_t quicly_maxsender_should_update_stream_id(quicly_maxsender_t *m, uint32_
     /* round-up */
     next_stream_id = (next_stream_id + 1) & 0xfffffffe;
 
-    avail_sent = (uint32_t)m->max_sent - (next_stream_id - 2);
+    avail_sent = m->max_sent >= next_stream_id - 2 ? (uint32_t)m->max_sent - (next_stream_id - 2) : 0;
     avail_actual = initial_max_stream_id - num_open_streams * 2;
 
     /* ratio check */

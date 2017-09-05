@@ -38,6 +38,7 @@ typedef struct st_quicly_maxsender_ackargs_t {
 
 static void quicly_maxsender_init(quicly_maxsender_t *m, uint64_t initial_value);
 static void quicly_maxsender_dispose(quicly_maxsender_t *m);
+static void quicly_maxsender_reset(quicly_maxsender_t *m, uint64_t initial_value);
 static int quicly_maxsender_should_update(quicly_maxsender_t *m, uint64_t buffered_from, uint32_t window_size,
                                           uint32_t update_ratio);
 uint32_t quicly_maxsender_should_update_stream_id(quicly_maxsender_t *m, uint32_t next_stream_id, uint32_t num_open_streams,
@@ -57,6 +58,12 @@ inline void quicly_maxsender_init(quicly_maxsender_t *m, uint64_t initial_value)
 
 inline void quicly_maxsender_dispose(quicly_maxsender_t *m)
 {
+}
+
+inline void quicly_maxsender_reset(quicly_maxsender_t *m, uint64_t initial_value)
+{
+    m->max_sent = initial_value;
+    m->max_acked = initial_value;
 }
 
 inline int quicly_maxsender_should_update(quicly_maxsender_t *m, uint64_t buffered_from, uint32_t window_size,
