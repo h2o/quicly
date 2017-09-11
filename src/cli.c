@@ -22,21 +22,31 @@
 #include <getopt.h>
 #include <stdio.h>
 #include <sys/select.h>
+#include <sys/time.h>
 #include "quicly.h"
 #include "../deps/picotls/t/util.h"
 
 static int on_stream_open(quicly_stream_t *stream);
+static int64_t now(quicly_context_t *ctx);
 
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx = {&tlsctx,
                                1280,
                                1000,
-                               {},
+                               {16384, 65536, 200, 600},
                                quicly_default_alloc_packet,
                                quicly_default_free_packet,
                                quicly_default_alloc_stream,
                                quicly_default_free_stream,
-                               on_stream_open};
+                               on_stream_open,
+                               now};
+
+static int64_t now(quicly_context_t *ctx)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
 
 static void send_data(quicly_stream_t *stream, const char *s)
 {
