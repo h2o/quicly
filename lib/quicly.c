@@ -1168,8 +1168,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
     size_t range_index;
     int ret;
 
-    if (conn->ingress.ack_queue.num_ranges == 0)
-        return 0;
+    assert(conn->ingress.ack_queue.num_ranges != 0);
 
     quicly_determine_encode_ack_frame_params(&conn->ingress.ack_queue, &encode_params);
 
@@ -1377,7 +1376,8 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         s.packet_type = QUICLY_PACKET_TYPE_SERVER_CLEARTEXT;
     }
     s.aead = NULL;
-    if (!conn->egress.acks_require_encryption && s.packet_type != QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
+    if (conn->ingress.ack_queue.num_ranges != 0 && !conn->egress.acks_require_encryption &&
+        s.packet_type != QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
         if ((ret = send_ack(conn, &s)) != 0)
             goto Exit;
     }
@@ -1400,8 +1400,10 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
     if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED) {
         s.packet_type = QUICLY_PACKET_TYPE_1RTT_KEY_PHASE_0;
         s.aead = conn->egress.pp.aead.key_phase0;
-        if ((ret = send_ack(conn, &s)) != 0)
+        /* acks */
+        if (conn->ingress.ack_queue.num_ranges != 0 && (ret = send_ack(conn, &s)) != 0)
             goto Exit;
+        /* max_stream_id */
         uint32_t max_stream_id;
         if ((max_stream_id = quicly_maxsender_should_update_stream_id(
                  &conn->ingress.max_stream_id, conn->super.peer.next_stream_id, conn->super.peer.num_streams,
@@ -1412,6 +1414,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             s.dst = quicly_encode_max_stream_id_frame(s.dst, max_stream_id);
             quicly_maxsender_record(&conn->ingress.max_stream_id, max_stream_id, &ack->data.max_stream_id.args);
         }
+        /* max_data */
         if (quicly_maxsender_should_update(&conn->ingress.max_data.sender, (uint64_t)(conn->ingress.max_data.bytes_consumed / 1024),
                                            conn->super.ctx->transport_params.initial_max_data_kb, 512)) {
             quicly_ack_t *ack;
@@ -1422,6 +1425,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             s.dst = quicly_encode_max_data_frame(s.dst, new_value);
             quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &ack->data.max_data.args);
         }
+        /* stream_id_blocked */
         if (conn->egress.stream_id_blocked_state == QUICLY_SENDER_STATE_SEND) {
             if (stream_id_blocked(conn)) {
                 quicly_ack_t *ack;
@@ -1433,6 +1437,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
                 conn->egress.stream_id_blocked_state = QUICLY_SENDER_STATE_NONE;
             }
         }
+        /* stream-level control frames */
         while (s.num_packets != s.max_packets && quicly_linklist_is_linked(&conn->pending_link.control)) {
             quicly_stream_t *stream =
                 (void *)((char *)conn->pending_link.control.next - offsetof(quicly_stream_t, _send_aux.pending_link.control));
@@ -1440,6 +1445,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
                 goto Exit;
             quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
         }
+        /* fin-only STREAM frames */
         while (s.num_packets != s.max_packets && quicly_linklist_is_linked(&conn->pending_link.stream_fin_only)) {
             quicly_stream_t *stream = (void *)((char *)conn->pending_link.stream_fin_only.next -
                                                offsetof(quicly_stream_t, _send_aux.pending_link.stream));
@@ -1447,6 +1453,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
                 goto Exit;
             resched_stream_data(stream);
         }
+        /* STREAM frames with payload */
         while (s.num_packets != s.max_packets && quicly_linklist_is_linked(&conn->pending_link.stream_with_payload) &&
                conn->egress.max_data.sent < conn->egress.max_data.permitted) {
             quicly_stream_t *stream = (void *)((char *)conn->pending_link.stream_with_payload.next -
@@ -1455,6 +1462,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
                 goto Exit;
             resched_stream_data(stream);
         }
+        /* commit */
         if (s.target != NULL)
             commit_send_packet(conn, &s);
     }
