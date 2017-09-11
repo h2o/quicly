@@ -13,6 +13,7 @@ INCLUDE_DIRECTORIES(${OPENSSL_INCLUDE_DIR} deps/klib deps/picotls/include deps/p
 
 SET(PICOTLS_OPENSSL_FILES
     deps/picotls/lib/openssl.c
+    deps/picotls/lib/pembase64.c
     deps/picotls/lib/picotls.c)
 
 SET(QUICLY_LIBRARY_FILES

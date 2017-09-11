@@ -23,6 +23,8 @@
 		E920D22E1F4981E500799777 /* ack.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D22D1F4981E500799777 /* ack.c */; };
 		E920D2301F49EE0B00799777 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D22F1F49EE0B00799777 /* loss.c */; };
 		E92D43ED1F41DCF5002AC767 /* sendbuf.h in Headers */ = {isa = PBXBuildFile; fileRef = E92D43EC1F41DCF5002AC767 /* sendbuf.h */; };
+		E93E546A1F663851001C50FE /* pembase64.c in Sources */ = {isa = PBXBuildFile; fileRef = E93E54681F663849001C50FE /* pembase64.c */; };
+		E93E546B1F663852001C50FE /* pembase64.c in Sources */ = {isa = PBXBuildFile; fileRef = E93E54681F663849001C50FE /* pembase64.c */; };
 		E984482C1EA48D1200390927 /* picotls.h in Headers */ = {isa = PBXBuildFile; fileRef = E984482B1EA48D1200390927 /* picotls.h */; };
 		E984483A1EA48D7A00390927 /* libquicly.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E98448171EA48BD400390927 /* libquicly.a */; };
 		E984483B1EA48DD300390927 /* openssl.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448271EA48D0000390927 /* openssl.c */; };
@@ -86,6 +88,7 @@
 		E920D22D1F4981E500799777 /* ack.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ack.c; sourceTree = "<group>"; };
 		E920D22F1F49EE0B00799777 /* loss.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E92D43EC1F41DCF5002AC767 /* sendbuf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = sendbuf.h; sourceTree = "<group>"; };
+		E93E54681F663849001C50FE /* pembase64.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pembase64.c; sourceTree = "<group>"; };
 		E98448171EA48BD400390927 /* libquicly.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libquicly.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		E98448271EA48D0000390927 /* openssl.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = openssl.c; sourceTree = "<group>"; };
 		E98448281EA48D0000390927 /* picotls.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = picotls.c; sourceTree = "<group>"; };
@@ -225,6 +228,7 @@
 			isa = PBXGroup;
 			children = (
 				E98448271EA48D0000390927 /* openssl.c */,
+				E93E54681F663849001C50FE /* pembase64.c */,
 				E98448281EA48D0000390927 /* picotls.c */,
 			);
 			path = lib;
@@ -422,6 +426,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E984483B1EA48DD300390927 /* openssl.c in Sources */,
+				E93E546A1F663851001C50FE /* pembase64.c in Sources */,
 				E984483C1EA48DD300390927 /* picotls.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -440,6 +445,7 @@
 				E9CC44251EC1962700DC7D3E /* test.c in Sources */,
 				E9F6A4211F3C0B6D0083F0B2 /* ranges.c in Sources */,
 				E920D21A1F42E9CE00799777 /* buffer.c in Sources */,
+				E93E546B1F663852001C50FE /* pembase64.c in Sources */,
 				E9CC441B1EC195DF00DC7D3E /* openssl.c in Sources */,
 				E9F6A42A1F3C3B7B0083F0B2 /* ranges.c in Sources */,
 				E99B75E91F5D259400CF503E /* stream-concurrency.c in Sources */,
