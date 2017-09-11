@@ -1748,7 +1748,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 if ((ret = handle_stream_blocked_frame(conn, &frame)) != 0)
                     goto Exit;
             } break;
-            case QUICLY_FRAME_TYPE_STREAM_ID_NEEDED:
+            case QUICLY_FRAME_TYPE_STREAM_ID_BLOCKED:
                 quicly_maxsender_reset(&conn->ingress.max_stream_id, 0);
                 ret = 0;
                 break;
