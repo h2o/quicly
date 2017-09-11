@@ -86,7 +86,7 @@ struct st_quicly_context_t {
     /**
      * initial retransmission timeout (in milliseconds)
      */
-    uint16_t initial_rto;
+    uint32_t initial_rto;
     /**
      * transport parameters
      */
