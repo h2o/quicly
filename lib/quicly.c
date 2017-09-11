@@ -131,6 +131,10 @@ struct st_quicly_conn_t {
         /**
          *
          */
+        quicly_sender_state_t stream_id_blocked_state;
+        /**
+         *
+         */
         unsigned acks_require_encryption : 1;
     } egress;
     /**
@@ -321,6 +325,11 @@ static void resched_stream_data(quicly_stream_t *stream)
 
     if (target != NULL)
         quicly_linklist_insert(target, &stream->_send_aux.pending_link.stream);
+}
+
+static int stream_id_blocked(quicly_conn_t *conn)
+{
+    return conn->super.host.next_stream_id == 0 || conn->super.host.next_stream_id > conn->egress.max_stream_id;
 }
 
 static int should_update_max_stream_data(quicly_stream_t *stream)
@@ -1049,6 +1058,17 @@ static int on_ack_stop_sending(quicly_conn_t *conn, int acked, quicly_ack_t *ack
     return 0;
 }
 
+static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+{
+    if (!acked && conn->egress.stream_id_blocked_state == QUICLY_SENDER_STATE_UNACKED && stream_id_blocked(conn)) {
+        conn->egress.stream_id_blocked_state = QUICLY_SENDER_STATE_SEND;
+    } else {
+        conn->egress.stream_id_blocked_state = QUICLY_SENDER_STATE_NONE;
+    }
+
+    return 0;
+}
+
 struct st_quicly_send_context_t {
     uint8_t packet_type;
     ptls_aead_context_t *aead;
@@ -1401,6 +1421,17 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
                 (uint64_t)(conn->ingress.max_data.bytes_consumed / 1024) + conn->super.ctx->transport_params.initial_max_data_kb;
             s.dst = quicly_encode_max_data_frame(s.dst, new_value);
             quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &ack->data.max_data.args);
+        }
+        if (conn->egress.stream_id_blocked_state == QUICLY_SENDER_STATE_SEND) {
+            if (stream_id_blocked(conn)) {
+                quicly_ack_t *ack;
+                if ((ret = prepare_acked_packet(conn, &s, 1, &ack, on_ack_stream_id_blocked)) != 0)
+                    goto Exit;
+                *s.dst++ = QUICLY_FRAME_TYPE_STREAM_ID_BLOCKED;
+                conn->egress.stream_id_blocked_state = QUICLY_SENDER_STATE_UNACKED;
+            } else {
+                conn->egress.stream_id_blocked_state = QUICLY_SENDER_STATE_NONE;
+            }
         }
         while (s.num_packets != s.max_packets && quicly_linklist_is_linked(&conn->pending_link.control)) {
             quicly_stream_t *stream =
@@ -1779,8 +1810,10 @@ Exit:
 
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
 {
-    if (conn->super.host.next_stream_id == 0 || conn->super.host.next_stream_id > conn->egress.max_stream_id)
+    if (stream_id_blocked(conn)) {
+        conn->egress.stream_id_blocked_state = QUICLY_SENDER_STATE_SEND;
         return QUICLY_ERROR_TOO_MANY_OPEN_STREAMS;
+    }
 
     if ((*stream = open_stream(conn, conn->super.host.next_stream_id)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
