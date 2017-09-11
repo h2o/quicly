@@ -226,7 +226,10 @@ typedef struct st_quicly_decode_packet_t {
     uint8_t is_long_header : 1;
     uint8_t has_connection_id : 1;
     uint64_t connection_id;
-    uint32_t packet_number;
+    struct {
+        uint32_t bits;
+        uint32_t mask;
+    } packet_number;
     uint32_t version;
     ptls_iovec_t header;
     ptls_iovec_t payload;
@@ -240,6 +243,10 @@ typedef struct st_quicly_decode_packet_t {
  *
  */
 int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, size_t len);
+/**
+ *
+ */
+uint64_t quicly_determine_packet_number(quicly_decoded_packet_t *packet, uint64_t next_expected);
 /**
  *
  */

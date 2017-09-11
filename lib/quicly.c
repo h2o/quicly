@@ -63,7 +63,6 @@ KHASH_MAP_INIT_INT(quicly_stream_t, quicly_stream_t *)
     }
 
 struct st_quicly_packet_protection_t {
-    uint64_t packet_number;
     struct {
         ptls_aead_context_t *early_data;
         ptls_aead_context_t *key_phase0;
@@ -101,6 +100,10 @@ struct st_quicly_conn_t {
          *
          */
         quicly_maxsender_t max_stream_id;
+        /**
+         *
+         */
+        uint64_t next_expected_packet_number;
     } ingress;
     /**
      *
@@ -224,7 +227,8 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
         if (src_end - src < 16)
             return QUICLY_ERROR_INVALID_PACKET_HEADER;
         packet->connection_id = quicly_decode64(&src);
-        packet->packet_number = quicly_decode32(&src);
+        packet->packet_number.bits = quicly_decode32(&src);
+        packet->packet_number.mask = UINT32_MAX;
         packet->version = quicly_decode32(&src);
     } else {
         /* short header */
@@ -250,12 +254,25 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
         }
         if (src_end - src < packet_number_size)
             return QUICLY_ERROR_INVALID_PACKET_HEADER;
-        packet->packet_number = (uint32_t)quicly_decodev(&src, packet_number_size);
+        packet->packet_number.bits = (uint32_t)quicly_decodev(&src, packet_number_size);
+        packet->packet_number.mask = UINT32_MAX >> ((4 - packet_number_size) * 8);
     }
 
     packet->header.len = src - packet->header.base;
     packet->payload = ptls_iovec_init(src, src_end - src);
     return 0;
+}
+
+uint64_t quicly_determine_packet_number(quicly_decoded_packet_t *packet, uint64_t next_expected)
+{
+    uint64_t actual = (next_expected & ~(uint64_t)packet->packet_number.mask) + packet->packet_number.bits;
+
+    if (((packet->packet_number.bits - (uint32_t)next_expected) & packet->packet_number.mask) > (packet->packet_number.mask >> 1)) {
+        if (actual >= (uint64_t)packet->packet_number.mask + 1)
+            actual -= (uint64_t)packet->packet_number.mask + 1;
+    }
+
+    return actual;
 }
 
 static uint8_t *emit_long_header(quicly_conn_t *conn, uint8_t *dst, uint8_t type, uint64_t connection_id,
@@ -934,8 +951,10 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         return PTLS_ERROR_NO_MEMORY;
     conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
 
-    if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number, packet->packet_number + 1)) != 0)
+    if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number.bits,
+                                    (uint64_t)packet->packet_number.bits + 1)) != 0)
         goto Exit;
+    conn->ingress.next_expected_packet_number = (uint64_t)packet->packet_number.bits + 1;
 
     if ((ret = apply_stream_frame(&conn->crypto.stream, &frame)) != 0)
         goto Exit;
@@ -1649,6 +1668,7 @@ static int handle_max_data_frame(quicly_conn_t *conn, quicly_max_data_frame_t *f
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
     ptls_aead_context_t *aead = NULL;
+    uint64_t packet_number;
     int ret;
 
     /* FIXME check peer address */
@@ -1707,9 +1727,10 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         goto Exit;
     }
 
+    packet_number = quicly_determine_packet_number(packet, conn->ingress.next_expected_packet_number);
     if (aead != NULL) {
         if ((packet->payload.len = ptls_aead_decrypt(aead, packet->payload.base, packet->payload.base, packet->payload.len,
-                                                     packet->packet_number, packet->header.base, packet->header.len)) == SIZE_MAX) {
+                                                     packet_number, packet->header.base, packet->header.len)) == SIZE_MAX) {
             ret = QUICLY_ERROR_DECRYPTION_FAILURE;
             goto Exit;
         }
@@ -1719,6 +1740,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             goto Exit;
         }
     }
+    conn->ingress.next_expected_packet_number = packet_number + 1;
 
     if (packet->payload.len == 0) {
         ret = QUICLY_ERROR_INVALID_FRAME_DATA;
@@ -1808,7 +1830,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
     } while (src != end);
     if (should_ack) {
-        if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number, packet->packet_number + 1)) != 0)
+        if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet_number, packet_number + 1)) != 0)
             goto Exit;
         if (aead != NULL)
             conn->egress.acks_require_encryption = 1;

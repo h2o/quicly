@@ -185,6 +185,21 @@ int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
     return 1;
 }
 
+static void test_next_packet_number(void)
+{
+    quicly_decoded_packet_t d = {0};
+    uint64_t n;
+
+    d.packet_number.bits = 0xc0;
+    d.packet_number.mask = 0xff;
+
+    /* prefer lower in case the distance in both directions are equal; see https://github.com/quicwg/base-drafts/issues/674 */
+    n = quicly_determine_packet_number(&d, 0x140);
+    ok(n == 0xc0);
+    n = quicly_determine_packet_number(&d, 0x141);
+    ok(n == 0x1c0);
+}
+
 int main(int argc, char **argv)
 {
     ERR_load_crypto_strings();
@@ -214,6 +229,7 @@ int main(int argc, char **argv)
         EVP_PKEY_free(pkey);
     }
 
+    subtest("next-packet-number", test_next_packet_number);
     subtest("ranges", test_ranges);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);

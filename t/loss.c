@@ -53,7 +53,7 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
 
 static int cond_even(quicly_decoded_packet_t *packet)
 {
-    return packet->packet_number % 2 == 0;
+    return packet->packet_number.bits % 2 == 0;
 }
 
 static void test_even(void)
