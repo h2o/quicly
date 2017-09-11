@@ -58,7 +58,8 @@ KHASH_MAP_INIT_INT(quicly_stream_t, quicly_stream_t *)
         quicly_conn_t *c = (conn);                                                                                                 \
         char buf[1024];                                                                                                            \
         snprintf(buf, sizeof(buf), __VA_ARGS__);                                                                                   \
-        fprintf(stderr, "%s:%p,%" PRIu32 ": %s\n", quicly_is_client(c) ? "client" : "server", (c), (stream_id), buf);              \
+        fprintf(stderr, "%s:%" PRIx64 ",%" PRIu32 ": %s\n", quicly_is_client(c) ? "client" : "server", conn->super.connection_id,  \
+                (stream_id), buf);                                                                                                 \
     }
 
 struct st_quicly_packet_protection_t {
@@ -730,6 +731,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     if (server_name != NULL) {
         conn->super.host.next_stream_id = 1;
         conn->super.peer.next_stream_id = 2;
+        ctx->tls->random_bytes(&conn->super.connection_id, sizeof(conn->super.connection_id));
     } else {
         conn->super.host.next_stream_id = 2;
         conn->super.peer.next_stream_id = 1;
