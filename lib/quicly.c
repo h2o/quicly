@@ -20,10 +20,13 @@
  * IN THE SOFTWARE.
  */
 #include <assert.h>
+#include <inttypes.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include "khash.h"
 #include "quicly.h"
 #include "quicly/ack.h"
@@ -53,14 +56,17 @@
 
 KHASH_MAP_INIT_INT(quicly_stream_t, quicly_stream_t *)
 
-#define QUICLY_DEBUG_LOG(conn, stream_id, ...)                                                                                     \
-    if (0) {                                                                                                                       \
-        quicly_conn_t *c = (conn);                                                                                                 \
-        char buf[1024];                                                                                                            \
-        snprintf(buf, sizeof(buf), __VA_ARGS__);                                                                                   \
-        fprintf(stderr, "%s:%" PRIx64 ",%" PRIu32 ": %s\n", quicly_is_client(c) ? "client" : "server", conn->super.connection_id,  \
-                (stream_id), buf);                                                                                                 \
-    }
+#define DEBUG_LOG(conn, stream_id, ...)                                                                                            \
+    do {                                                                                                                           \
+        quicly_conn_t *_conn = (conn);                                                                                             \
+        if (_conn->super.ctx->debug_log != NULL) {                                                                                 \
+            char buf[1024];                                                                                                        \
+            snprintf(buf, sizeof(buf), __VA_ARGS__);                                                                               \
+            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%" PRIx64 ",%" PRIu32 ": %s\n",                                      \
+                                        quicly_is_client(_conn) ? "client" : "server", _conn->super.connection_id, (stream_id),    \
+                                        buf);                                                                                      \
+        }                                                                                                                          \
+    } while (0)
 
 struct st_quicly_packet_protection_t {
     struct {
@@ -536,7 +542,7 @@ static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
 
     switch (ret) {
     case 0:
-        QUICLY_DEBUG_LOG(conn, 0, "handshake complete");
+        DEBUG_LOG(conn, 0, "handshake complete");
         /* state is 1RTT_ENCRYPTED when handling ClientFinished */
         if (conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
             conn->egress.max_data.permitted = (__uint128_t)conn->super.peer.transport_params.initial_max_data_kb * 1024;
@@ -612,7 +618,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 {
     int ret;
 
-    QUICLY_DEBUG_LOG(stream->conn, stream->stream_id, "received; off=%" PRIu64 ",len=%zu", frame->offset, frame->data.len);
+    DEBUG_LOG(stream->conn, stream->stream_id, "received; off=%" PRIu64 ",len=%zu", frame->offset, frame->data.len);
 
     if (frame->is_fin && (ret = quicly_recvbuf_mark_eos(&stream->recvbuf, frame->offset + frame->data.len)) != 0)
         return ret;
@@ -979,8 +985,8 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
     quicly_stream_t *stream;
     int ret;
 
-    QUICLY_DEBUG_LOG(conn, ack->data.stream.stream_id, "%s; off=%" PRIu64 ",len=%zu", acked ? "acked" : "lost",
-                     ack->data.stream.args.start, (size_t)(ack->data.stream.args.end - ack->data.stream.args.start));
+    DEBUG_LOG(conn, ack->data.stream.stream_id, "%s; off=%" PRIu64 ",len=%zu", acked ? "acked" : "lost",
+              ack->data.stream.args.start, (size_t)(ack->data.stream.args.end - ack->data.stream.args.start));
 
     /* TODO cache pointer to stream (using a generation counter?) */
     if ((stream = quicly_get_stream(conn, ack->data.stream.stream_id)) == NULL)
@@ -1088,6 +1094,17 @@ static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t
     }
 
     return 0;
+}
+
+int64_t quicly_get_first_timeout(quicly_conn_t *conn)
+{
+    quicly_acks_iter_t iter;
+    quicly_ack_t *ack;
+
+    quicly_acks_init_iter(&conn->egress.acks, &iter);
+    if ((ack = quicly_acks_get(&iter)) == NULL)
+        return INT64_MAX;
+    return ack->sent_at + conn->super.ctx->initial_rto;
 }
 
 struct st_quicly_send_context_t {
@@ -1280,7 +1297,7 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
     if (s->aead != NULL)
         encrypt_packet(s);
 
-    QUICLY_DEBUG_LOG(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
+    DEBUG_LOG(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
 
     /* adjust remaining send window */
     if (stream->_send_aux.max_sent < iter->stream_off + copysize) {
@@ -1365,10 +1382,15 @@ static int handle_timeouts(quicly_conn_t *conn, int64_t now)
     quicly_ack_t *ack;
     int ret;
     int64_t sent_before = now - conn->super.ctx->initial_rto;
+    uint64_t logged_pn = UINT64_MAX;
 
     for (quicly_acks_init_iter(&conn->egress.acks, &iter); (ack = quicly_acks_get(&iter)) != NULL; quicly_acks_next(&iter)) {
         if (sent_before < ack->sent_at)
             break;
+        if (ack->packet_number != logged_pn) {
+            logged_pn = ack->packet_number;
+            DEBUG_LOG(conn, 0, "RTO; packet-number: %" PRIu64, logged_pn);
+        }
         if ((ret = ack->acked(conn, 0, ack)) != 0)
             return ret;
         quicly_acks_release(&conn->egress.acks, &iter);
@@ -1591,7 +1613,7 @@ static int handle_ack_frame(quicly_conn_t *conn, quicly_ack_frame_t *frame)
                         break;
                 }
                 if (!found_active)
-                    QUICLY_DEBUG_LOG(conn, 0, "dupack");
+                    DEBUG_LOG(conn, 0, "dupack");
                 if (quicly_acks_get(&iter) == NULL)
                     goto Exit;
             } while (++packet_number, --block_length != 0);
@@ -1915,4 +1937,20 @@ quicly_stream_t *quicly_default_alloc_stream(quicly_context_t *ctx)
 void quicly_default_free_stream(quicly_stream_t *stream)
 {
     free(stream);
+}
+
+int64_t quicly_default_now(quicly_context_t *ctx)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
 }

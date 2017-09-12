@@ -49,7 +49,7 @@ typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
-typedef int (*quicly_set_timeout_cb)(quicly_context_t *ctx, quicly_conn_t *conn, unsigned millis);
+typedef void (*quicly_debug_log_cb)(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 typedef struct st_quicly_transport_parameters_t {
     /**
@@ -116,9 +116,9 @@ struct st_quicly_context_t {
      */
     quicly_now_cb now;
     /**
-     * called to register the timeout for the connection; the app should call quicly_send after specified milliseconds
+     * optional callback for debug logging
      */
-    quicly_set_timeout_cb set_timeout;
+    quicly_debug_log_cb debug_log;
 };
 
 typedef enum { QUICLY_STATE_BEFORE_SH = 0, QUICLY_STATE_BEFORE_SF, QUICLY_STATE_1RTT_ENCRYPTED } quicly_state_t;
@@ -286,6 +286,10 @@ void quicly_free(quicly_conn_t *conn);
 /**
  *
  */
+int64_t quicly_get_first_timeout(quicly_conn_t *conn);
+/**
+ *
+ */
 int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_packets);
 /**
  *
@@ -337,6 +341,14 @@ quicly_stream_t *quicly_default_alloc_stream(quicly_context_t *ctx);
  *
  */
 void quicly_default_free_stream(quicly_stream_t *stream);
+/**
+ *
+ */
+int64_t quicly_default_now(quicly_context_t *ctx);
+/**
+ *
+ */
+void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
 /* inline definitions */
 

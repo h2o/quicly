@@ -27,7 +27,6 @@
 #include "../deps/picotls/t/util.h"
 
 static int on_stream_open(quicly_stream_t *stream);
-static int64_t now(quicly_context_t *ctx);
 
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx = {&tlsctx,
@@ -39,14 +38,7 @@ static quicly_context_t ctx = {&tlsctx,
                                quicly_default_alloc_stream,
                                quicly_default_free_stream,
                                on_stream_open,
-                               now};
-
-static int64_t now(quicly_context_t *ctx)
-{
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
-}
+                               quicly_default_now};
 
 static void send_data(quicly_stream_t *stream, const char *s)
 {
@@ -116,7 +108,8 @@ static int send_pending(int fd, quicly_conn_t *conn)
             vec.iov_len = packets[i]->data.len;
             mess.msg_iov = &vec;
             mess.msg_iovlen = 1;
-            fprintf(stderr, "sending %zu bytes\n", vec.iov_len);
+            if (ctx.debug_log != NULL)
+                ctx.debug_log(&ctx, "sendmsg: %zu bytes\n", vec.iov_len);
             while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
                 ;
             if (ret == -1)
@@ -162,10 +155,19 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
 
     while (1) {
         fd_set readfds;
+        struct timeval *tv, tvbuf;
         do {
+            uint64_t timeout_at = quicly_get_first_timeout(conn);
+            if (timeout_at != UINT64_MAX) {
+                tvbuf.tv_sec = timeout_at / 1000;
+                tvbuf.tv_usec = timeout_at % 1000;
+                tv = &tvbuf;
+            } else {
+                tv = NULL;
+            }
             FD_ZERO(&readfds);
             FD_SET(fd, &readfds);
-        } while (select(fd + 1, &readfds, NULL, NULL, NULL) == -1 && errno == EINTR);
+        } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (FD_ISSET(fd, &readfds)) {
             uint8_t buf[4096];
             struct msghdr mess;
@@ -181,8 +183,8 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
             ssize_t rret;
             while ((rret = recvmsg(fd, &mess, 0)) <= 0)
                 ;
-//            assert(rret != 0);
-fprintf(stderr, "received %zd bytes!\n", rret);
+            if (ctx.debug_log != NULL)
+                ctx.debug_log(&ctx, "recvmsg: %zu bytes\n", vec.iov_len);
             quicly_decoded_packet_t packet;
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
                 if (conn == NULL) {
@@ -198,10 +200,10 @@ fprintf(stderr, "received %zd bytes!\n", rret);
                         send_data(stream, "GET / HTTP/1.0\r\n\r\n");
                     }
                 }
-                if (conn != NULL)
-                    send_pending(fd, conn);
             }
         }
+        if (conn != NULL)
+            send_pending(fd, conn);
     }
 }
 
@@ -214,7 +216,9 @@ static void usage(const char *cmd)
            "  -k key-file          specifies the credentials to be used for running the\n"
            "                       server. If omitted, the command runs as a client.\n"
            "  -l log-file          file to log traffic secrets\n"
-           "  -v                   verify peer using the default certificates\n"
+           "  -r [initial-rto]     initial RTO (in milliseconds)\n"
+           "  -V                   verify peer using the default certificates\n"
+           "  -v                   verbose mode\n"
            "  -h                   print this help\n"
            "\n",
            cmd);
@@ -227,7 +231,7 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
-    while ((ch = getopt(argc, argv, "c:k:l:vh")) != -1) {
+    while ((ch = getopt(argc, argv, "c:k:l:r:Vvh")) != -1) {
         switch (ch) {
         case 'c':
             load_certificate_chain(&tlsctx, optarg);
@@ -238,8 +242,17 @@ int main(int argc, char **argv)
         case 'l':
             setup_log_secret(&tlsctx, optarg);
             break;
-        case 'v':
+        case 'r':
+            if (sscanf(optarg, "%" PRIu32, &ctx.initial_rto) != 1) {
+                fprintf(stderr, "invalid argument passed to `-r`\n");
+                exit(1);
+            }
+            break;
+        case 'V':
             setup_verify_certificate(&tlsctx);
+            break;
+        case 'v':
+            ctx.debug_log = quicly_default_debug_log;
             break;
         default:
             usage(argv[0]);
