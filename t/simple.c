@@ -92,6 +92,7 @@ static void simple_http(void)
     ok(quicly_num_streams(client) == 1);
     assert(!quicly_stream_is_closable(server_stream));
 
+    quic_now += 25;
     transmit(client, server);
 
     assert(quicly_stream_is_closable(server_stream));
@@ -130,6 +131,7 @@ static void test_rst_then_close(void)
     ok(quicly_num_streams(client) == 1);
     ok(quicly_num_streams(server) == 2);
 
+    quic_now += 25;
     transmit(client, server);
 
     /* server becomes ready to close the stream, by receiving the ACK to the RST_STREAM */
@@ -192,6 +194,7 @@ static void tiny_stream_window(void)
     ok(quicly_num_streams(client) == 1);
     ok(quicly_num_streams(server) == 2);
 
+    quic_now += 25;
     transmit(client, server);
 
     /* server should have recieved ACK to the RST_STREAM it has sent */
@@ -266,6 +269,7 @@ static void test_rst_during_loss(void)
     ok(quicly_num_streams(client) == 1);
     ok(quicly_num_streams(server) == 2);
     ok(!quicly_stream_is_closable(server_stream));
+    quic_now += 25;
     transmit(client, server);
     ok(quicly_stream_is_closable(server_stream));
     quicly_close_stream(server_stream);

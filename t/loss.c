@@ -88,6 +88,7 @@ static void test_even(void)
     ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
 
     /* transmit ack for the 1st packet to server */
+    quic_now += 25;
     transmit(client, server);
 
     /* server doesn't resend the 2nd packet before RTO */
@@ -96,7 +97,7 @@ static void test_even(void)
     ok(num_received == 0);
     ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
 
-    quic_now = 1000;
+    quic_now += 1000;
 
     /* server resends the contents of the 2nd packet */
     transmit_cond(server, client, &num_sent, &num_received, cond_even);

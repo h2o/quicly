@@ -74,7 +74,9 @@ void test_stream_concurrency(void)
     transmit(server, client);
     ok(quicly_stream_is_closable(client_streams[i - 1]));
     quicly_close_stream(client_streams[i - 1]);
+    quic_now += 25;
     transmit(client, server);
+    quic_now += 25;
     transmit(server, client);
 
     /* still cannot open more */

@@ -145,6 +145,10 @@ struct st_quicly_conn_t {
         /**
          *
          */
+        int64_t send_ack_at;
+        /**
+         *
+         */
         unsigned acks_require_encryption : 1;
     } egress;
     /**
@@ -765,6 +769,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->transport_params.initial_max_data_kb);
     quicly_maxsender_init(&conn->ingress.max_stream_id, conn->super.ctx->transport_params.initial_max_stream_id);
     quicly_acks_init(&conn->egress.acks);
+    conn->egress.send_ack_at = INT64_MAX;
     init_stream(&conn->crypto.stream, conn, 0);
     conn->crypto.stream.on_update = crypto_stream_receive_handshake;
     conn->crypto.tls = tls;
@@ -1098,13 +1103,18 @@ static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
+    int64_t at = conn->egress.send_ack_at;
     quicly_acks_iter_t iter;
     quicly_ack_t *ack;
 
     quicly_acks_init_iter(&conn->egress.acks, &iter);
-    if ((ack = quicly_acks_get(&iter)) == NULL)
-        return INT64_MAX;
-    return ack->sent_at + conn->super.ctx->initial_rto;
+    if ((ack = quicly_acks_get(&iter)) != NULL) {
+        int64_t cand = ack->sent_at + conn->super.ctx->initial_rto;
+        if (cand < at)
+            at = cand;
+    }
+
+    return at;
 }
 
 struct st_quicly_send_context_t {
@@ -1206,7 +1216,8 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
     size_t range_index;
     int ret;
 
-    assert(conn->ingress.ack_queue.num_ranges != 0);
+    if (conn->ingress.ack_queue.num_ranges == 0)
+        return 0;
 
     quicly_determine_encode_ack_frame_params(&conn->ingress.ack_queue, &encode_params);
 
@@ -1218,6 +1229,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
     } while (range_index != SIZE_MAX);
 
     quicly_ranges_clear(&conn->ingress.ack_queue);
+    conn->egress.send_ack_at = INT64_MAX;
     return ret;
 }
 
@@ -1419,7 +1431,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         s.packet_type = QUICLY_PACKET_TYPE_SERVER_CLEARTEXT;
     }
     s.aead = NULL;
-    if (conn->ingress.ack_queue.num_ranges != 0 && !conn->egress.acks_require_encryption &&
+    if (conn->egress.send_ack_at <= s.now && !conn->egress.acks_require_encryption &&
         s.packet_type != QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
         if ((ret = send_ack(conn, &s)) != 0)
             goto Exit;
@@ -1436,16 +1448,24 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             conn->crypto.pending_data = 0;
         }
     }
-    if (s.target != NULL && (ret = commit_send_packet(conn, &s)) != 0)
-        goto Exit;
+    if (s.target != NULL) {
+        if (!conn->egress.acks_require_encryption && s.packet_type != QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
+            if ((ret = send_ack(conn, &s)) != 0)
+                goto Exit;
+        }
+        if ((ret = commit_send_packet(conn, &s)) != 0)
+            goto Exit;
+    }
 
     /* send encrypted frames */
     if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED) {
         s.packet_type = QUICLY_PACKET_TYPE_1RTT_KEY_PHASE_0;
         s.aead = conn->egress.pp.aead.key_phase0;
         /* acks */
-        if (conn->ingress.ack_queue.num_ranges != 0 && (ret = send_ack(conn, &s)) != 0)
-            goto Exit;
+        if (conn->egress.send_ack_at <= s.now) {
+            if ((ret = send_ack(conn, &s)) != 0)
+                goto Exit;
+        }
         /* max_stream_id */
         uint32_t max_stream_id;
         if ((max_stream_id = quicly_maxsender_should_update_stream_id(
@@ -1506,8 +1526,11 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             resched_stream_data(stream);
         }
         /* commit */
-        if (s.target != NULL)
+        if (s.target != NULL) {
+            if ((ret = send_ack(conn, &s)) != 0)
+                goto Exit;
             commit_send_packet(conn, &s);
+        }
     }
 
     ret = 0;
@@ -1770,7 +1793,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
     const uint8_t *src = packet->payload.base, *end = src + packet->payload.len;
-    int should_ack = 0;
+    int is_ack_only = 1;
     do {
         uint8_t type_flags = *src++;
         if (type_flags >= QUICLY_FRAME_TYPE_STREAM) {
@@ -1779,7 +1802,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 goto Exit;
             if ((ret = handle_stream_frame(conn, &frame)) != 0)
                 goto Exit;
-            should_ack = 1;
+            is_ack_only = 0;
         } else if (type_flags >= QUICLY_FRAME_TYPE_ACK) {
             quicly_ack_frame_t frame;
             if ((ret = quicly_decode_ack_frame(type_flags, &src, end, &frame)) != 0)
@@ -1848,14 +1871,16 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 assert(!"FIXME");
                 break;
             }
-            should_ack = 1;
+            is_ack_only = 0;
         }
     } while (src != end);
-    if (should_ack) {
-        if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet_number, packet_number + 1)) != 0)
-            goto Exit;
-        if (aead != NULL)
-            conn->egress.acks_require_encryption = 1;
+
+    if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet_number, packet_number + 1)) != 0)
+        goto Exit;
+    if (aead != NULL)
+        conn->egress.acks_require_encryption = 1;
+    if (!is_ack_only && conn->egress.send_ack_at == INT64_MAX) {
+        conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + 25; /* use better delayed ack timer */
     }
 
 Exit:
