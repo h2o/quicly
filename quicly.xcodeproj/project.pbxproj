@@ -14,7 +14,7 @@
 		E920D21C1F43DE4100799777 /* recvbuf.h in Headers */ = {isa = PBXBuildFile; fileRef = E920D21B1F43DE4100799777 /* recvbuf.h */; };
 		E920D21E1F43E05000799777 /* recvbuf.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D21D1F43E05000799777 /* recvbuf.c */; };
 		E920D21F1F43E05000799777 /* recvbuf.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D21D1F43E05000799777 /* recvbuf.c */; };
-		E920D2211F44047C00799777 /* error.h in Headers */ = {isa = PBXBuildFile; fileRef = E920D2201F44047C00799777 /* error.h */; };
+		E920D2211F44047C00799777 /* constants.h in Headers */ = {isa = PBXBuildFile; fileRef = E920D2201F44047C00799777 /* constants.h */; };
 		E920D2231F4536CB00799777 /* maxsender.h in Headers */ = {isa = PBXBuildFile; fileRef = E920D2221F4536CB00799777 /* maxsender.h */; };
 		E920D2251F49412900799777 /* simple.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D2241F49412900799777 /* simple.c */; };
 		E920D2291F4951BA00799777 /* ack.h in Headers */ = {isa = PBXBuildFile; fileRef = E920D2281F4951BA00799777 /* ack.h */; };
@@ -80,7 +80,7 @@
 		E920D2181F42E9CE00799777 /* buffer.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = buffer.c; sourceTree = "<group>"; };
 		E920D21B1F43DE4100799777 /* recvbuf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = recvbuf.h; sourceTree = "<group>"; };
 		E920D21D1F43E05000799777 /* recvbuf.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = recvbuf.c; sourceTree = "<group>"; };
-		E920D2201F44047C00799777 /* error.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = error.h; sourceTree = "<group>"; };
+		E920D2201F44047C00799777 /* constants.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = constants.h; sourceTree = "<group>"; };
 		E920D2221F4536CB00799777 /* maxsender.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = maxsender.h; sourceTree = "<group>"; };
 		E920D2241F49412900799777 /* simple.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = simple.c; sourceTree = "<group>"; };
 		E920D2281F4951BA00799777 /* ack.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ack.h; sourceTree = "<group>"; };
@@ -280,7 +280,7 @@
 			children = (
 				E920D2281F4951BA00799777 /* ack.h */,
 				E920D2161F42E93200799777 /* buffer.h */,
-				E920D2201F44047C00799777 /* error.h */,
+				E920D2201F44047C00799777 /* constants.h */,
 				E99F8C231F4E863200C26B3D /* frame.h */,
 				E9056C071F56965300E2B96C /* linklist.h */,
 				E920D2221F4536CB00799777 /* maxsender.h */,
@@ -309,7 +309,7 @@
 				E99F8C241F4E863200C26B3D /* frame.h in Headers */,
 				E92D43ED1F41DCF5002AC767 /* sendbuf.h in Headers */,
 				E920D21C1F43DE4100799777 /* recvbuf.h in Headers */,
-				E920D2211F44047C00799777 /* error.h in Headers */,
+				E920D2211F44047C00799777 /* constants.h in Headers */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

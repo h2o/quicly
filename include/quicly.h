@@ -26,7 +26,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include "picotls.h"
-#include "quicly/error.h"
+#include "quicly/constants.h"
 #include "quicly/linklist.h"
 #include "quicly/recvbuf.h"
 #include "quicly/sendbuf.h"

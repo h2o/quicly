@@ -19,10 +19,12 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef quicly_error_h
-#define quicly_error_h
+#ifndef quicly_constants_h
+#define quicly_constants_h
 
 #include <stddef.h>
+
+#define QUICLY_DELAYED_ACK_TIMEOUT 25 /* milliseconds */
 
 #define QUICLY_TRANSPORT_ERROR_BASE 1024
 #define QUICLY_TRANSPORT_ERROR_CODE(n) (QUICLY_TRANSPORT_ERROR_BASE + (n))

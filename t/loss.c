@@ -88,7 +88,7 @@ static void test_even(void)
     ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
 
     /* transmit ack for the 1st packet to server */
-    quic_now += 25;
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(client, server);
 
     /* server doesn't resend the 2nd packet before RTO */

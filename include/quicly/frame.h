@@ -25,7 +25,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "picotls.h"
-#include "quicly/error.h"
+#include "quicly/constants.h"
 #include "quicly/ranges.h"
 
 #define QUICLY_FRAME_TYPE_PADDING 0
