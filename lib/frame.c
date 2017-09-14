@@ -26,15 +26,21 @@ void quicly_determine_encode_ack_frame_params(quicly_ranges_t *ranges, quicly_ac
 {
     static const unsigned encoding_mode[] = {3, 3, 3, 3, 2, 2, 1, 0, 0};
 
+    assert(ranges->num_ranges != 0);
+
     params->largest_acknowledged_mode = encoding_mode[quicly_clz64(ranges->ranges[ranges->num_ranges - 1].end - 1) / 8];
 
-    uint64_t max_ack_block_length = 0;
-    size_t i;
-    for (i = 0; i < ranges->num_ranges; ++i) {
-        size_t bl = ranges->ranges[i].end - ranges->ranges[i].start;
-        if (bl > max_ack_block_length)
-            max_ack_block_length = bl;
+    size_t i = ranges->num_ranges - 1;
+    uint64_t max_ack_block_length = ranges->ranges[i].end - ranges->ranges[i].start - 1;
+    if (i != 0) {
+        do {
+            --i;
+            size_t bl = ranges->ranges[i].end - ranges->ranges[i].start;
+            if (bl > max_ack_block_length)
+                max_ack_block_length = bl;
+        } while (i != 0);
     }
+
     params->block_length_mode = encoding_mode[quicly_clz64(max_ack_block_length) / 8];
     params->min_capacity_excluding_num_blocks = 2 + (1 << params->largest_acknowledged_mode) + 2 + (1 << params->block_length_mode);
 }
@@ -56,7 +62,7 @@ uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t
     *dst++ = 0; /* TODO num_ts */
     dst = quicly_encodev(dst, largest_acknowledged_length, ranges->ranges[*range_index].end - 1);
     dst = quicly_encode16(dst, 0); /* TODO ack_delay */
-    dst = quicly_encodev(dst, block_length_length, ranges->ranges[*range_index].end - ranges->ranges[*range_index].start);
+    dst = quicly_encodev(dst, block_length_length, ranges->ranges[*range_index].end - ranges->ranges[*range_index].start - 1);
 
     if (--*range_index != SIZE_MAX) {
         do {
@@ -102,7 +108,7 @@ int quicly_decode_ack_frame(uint8_t type_flags, const uint8_t **src, const uint8
     frame->ack_delay = quicly_decode16(src);
 
     frame->smallest_acknowledged = frame->largest_acknowledged + 1;
-    frame->ack_block_lengths[0] = quicly_decodev(src, ack_block_length_size);
+    frame->ack_block_lengths[0] = quicly_decodev(src, ack_block_length_size) + 1;
     frame->smallest_acknowledged -= frame->ack_block_lengths[0];
     for (i = 0; i != frame->num_gaps; ++i) {
         frame->gaps[i] = *(*src)++;
