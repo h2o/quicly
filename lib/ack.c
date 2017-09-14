@@ -23,6 +23,8 @@
 #include <stdlib.h>
 #include "quicly/ack.h"
 
+const quicly_ack_t quicly_acks__end_iter = {UINT64_MAX, INT64_MAX};
+
 void quicly_acks_dispose(quicly_acks_t *acks)
 {
     struct st_quicly_ack_block_t *block;

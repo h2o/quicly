@@ -28,6 +28,7 @@
 #include "picotls.h"
 #include "quicly/constants.h"
 #include "quicly/linklist.h"
+#include "quicly/loss.h"
 #include "quicly/recvbuf.h"
 #include "quicly/sendbuf.h"
 #include "quicly/maxsender.h"
@@ -84,9 +85,9 @@ struct st_quicly_context_t {
      */
     uint16_t max_packet_size;
     /**
-     * initial retransmission timeout (in milliseconds)
+     * loss detection parameters
      */
-    uint32_t initial_rto;
+    quicly_loss_conf_t loss;
     /**
      * transport parameters
      */

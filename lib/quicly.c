@@ -126,6 +126,10 @@ struct st_quicly_conn_t {
         /**
          *
          */
+        quicly_loss_t loss;
+        /**
+         *
+         */
         uint64_t packet_number;
         /**
          *
@@ -769,6 +773,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->transport_params.initial_max_data_kb);
     quicly_maxsender_init(&conn->ingress.max_stream_id, conn->super.ctx->transport_params.initial_max_stream_id);
     quicly_acks_init(&conn->egress.acks);
+    quicly_loss_init(&conn->egress.loss, &conn->super.ctx->loss,
+                     conn->super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
     conn->egress.send_ack_at = INT64_MAX;
     init_stream(&conn->crypto.stream, conn, 0);
     conn->crypto.stream.on_update = crypto_stream_receive_handshake;
@@ -1103,18 +1109,7 @@ static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
-    int64_t at = conn->egress.send_ack_at;
-    quicly_acks_iter_t iter;
-    quicly_ack_t *ack;
-
-    quicly_acks_init_iter(&conn->egress.acks, &iter);
-    if ((ack = quicly_acks_get(&iter)) != NULL) {
-        int64_t cand = ack->sent_at + conn->super.ctx->initial_rto;
-        if (cand < at)
-            at = cand;
-    }
-
-    return at;
+    return conn->egress.loss.alarm_at < conn->egress.send_ack_at ? conn->egress.loss.alarm_at : conn->egress.send_ack_at;
 }
 
 struct st_quicly_send_context_t {
@@ -1388,17 +1383,45 @@ ShrinkRanges:
     return ret;
 }
 
-static int handle_timeouts(quicly_conn_t *conn, int64_t now)
+static int retire_acks(quicly_conn_t *conn, size_t count)
 {
     quicly_acks_iter_t iter;
     quicly_ack_t *ack;
+    uint64_t pn;
     int ret;
-    int64_t sent_before = now - conn->super.ctx->initial_rto;
-    uint64_t logged_pn = UINT64_MAX;
 
-    for (quicly_acks_init_iter(&conn->egress.acks, &iter); (ack = quicly_acks_get(&iter)) != NULL; quicly_acks_next(&iter)) {
-        if (sent_before < ack->sent_at)
+    assert(count != 0);
+
+    quicly_acks_init_iter(&conn->egress.acks, &iter);
+    ack = quicly_acks_get(&iter);
+
+    do {
+        if ((pn = ack->packet_number) == UINT64_MAX)
             break;
+        do {
+            if ((ret = ack->acked(conn, 0, ack)) != 0)
+                return ret;
+            quicly_acks_release(&conn->egress.acks, &iter);
+            quicly_acks_next(&iter);
+        } while ((ack = quicly_acks_get(&iter))->packet_number == pn);
+    } while (--count != 0);
+
+    return 0;
+}
+
+static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time)
+{
+    quicly_conn_t *conn = (void *)((char *)ld - offsetof(quicly_conn_t, egress.loss));
+    quicly_acks_iter_t iter;
+    quicly_ack_t *ack;
+    int64_t sent_before = now - delay_until_lost;
+    uint64_t logged_pn = UINT64_MAX;
+    int ret;
+
+    quicly_acks_init_iter(&conn->egress.acks, &iter);
+
+    /* handle loss */
+    while ((ack = quicly_acks_get(&iter))->sent_at <= sent_before) {
         if (ack->packet_number != logged_pn) {
             logged_pn = ack->packet_number;
             DEBUG_LOG(conn, 0, "RTO; packet-number: %" PRIu64, logged_pn);
@@ -1406,7 +1429,11 @@ static int handle_timeouts(quicly_conn_t *conn, int64_t now)
         if ((ret = ack->acked(conn, 0, ack)) != 0)
             return ret;
         quicly_acks_release(&conn->egress.acks, &iter);
+        quicly_acks_next(&iter);
     }
+
+    /* schedule next alarm */
+    *loss_time = ack->sent_at == INT64_MAX ? INT64_MAX : ack->sent_at + delay_until_lost;
 
     return 0;
 }
@@ -1417,8 +1444,19 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
     int ret;
 
     /* handle timeouts */
-    if ((ret = handle_timeouts(conn, s.now)) != 0)
-        goto Exit;
+    if (conn->egress.loss.alarm_at <= s.now) {
+        size_t min_packets_to_send;
+        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1, do_detect_loss,
+                                        &min_packets_to_send)) != 0)
+            goto Exit;
+        if (min_packets_to_send != 0) {
+            /* better way to notify the app that we want to send some packets outside the congestion window? */
+            assert(min_packets_to_send <= *num_packets);
+            *num_packets = min_packets_to_send;
+            if ((ret = retire_acks(conn, min_packets_to_send)) != 0)
+                goto Exit;
+        }
+    }
 
     /* send cleartext frames */
     if (quicly_is_client(conn)) {
@@ -1533,6 +1571,8 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         }
     }
 
+    quicly_loss_update_alarm(&conn->egress.loss, s.now, conn->egress.acks.head != NULL);
+
     ret = 0;
 Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
@@ -1604,49 +1644,48 @@ static int handle_rst_stream_frame(quicly_conn_t *conn, quicly_rst_stream_frame_
     return ret;
 }
 
-static int handle_ack_frame(quicly_conn_t *conn, quicly_ack_frame_t *frame)
+static int handle_ack_frame(quicly_conn_t *conn, quicly_ack_frame_t *frame, int64_t now)
 {
     quicly_acks_iter_t iter;
     uint64_t packet_number = frame->smallest_acknowledged;
+    int64_t last_packet_sent_at = INT64_MAX;
     int ret;
 
     quicly_acks_init_iter(&conn->egress.acks, &iter);
-    if (quicly_acks_get(&iter) == NULL)
-        return 0;
 
     size_t gap_index = frame->num_gaps;
     while (1) {
         uint64_t block_length = frame->ack_block_lengths[gap_index];
         if (block_length != 0) {
-            while (quicly_acks_get(&iter)->packet_number < packet_number) {
+            while (quicly_acks_get(&iter)->packet_number < packet_number)
                 quicly_acks_next(&iter);
-                if (quicly_acks_get(&iter) == NULL)
-                    goto Exit;
-            }
             do {
-                int found_active = 0;
-                while (quicly_acks_get(&iter)->packet_number == packet_number) {
-                    found_active = 1;
-                    quicly_ack_t *ack = quicly_acks_get(&iter);
+                quicly_ack_t *ack;
+                while ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
+                    last_packet_sent_at = ack->sent_at;
                     if ((ret = ack->acked(conn, 1, ack)) != 0)
                         return ret;
                     quicly_acks_release(&conn->egress.acks, &iter);
                     quicly_acks_next(&iter);
-                    if (quicly_acks_get(&iter) == NULL)
-                        break;
                 }
-                if (!found_active)
-                    DEBUG_LOG(conn, 0, "dupack? (pn=%" PRIu64 ")", packet_number);
-                if (quicly_acks_get(&iter) == NULL)
-                    goto Exit;
-            } while (++packet_number, --block_length != 0);
+                if (quicly_loss_on_packet_acked(&conn->egress.loss, packet_number)) {
+                    /* FIXME notify CC that RTO has been verified */
+                }
+                ++packet_number;
+            } while (--block_length != 0);
         }
         if (gap_index-- == 0)
             break;
         packet_number += frame->gaps[gap_index];
     }
 
-Exit:
+    quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged,
+                                last_packet_sent_at <= now && packet_number >= frame->largest_acknowledged
+                                    ? (uint32_t)(now - last_packet_sent_at)
+                                    : UINT32_MAX);
+    quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
+    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.acks.head != NULL);
+
     return 0;
 }
 
@@ -1712,6 +1751,7 @@ static int handle_max_data_frame(quicly_conn_t *conn, quicly_max_data_frame_t *f
 
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
+    int64_t now = conn->super.ctx->now(conn->super.ctx);
     ptls_aead_context_t *aead = NULL;
     uint64_t packet_number;
     int ret;
@@ -1807,7 +1847,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             quicly_ack_frame_t frame;
             if ((ret = quicly_decode_ack_frame(type_flags, &src, end, &frame)) != 0)
                 goto Exit;
-            if ((ret = handle_ack_frame(conn, &frame)) != 0)
+            if ((ret = handle_ack_frame(conn, &frame, now)) != 0)
                 goto Exit;
         } else {
             switch (type_flags) {

@@ -91,7 +91,7 @@ static ptls_context_t tls_ctx = {
 int64_t quic_now;
 quicly_context_t quic_ctx = {&tls_ctx,
                              1280,
-                             1000,
+                             {0, 128, 0, 1000, 100},
                              {8192, 64, 10, 60, 0},
                              quicly_default_alloc_packet,
                              quicly_default_free_packet,
