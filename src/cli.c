@@ -197,7 +197,7 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
             while ((rret = recvmsg(fd, &mess, 0)) <= 0)
                 ;
             if (ctx.debug_log != NULL)
-                ctx.debug_log(&ctx, "recvmsg: %zu bytes\n", vec.iov_len);
+                ctx.debug_log(&ctx, "recvmsg: %zd bytes\n", rret);
             quicly_decoded_packet_t packet;
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
                 if (conn == NULL) {
