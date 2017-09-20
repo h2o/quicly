@@ -1636,7 +1636,7 @@ static int handle_ack_frame(quicly_conn_t *conn, quicly_ack_frame_t *frame)
                         break;
                 }
                 if (!found_active)
-                    DEBUG_LOG(conn, 0, "dupack");
+                    DEBUG_LOG(conn, 0, "dupack? (pn=%" PRIu64 ")", packet_number);
                 if (quicly_acks_get(&iter) == NULL)
                     goto Exit;
             } while (++packet_number, --block_length != 0);
