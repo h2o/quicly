@@ -245,7 +245,7 @@ inline void quicly_determine_stream_frame_field_lengths(uint32_t stream_id, uint
 inline uint8_t *quicly_encode_stream_frame_header(uint8_t *dst, int is_fin, uint32_t stream_id, size_t stream_id_length,
                                                   uint64_t offset, size_t offset_length, size_t data_length)
 {
-    *dst++ = QUICLY_FRAME_TYPE_STREAM | is_fin << 5 | (stream_id_length - 1) << 3 | offset_length | data_length <= UINT16_MAX;
+    *dst++ = QUICLY_FRAME_TYPE_STREAM | is_fin << 5 | (stream_id_length - 1) << 3 | offset_length | (data_length <= UINT16_MAX);
     dst = quicly_encodev(dst, stream_id_length, stream_id);
     if (offset_length != 0)
         dst = quicly_encodev(dst, offset_length, offset);

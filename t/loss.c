@@ -106,7 +106,7 @@ static void test_even(void)
     ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
 }
 
-static uint rand_ratio;
+static unsigned rand_ratio;
 
 static int cond_rand(quicly_decoded_packet_t *packet)
 {
