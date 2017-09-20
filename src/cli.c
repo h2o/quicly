@@ -157,8 +157,8 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
         fd_set readfds;
         struct timeval *tv, tvbuf;
         do {
-            uint64_t timeout_at = quicly_get_first_timeout(conn);
-            if (timeout_at != UINT64_MAX) {
+            int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
+            if (timeout_at != INT64_MAX) {
                 tvbuf.tv_sec = timeout_at / 1000;
                 tvbuf.tv_usec = timeout_at % 1000;
                 tv = &tvbuf;
