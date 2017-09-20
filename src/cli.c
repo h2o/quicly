@@ -166,8 +166,14 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
         do {
             int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
             if (timeout_at != INT64_MAX) {
-                tvbuf.tv_sec = timeout_at / 1000;
-                tvbuf.tv_usec = timeout_at % 1000;
+                int64_t delta = timeout_at - quicly_get_context(conn)->now(quicly_get_context(conn));
+                if (delta > 0) {
+                    tvbuf.tv_sec = delta / 1000;
+                    tvbuf.tv_usec = (delta % 1000) * 1000;
+                } else {
+                    tvbuf.tv_sec = 0;
+                    tvbuf.tv_usec = 0;
+                }
                 tv = &tvbuf;
             } else {
                 tv = NULL;
