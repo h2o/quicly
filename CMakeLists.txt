@@ -20,6 +20,7 @@ SET(QUICLY_LIBRARY_FILES
     lib/ack.c
     lib/buffer.c
     lib/frame.c
+    lib/loss.c
     lib/maxsender.c
     lib/quicly.c
     lib/ranges.c

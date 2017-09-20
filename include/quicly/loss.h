@@ -49,6 +49,19 @@ typedef struct quicly_loss_conf_t {
     uint32_t default_initial_rtt;
 } quicly_loss_conf_t;
 
+#define QUICLY_LOSS_DEFAULT_MAX_TLPS 2
+#define QUICLY_LOSS_DEFAULT_TIME_REORDERING_PERCENTILE (1024 / 8)
+#define QUICLY_LOSS_DEFAULT_MIN_TLP_TIMEOUT 10
+#define QUICLY_LOSS_DEFAULT_MIN_RTO_TIMEOUT 200
+#define QUICLY_LOSS_DEFAULT_INITIAL_RTT 100
+
+#define QUICLY_LOSS_DEFAULT_CONF                                                                                                   \
+    ((quicly_loss_conf_t){.max_tlps = QUICLY_LOSS_DEFAULT_MAX_TLPS,                                                                \
+                          .time_reordering_percentile = QUICLY_LOSS_DEFAULT_TIME_REORDERING_PERCENTILE,                            \
+                          .min_tlp_timeout = QUICLY_LOSS_DEFAULT_MIN_TLP_TIMEOUT,                                                  \
+                          .min_rto_timeout = QUICLY_LOSS_DEFAULT_MIN_RTO_TIMEOUT,                                                   \
+                          .default_initial_rtt = QUICLY_LOSS_DEFAULT_INITIAL_RTT})
+
 extern quicly_loss_conf_t quicly_loss_default_conf;
 
 typedef struct quicly_rtt_t {

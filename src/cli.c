@@ -38,7 +38,7 @@ static int on_stream_open(quicly_stream_t *stream);
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx = {&tlsctx,
                                1280,
-                               1000,
+                               QUICLY_LOSS_DEFAULT_CONF,
                                {16384, 65536, 200, 600},
                                quicly_default_alloc_packet,
                                quicly_default_free_packet,
@@ -256,7 +256,7 @@ int main(int argc, char **argv)
             setup_log_secret(&tlsctx, optarg);
             break;
         case 'r':
-            if (sscanf(optarg, "%" PRIu32, &ctx.initial_rto) != 1) {
+            if (sscanf(optarg, "%" PRIu32, &ctx.loss.default_initial_rtt) != 1) {
                 fprintf(stderr, "invalid argument passed to `-r`\n");
                 exit(1);
             }
