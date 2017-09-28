@@ -33,6 +33,24 @@
 #include "quicly.h"
 #include "../deps/picotls/t/util.h"
 
+static unsigned verbosity = 0;
+
+static void hexdump(const char *title, const uint8_t *p, size_t l)
+{
+    fprintf(stderr, "%s (%zu bytes):\n", title, l);
+
+    while (l != 0) {
+        int i;
+        fputs("   ", stderr);
+        for (i = 0; i < 16; ++i) {
+            fprintf(stderr, " %02x", *p++);
+            if (--l == 0)
+                break;
+        }
+        fputc('\n', stderr);
+    }
+}
+
 static int on_stream_open(quicly_stream_t *stream);
 
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
@@ -115,8 +133,8 @@ static int send_pending(int fd, quicly_conn_t *conn)
             vec.iov_len = packets[i]->data.len;
             mess.msg_iov = &vec;
             mess.msg_iovlen = 1;
-            if (ctx.debug_log != NULL)
-                ctx.debug_log(&ctx, "sendmsg: %zu bytes\n", vec.iov_len);
+            if (verbosity >= 2)
+                hexdump("sendmsg", vec.iov_base, vec.iov_len);
             while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
                 ;
             if (ret == -1)
@@ -196,8 +214,8 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
             ssize_t rret;
             while ((rret = recvmsg(fd, &mess, 0)) <= 0)
                 ;
-            if (ctx.debug_log != NULL)
-                ctx.debug_log(&ctx, "recvmsg: %zd bytes\n", rret);
+            if (verbosity >= 2)
+                hexdump("recvmsg", buf, rret);
             quicly_decoded_packet_t packet;
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
                 if (conn == NULL) {
@@ -265,7 +283,7 @@ int main(int argc, char **argv)
             setup_verify_certificate(&tlsctx);
             break;
         case 'v':
-            ctx.debug_log = quicly_default_debug_log;
+            ++verbosity;
             break;
         default:
             usage(argv[0]);
@@ -274,6 +292,9 @@ int main(int argc, char **argv)
     }
     argc -= optind;
     argv += optind;
+
+    if (verbosity != 0)
+        ctx.debug_log = quicly_default_debug_log;
 
     if (tlsctx.certificates.count != 0 || tlsctx.sign_certificate != NULL) {
         /* server */
