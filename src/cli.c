@@ -146,7 +146,7 @@ static int send_pending(int fd, quicly_conn_t *conn)
     return ret;
 }
 
-static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
+static int run_peer(struct sockaddr *sa, socklen_t salen, const char *target)
 {
     int fd, ret;
     quicly_conn_t *conn = NULL;
@@ -155,7 +155,7 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
         perror("socket(2) failed");
         return 1;
     }
-    if (is_server) {
+    if (target == NULL) {
         int on = 1;
         if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
             perror("setsockopt(SO_REUSEADDR) failed");
@@ -173,7 +173,7 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, int is_server)
             perror("bind(2) failed");
             return 1;
         }
-        ret = quicly_connect(&conn, &ctx, "example.com", sa, salen, NULL);
+        ret = quicly_connect(&conn, &ctx, target, sa, salen, NULL);
         assert(ret == 0);
         send_pending(fd, conn);
     }
@@ -315,5 +315,5 @@ int main(int argc, char **argv)
     if (resolve_address((void *)&sa, &salen, host, port, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
-    return run_peer((void *)&sa, salen, tlsctx.certificates.count != 0);
+    return run_peer((void *)&sa, salen, tlsctx.certificates.count != 0 ? NULL : host);
 }
