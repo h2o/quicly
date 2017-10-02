@@ -58,6 +58,7 @@ static quicly_context_t ctx = {&tlsctx,
                                1280,
                                1000,
                                {16384, 65536, 200, 600},
+                               {0},
                                quicly_default_alloc_packet,
                                quicly_default_free_packet,
                                quicly_default_alloc_stream,
@@ -112,16 +113,13 @@ int on_stream_open(quicly_stream_t *stream)
 
 static int send_pending(int fd, quicly_conn_t *conn)
 {
+    quicly_raw_packet_t *packets[16];
+    size_t num_packets, i;
     int ret;
 
-    while (1) {
-        quicly_raw_packet_t *packets[16];
-        size_t num_packets = sizeof(packets) / sizeof(packets[0]), i;
-
-        if ((ret = quicly_send(conn, packets, &num_packets)) != 0)
-            break;
-        if (num_packets == 0)
-            break;
+    do {
+        num_packets = sizeof(packets) / sizeof(packets[0]);
+        ret = quicly_send(conn, packets, &num_packets);
 
         for (i = 0; i != num_packets; ++i) {
             struct msghdr mess;
@@ -139,9 +137,10 @@ static int send_pending(int fd, quicly_conn_t *conn)
                 ;
             if (ret == -1)
                 perror("sendmsg failed");
+            ret = 0;
             quicly_default_free_packet(&ctx, packets[i]);
         }
-    }
+    } while (ret == 0 && num_packets != 0);
 
     return ret;
 }
@@ -233,8 +232,10 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, const char *target)
                 }
             }
         }
-        if (conn != NULL)
-            send_pending(fd, conn);
+        if (conn != NULL && send_pending(fd, conn) != 0) {
+            quicly_free(conn);
+            conn = NULL;
+        }
     }
 }
 
@@ -248,6 +249,7 @@ static void usage(const char *cmd)
            "                       server. If omitted, the command runs as a client.\n"
            "  -l log-file          file to log traffic secrets\n"
            "  -r [initial-rto]     initial RTO (in milliseconds)\n"
+           "  -s [secret]          use stateless reset\n"
            "  -V                   verify peer using the default certificates\n"
            "  -v                   verbose mode\n"
            "  -h                   print this help\n"
@@ -262,7 +264,7 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
-    while ((ch = getopt(argc, argv, "c:k:l:r:Vvh")) != -1) {
+    while ((ch = getopt(argc, argv, "c:k:l:r:s:Vvh")) != -1) {
         switch (ch) {
         case 'c':
             load_certificate_chain(&tlsctx, optarg);
@@ -278,6 +280,10 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid argument passed to `-r`\n");
                 exit(1);
             }
+            break;
+        case 's':
+            ctx.stateless_retry.enforce_use = 1;
+            ctx.stateless_retry.key = optarg;
             break;
         case 'V':
             setup_verify_certificate(&tlsctx);

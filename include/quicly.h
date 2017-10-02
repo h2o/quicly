@@ -92,6 +92,13 @@ struct st_quicly_context_t {
      */
     quicly_transport_parameters_t transport_params;
     /**
+     * stateless reset
+     */
+    struct {
+        unsigned enforce_use : 1;
+        const void *key;
+    } stateless_retry;
+    /**
      * callback for allocating memory for raw packet
      */
     quicly_alloc_packet_cb alloc_packet;
@@ -121,7 +128,12 @@ struct st_quicly_context_t {
     quicly_debug_log_cb debug_log;
 };
 
-typedef enum { QUICLY_STATE_BEFORE_SH = 0, QUICLY_STATE_BEFORE_SF, QUICLY_STATE_1RTT_ENCRYPTED } quicly_state_t;
+typedef enum {
+    QUICLY_STATE_SEND_STATELESS_RETRY,
+    QUICLY_STATE_BEFORE_SH,
+    QUICLY_STATE_BEFORE_SF,
+    QUICLY_STATE_1RTT_ENCRYPTED
+} quicly_state_t;
 
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;

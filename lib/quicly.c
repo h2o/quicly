@@ -385,30 +385,52 @@ static void on_recvbuf_change(quicly_recvbuf_t *buf, size_t shift_amount)
     }
 }
 
-static void init_stream(quicly_stream_t *stream, quicly_conn_t *conn, uint32_t stream_id)
+static void init_stream_properties(quicly_stream_t *stream)
 {
-    stream->conn = conn;
-    stream->stream_id = stream_id;
     quicly_sendbuf_init(&stream->sendbuf, on_sendbuf_change);
     quicly_recvbuf_init(&stream->recvbuf, on_recvbuf_change);
 
-    stream->_send_aux.max_stream_data = conn->super.peer.transport_params.initial_max_stream_data;
+    stream->_send_aux.max_stream_data = stream->conn->super.peer.transport_params.initial_max_stream_data;
     stream->_send_aux.max_sent = 0;
     stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_NONE;
     stream->_send_aux.stop_sending.reason = 0;
     stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_NONE;
     stream->_send_aux.rst.reason = 0;
-    quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender, conn->super.ctx->transport_params.initial_max_stream_data);
+    quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender,
+                          stream->conn->super.ctx->transport_params.initial_max_stream_data);
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
     quicly_linklist_init(&stream->_send_aux.pending_link.stream);
 
-    stream->_recv_aux.window = conn->super.ctx->transport_params.initial_max_stream_data;
+    stream->_recv_aux.window = stream->conn->super.ctx->transport_params.initial_max_stream_data;
     stream->_recv_aux.rst_reason = QUICLY_ERROR_FIN_CLOSED;
+}
+
+static void dispose_stream_properties(quicly_stream_t *stream)
+{
+    quicly_sendbuf_dispose(&stream->sendbuf);
+    quicly_recvbuf_dispose(&stream->recvbuf);
+    quicly_maxsender_dispose(&stream->_send_aux.max_stream_data_sender);
+    quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
+    quicly_linklist_unlink(&stream->_send_aux.pending_link.stream);
+}
+
+static void init_stream(quicly_stream_t *stream, quicly_conn_t *conn, uint32_t stream_id)
+{
+    stream->conn = conn;
+    stream->stream_id = stream_id;
 
     int r;
     khiter_t iter = kh_put(quicly_stream_t, conn->streams, stream_id, &r);
     assert(iter != kh_end(conn->streams));
     kh_val(conn->streams, iter) = stream;
+
+    init_stream_properties(stream);
+}
+
+static void reinit_stream_properties(quicly_stream_t *stream)
+{
+    dispose_stream_properties(stream);
+    init_stream_properties(stream);
 }
 
 static quicly_stream_t *open_stream(quicly_conn_t *conn, uint32_t stream_id)
@@ -428,12 +450,8 @@ static void destroy_stream(quicly_stream_t *stream)
     assert(iter != kh_end(conn->streams));
     kh_del(quicly_stream_t, conn->streams, iter);
 
-    quicly_sendbuf_dispose(&stream->sendbuf);
     conn->ingress.max_data.bytes_consumed += stream->recvbuf.data.len;
-    quicly_recvbuf_dispose(&stream->recvbuf);
-    quicly_maxsender_dispose(&stream->_send_aux.max_stream_data_sender);
-    quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
-    quicly_linklist_unlink(&stream->_send_aux.pending_link.stream);
+    dispose_stream_properties(stream);
 
     if (stream->stream_id != 0) {
         if (quicly_is_client(conn) == stream->stream_id % 2) {
@@ -560,12 +578,51 @@ static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
             conn->super.state = QUICLY_STATE_BEFORE_SF;
         ret = 0;
         break;
+    case PTLS_ERROR_STATELESS_RETRY:
+        assert(!quicly_is_client(conn));
+        assert(conn->super.state == QUICLY_STATE_BEFORE_SH);
+        conn->super.state = QUICLY_STATE_SEND_STATELESS_RETRY;
+        ret = 0;
+        break;
     default:
         break;
     }
 
 Exit:
     return ret;
+}
+
+static int crypto_stream_receive_stateless_retry(quicly_stream_t *_stream)
+{
+    quicly_conn_t *conn = (void *)((char *)_stream - offsetof(quicly_conn_t, crypto.stream));
+    ptls_iovec_t input = quicly_recvbuf_get(&conn->crypto.stream.recvbuf);
+    size_t consumed = input.len;
+    ptls_buffer_t buf;
+    int ret;
+
+    ptls_buffer_init(&buf, "", 0);
+
+    /* should have received HRR */
+    ret = ptls_handshake(conn->crypto.tls, &buf, input.base, &consumed, &conn->crypto.handshake_properties);
+    quicly_recvbuf_shift(&conn->crypto.stream.recvbuf, consumed);
+    if (ret != PTLS_ERROR_IN_PROGRESS)
+        goto Error;
+    if (input.len != consumed)
+        goto Error;
+    if (buf.off == 0)
+        goto Error;
+
+    /* send the 2nd ClientHello */
+    conn->super.ctx->tls->random_bytes(&conn->super.connection_id, sizeof(conn->super.connection_id));
+    reinit_stream_properties(&conn->crypto.stream);
+    conn->crypto.stream.on_update = crypto_stream_receive_handshake;
+    write_tlsbuf(conn, &buf);
+
+    return 0;
+
+Error:
+    ptls_buffer_dispose(&buf);
+    return QUICLY_ERROR_TBD;
 }
 
 static int do_apply_stream_frame(quicly_stream_t *stream, uint64_t off, ptls_iovec_t data)
@@ -755,6 +812,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
 
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
+    conn->super.state = QUICLY_STATE_BEFORE_SH;
     if (server_name != NULL) {
         conn->super.host.next_stream_id = 1;
         conn->super.peer.next_stream_id = 2;
@@ -961,6 +1019,9 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     if ((conn = create_connection(ctx, NULL, sa, salen, handshake_properties)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
+    /* TODO should there be a way to set use of stateless reset per SNI or something? */
+    conn->crypto.handshake_properties.server.cookie.enforce_use = ctx->stateless_retry.enforce_use;
+    conn->crypto.handshake_properties.server.cookie.key = ctx->stateless_retry.key;
 
     if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number.bits,
                                     (uint64_t)packet->packet_number.bits + 1)) != 0)
@@ -1421,20 +1482,22 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         goto Exit;
 
     /* send cleartext frames */
-    if (quicly_is_client(conn)) {
-        if (quicly_get_state(conn) == QUICLY_STATE_BEFORE_SH) {
-            s.packet_type = QUICLY_PACKET_TYPE_CLIENT_INITIAL;
-        } else {
-            s.packet_type = QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT;
+    switch (quicly_get_state(conn)) {
+    case QUICLY_STATE_SEND_STATELESS_RETRY:
+        assert(!quicly_is_client(conn));
+        s.packet_type = QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY;
+        break;
+    case QUICLY_STATE_BEFORE_SH:
+        assert(quicly_is_client(conn));
+        s.packet_type = QUICLY_PACKET_TYPE_CLIENT_INITIAL;
+        break;
+    default:
+        s.packet_type = quicly_is_client(conn) ? QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT : QUICLY_PACKET_TYPE_SERVER_CLEARTEXT;
+        if (conn->egress.send_ack_at <= s.now && !conn->egress.acks_require_encryption) {
+            if ((ret = send_ack(conn, &s)) != 0)
+                goto Exit;
         }
-    } else {
-        s.packet_type = QUICLY_PACKET_TYPE_SERVER_CLEARTEXT;
-    }
-    s.aead = NULL;
-    if (conn->egress.send_ack_at <= s.now && !conn->egress.acks_require_encryption &&
-        s.packet_type != QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
-        if ((ret = send_ack(conn, &s)) != 0)
-            goto Exit;
+        break;
     }
     if (conn->crypto.pending_control || conn->crypto.pending_data) {
         if (conn->crypto.pending_control) {
@@ -1449,10 +1512,6 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         }
     }
     if (s.target != NULL) {
-        if (!conn->egress.acks_require_encryption && s.packet_type != QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
-            if ((ret = send_ack(conn, &s)) != 0)
-                goto Exit;
-        }
         if ((ret = commit_send_packet(conn, &s)) != 0)
             goto Exit;
     }
@@ -1537,8 +1596,11 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
 Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
-    if (ret == 0)
+    if (ret == 0) {
         *num_packets = s.num_packets;
+        if (s.packet_type == QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY)
+            ret = QUICLY_ERROR_CONNECTION_CLOSED;
+    }
     return ret;
 }
 
@@ -1731,6 +1793,13 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
     switch (packet->type) {
+    case QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY:
+        if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_BEFORE_SH)) {
+            ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
+            goto Exit;
+        }
+        conn->crypto.stream.on_update = crypto_stream_receive_stateless_retry;
+        break;
     case QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT:
         if (quicly_is_client(conn)) {
             ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
@@ -1804,6 +1873,11 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 goto Exit;
             is_ack_only = 0;
         } else if (type_flags >= QUICLY_FRAME_TYPE_ACK) {
+            /* TODO use separate decoding logic (like the one in quicly_accept) for stateless-retry */
+            if (packet->type == QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY) {
+                ret = QUICLY_ERROR_TBD;
+                goto Exit;
+            }
             quicly_ack_frame_t frame;
             if ((ret = quicly_decode_ack_frame(type_flags, &src, end, &frame)) != 0)
                 goto Exit;
