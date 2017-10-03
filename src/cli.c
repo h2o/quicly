@@ -381,6 +381,11 @@ int main(int argc, char **argv)
         case 's':
             ctx.stateless_retry.enforce_use = 1;
             ctx.stateless_retry.key = optarg;
+            if (strlen(ctx.stateless_retry.key) < tlsctx.cipher_suites[0]->hash->digest_size) {
+                fprintf(stderr, "secret key is too long (should be at least %zu bytes long)\n",
+                        tlsctx.cipher_suites[0]->hash->digest_size);
+                exit(1);
+            }
             break;
         case 'V':
             setup_verify_certificate(&tlsctx);
