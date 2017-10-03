@@ -65,6 +65,7 @@ static quicly_context_t ctx = {&tlsctx,
                                quicly_default_free_stream,
                                on_stream_open,
                                quicly_default_now};
+static const char *req_paths[1024];
 
 static void send_data(quicly_stream_t *stream, const char *s)
 {
@@ -99,8 +100,12 @@ static int on_resp_receive(quicly_stream_t *stream)
         quicly_recvbuf_shift(&stream->recvbuf, input.len);
     }
 
-    if (quicly_recvbuf_is_shutdown(&stream->recvbuf))
-        exit(0);
+    if (quicly_recvbuf_is_shutdown(&stream->recvbuf)) {
+        static size_t num_resp_received;
+        ++num_resp_received;
+        if (req_paths[num_resp_received] == NULL)
+            exit(0);
+    }
 
     return 0;
 }
@@ -207,11 +212,16 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
                 quicly_receive(conn, &packet);
                 if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED && quicly_get_next_stream_id(conn) == 1) {
-                    quicly_stream_t *stream;
-                    ret = quicly_open_stream(conn, &stream);
-                    assert(ret == 0);
-                    stream->on_update = on_resp_receive;
-                    send_data(stream, "GET /\r\n");
+                    size_t i;
+                    for (i = 0; req_paths[i] != NULL; ++i) {
+                        char req[1024];
+                        quicly_stream_t *stream;
+                        ret = quicly_open_stream(conn, &stream);
+                        assert(ret == 0);
+                        stream->on_update = on_resp_receive;
+                        sprintf(req, "GET %s\n", req_paths[i]);
+                        send_data(stream, req);
+                    }
                 }
             }
         }
@@ -345,6 +355,7 @@ static void usage(const char *cmd)
            "  -k key-file          specifies the credentials to be used for running the\n"
            "                       server. If omitted, the command runs as a client.\n"
            "  -l log-file          file to log traffic secrets\n"
+           "  -p path              path to request (can be set multiple times)\n"
            "  -r [initial-rto]     initial RTO (in milliseconds)\n"
            "  -s [secret]          use stateless reset\n"
            "  -V                   verify peer using the default certificates\n"
@@ -361,7 +372,7 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
-    while ((ch = getopt(argc, argv, "c:k:l:r:s:Vvh")) != -1) {
+    while ((ch = getopt(argc, argv, "c:k:l:p:r:s:Vvh")) != -1) {
         switch (ch) {
         case 'c':
             load_certificate_chain(&tlsctx, optarg);
@@ -372,6 +383,12 @@ int main(int argc, char **argv)
         case 'l':
             setup_log_secret(&tlsctx, optarg);
             break;
+        case 'p': {
+            size_t i;
+            for (i = 0; req_paths[i] != NULL; ++i)
+                ;
+            req_paths[i] = optarg;
+        } break;
         case 'r':
             if (sscanf(optarg, "%" PRIu32, &ctx.initial_rto) != 1) {
                 fprintf(stderr, "invalid argument passed to `-r`\n");
@@ -400,6 +417,9 @@ int main(int argc, char **argv)
     }
     argc -= optind;
     argv += optind;
+
+    if (req_paths[0] == NULL)
+        req_paths[0] = "/";
 
     if (verbosity != 0)
         ctx.debug_log = quicly_default_debug_log;
