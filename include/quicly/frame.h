@@ -30,6 +30,7 @@
 
 #define QUICLY_FRAME_TYPE_PADDING 0
 #define QUICLY_FRAME_TYPE_RST_STREAM 1
+#define QUICLY_FRAME_TYPE_CONNECTION_CLOSE 2
 #define QUICLY_FRAME_TYPE_MAX_DATA 4
 #define QUICLY_FRAME_TYPE_MAX_STREAM_DATA 5
 #define QUICLY_FRAME_TYPE_MAX_STREAM_ID 6
@@ -77,13 +78,20 @@ static int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, c
 
 static uint8_t *quicly_encode_rst_stream_frame(uint8_t *dst, uint32_t stream_id, uint32_t reason, uint64_t final_offset);
 
-typedef struct st_quicly_rst_stream_frame {
+typedef struct st_quicly_rst_stream_frame_t {
     uint32_t stream_id;
     uint32_t reason;
     uint64_t final_offset;
 } quicly_rst_stream_frame_t;
 
 static int quicly_decode_rst_stream_frame(const uint8_t **src, const uint8_t *end, quicly_rst_stream_frame_t *frame);
+
+typedef struct st_quicly_connection_close_frame_t {
+    uint32_t error_code;
+    ptls_iovec_t reason_phrase;
+} quicly_connection_close_frame_t;
+
+static int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_connection_close_frame_t *frame);
 
 static uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data_kb);
 
@@ -313,6 +321,19 @@ inline int quicly_decode_rst_stream_frame(const uint8_t **src, const uint8_t *en
     frame->stream_id = quicly_decode32(src);
     frame->reason = quicly_decode32(src);
     frame->final_offset = quicly_decode64(src);
+    return 0;
+}
+
+inline int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_connection_close_frame_t *frame)
+{
+    if (end - *src < 6)
+        return QUICLY_ERROR_INVALID_FRAME_DATA;
+    frame->error_code = quicly_decode32(src);
+    frame->reason_phrase.len = quicly_decode16(src);
+    if (end - *src < frame->reason_phrase.len)
+        return QUICLY_ERROR_INVALID_FRAME_DATA;
+    frame->reason_phrase.base = (void *)*src;
+    *src += frame->reason_phrase.len;
     return 0;
 }
 
