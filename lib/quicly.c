@@ -1946,8 +1946,9 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                     goto Exit;
             } break;
             default:
-                assert(!"FIXME");
-                break;
+                fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)type_flags);
+                ret = QUICLY_ERROR_TBD;
+                goto Exit;
             }
             is_ack_only = 0;
         }
