@@ -382,7 +382,7 @@ int main(int argc, char **argv)
             ctx.stateless_retry.enforce_use = 1;
             ctx.stateless_retry.key = optarg;
             if (strlen(ctx.stateless_retry.key) < tlsctx.cipher_suites[0]->hash->digest_size) {
-                fprintf(stderr, "secret key stateless retry is too short (should be at least %zu bytes long)\n",
+                fprintf(stderr, "secret for stateless retry is too short (should be at least %zu bytes long)\n",
                         tlsctx.cipher_suites[0]->hash->digest_size);
                 exit(1);
             }
