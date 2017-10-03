@@ -348,7 +348,7 @@ static void usage(const char *cmd)
            "  -r [initial-rto]     initial RTO (in milliseconds)\n"
            "  -s [secret]          use stateless reset\n"
            "  -V                   verify peer using the default certificates\n"
-           "  -v                   verbose mode\n"
+           "  -v                   verbose mode (-vv emits packet dumps as well)\n"
            "  -h                   print this help\n"
            "\n",
            cmd);
