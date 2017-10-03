@@ -51,7 +51,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID 2
 #define QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT 3
 #define QUICLY_TRANSPORT_PARAMETER_ID_TRUNCATE_CONNECTION_ID 4
-#define QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_EREST_TOKEN 6
+#define QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN 6
 
 #define GET_TYPE_FROM_PACKET_HEADER(p) (*(uint8_t *)(p)&0x1f)
 
@@ -737,7 +737,7 @@ static int encode_transport_parameter_list(quicly_transport_parameters_t *params
         PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT,
                                  { ptls_buffer_push16(buf, params->idle_timeout); });
         if (!is_client) {
-            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_EREST_TOKEN, {
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN, {
                 /* FIXME implement stateless reset */
                 static const uint8_t zeroes[16] = {0};
                 ptls_buffer_pushv(buf, zeroes, sizeof(zeroes));
