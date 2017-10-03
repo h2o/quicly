@@ -608,6 +608,7 @@ static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
         assert(!quicly_is_client(conn));
         assert(conn->super.state == QUICLY_STATE_BEFORE_SH);
         conn->super.state = QUICLY_STATE_SEND_STATELESS_RETRY;
+        conn->egress.packet_number = conn->ingress.next_expected_packet_number - 1;
         ret = 0;
         break;
     default:
