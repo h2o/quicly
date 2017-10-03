@@ -1834,6 +1834,10 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
             goto Exit;
         }
+        if (conn->egress.packet_number - 1 != packet->packet_number.bits) {
+            ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
+            goto Exit;
+        }
         conn->crypto.stream.on_update = crypto_stream_receive_stateless_retry;
         break;
     case QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT:
