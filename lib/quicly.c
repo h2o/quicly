@@ -640,7 +640,6 @@ static int crypto_stream_receive_stateless_retry(quicly_stream_t *_stream)
         goto Error;
 
     /* send the 2nd ClientHello */
-    conn->super.ctx->tls->random_bytes(&conn->super.connection_id, sizeof(conn->super.connection_id));
     reinit_stream_properties(&conn->crypto.stream);
     conn->crypto.stream.on_update = crypto_stream_receive_handshake;
     write_tlsbuf(conn, &buf);
