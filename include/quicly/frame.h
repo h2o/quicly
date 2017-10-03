@@ -22,6 +22,10 @@
 #ifndef quicly_frame_h
 #define quicly_frame_h
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 #include "picotls.h"
@@ -413,5 +417,9 @@ inline size_t quicly_ack_frame_get_minimum_capacity(quicly_ack_frame_encode_para
 {
     return params->min_capacity_excluding_num_blocks + (range_index != 0);
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
