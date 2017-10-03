@@ -724,7 +724,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
         ptls_buffer_push_block((buf), 2, block);                                                                                   \
     } while (0)
 
-static int encode_transport_parameter_list(quicly_transport_parameters_t *params, ptls_buffer_t *buf)
+static int encode_transport_parameter_list(quicly_transport_parameters_t *params, ptls_buffer_t *buf, int is_client)
 {
     int ret;
 
@@ -737,11 +737,13 @@ static int encode_transport_parameter_list(quicly_transport_parameters_t *params
                                  { ptls_buffer_push32(buf, params->initial_max_stream_id); });
         PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT,
                                  { ptls_buffer_push16(buf, params->idle_timeout); });
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_EREST_TOKEN, {
-            /* FIXME implement stateless reset */
-            static const uint8_t zeroes[16] = {0};
-            ptls_buffer_pushv(buf, zeroes, sizeof(zeroes));
-        });
+        if (!is_client) {
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_EREST_TOKEN, {
+                /* FIXME implement stateless reset */
+                static const uint8_t zeroes[16] = {0};
+                ptls_buffer_pushv(buf, zeroes, sizeof(zeroes));
+            });
+        }
         if (params->truncate_connection_id)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_TRUNCATE_CONNECTION_ID, {});
     });
@@ -936,7 +938,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
     ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
     ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
-    if ((ret = encode_transport_parameter_list(&ctx->transport_params, &conn->crypto.transport_parameters.buf)) != 0)
+    if ((ret = encode_transport_parameter_list(&ctx->transport_params, &conn->crypto.transport_parameters.buf, 1)) != 0)
         goto Exit;
     conn->crypto.transport_parameters.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
@@ -993,7 +995,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
     ptls_buffer_push_block(&conn->crypto.transport_parameters.buf, 1,
                            { ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION); });
-    if ((ret = encode_transport_parameter_list(&conn->super.ctx->transport_params, &conn->crypto.transport_parameters.buf)) != 0)
+    if ((ret = encode_transport_parameter_list(&conn->super.ctx->transport_params, &conn->crypto.transport_parameters.buf, 0)) != 0)
         goto Exit;
     properties->additional_extensions = conn->crypto.transport_parameters.ext;
     conn->crypto.transport_parameters.ext[0] =
