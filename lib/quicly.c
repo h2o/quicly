@@ -793,8 +793,8 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
     return type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS;
 }
 
-static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                                        ptls_handshake_properties_t *handshake_properties)
+static quicly_conn_t *create_connection(quicly_context_t *ctx, uint64_t connection_id, const char *server_name, struct sockaddr *sa,
+                                        socklen_t salen, ptls_handshake_properties_t *handshake_properties)
 {
     ptls_t *tls = NULL;
     quicly_conn_t *conn;
@@ -812,11 +812,11 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
 
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
+    conn->super.connection_id = connection_id;
     conn->super.state = QUICLY_STATE_BEFORE_SH;
     if (server_name != NULL) {
         conn->super.host.next_stream_id = 1;
         conn->super.peer.next_stream_id = 2;
-        ctx->tls->random_bytes(&conn->super.connection_id, sizeof(conn->super.connection_id));
     } else {
         conn->super.host.next_stream_id = 2;
         conn->super.peer.next_stream_id = 1;
@@ -890,10 +890,12 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
                    ptls_handshake_properties_t *handshake_properties)
 {
     quicly_conn_t *conn;
+    uint64_t connection_id;
     ptls_buffer_t buf;
     int ret;
 
-    if ((conn = create_connection(ctx, server_name, sa, salen, handshake_properties)) == NULL) {
+    ctx->tls->random_bytes(&connection_id, sizeof(connection_id));
+    if ((conn = create_connection(ctx, connection_id, server_name, sa, salen, handshake_properties)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -1016,7 +1018,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         }
     }
 
-    if ((conn = create_connection(ctx, NULL, sa, salen, handshake_properties)) == NULL)
+    if ((conn = create_connection(ctx, packet->connection_id, NULL, sa, salen, handshake_properties)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
     /* TODO should there be a way to set use of stateless reset per SNI or something? */

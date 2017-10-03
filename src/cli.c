@@ -145,37 +145,25 @@ static int send_pending(int fd, quicly_conn_t *conn)
     return ret;
 }
 
-static int run_peer(struct sockaddr *sa, socklen_t salen, const char *target)
+static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
 {
     int fd, ret;
+    struct sockaddr_in local;
     quicly_conn_t *conn = NULL;
 
     if ((fd = socket(sa->sa_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         perror("socket(2) failed");
         return 1;
     }
-    if (target == NULL) {
-        int on = 1;
-        if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
-            perror("setsockopt(SO_REUSEADDR) failed");
-            return 1;
-        }
-        if (bind(fd, sa, salen) != 0) {
-            perror("bind(2) failed");
-            return 1;
-        }
-    } else {
-        struct sockaddr_in local;
-        memset(&local, 0, sizeof(local));
-        local.sin_family = AF_INET;
-        if (bind(fd, (void *)&local, sizeof(local)) != 0) {
-            perror("bind(2) failed");
-            return 1;
-        }
-        ret = quicly_connect(&conn, &ctx, target, sa, salen, NULL);
-        assert(ret == 0);
-        send_pending(fd, conn);
+    memset(&local, 0, sizeof(local));
+    local.sin_family = AF_INET;
+    if (bind(fd, (void *)&local, sizeof(local)) != 0) {
+        perror("bind(2) failed");
+        return 1;
     }
+    ret = quicly_connect(&conn, &ctx, host, sa, salen, NULL);
+    assert(ret == 0);
+    send_pending(fd, conn);
 
     while (1) {
         fd_set readfds;
@@ -217,24 +205,133 @@ static int run_peer(struct sockaddr *sa, socklen_t salen, const char *target)
                 hexdump("recvmsg", buf, rret);
             quicly_decoded_packet_t packet;
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
-                if (conn == NULL) {
-                    if (quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, NULL, &packet) != 0)
-                        assert(conn == NULL);
-                } else {
-                    quicly_receive(conn, &packet);
-                    if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED && quicly_get_next_stream_id(conn) == 1) {
-                        quicly_stream_t *stream;
-                        ret = quicly_open_stream(conn, &stream);
-                        assert(ret == 0);
-                        stream->on_update = on_resp_receive;
-                        send_data(stream, "GET / HTTP/1.0\r\n\r\n");
-                    }
+                quicly_receive(conn, &packet);
+                if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED && quicly_get_next_stream_id(conn) == 1) {
+                    quicly_stream_t *stream;
+                    ret = quicly_open_stream(conn, &stream);
+                    assert(ret == 0);
+                    stream->on_update = on_resp_receive;
+                    send_data(stream, "GET / HTTP/1.0\r\n\r\n");
                 }
             }
         }
         if (conn != NULL && send_pending(fd, conn) != 0) {
             quicly_free(conn);
             conn = NULL;
+        }
+    }
+}
+
+static int run_server(struct sockaddr *sa, socklen_t salen)
+{
+    static quicly_conn_t **conns;
+    size_t num_conns = 0;
+    int fd, ret;
+
+    if ((fd = socket(sa->sa_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
+        perror("socket(2) failed");
+        return 1;
+    }
+    int on = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
+        perror("setsockopt(SO_REUSEADDR) failed");
+        return 1;
+    }
+    if (bind(fd, sa, salen) != 0) {
+        perror("bind(2) failed");
+        return 1;
+    }
+
+    while (1) {
+        fd_set readfds;
+        struct timeval *tv, tvbuf;
+        do {
+            int64_t timeout_at = INT64_MAX;
+            size_t i;
+            for (i = 0; i != num_conns; ++i) {
+                int64_t conn_to = quicly_get_first_timeout(conns[i]);
+                if (conn_to < timeout_at)
+                    timeout_at = conn_to;
+            }
+            if (timeout_at != INT64_MAX) {
+                int64_t delta = timeout_at - ctx.now(&ctx);
+                if (delta > 0) {
+                    tvbuf.tv_sec = delta / 1000;
+                    tvbuf.tv_usec = (delta % 1000) * 1000;
+                } else {
+                    tvbuf.tv_sec = 0;
+                    tvbuf.tv_usec = 0;
+                }
+                tv = &tvbuf;
+            } else {
+                tv = NULL;
+            }
+            FD_ZERO(&readfds);
+            FD_SET(fd, &readfds);
+        } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
+        if (FD_ISSET(fd, &readfds)) {
+            uint8_t buf[4096];
+            struct msghdr mess;
+            struct sockaddr sa;
+            struct iovec vec;
+            memset(&mess, 0, sizeof(mess));
+            mess.msg_name = &sa;
+            mess.msg_namelen = sizeof(sa);
+            vec.iov_base = buf;
+            vec.iov_len = sizeof(buf);
+            mess.msg_iov = &vec;
+            mess.msg_iovlen = 1;
+            ssize_t rret;
+            while ((rret = recvmsg(fd, &mess, 0)) <= 0)
+                ;
+            if (verbosity >= 2)
+                hexdump("recvmsg", buf, rret);
+            quicly_decoded_packet_t packet;
+            if (quicly_decode_packet(&packet, buf, rret) == 0) {
+                if (packet.has_connection_id) {
+                    quicly_conn_t *conn = NULL;
+                    size_t i;
+                    for (i = 0; i != num_conns; ++i) {
+                        if (quicly_get_connection_id(conns[i]) == packet.connection_id) {
+                            conn = conns[i];
+                            break;
+                        }
+                    }
+                    if (conn != NULL) {
+                        /* existing connection */
+                        quicly_receive(conn, &packet);
+                        if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED && quicly_get_next_stream_id(conn) == 1) {
+                            quicly_stream_t *stream;
+                            ret = quicly_open_stream(conn, &stream);
+                            assert(ret == 0);
+                            stream->on_update = on_resp_receive;
+                            send_data(stream, "GET / HTTP/1.0\r\n\r\n");
+                        }
+                    } else {
+                        /* new connection */
+                        if (quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, NULL, &packet) == 0) {
+                            assert(conn != NULL);
+                            conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
+                            assert(conns != NULL);
+                            conns[num_conns++] = conn;
+                        } else {
+                            assert(conn == NULL);
+                        }
+                    }
+                    if (conn != NULL && send_pending(fd, conn) != 0) {
+                        for (i = 0; i != num_conns; ++i) {
+                            if (conns[i] == conn) {
+                                memcpy(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(*conns));
+                                --num_conns;
+                                break;
+                            }
+                        }
+                        quicly_free(conn);
+                    }
+                } else {
+                    fprintf(stderr, "ignoring packet without connection-id\n");
+                }
+            }
         }
     }
 }
@@ -321,5 +418,5 @@ int main(int argc, char **argv)
     if (resolve_address((void *)&sa, &salen, host, port, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
-    return run_peer((void *)&sa, salen, tlsctx.certificates.count != 0 ? NULL : host);
+    return tlsctx.certificates.count != 0 ? run_server((void *)&sa, salen) : run_client((void *)&sa, salen, host);
 }
