@@ -1028,6 +1028,8 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number.bits,
                                     (uint64_t)packet->packet_number.bits + 1)) != 0)
         goto Exit;
+    assert(conn->egress.send_ack_at == INT64_MAX);
+    conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
     conn->ingress.next_expected_packet_number = (uint64_t)packet->packet_number.bits + 1;
 
     if ((ret = apply_stream_frame(&conn->crypto.stream, &frame)) != 0)
