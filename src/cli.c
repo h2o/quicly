@@ -77,7 +77,7 @@ static int on_req_receive(quicly_stream_t *stream)
     ptls_iovec_t input;
 
     if (stream->recvbuf.data_off == 0) {
-        const char *s = "HTTP/1.0 200 OK\r\n\r\n";
+        const char *s = "Hello world!\nThe request was: ";
         quicly_sendbuf_write(&stream->sendbuf, s, strlen(s), NULL);
     }
     while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
@@ -211,7 +211,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
                     ret = quicly_open_stream(conn, &stream);
                     assert(ret == 0);
                     stream->on_update = on_resp_receive;
-                    send_data(stream, "GET / HTTP/1.0\r\n\r\n");
+                    send_data(stream, "GET /\r\n");
                 }
             }
         }
