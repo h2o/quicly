@@ -22,6 +22,10 @@
 #ifndef quicly_h
 #define quicly_h
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -366,43 +370,43 @@ void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...) __att
 
 inline quicly_state_t quicly_get_state(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->state;
 }
 
 inline uint32_t quicly_num_streams(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return 1 + c->host.num_streams + c->peer.num_streams;
 }
 
 inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->ctx;
 }
 
 inline uint64_t quicly_get_connection_id(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->connection_id;
 }
 
 inline int quicly_is_client(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->host.next_stream_id % 2 != 0;
 }
 
 inline uint32_t quicly_get_next_stream_id(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->host.next_stream_id;
 }
 
 inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     *sa = c->peer.sa;
     *salen = c->peer.salen;
 }
@@ -415,5 +419,9 @@ inline int quicly_stream_is_closable(quicly_stream_t *stream)
         return 0;
     return 1;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
