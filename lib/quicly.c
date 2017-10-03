@@ -548,6 +548,30 @@ static void write_tlsbuf(quicly_conn_t *conn, ptls_buffer_t *tlsbuf)
     }
 }
 
+static int crypto_stream_receive_post_handshake(quicly_stream_t *_stream)
+{
+    quicly_conn_t *conn = (void *)((char *)_stream - offsetof(quicly_conn_t, crypto.stream));
+    ptls_buffer_t buf;
+    ptls_iovec_t input;
+    int ret = 0;
+
+    ptls_buffer_init(&buf, "", 0);
+    while ((input = quicly_recvbuf_get(&conn->crypto.stream.recvbuf)).len != 0) {
+        if ((ret = ptls_receive(conn->crypto.tls, &buf, input.base, &input.len)) != 0)
+            goto Exit;
+        quicly_recvbuf_shift(&conn->crypto.stream.recvbuf, input.len);
+        if (buf.off != 0) {
+            fprintf(stderr, "ptls_receive returned application data\n");
+            ret = QUICLY_ERROR_TBD;
+            goto Exit;
+        }
+    }
+
+Exit:
+    ptls_buffer_dispose(&buf);
+    return ret;
+}
+
 static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
 {
     quicly_conn_t *conn = (void *)((char *)_stream - offsetof(quicly_conn_t, crypto.stream));
@@ -565,6 +589,7 @@ static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
     switch (ret) {
     case 0:
         DEBUG_LOG(conn, 0, "handshake complete");
+        conn->crypto.stream.on_update = crypto_stream_receive_post_handshake;
         /* state is 1RTT_ENCRYPTED when handling ClientFinished */
         if (conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
             conn->egress.max_data.permitted = (__uint128_t)conn->super.peer.transport_params.initial_max_data_kb * 1024;
