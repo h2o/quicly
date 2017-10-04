@@ -78,7 +78,7 @@ static int on_req_receive(quicly_stream_t *stream)
     ptls_iovec_t input;
 
     if (stream->recvbuf.data_off == 0) {
-        const char *s = "Hello world!\nThe request was: ";
+        const char *s = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nHello world!\nThe request was: ";
         quicly_sendbuf_write(&stream->sendbuf, s, strlen(s), NULL);
     }
     while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
