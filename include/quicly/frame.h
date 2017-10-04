@@ -336,7 +336,7 @@ inline int quicly_decode_connection_close_frame(const uint8_t **src, const uint8
     frame->reason_phrase.len = quicly_decode16(src);
     if (end - *src < frame->reason_phrase.len)
         return QUICLY_ERROR_INVALID_FRAME_DATA;
-    frame->reason_phrase.base = (void *)*src;
+    frame->reason_phrase.base = (uint8_t *)*src;
     *src += frame->reason_phrase.len;
     return 0;
 }
