@@ -53,6 +53,7 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
 
 static int on_stream_open(quicly_stream_t *stream);
 
+static ptls_handshake_properties_t hs_properties;
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx = {&tlsctx,
                                1280,
@@ -150,6 +151,33 @@ static int send_pending(int fd, quicly_conn_t *conn)
     return ret;
 }
 
+static void set_alpn(ptls_handshake_properties_t *pro, const char *alpn_str)
+{
+    const char *start, *cur;
+    ptls_iovec_t *list = NULL;
+    size_t entries = 0;
+    start = cur = alpn_str;
+#define ADD_ONE() \
+        if ((cur - start) > 0) { \
+            list = realloc(list, sizeof(*list)*(entries + 1)); \
+            list[entries].base = (void *)strndup(start, cur - start); \
+            list[entries++].len = cur - start; \
+        }
+
+    while (*cur) {
+        if (*cur == ',') {
+            ADD_ONE();
+            start = cur + 1;
+        }
+        cur++;
+    }
+    if (start != cur)
+            ADD_ONE();
+
+    pro->client.negotiated_protocols.list = list;
+    pro->client.negotiated_protocols.count = entries;
+}
+
 static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
 {
     int fd, ret;
@@ -166,7 +194,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
         perror("bind(2) failed");
         return 1;
     }
-    ret = quicly_connect(&conn, &ctx, host, sa, salen, NULL);
+    ret = quicly_connect(&conn, &ctx, host, sa, salen, &hs_properties);
     assert(ret == 0);
     send_pending(fd, conn);
 
@@ -351,6 +379,7 @@ static void usage(const char *cmd)
     printf("Usage: %s [options] host port\n"
            "\n"
            "Options:\n"
+           "  -a <alpn list>       a coma separated list of ALPN identifiers\n"
            "  -c certificate-file\n"
            "  -k key-file          specifies the credentials to be used for running the\n"
            "                       server. If omitted, the command runs as a client.\n"
@@ -372,8 +401,11 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
-    while ((ch = getopt(argc, argv, "c:k:l:p:r:s:Vvh")) != -1) {
+    while ((ch = getopt(argc, argv, "a:c:k:l:p:r:s:Vvh")) != -1) {
         switch (ch) {
+        case 'a':
+            set_alpn(&hs_properties, optarg);
+            break;
         case 'c':
             load_certificate_chain(&tlsctx, optarg);
             break;
