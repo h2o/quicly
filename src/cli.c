@@ -472,7 +472,7 @@ int main(int argc, char **argv)
     host = (--argc, *argv++);
     port = (--argc, *argv++);
 
-    if (resolve_address((void *)&sa, &salen, host, port, SOCK_DGRAM, IPPROTO_UDP) != 0)
+    if (resolve_address((void *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
     return tlsctx.certificates.count != 0 ? run_server((void *)&sa, salen) : run_client((void *)&sa, salen, host);

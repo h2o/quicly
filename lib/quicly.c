@@ -32,7 +32,7 @@
 #include "quicly/ack.h"
 #include "quicly/frame.h"
 
-#define QUICLY_PROTOCOL_VERSION 0xff000005
+#define QUICLY_PROTOCOL_VERSION 0xff000007
 
 #define QUICLY_PACKET_TYPE_VERSION_NEGOTIATION 1
 #define QUICLY_PACKET_TYPE_CLIENT_INITIAL 2
@@ -71,6 +71,7 @@ KHASH_MAP_INIT_INT(quicly_stream_t, quicly_stream_t *)
 
 struct st_quicly_packet_protection_t {
     struct {
+        ptls_aead_context_t *handshake;
         ptls_aead_context_t *early_data;
         ptls_aead_context_t *key_phase0;
         ptls_aead_context_t *key_phase1;
@@ -178,38 +179,10 @@ struct st_quicly_conn_t {
 
 static const quicly_transport_parameters_t transport_params_before_handshake = {8192, 16, 100, 60, 0};
 
-#define FNV1A_OFFSET_BASIS ((uint64_t)14695981039346656037u)
-
-static uint64_t fnv1a(uint64_t hash, const uint8_t *p, const uint8_t *end)
-{
-    while (p != end) {
-        hash = hash ^ (uint64_t)*p++;
-        hash *= 1099511628211u;
-    }
-
-    return hash;
-}
-
-static int verify_cleartext_packet(quicly_decoded_packet_t *packet)
-{
-    uint64_t calced, received;
-    const uint8_t *p;
-
-    if (packet->payload.len < 8)
-        return 0;
-    packet->payload.len -= 8;
-
-    calced = fnv1a(FNV1A_OFFSET_BASIS, packet->header.base, packet->header.base + packet->header.len);
-    calced = fnv1a(calced, packet->payload.base, packet->payload.base + packet->payload.len);
-
-    p = packet->payload.base + packet->payload.len;
-    received = quicly_decode64(&p);
-
-    return calced == received;
-}
-
 static void free_packet_protection(struct st_quicly_packet_protection_t *pp)
 {
+    if (pp->aead.handshake != NULL)
+        ptls_aead_free(pp->aead.handshake);
     if (pp->aead.early_data != NULL)
         ptls_aead_free(pp->aead.early_data);
     if (pp->aead.key_phase0 != NULL)
@@ -504,6 +477,58 @@ void quicly_free(quicly_conn_t *conn)
     free(conn);
 }
 
+static int setup_handshake_secret(ptls_aead_context_t **aead, ptls_cipher_suite_t *cs, const void *master_secret, const char *label,
+                                  int is_enc)
+{
+    uint8_t aead_secret[PTLS_MAX_DIGEST_SIZE];
+    int ret;
+
+    if ((ret = ptls_hkdf_expand_label(cs->hash, aead_secret, cs->hash->digest_size,
+                                      ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0))) != 0)
+        goto Exit;
+    if ((*aead = ptls_aead_new(cs->aead, cs->hash, is_enc, aead_secret)) == NULL) {
+        ret = PTLS_ERROR_NO_MEMORY;
+        goto Exit;
+    }
+
+Exit:
+    ptls_clear_memory(aead_secret, sizeof(aead_secret));
+    return ret;
+}
+
+static int setup_handshake_encryption(ptls_aead_context_t **ingress, ptls_aead_context_t **egress, quicly_context_t *ctx,
+                                      uint64_t connection_id, int is_client)
+{
+    static const uint8_t salt[] = {0xaf, 0xc8, 0x24, 0xec, 0x5f, 0xc7, 0x7e, 0xca, 0x1e, 0x9d,
+                                   0x36, 0xf3, 0x7f, 0xb2, 0xd4, 0x65, 0x18, 0xc3, 0x66, 0x39};
+    static const char *labels[2] = {"QUIC client cleartext Secret", "QUIC server cleartext Secret"};
+    ptls_cipher_suite_t **cs;
+    uint8_t ikm[8], secret[PTLS_MAX_DIGEST_SIZE];
+    int ret;
+
+    /* find aes128gcm cipher */
+    for (cs = ctx->tls->cipher_suites;; ++cs) {
+        assert(cs != NULL);
+        if ((*cs)->id == PTLS_CIPHER_SUITE_AES_128_GCM_SHA256)
+            break;
+    }
+
+    /* extract master secret */
+    quicly_encode64(ikm, connection_id);
+    if ((ret = ptls_hkdf_extract((*cs)->hash, secret, ptls_iovec_init(salt, sizeof(salt)), ptls_iovec_init(ikm, sizeof(ikm)))) != 0)
+        goto Exit;
+
+    /* create aead contexts */
+    if ((ret = setup_handshake_secret(ingress, *cs, secret, labels[is_client], 0)) != 0)
+        goto Exit;
+    if ((ret = setup_handshake_secret(egress, *cs, secret, labels[!is_client], 1)) != 0)
+        goto Exit;
+
+Exit:
+    ptls_clear_memory(secret, sizeof(secret));
+    return ret;
+}
+
 static int setup_1rtt_secret(struct st_quicly_packet_protection_t *pp, ptls_t *tls, const char *label, int is_enc)
 {
     ptls_cipher_suite_t *cipher = ptls_get_cipher(tls);
@@ -755,11 +780,10 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
 {
 #define ID_TO_BIT(id) ((uint64_t)1 << (id))
 
-    uint64_t found_id_bits = 0,
-             must_found_id_bits = ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA) |
-                                  ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA) |
-                                  ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID) |
-                                  ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT);
+    uint64_t found_id_bits = 0, must_found_id_bits = ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA) |
+                                                     ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA) |
+                                                     ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID) |
+                                                     ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT);
     int ret;
 
     /* set optional parameters to their default values */
@@ -932,6 +956,9 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
+    if ((ret = setup_handshake_encryption(&conn->ingress.pp.aead.handshake, &conn->egress.pp.aead.handshake, ctx, connection_id,
+                                          1)) != 0)
+        goto Exit;
 
     /* handshake */
     ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
@@ -1013,6 +1040,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
                   ptls_handshake_properties_t *handshake_properties, quicly_decoded_packet_t *packet)
 {
     quicly_conn_t *conn = NULL;
+    ptls_aead_context_t *aead_ingress = NULL, *aead_egress = NULL;
     quicly_stream_frame_t frame;
     int ret;
 
@@ -1021,10 +1049,15 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
-    if (!verify_cleartext_packet(packet)) {
+    if ((ret = setup_handshake_encryption(&aead_ingress, &aead_egress, ctx, packet->connection_id, 0)) != 0)
+        goto Exit;
+    if ((packet->payload.len = ptls_aead_decrypt(aead_ingress, packet->payload.base, packet->payload.base, packet->payload.len,
+                                                 packet->packet_number.bits, packet->header.base, packet->header.len)) ==
+        SIZE_MAX) {
         ret = QUICLY_ERROR_DECRYPTION_FAILURE;
         goto Exit;
     }
+
     {
         const uint8_t *src = packet->payload.base, *end = src + packet->payload.len;
         uint8_t type_flags;
@@ -1053,6 +1086,10 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
 
     if ((conn = create_connection(ctx, packet->connection_id, NULL, sa, salen, handshake_properties)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
+    conn->ingress.pp.aead.handshake = aead_ingress;
+    aead_ingress = NULL;
+    conn->egress.pp.aead.handshake = aead_egress;
+    aead_egress = NULL;
     conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
     /* TODO should there be a way to set use of stateless reset per SNI or something? */
     conn->crypto.handshake_properties.server.cookie.enforce_use = ctx->stateless_retry.enforce_use;
@@ -1079,6 +1116,10 @@ Exit:
     if (!(ret == 0 || ret == PTLS_ERROR_IN_PROGRESS)) {
         if (conn != NULL)
             quicly_free(conn);
+        if (aead_ingress != NULL)
+            ptls_aead_free(aead_ingress);
+        if (aead_egress != NULL)
+            ptls_aead_free(aead_egress);
     }
     return ret;
 }
@@ -1236,22 +1277,21 @@ static inline void encrypt_packet(struct st_quicly_send_context_t *s)
 
 static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
 {
-    if (s->aead != NULL) {
-        if (s->dst != s->dst_unencrypted_from)
-            encrypt_packet(s);
-        s->dst += ptls_aead_encrypt_final(s->aead, s->dst);
-    } else {
-        if (s->packet_type == QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
-            if (s->num_packets != 0)
-                return QUICLY_ERROR_HANDSHAKE_TOO_LARGE;
-            const size_t max_size = 1272; /* max UDP packet size excluding fnv1a hash */
-            assert(s->dst - s->target->data.base <= max_size);
-            memset(s->dst, 0, s->target->data.base + max_size - s->dst);
-            s->dst = s->target->data.base + max_size;
-        }
-        uint64_t hash = fnv1a(FNV1A_OFFSET_BASIS, s->target->data.base, s->dst);
-        s->dst = quicly_encode64(s->dst, hash);
+    assert(s->aead != NULL);
+
+    if (s->packet_type == QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
+        if (s->num_packets != 0)
+            return QUICLY_ERROR_HANDSHAKE_TOO_LARGE;
+        const size_t max_size = 1264; /* max UDP packet size excluding aead tag */
+        assert(s->dst - s->target->data.base <= max_size);
+        memset(s->dst, 0, s->target->data.base + max_size - s->dst);
+        s->dst = s->target->data.base + max_size;
     }
+
+    if (s->dst != s->dst_unencrypted_from)
+        encrypt_packet(s);
+    s->dst += ptls_aead_encrypt_final(s->aead, s->dst);
+
     s->target->data.len = s->dst - s->target->data.base;
     s->packets[s->num_packets++] = s->target;
     ++conn->egress.packet_number;
@@ -1283,12 +1323,9 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
         s->dst_end = s->target->data.base + conn->super.ctx->max_packet_size;
         s->dst = emit_long_header(conn, s->dst, s->packet_type, conn->super.connection_id, (uint32_t)conn->egress.packet_number);
         s->dst_unencrypted_from = s->dst;
-        if (s->aead != NULL) {
-            s->dst_end -= s->aead->algo->tag_size;
-            ptls_aead_encrypt_init(s->aead, conn->egress.packet_number, s->target->data.base, s->dst - s->target->data.base);
-        } else {
-            s->dst_end -= 8; /* space for fnv1a-64 */
-        }
+        assert(s->aead != NULL);
+        s->dst_end -= s->aead->algo->tag_size;
+        ptls_aead_encrypt_init(s->aead, conn->egress.packet_number, s->target->data.base, s->dst - s->target->data.base);
         assert(s->dst < s->dst_end);
     }
 
@@ -1511,7 +1548,8 @@ static int handle_timeouts(quicly_conn_t *conn, int64_t now)
 
 int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_packets)
 {
-    struct st_quicly_send_context_t s = {UINT8_MAX, NULL, conn->super.ctx->now(conn->super.ctx), packets, *num_packets};
+    struct st_quicly_send_context_t s = {UINT8_MAX, conn->egress.pp.aead.handshake, conn->super.ctx->now(conn->super.ctx), packets,
+                                         *num_packets};
     int ret;
 
     /* handle timeouts */
@@ -1811,11 +1849,11 @@ static int handle_max_data_frame(quicly_conn_t *conn, quicly_max_data_frame_t *f
 
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
-    ptls_aead_context_t *aead = NULL;
+    ptls_aead_context_t *aead;
     uint64_t packet_number;
     int ret;
 
-    /* FIXME check peer address */
+    /* FIXME check peer address (and also invocation timing?) */
     conn->super.connection_id = packet->connection_id;
 
     /* ignore packets having wrong connection id */
@@ -1831,7 +1869,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 
     switch (packet->type) {
     case QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY:
-        if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_BEFORE_SH)) {
+        if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_BEFORE_SH) ||
+            (aead = conn->ingress.pp.aead.handshake) == NULL) {
             ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
             goto Exit;
         }
@@ -1842,13 +1881,13 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         conn->crypto.stream.on_update = crypto_stream_receive_stateless_retry;
         break;
     case QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT:
-        if (quicly_is_client(conn)) {
+        if (quicly_is_client(conn) || (aead = conn->ingress.pp.aead.handshake) == NULL) {
             ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
             goto Exit;
         }
         break;
     case QUICLY_PACKET_TYPE_SERVER_CLEARTEXT:
-        if (!quicly_is_client(conn)) {
+        if (!quicly_is_client(conn) || (aead = conn->ingress.pp.aead.handshake) == NULL) {
             ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
             goto Exit;
         }
@@ -1883,17 +1922,10 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
     packet_number = quicly_determine_packet_number(packet, conn->ingress.next_expected_packet_number);
-    if (aead != NULL) {
-        if ((packet->payload.len = ptls_aead_decrypt(aead, packet->payload.base, packet->payload.base, packet->payload.len,
-                                                     packet_number, packet->header.base, packet->header.len)) == SIZE_MAX) {
-            ret = QUICLY_ERROR_DECRYPTION_FAILURE;
-            goto Exit;
-        }
-    } else {
-        if (!verify_cleartext_packet(packet)) {
-            ret = QUICLY_ERROR_DECRYPTION_FAILURE;
-            goto Exit;
-        }
+    if ((packet->payload.len = ptls_aead_decrypt(aead, packet->payload.base, packet->payload.base, packet->payload.len,
+                                                 packet_number, packet->header.base, packet->header.len)) == SIZE_MAX) {
+        ret = QUICLY_ERROR_DECRYPTION_FAILURE;
+        goto Exit;
     }
     conn->ingress.next_expected_packet_number = packet_number + 1;
 
