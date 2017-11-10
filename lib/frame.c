@@ -42,7 +42,7 @@ void quicly_determine_encode_ack_frame_params(quicly_ranges_t *ranges, quicly_ac
     }
 
     params->block_length_mode = encoding_mode[quicly_clz64(max_ack_block_length) / 8];
-    params->min_capacity_excluding_num_blocks = 2 + (1 << params->largest_acknowledged_mode) + 2 + (1 << params->block_length_mode);
+    params->min_capacity_excluding_num_blocks = 1 + (1 << params->largest_acknowledged_mode) + 2 + (1 << params->block_length_mode);
 }
 
 uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t *ranges, size_t *range_index,
@@ -59,7 +59,6 @@ uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t
         num_gaps_at = dst++;
         *num_gaps_at = 0;
     }
-    *dst++ = 0; /* TODO num_ts */
     dst = quicly_encodev(dst, largest_acknowledged_length, ranges->ranges[*range_index].end - 1);
     dst = quicly_encode16(dst, 0); /* TODO ack_delay */
     dst = quicly_encodev(dst, block_length_length, ranges->ranges[*range_index].end - ranges->ranges[*range_index].start - 1);
@@ -84,7 +83,7 @@ uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t
 
 int quicly_decode_ack_frame(uint8_t type_flags, const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame)
 {
-    unsigned num_ts, largest_ack_size, ack_block_length_size, i;
+    unsigned largest_ack_size, ack_block_length_size, i;
 
     /* obtain num_gaps, num_ts, largest_ack_size, ack_block_size */
     if (end - *src < 4)
@@ -94,13 +93,11 @@ int quicly_decode_ack_frame(uint8_t type_flags, const uint8_t **src, const uint8
     } else {
         frame->num_gaps = 0;
     }
-    num_ts = *(*src)++;
     largest_ack_size = 1 << (type_flags >> 2 & 3);
     ack_block_length_size = 1 << (type_flags & 3);
 
     /* size check */
-    unsigned remaining =
-        largest_ack_size + 2 + (1 + ack_block_length_size) * (frame->num_gaps + 1) - 1 + (num_ts != 0 ? 2 + 3 * num_ts : 0);
+    unsigned remaining = largest_ack_size + 2 + (1 + ack_block_length_size) * (frame->num_gaps + 1) - 1;
     if (end - *src < remaining)
         return QUICLY_ERROR_INVALID_FRAME_DATA;
 
