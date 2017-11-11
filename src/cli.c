@@ -264,7 +264,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
 {
     static quicly_conn_t **conns;
     size_t num_conns = 0;
-    int fd, ret;
+    int fd;
 
     if ((fd = socket(sa->sa_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         perror("socket(2) failed");
@@ -338,13 +338,6 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     if (conn != NULL) {
                         /* existing connection */
                         quicly_receive(conn, &packet);
-                        if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED && quicly_get_next_stream_id(conn) == 1) {
-                            quicly_stream_t *stream;
-                            ret = quicly_open_stream(conn, &stream);
-                            assert(ret == 0);
-                            stream->on_update = on_resp_receive;
-                            send_data(stream, "GET / HTTP/1.0\r\n\r\n");
-                        }
                     } else {
                         /* new connection */
                         if (quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, NULL, &packet) == 0) {
