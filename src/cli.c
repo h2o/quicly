@@ -74,21 +74,104 @@ static void send_data(quicly_stream_t *stream, const char *s)
     quicly_sendbuf_shutdown(&stream->sendbuf);
 }
 
+static int parse_request(ptls_iovec_t input, ptls_iovec_t *path, int *is_http1)
+{
+    size_t off = 0, path_start;
+
+    for (off = 0; off != input.len; ++off)
+        if (input.base[off] == ' ')
+            goto EndOfMethod;
+    return 0;
+
+EndOfMethod:
+    ++off;
+    path_start = off;
+    for (; off != input.len; ++off)
+        if (input.base[off] == ' ' || input.base[off] == '\r' || input.base[off] == '\n')
+            goto EndOfPath;
+    return 0;
+
+EndOfPath:
+    *path = ptls_iovec_init(input.base + path_start, off - path_start);
+    *is_http1 = input.base[off] == ' ';
+    return 1;
+}
+
+static int path_is(ptls_iovec_t path, const char *expected)
+{
+    size_t expected_len = strlen(expected);
+    if (path.len != expected_len)
+        return 0;
+    return memcmp(path.base, expected, path.len) == 0;
+}
+
+static void send_header(quicly_sendbuf_t *sendbuf, int is_http1, int status, const char *mime_type)
+{
+    char buf[256];
+
+    if (!is_http1)
+        return;
+
+    sprintf(buf, "HTTP/1.1 %03d OK\r\nConnection: close\r\nContent-Type: %s\r\n\r\n", status, mime_type);
+    quicly_sendbuf_write(sendbuf, buf, strlen(buf), NULL);
+}
+
+static int send_file(quicly_sendbuf_t *sendbuf, int is_http1, const char *fn, const char *mime_type)
+{
+    FILE *fp;
+    char buf[1024];
+    size_t n;
+
+    if ((fp = fopen(fn, "r")) == NULL)
+        return 0;
+    send_header(sendbuf, is_http1, 200, mime_type);
+    while ((n = fread(buf, 1, sizeof(buf), fp)) != 0)
+        quicly_sendbuf_write(sendbuf, buf, n, NULL);
+    fclose(fp);
+
+    return 1;
+}
+
+static int send_sized_text(quicly_sendbuf_t *sendbuf, ptls_iovec_t path, int is_http1)
+{
+    unsigned size;
+    if (!(path.len > 5 && path.base[0] == '/' && memcmp(path.base + path.len - 4, ".txt", 4) == 0))
+        return 0;
+    if (sscanf((const char *)path.base + 1, "%u", &size) != 1)
+        return 0;
+
+    send_header(sendbuf, is_http1, 200, "text/plain; charset=utf-8");
+    for (; size >= 12; size -= 12)
+        quicly_sendbuf_write(sendbuf, "hello world\n", 12, NULL);
+    if (size != 0)
+        quicly_sendbuf_write(sendbuf, "hello world", size, NULL);
+    return 1;
+}
+
 static int on_req_receive(quicly_stream_t *stream)
 {
-    ptls_iovec_t input;
+    ptls_iovec_t path;
+    int is_http1;
 
-    if (stream->recvbuf.data_off == 0) {
-        const char *s = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nHello world!\nThe request was: ";
-        quicly_sendbuf_write(&stream->sendbuf, s, strlen(s), NULL);
-    }
-    while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
-        quicly_sendbuf_write(&stream->sendbuf, input.base, input.len, NULL);
-        quicly_recvbuf_shift(&stream->recvbuf, input.len);
-    }
-    if (quicly_recvbuf_is_shutdown(&stream->recvbuf))
-        quicly_sendbuf_shutdown(&stream->sendbuf);
+    /* fixme call is_shutdown */
+    if (stream->sendbuf.eos != UINT64_MAX)
+        return 0;
 
+    /* obtain path of the request, or return without doing anything */
+    if (!parse_request(quicly_recvbuf_get(&stream->recvbuf), &path, &is_http1))
+        return 0;
+
+    if (path_is(path, "/logo.jpg") && send_file(&stream->sendbuf, is_http1, "assets/logo.jpg", "image/jpeg"))
+        goto Sent;
+    if (path_is(path, "/main.jpg") && send_file(&stream->sendbuf, is_http1, "assets/main.jpg", "image/jpeg"))
+        goto Sent;
+    if (send_sized_text(&stream->sendbuf, path, is_http1))
+        goto Sent;
+
+    send_header(&stream->sendbuf, is_http1, 404, "text/plain; charset=utf-8");
+    quicly_sendbuf_write(&stream->sendbuf, "not found\n", 10, NULL);
+Sent:
+    quicly_sendbuf_shutdown(&stream->sendbuf);
     return 0;
 }
 
