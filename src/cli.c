@@ -462,7 +462,7 @@ static void usage(const char *cmd)
            "  -l log-file          file to log traffic secrets\n"
            "  -p path              path to request (can be set multiple times)\n"
            "  -r [initial-rto]     initial RTO (in milliseconds)\n"
-           "  -s [secret]          use stateless reset\n"
+           "  -s [secret]          use stateless retry protected by the secret\n"
            "  -V                   verify peer using the default certificates\n"
            "  -v                   verbose mode (-vv emits packet dumps as well)\n"
            "  -h                   print this help\n"
