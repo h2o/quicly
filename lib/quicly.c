@@ -147,10 +147,6 @@ struct st_quicly_conn_t {
          *
          */
         int64_t send_ack_at;
-        /**
-         *
-         */
-        unsigned acks_require_encryption : 1;
     } egress;
     /**
      * crypto data
@@ -1560,7 +1556,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         break;
     default:
         s.first_byte = quicly_is_client(conn) ? QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT : QUICLY_PACKET_TYPE_SERVER_CLEARTEXT;
-        if (conn->egress.send_ack_at <= s.now && !conn->egress.acks_require_encryption) {
+        if (conn->egress.send_ack_at <= s.now && quicly_get_state(conn) != QUICLY_STATE_1RTT_ENCRYPTED) {
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
         }
@@ -1855,7 +1851,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
     if (conn->super.state != QUICLY_STATE_1RTT_ENCRYPTED && QUICLY_PACKET_TYPE_IS_1RTT(packet->type)) {
-        ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
+        /* FIXME enqueue the packet? */
+        ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
 
@@ -2019,8 +2016,6 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 
     if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet_number, packet_number + 1)) != 0)
         goto Exit;
-    if (aead != NULL)
-        conn->egress.acks_require_encryption = 1;
     if (!is_ack_only && conn->egress.send_ack_at == INT64_MAX) {
         conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
     }

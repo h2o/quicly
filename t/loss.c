@@ -43,7 +43,7 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
         for (i = 0; i != *num_sent; ++i) {
             if (cond(decoded + i)) {
                 ret = quicly_receive(dst, decoded + i);
-                ok(ret == 0);
+                ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
                 ++*num_received;
             }
         }
@@ -87,21 +87,25 @@ static void test_even(void)
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
 
-    /* transmit ack for the 1st packet to server */
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
-    transmit(client, server);
 
-    /* server doesn't resend the 2nd packet before RTO */
+    /* after ack-timeout, server sends the delayed ack */
     transmit_cond(server, client, &num_sent, &num_received, cond_even);
-    ok(num_sent == 0);
+    ok(num_sent == 1);
+    ok(num_received == 1);
+
+    /* client sends delayed-ack that gets dropped */
+    transmit_cond(client, server, &num_sent, &num_received, cond_even);
+    ok(num_sent == 1);
     ok(num_received == 0);
+
     ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
 
     quic_now += 1000;
 
-    /* server resends the contents of the 2nd packet */
+    /* server resends the contents of all the packets (in cleartext) */
     transmit_cond(server, client, &num_sent, &num_received, cond_even);
-    ok(num_sent == 1);
+    ok(num_sent == 2);
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
 }
