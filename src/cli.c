@@ -54,7 +54,7 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
 static int on_stream_open(quicly_stream_t *stream);
 
 static ptls_handshake_properties_t hs_properties;
-static ptls_context_t tlsctx = {ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
+static ptls_context_t tlsctx = {ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx = {&tlsctx,
                                1280,
                                1000,

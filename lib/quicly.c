@@ -521,7 +521,7 @@ static int setup_1rtt_secret(struct st_quicly_packet_protection_t *pp, ptls_t *t
     ptls_cipher_suite_t *cipher = ptls_get_cipher(tls);
     int ret;
 
-    if ((ret = ptls_export_secret(tls, pp->secret, cipher->hash->digest_size, label, ptls_iovec_init(NULL, 0))) != 0)
+    if ((ret = ptls_export_secret(tls, pp->secret, cipher->hash->digest_size, label, ptls_iovec_init(NULL, 0), 0)) != 0)
         return ret;
     if ((pp->aead.one_rtt[0] = ptls_aead_new(cipher->aead, cipher->hash, is_enc, pp->secret)) == NULL)
         return PTLS_ERROR_NO_MEMORY;

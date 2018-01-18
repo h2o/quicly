@@ -86,7 +86,8 @@ static int64_t get_now(quicly_context_t *ctx);
 static ptls_iovec_t cert;
 static ptls_openssl_sign_certificate_t cert_signer;
 static ptls_context_t tls_ctx = {
-    ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL, &cert_signer.super};
+    ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL,
+    &cert_signer.super};
 
 int64_t quic_now;
 quicly_context_t quic_ctx = {&tls_ctx,
