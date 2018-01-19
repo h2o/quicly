@@ -238,8 +238,7 @@ struct st_quicly_stream_t {
 };
 
 typedef struct st_quicly_decode_packet_t {
-    uint8_t type;
-    uint8_t has_connection_id : 1;
+    uint8_t first_byte;
     uint64_t connection_id;
     struct {
         uint32_t bits;

@@ -34,18 +34,14 @@
 
 #define QUICLY_PROTOCOL_VERSION 0xff000007
 
-#define QUICLY_PACKET_TYPE_VERSION_NEGOTIATION 0x81
-#define QUICLY_PACKET_TYPE_CLIENT_INITIAL 0x82
-#define QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY 0x83
-#define QUICLY_PACKET_TYPE_SERVER_CLEARTEXT 0x84
-#define QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT 0x85
-#define QUICLY_PACKET_TYPE_0RTT_PROTECTED 0x86
-#define QUICLY_PACKET_TYPE_LONG_MIN QUICLY_PACKET_TYPE_VERSION_NEGOTIATION
-#define QUICLY_PACKET_TYPE_LONG_MAX QUICLY_PACKET_TYPE_0RTT_PROTECTED
+#define QUICLY_PACKET_TYPE_INITIAL 0xff
+#define QUICLY_PACKET_TYPE_RETRY 0xfe
+#define QUICLY_PACKET_TYPE_HANDSHAKE 0xfd
+#define QUICLY_PACKET_TYPE_0RTT_PROTECTED 0xfc
+#define QUICLY_PACKET_TYPE_LONG_MIN QUICLY_PACKET_TYPE_0RTT_PROTECTED
 
 #define QUICLY_PACKET_TYPE_IS_1RTT(t) (((t) & 0x80) == 0)
-#define QUICLY_PACKET_TYPE_1RTT_TO_KEY_PHASE(t) (t)
-#define QUICLY_PACKET_TYPE_1RTT_FROM_KEY_PHASE(t) (t)
+#define QUICLY_PACKET_TYPE_1RTT_TO_KEY_PHASE(t) (((t) & 0x20) != 0)
 
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS 26
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA 0
@@ -194,14 +190,12 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
     packet->header.base = (void *)src;
 
     const uint8_t *src_end = src + len;
-    uint8_t first_byte = *src++;
 
-    if ((first_byte & 0x80) != 0) {
+    packet->first_byte = *src++;
+    if (!QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
         /* long header */
-        if (!(QUICLY_PACKET_TYPE_LONG_MIN <= first_byte && first_byte <= QUICLY_PACKET_TYPE_LONG_MAX))
+        if (packet->first_byte < QUICLY_PACKET_TYPE_LONG_MIN)
             return QUICLY_ERROR_INVALID_PACKET_HEADER;
-        packet->type = first_byte;
-        packet->has_connection_id = 1;
         if (src_end - src < 16)
             return QUICLY_ERROR_INVALID_PACKET_HEADER;
         packet->connection_id = quicly_decode64(&src);
@@ -210,21 +204,21 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
         packet->packet_number.mask = UINT32_MAX;
     } else {
         /* short header */
-        packet->type = QUICLY_PACKET_TYPE_1RTT_FROM_KEY_PHASE((first_byte & 0x20) != 0);
-        if ((first_byte & 0x40) != 0) {
-            packet->has_connection_id = 1;
+        unsigned packet_number_size;
+        if ((packet->first_byte & 0x40) == 0) {
             if (src_end - src < 8)
                 return QUICLY_ERROR_INVALID_PACKET_HEADER;
             packet->connection_id = quicly_decode64(&src);
-        } else {
-            packet->has_connection_id = 0;
         }
-        unsigned type = first_byte & 0x1f, packet_number_size;
-        switch (type) {
-        case 1:
-        case 2:
-        case 3:
-            packet_number_size = 1 << (type - 1);
+        switch (packet->first_byte & 0x1f) {
+        case 0x1f:
+            packet_number_size = 1;
+            break;
+        case 0x1e:
+            packet_number_size = 2;
+            break;
+        case 0x1d:
+            packet_number_size = 4;
             break;
         default:
             return QUICLY_ERROR_INVALID_PACKET_HEADER;
@@ -1028,7 +1022,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     int ret;
 
     /* ignore any packet that does not  */
-    if (packet->type != QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
+    if (packet->first_byte != QUICLY_PACKET_TYPE_INITIAL) {
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
@@ -1262,7 +1256,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
 {
     assert(s->aead != NULL);
 
-    if (s->first_byte == QUICLY_PACKET_TYPE_CLIENT_INITIAL) {
+    if (s->first_byte == QUICLY_PACKET_TYPE_INITIAL) {
         if (s->num_packets != 0)
             return QUICLY_ERROR_HANDSHAKE_TOO_LARGE;
         const size_t max_size = 1264; /* max UDP packet size excluding aead tag */
@@ -1548,14 +1542,14 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
     switch (quicly_get_state(conn)) {
     case QUICLY_STATE_SEND_STATELESS_RETRY:
         assert(!quicly_is_client(conn));
-        s.first_byte = QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY;
+        s.first_byte = QUICLY_PACKET_TYPE_RETRY;
         break;
     case QUICLY_STATE_BEFORE_SH:
         assert(quicly_is_client(conn));
-        s.first_byte = QUICLY_PACKET_TYPE_CLIENT_INITIAL;
+        s.first_byte = QUICLY_PACKET_TYPE_INITIAL;
         break;
     default:
-        s.first_byte = quicly_is_client(conn) ? QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT : QUICLY_PACKET_TYPE_SERVER_CLEARTEXT;
+        s.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
         if (conn->egress.send_ack_at <= s.now && quicly_get_state(conn) != QUICLY_STATE_1RTT_ENCRYPTED) {
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
@@ -1581,7 +1575,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
 
     /* send encrypted frames */
     if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED) {
-        s.first_byte = 0x43 | (QUICLY_PACKET_TYPE_1RTT_FROM_KEY_PHASE(0) << 5);
+        s.first_byte = 0x1d; /* 1rtt,has-connection-id,key-phase=0,packet-number-size=4 */
         s.aead = conn->egress.pp.aead.one_rtt[0];
         /* acks */
         if (conn->egress.send_ack_at <= s.now) {
@@ -1661,7 +1655,7 @@ Exit:
         ret = 0;
     if (ret == 0) {
         *num_packets = s.num_packets;
-        if (s.first_byte == QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY)
+        if (s.first_byte == QUICLY_PACKET_TYPE_RETRY)
             ret = QUICLY_ERROR_CONNECTION_CLOSED;
     }
     return ret;
@@ -1850,22 +1844,22 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         goto Exit;
     }
 
-    if (conn->super.state != QUICLY_STATE_1RTT_ENCRYPTED && QUICLY_PACKET_TYPE_IS_1RTT(packet->type)) {
+    if (conn->super.state != QUICLY_STATE_1RTT_ENCRYPTED && QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
         /* FIXME enqueue the packet? */
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
 
-    if (QUICLY_PACKET_TYPE_IS_1RTT(packet->type)) {
-        int key_phase = QUICLY_PACKET_TYPE_1RTT_TO_KEY_PHASE(packet->type);
+    if (QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
+        int key_phase = QUICLY_PACKET_TYPE_1RTT_TO_KEY_PHASE(packet->first_byte);
         if ((aead = conn->ingress.pp.aead.one_rtt[key_phase]) == NULL) {
             /* drop 1rtt-encrypted packets received prior to handshake completion (due to loss of the packet carrying the latter) */
             ret = key_phase == 0 && quicly_get_state(conn) != QUICLY_STATE_1RTT_ENCRYPTED ? 0 : QUICLY_ERROR_INVALID_PACKET_HEADER;
             goto Exit;
         }
     } else {
-        switch (packet->type) {
-        case QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY:
+        switch (packet->first_byte) {
+        case QUICLY_PACKET_TYPE_RETRY:
             if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_BEFORE_SH) ||
                 (aead = conn->ingress.pp.aead.handshake) == NULL) {
                 ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
@@ -1877,14 +1871,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             }
             conn->crypto.stream.on_update = crypto_stream_receive_stateless_retry;
             break;
-        case QUICLY_PACKET_TYPE_CLIENT_CLEARTEXT:
-            if (quicly_is_client(conn) || (aead = conn->ingress.pp.aead.handshake) == NULL) {
-                ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
-                goto Exit;
-            }
-            break;
-        case QUICLY_PACKET_TYPE_SERVER_CLEARTEXT:
-            if (!quicly_is_client(conn) || (aead = conn->ingress.pp.aead.handshake) == NULL) {
+        case QUICLY_PACKET_TYPE_HANDSHAKE:
+            if ((aead = conn->ingress.pp.aead.handshake) == NULL) {
                 ret = QUICLY_ERROR_INVALID_PACKET_HEADER;
                 goto Exit;
             }
@@ -1895,7 +1883,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 goto Exit;
             }
             break;
-        case QUICLY_PACKET_TYPE_CLIENT_INITIAL:
+        case QUICLY_PACKET_TYPE_INITIAL:
             /* FIXME ignore for time being */
             ret = 0;
             goto Exit;
@@ -1931,7 +1919,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             is_ack_only = 0;
         } else if (type_flags >= QUICLY_FRAME_TYPE_ACK) {
             /* TODO use separate decoding logic (like the one in quicly_accept) for stateless-retry */
-            if (packet->type == QUICLY_PACKET_TYPE_SERVER_STATELESS_RETRY) {
+            if (packet->first_byte == QUICLY_PACKET_TYPE_RETRY) {
                 ret = QUICLY_ERROR_TBD;
                 goto Exit;
             }
