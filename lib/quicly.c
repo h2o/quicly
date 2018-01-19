@@ -205,9 +205,9 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
         if (src_end - src < 16)
             return QUICLY_ERROR_INVALID_PACKET_HEADER;
         packet->connection_id = quicly_decode64(&src);
+        packet->version = quicly_decode32(&src);
         packet->packet_number.bits = quicly_decode32(&src);
         packet->packet_number.mask = UINT32_MAX;
-        packet->version = quicly_decode32(&src);
     } else {
         /* short header */
         packet->type = QUICLY_PACKET_TYPE_1RTT_FROM_KEY_PHASE((first_byte & 0x20) != 0);
@@ -1307,9 +1307,9 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
         /* emit header */
         *s->dst++ = s->first_byte;
         s->dst = quicly_encode64(s->dst, conn->super.connection_id);
-        s->dst = quicly_encode32(s->dst, (uint32_t)conn->egress.packet_number);
         if ((s->first_byte & 0x80) != 0)
             s->dst = quicly_encode32(s->dst, QUICLY_PROTOCOL_VERSION);
+        s->dst = quicly_encode32(s->dst, (uint32_t)conn->egress.packet_number);
         s->dst_unencrypted_from = s->dst;
         assert(s->aead != NULL);
         s->dst_end -= s->aead->algo->tag_size;
