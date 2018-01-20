@@ -25,35 +25,33 @@
 static void test_ack_decode(void)
 {
     {
-        uint8_t pat[] = {0xa0, 0xfe, 0x34, 0x56, 0x78};
+        uint8_t pat[] = {0xe, 0x34, 0x00, 0x00, 0x11};
         quicly_ack_frame_t decoded;
 
         const uint8_t *src = pat + 1;
         ok(quicly_decode_ack_frame(pat[0], &src, pat + sizeof(pat), &decoded) == 0);
         ok(src == pat + sizeof(pat));
-        ok(decoded.largest_acknowledged == 0xfe);
+        ok(decoded.largest_acknowledged == 0x34);
         ok(decoded.num_gaps == 0);
-        ok(decoded.ack_delay == 0x3456);
-        ok(decoded.ack_block_lengths[0] == 0x79);
-        ok(decoded.smallest_acknowledged == 0xfe - 0x79 + 1);
+        ok(decoded.ack_block_lengths[0] == 0x12);
+        ok(decoded.smallest_acknowledged == 0x34 - 0x12 + 1);
     }
 
     {
-        uint8_t pat[] = {0xb5, 2, 0xfe, 0xdc, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19};
+        uint8_t pat[] = {0xe, 0x34, 0x00, 0x02, 0x00, 0x01, 0x02, 0x03, 0x04};
         quicly_ack_frame_t decoded;
 
         const uint8_t *src = pat + 1;
         ok(quicly_decode_ack_frame(pat[0], &src, pat + sizeof(pat), &decoded) == 0);
         ok(src == pat + sizeof(pat));
-        ok(decoded.largest_acknowledged == 0xfedc);
+        ok(decoded.largest_acknowledged == 0x34);
         ok(decoded.num_gaps == 2);
-        ok(decoded.ack_delay == 0x1011);
-        ok(decoded.ack_block_lengths[0] == 0x1214);
-        ok(decoded.gaps[0] == 0x14);
-        ok(decoded.ack_block_lengths[1] == 0x1516);
-        ok(decoded.gaps[1] == 0x17);
-        ok(decoded.ack_block_lengths[2] == 0x1819);
-        ok(decoded.smallest_acknowledged == 0xfedc - 0x1214 - 0x14 - 0x1516 - 0x17 - 0x1819 + 1);
+        ok(decoded.ack_block_lengths[0] == 1);
+        ok(decoded.gaps[0] == 2);
+        ok(decoded.ack_block_lengths[1] == 3);
+        ok(decoded.gaps[1] == 4);
+        ok(decoded.ack_block_lengths[2] == 5);
+        ok(decoded.smallest_acknowledged == 0x34 - 1 - 2 - 3 - 4 - 5 + 1);
     }
 }
 
@@ -61,7 +59,6 @@ static void test_ack_encode(void)
 {
     quicly_ranges_t ranges;
     size_t range_index;
-    quicly_ack_frame_encode_params_t params;
     uint8_t buf[256], *end;
     const uint8_t *src;
     quicly_ack_frame_t decoded;
@@ -69,12 +66,9 @@ static void test_ack_encode(void)
     quicly_ranges_init(&ranges);
     quicly_ranges_update(&ranges, 0x12, 0x13);
 
-    quicly_determine_encode_ack_frame_params(&ranges, &params);
-    ok(params.largest_acknowledged_mode == 0);
-    ok(params.block_length_mode == 0);
     range_index = 0;
-    end = quicly_encode_ack_frame(buf, buf + sizeof(buf), &ranges, &range_index, &params);
-    ok(end - buf == params.min_capacity_excluding_num_blocks);
+    end = quicly_encode_ack_frame(buf, buf + sizeof(buf), &ranges, &range_index);
+    ok(end - buf == 5);
 
     quicly_ranges_dispose(&ranges);
 

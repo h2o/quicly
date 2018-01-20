@@ -233,7 +233,7 @@ struct st_quicly_stream_t {
         /**
          *
          */
-        uint32_t rst_reason;
+        uint16_t rst_reason;
     } _recv_aux;
 };
 
@@ -322,7 +322,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 /**
  *
  */
-quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint32_t stream_id);
+quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint64_t stream_id);
 /**
  *
  */
