@@ -501,7 +501,7 @@ static int setup_handshake_encryption(ptls_aead_context_t **ingress, ptls_aead_c
 {
     static const uint8_t salt[] = {0xaf, 0xc8, 0x24, 0xec, 0x5f, 0xc7, 0x7e, 0xca, 0x1e, 0x9d,
                                    0x36, 0xf3, 0x7f, 0xb2, 0xd4, 0x65, 0x18, 0xc3, 0x66, 0x39};
-    static const char *labels[2] = {"QUIC client cleartext Secret", "QUIC server cleartext Secret"};
+    static const char *labels[2] = {"QUIC client handshake secret", "QUIC server handshake secret"};
     ptls_cipher_suite_t **cs;
     uint8_t ikm[8], secret[PTLS_MAX_DIGEST_SIZE];
     int ret;
