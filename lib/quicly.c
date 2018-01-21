@@ -2023,12 +2023,14 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 if ((ret = handle_rst_stream_frame(conn, &frame)) != 0)
                     goto Exit;
             } break;
-            case QUICLY_FRAME_TYPE_CONNECTION_CLOSE: {
-                quicly_connection_close_frame_t frame;
+            case QUICLY_FRAME_TYPE_CONNECTION_CLOSE:
+            case QUICLY_FRAME_TYPE_APPLICATION_CLOSE: {
+                quicly_close_frame_t frame;
                 if ((ret = quicly_decode_connection_close_frame(&src, end, &frame)) != 0)
                     goto Exit;
-                fprintf(stderr, "connection close:%" PRIx32 ":%.*s\n", frame.error_code, (int)frame.reason_phrase.len,
-                        frame.reason_phrase.base);
+                fprintf(stderr, "%s close:%" PRIx32 ":%.*s\n",
+                        type_flags == QUICLY_FRAME_TYPE_CONNECTION_CLOSE ? "connection" : "application", frame.error_code,
+                        (int)frame.reason_phrase.len, frame.reason_phrase.base);
             } break;
             case QUICLY_FRAME_TYPE_MAX_DATA: {
                 quicly_max_data_frame_t frame;
