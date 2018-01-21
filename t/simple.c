@@ -69,6 +69,7 @@ static void simple_http(void)
 
     ret = quicly_open_stream(client, &client_stream);
     ok(ret == 0);
+    ok(client_stream->stream_id == 4);
     client_stream->on_update = on_update_noop;
     quicly_sendbuf_write(&client_stream->sendbuf, req, strlen(req), NULL);
     quicly_sendbuf_shutdown(&client_stream->sendbuf);
@@ -103,7 +104,7 @@ static void simple_http(void)
 static void test_rst_then_close(void)
 {
     quicly_stream_t *client_stream, *server_stream;
-    uint32_t stream_id;
+    uint64_t stream_id;
     int ret;
 
     /* client sends STOP_SENDING and RST_STREAM */
@@ -142,10 +143,11 @@ static void test_rst_then_close(void)
 
 static void tiny_stream_window(void)
 {
+    uint32_t initial_max_stream_data_orig = quic_ctx.initial_max_stream_data;
     quicly_stream_t *client_stream, *server_stream;
     int ret;
 
-    quic_ctx.transport_params.initial_max_stream_data = 4;
+    quic_ctx.initial_max_stream_data = 4;
 
     ok(max_data_is_equal(client, server));
 
@@ -203,16 +205,19 @@ static void tiny_stream_window(void)
     ok(quicly_num_streams(server) == 1);
 
     ok(max_data_is_equal(client, server));
+
+    quic_ctx.initial_max_stream_data = initial_max_stream_data_orig;
 }
 
 static void test_rst_during_loss(void)
 {
+    uint32_t initial_max_stream_data_orig = quic_ctx.initial_max_stream_data;
     quicly_stream_t *client_stream, *server_stream;
     quicly_raw_packet_t *reordered_packet;
     int ret;
     __uint128_t max_data_at_start, tmp;
 
-    quic_ctx.transport_params.initial_max_stream_data = 4;
+    quic_ctx.initial_max_stream_data = 4;
 
     ok(max_data_is_equal(client, server));
     quicly_get_max_data(client, NULL, &max_data_at_start, NULL);
@@ -278,16 +283,19 @@ static void test_rst_during_loss(void)
     quicly_get_max_data(server, NULL, NULL, &tmp);
     ok(tmp == max_data_at_start + 8);
     ok(max_data_is_equal(client, server));
+
+    quic_ctx.initial_max_stream_data = initial_max_stream_data_orig;
 }
 
 static void tiny_connection_window(void)
 {
+    uint32_t initial_max_data_kb_orig = quic_ctx.initial_max_data_kb;
     quicly_stream_t *client_stream, *server_stream;
     size_t i;
     int ret;
     char testdata[1025];
 
-    quic_ctx.transport_params.initial_max_data_kb = 1;
+    quic_ctx.initial_max_data_kb = 1;
     for (i = 0; i < 1024 / 16; ++i)
         strcpy(testdata + i * 16, "0123456789abcdef");
 
@@ -331,22 +339,16 @@ static void tiny_connection_window(void)
         ok(recvbuf_is(&server_stream->recvbuf, testdata));
         ok(server_stream->recvbuf.data.len == 0);
     }
+
+    quic_ctx.initial_max_data_kb = initial_max_data_kb_orig;
 }
 
 void test_simple(void)
 {
-    quicly_transport_parameters_t transport_params_backup = quic_ctx.transport_params;
-
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
     subtest("rst-then-close", test_rst_then_close);
-
     subtest("tiny-stream-window", tiny_stream_window);
-    quic_ctx.transport_params = transport_params_backup;
-
     subtest("rst-during-loss", test_rst_during_loss);
-    quic_ctx.transport_params = transport_params_backup;
-
     subtest("tiny-connection-window", tiny_connection_window);
-    quic_ctx.transport_params = transport_params_backup;
 }

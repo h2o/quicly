@@ -21,29 +21,25 @@
  */
 #include "quicly/maxsender.h"
 
-uint32_t quicly_maxsender_should_update_stream_id(quicly_maxsender_t *m, uint32_t next_stream_id, uint32_t num_open_streams,
-                                                  uint32_t initial_max_stream_id, uint32_t update_ratio)
+uint64_t quicly_maxsender_should_update_stream_id(quicly_maxsender_t *m, uint64_t next_stream_id, uint32_t num_open_streams,
+                                                  uint32_t max_concurrent_streams, uint32_t update_ratio)
 {
-    uint32_t avail_sent, avail_actual, send_value;
-
-    /* round-up */
-    next_stream_id = (next_stream_id + 1) & 0xfffffffe;
-
-    avail_sent = m->max_sent >= next_stream_id - 2 ? (uint32_t)m->max_sent - (next_stream_id - 2) : 0;
-    avail_actual = initial_max_stream_id - num_open_streams * 2;
+    uint32_t num_avail_actual = max_concurrent_streams - num_open_streams,
+             num_avail_sent = m->max_sent > next_stream_id ? (uint32_t)((m->max_sent - next_stream_id) / 4) : 0;
+    uint64_t send_value;
 
     /* ratio check */
-    if (((uint64_t)avail_actual * update_ratio) / 1024 < avail_sent)
+    if ((uint64_t)num_avail_actual * update_ratio < (uint64_t)num_avail_sent * 1024)
         return 0;
 
     /* calculate the actual value to send as well as making adjustments */
-    send_value = next_stream_id + avail_actual - 2;
-    if (send_value >= 0xfffffffe)
-        send_value = 0xfffffffe;
+    send_value = next_stream_id + num_avail_actual * 4 - 4;
+    if (send_value >= (uint64_t)1 << 62)
+        send_value = (((uint64_t)1 << 62) - 4) | (next_stream_id & 3);
 
     /* do not send one value more than once */
     if (send_value == m->max_sent)
         return 0;
 
-    return (uint32_t)send_value;
+    return send_value;
 }
