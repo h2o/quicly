@@ -971,13 +971,22 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
 
+    uint32_t negotiated_version;
+    if ((ret = ptls_decode32(&negotiated_version, &src, end)) != 0)
+        goto Exit;
+    if (negotiated_version != QUICLY_PROTOCOL_VERSION) {
+        fprintf(stderr, "version negotiation not supported\n");
+        ret = QUICLY_ERROR_TBD;
+        goto Exit;
+    }
+
     ptls_decode_open_block(src, end, 1, {
         int found_negotiated_version = 0;
         do {
             uint32_t supported_version;
             if ((ret = ptls_decode32(&supported_version, &src, end)) != 0)
                 goto Exit;
-            if (supported_version == QUICLY_PROTOCOL_VERSION)
+            if (supported_version == negotiated_version)
                 found_negotiated_version = 1;
         } while (src != end);
         if (!found_negotiated_version) {
@@ -1010,7 +1019,6 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     /* handshake */
     ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
-    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
     ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
     if ((ret = encode_transport_parameter_list(conn->super.ctx, &conn->crypto.transport_parameters.buf, 1)) != 0)
         goto Exit;
@@ -1051,12 +1059,11 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     { /* decode transport_parameters extension */
         const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
-        uint32_t negotiated_version, initial_version;
-        if ((ret = ptls_decode32(&negotiated_version, &src, end)) != 0)
-            goto Exit;
+        uint32_t initial_version;
         if ((ret = ptls_decode32(&initial_version, &src, end)) != 0)
             goto Exit;
-        if (!(negotiated_version == QUICLY_PROTOCOL_VERSION && initial_version == QUICLY_PROTOCOL_VERSION)) {
+        if (initial_version != QUICLY_PROTOCOL_VERSION) {
+            fprintf(stderr, "version negotiation not supported\n");
             ret = QUICLY_ERROR_VERSION_NEGOTIATION;
             goto Exit;
         }
@@ -1067,6 +1074,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
     ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
+    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
     ptls_buffer_push_block(&conn->crypto.transport_parameters.buf, 1,
                            { ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION); });
     if ((ret = encode_transport_parameter_list(conn->super.ctx, &conn->crypto.transport_parameters.buf, 0)) != 0)
