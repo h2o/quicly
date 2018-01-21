@@ -58,7 +58,11 @@ static ptls_context_t tlsctx = {ptls_openssl_random_bytes, &ptls_get_time, ptls_
 static quicly_context_t ctx = {&tlsctx,
                                1280,
                                1000,
-                               {16384, 65536, 200, 600},
+                               16384,
+                               65536,
+                               200,
+                               600,
+                               0,
                                {0},
                                quicly_default_alloc_packet,
                                quicly_default_free_packet,
@@ -322,7 +326,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
             quicly_decoded_packet_t packet;
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
                 quicly_receive(conn, &packet);
-                if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED && quicly_get_next_stream_id(conn) == 1) {
+                if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED && quicly_get_next_stream_id(conn, 0) == 4) {
                     size_t i;
                     for (i = 0; req_paths[i] != NULL; ++i) {
                         char req[1024];
@@ -409,41 +413,37 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 hexdump("recvmsg", buf, rret);
             quicly_decoded_packet_t packet;
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
-                if (packet.has_connection_id) {
-                    quicly_conn_t *conn = NULL;
-                    size_t i;
+                quicly_conn_t *conn = NULL;
+                size_t i;
+                for (i = 0; i != num_conns; ++i) {
+                    if (quicly_get_connection_id(conns[i]) == packet.connection_id) {
+                        conn = conns[i];
+                        break;
+                    }
+                }
+                if (conn != NULL) {
+                    /* existing connection */
+                    quicly_receive(conn, &packet);
+                } else {
+                    /* new connection */
+                    if (quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, NULL, &packet) == 0) {
+                        assert(conn != NULL);
+                        conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
+                        assert(conns != NULL);
+                        conns[num_conns++] = conn;
+                    } else {
+                        assert(conn == NULL);
+                    }
+                }
+                if (conn != NULL && send_pending(fd, conn) != 0) {
                     for (i = 0; i != num_conns; ++i) {
-                        if (quicly_get_connection_id(conns[i]) == packet.connection_id) {
-                            conn = conns[i];
+                        if (conns[i] == conn) {
+                            memcpy(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(*conns));
+                            --num_conns;
                             break;
                         }
                     }
-                    if (conn != NULL) {
-                        /* existing connection */
-                        quicly_receive(conn, &packet);
-                    } else {
-                        /* new connection */
-                        if (quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, NULL, &packet) == 0) {
-                            assert(conn != NULL);
-                            conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
-                            assert(conns != NULL);
-                            conns[num_conns++] = conn;
-                        } else {
-                            assert(conn == NULL);
-                        }
-                    }
-                    if (conn != NULL && send_pending(fd, conn) != 0) {
-                        for (i = 0; i != num_conns; ++i) {
-                            if (conns[i] == conn) {
-                                memcpy(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(*conns));
-                                --num_conns;
-                                break;
-                            }
-                        }
-                        quicly_free(conn);
-                    }
-                } else {
-                    fprintf(stderr, "ignoring packet without connection-id\n");
+                    quicly_free(conn);
                 }
             }
         }
