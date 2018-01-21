@@ -1882,6 +1882,12 @@ static int handle_max_stream_id_frame(quicly_conn_t *conn, quicly_max_stream_id_
     return 0;
 }
 
+static int handle_ping_frame(quicly_conn_t *conn, quicly_ping_frame_t *frame)
+{
+    fprintf(stderr, "received ping; TODO implement pong\n");
+    return 0;
+}
+
 static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_frame_t *frame)
 {
     quicly_stream_t *stream;
@@ -2045,9 +2051,13 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 if ((ret = handle_max_stream_id_frame(conn, &frame)) != 0)
                     goto Exit;
             } break;
-            case QUICLY_FRAME_TYPE_PING:
-                ret = 0;
-                break;
+            case QUICLY_FRAME_TYPE_PING: {
+                quicly_ping_frame_t frame;
+                if ((ret = quicly_decode_ping_frame(&src, end, &frame)) != 0)
+                    goto Exit;
+                if ((ret = handle_ping_frame(conn, &frame)) != 0)
+                    goto Exit;
+            } break;
             case QUICLY_FRAME_TYPE_BLOCKED:
                 quicly_maxsender_reset(&conn->ingress.max_data.sender, 0);
                 ret = 0;

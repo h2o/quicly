@@ -20,7 +20,17 @@
  * IN THE SOFTWARE.
  */
 #include <assert.h>
+#include <string.h>
 #include "quicly/frame.h"
+
+uint8_t *quicly_encode_ping_frame(uint8_t *dst, ptls_iovec_t data)
+{
+    *dst++ = QUICLY_FRAME_TYPE_PING;
+    *dst++ = (uint8_t)data.len;
+    memcpy(dst, data.base, data.len);
+    dst += data.len;
+    return dst;
+}
 
 uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t *ranges, size_t *range_index)
 {
