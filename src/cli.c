@@ -244,12 +244,12 @@ static void set_alpn(ptls_handshake_properties_t *pro, const char *alpn_str)
     ptls_iovec_t *list = NULL;
     size_t entries = 0;
     start = cur = alpn_str;
-#define ADD_ONE() \
-        if ((cur - start) > 0) { \
-            list = realloc(list, sizeof(*list)*(entries + 1)); \
-            list[entries].base = (void *)strndup(start, cur - start); \
-            list[entries++].len = cur - start; \
-        }
+#define ADD_ONE()                                                                                                                  \
+    if ((cur - start) > 0) {                                                                                                       \
+        list = realloc(list, sizeof(*list) * (entries + 1));                                                                       \
+        list[entries].base = (void *)strndup(start, cur - start);                                                                  \
+        list[entries++].len = cur - start;                                                                                         \
+    }
 
     while (*cur) {
         if (*cur == ',') {
@@ -259,7 +259,7 @@ static void set_alpn(ptls_handshake_properties_t *pro, const char *alpn_str)
         cur++;
     }
     if (start != cur)
-            ADD_ONE();
+        ADD_ONE();
 
     pro->client.negotiated_protocols.list = list;
     pro->client.negotiated_protocols.count = entries;
