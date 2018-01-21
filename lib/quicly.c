@@ -65,9 +65,9 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         if (_conn->super.ctx->debug_log != NULL) {                                                                                 \
             char buf[1024];                                                                                                        \
             snprintf(buf, sizeof(buf), __VA_ARGS__);                                                                               \
-            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%" PRIx64 ",%" PRIu32 ": %s\n",                                      \
-                                        quicly_is_client(_conn) ? "client" : "server", _conn->super.connection_id, (stream_id),    \
-                                        buf);                                                                                      \
+            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%" PRIx64 ",%" PRIu64 ": %s\n",                                      \
+                                        quicly_is_client(_conn) ? "client" : "server", _conn->super.connection_id,                 \
+                                        (uint64_t)(stream_id), buf);                                                               \
         }                                                                                                                          \
     } while (0)
 
