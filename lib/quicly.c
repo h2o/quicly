@@ -182,6 +182,25 @@ struct st_quicly_conn_t {
     } pending_link;
 };
 
+const quicly_context_t quicly_default_context = {
+    NULL,      /* tls */
+    1280,      /* max_packet_size */
+    1000,      /* initial_rto */
+    16384,     /* initial_max_stream_data */
+    64,        /* initial_max_data_kb */
+    600,       /* idle_timeout */
+    100,       /* max_concurrent_streams_bidi */
+    0,         /* max_concurrent_streams_uni */
+    {0, NULL}, /* stateless_retry {enforce_use, key} */
+    quicly_default_alloc_packet,
+    quicly_default_free_packet,
+    quicly_default_alloc_stream,
+    quicly_default_free_stream,
+    NULL, /* on_stream_open */
+    quicly_default_now,
+    NULL, /* debug_log */
+};
+
 static const quicly_transport_parameters_t transport_params_before_handshake = {8192, 16, 100, 60, 0};
 
 static void free_packet_protection(struct st_quicly_packet_protection_t *pp)

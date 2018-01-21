@@ -275,6 +275,8 @@ typedef struct st_quicly_decode_packet_t {
 #define QUICLY_RESET_STREAM_INGRESS 2
 #define QUICLY_RESET_STREAM_BOTH_DIRECTIONS (QUICLY_RESET_STREAM_INGRESS | QUICLY_RESET_STREAM_EGRESS)
 
+extern const quicly_context_t quicly_default_context;
+
 /**
  *
  */

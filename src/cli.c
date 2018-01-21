@@ -55,21 +55,7 @@ static int on_stream_open(quicly_stream_t *stream);
 
 static ptls_handshake_properties_t hs_properties;
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
-static quicly_context_t ctx = {&tlsctx,
-                               1280,
-                               1000,
-                               16384,
-                               65536,
-                               200,
-                               600,
-                               0,
-                               {0},
-                               quicly_default_alloc_packet,
-                               quicly_default_free_packet,
-                               quicly_default_alloc_stream,
-                               quicly_default_free_stream,
-                               on_stream_open,
-                               quicly_default_now};
+static quicly_context_t ctx;
 static const char *req_paths[1024];
 
 static void send_data(quicly_stream_t *stream, const char *s)
@@ -476,6 +462,10 @@ int main(int argc, char **argv)
     struct sockaddr_storage sa;
     socklen_t salen;
     int ch;
+
+    ctx = quicly_default_context;
+    ctx.tls = &tlsctx;
+    ctx.on_stream_open = on_stream_open;
 
     while ((ch = getopt(argc, argv, "a:c:k:l:p:r:s:Vvh")) != -1) {
         switch (ch) {
