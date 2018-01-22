@@ -642,6 +642,8 @@ static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
             if ((ret = setup_1rtt(conn, conn->crypto.tls)) != 0)
                 goto Exit;
         }
+        if (quicly_recvbuf_get(&conn->crypto.stream.recvbuf).len != 0)
+            ret = conn->crypto.stream.on_update(&conn->crypto.stream);
         break;
     case PTLS_ERROR_IN_PROGRESS:
         if (conn->super.state == QUICLY_STATE_BEFORE_SH)

@@ -479,11 +479,13 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
+    setup_session_cache(&tlsctx);
+
     ctx = quicly_default_context;
     ctx.tls = &tlsctx;
     ctx.on_stream_open = on_stream_open;
 
-    while ((ch = getopt(argc, argv, "a:c:k:l:np:r:s:Vvh")) != -1) {
+    while ((ch = getopt(argc, argv, "a:c:k:l:np:r:S:s:Vvh")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -512,7 +514,7 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
-        case 's':
+        case 'S':
             ctx.stateless_retry.enforce_use = 1;
             ctx.stateless_retry.key = optarg;
             if (strlen(ctx.stateless_retry.key) < tlsctx.cipher_suites[0]->hash->digest_size) {
@@ -520,6 +522,9 @@ int main(int argc, char **argv)
                         tlsctx.cipher_suites[0]->hash->digest_size);
                 exit(1);
             }
+            break;
+        case 's':
+            setup_session_file(&tlsctx, &hs_properties, optarg);
             break;
         case 'V':
             setup_verify_certificate(&tlsctx);
