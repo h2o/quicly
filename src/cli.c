@@ -171,6 +171,7 @@ static int on_resp_receive(quicly_stream_t *stream)
 
     while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
         fwrite(input.base, 1, input.len, stdout);
+        fflush(stdout);
         quicly_recvbuf_shift(&stream->recvbuf, input.len);
     }
 
