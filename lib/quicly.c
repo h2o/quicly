@@ -192,7 +192,6 @@ const quicly_context_t quicly_default_context = {
     100,       /* max_concurrent_streams_bidi */
     0,         /* max_concurrent_streams_uni */
     {0, NULL}, /* stateless_retry {enforce_use, key} */
-    0,         /* enforce_version_negotiation */
     quicly_default_alloc_packet,
     quicly_default_free_packet,
     quicly_default_alloc_stream,
@@ -228,6 +227,8 @@ int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, si
     packet->first_byte = *src++;
     if (!QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
         /* long header */
+        if (packet->first_byte < QUICLY_PACKET_TYPE_LONG_MIN)
+            goto Error;
         if (src_end - src < 16)
             goto Error;
         packet->connection_id = quicly_decode64(&src);
@@ -942,12 +943,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint64_t connecti
         conn->super.peer.next_stream_id_uni = 1;
     }
     conn->super.peer.transport_params = transport_params_before_handshake;
-    if (server_name != NULL && ctx->enforce_version_negotiation) {
-        ctx->tls->random_bytes(&conn->super.version, sizeof(conn->super.version));
-        conn->super.version = (conn->super.version & 0xf0f0f0f0) | 0x0a0a0a0a;
-    } else {
-        conn->super.version = QUICLY_PROTOCOL_VERSION;
-    }
     conn->streams = kh_init(quicly_stream_t);
     quicly_ranges_init(&conn->ingress.ack_queue);
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->initial_max_data);
@@ -1024,13 +1019,26 @@ Exit:
     return ret;
 }
 
-static int setup_initial_packet_payload(quicly_conn_t *conn)
+int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
+                   ptls_handshake_properties_t *handshake_properties)
 {
+    quicly_conn_t *conn;
+    uint64_t connection_id;
     ptls_buffer_t buf;
     int ret;
 
+    ctx->tls->random_bytes(&connection_id, sizeof(connection_id));
+    if ((conn = create_connection(ctx, connection_id, server_name, sa, salen, handshake_properties)) == NULL) {
+        ret = PTLS_ERROR_NO_MEMORY;
+        goto Exit;
+    }
+    if ((ret = setup_handshake_encryption(&conn->ingress.pp.aead.handshake, &conn->egress.pp.aead.handshake, ctx, connection_id,
+                                          1)) != 0)
+        goto Exit;
+
+    /* handshake */
     ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
-    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, conn->super.version);
+    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
     if ((ret = encode_transport_parameter_list(conn->super.ctx, &conn->crypto.transport_parameters.buf, 1)) != 0)
         goto Exit;
     conn->crypto.transport_parameters.ext[0] =
@@ -1044,30 +1052,6 @@ static int setup_initial_packet_payload(quicly_conn_t *conn)
     if ((ret = ptls_handshake(conn->crypto.tls, &buf, NULL, 0, &conn->crypto.handshake_properties)) != PTLS_ERROR_IN_PROGRESS)
         goto Exit;
     write_tlsbuf(conn, &buf);
-
-    ret = 0;
-Exit:
-    /* FIXME possibly leaking buf */
-    return ret;
-}
-
-int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                   ptls_handshake_properties_t *handshake_properties)
-{
-    quicly_conn_t *conn;
-    uint64_t connection_id;
-    int ret;
-
-    ctx->tls->random_bytes(&connection_id, sizeof(connection_id));
-    if ((conn = create_connection(ctx, connection_id, server_name, sa, salen, handshake_properties)) == NULL) {
-        ret = PTLS_ERROR_NO_MEMORY;
-        goto Exit;
-    }
-    if ((ret = setup_handshake_encryption(&conn->ingress.pp.aead.handshake, &conn->egress.pp.aead.handshake, ctx, connection_id,
-                                          1)) != 0)
-        goto Exit;
-    if ((ret = setup_initial_packet_payload(conn)) != 0)
-        goto Exit;
 
     *_conn = conn;
     ret = 0;
@@ -1138,10 +1122,6 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     /* ignore any packet that does not  */
     if (packet->first_byte != QUICLY_PACKET_TYPE_INITIAL) {
         ret = QUICLY_ERROR_PACKET_IGNORED;
-        goto Exit;
-    }
-    if (packet->version != QUICLY_PROTOCOL_VERSION) {
-        ret = QUICLY_ERROR_VERSION_NEGOTIATION;
         goto Exit;
     }
     if ((ret = setup_handshake_encryption(&aead_ingress, &aead_egress, ctx, packet->connection_id, 0)) != 0)
@@ -1641,34 +1621,6 @@ static int handle_timeouts(quicly_conn_t *conn, int64_t now)
     return 0;
 }
 
-quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                     uint64_t connection_id)
-{
-    quicly_raw_packet_t *packet;
-    uint8_t *dst;
-
-    if ((packet = ctx->alloc_packet(ctx, salen, ctx->max_packet_size)) == NULL)
-        return NULL;
-    packet->salen = salen;
-    memcpy(&packet->sa, sa, salen);
-    dst = packet->data.base;
-
-    /* type_flags */
-    ctx->tls->random_bytes(dst, 1);
-    *dst |= 0x80;
-    ++dst;
-    /* connection-id */
-    dst = quicly_encode64(dst, connection_id);
-    /* version */
-    dst = quicly_encode32(dst, 0);
-    /* supported_versions */
-    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION);
-
-    packet->data.len = dst - packet->data.base;
-
-    return packet;
-}
-
 int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_packets)
 {
     struct st_quicly_send_context_t s = {UINT8_MAX, conn->egress.pp.aead.handshake, conn->super.ctx->now(conn->super.ctx), packets,
@@ -1977,60 +1929,6 @@ static int handle_max_data_frame(quicly_conn_t *conn, quicly_max_data_frame_t *f
     return 0;
 }
 
-static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
-{
-    ptls_t *newtls = NULL;
-    const char *server_name;
-    int ret;
-
-    conn->super.version = version;
-
-    /* reinit TLS */
-    if ((newtls = ptls_new(conn->super.ctx->tls, 0)) == NULL) {
-        ret = PTLS_ERROR_NO_MEMORY;
-        goto Exit;
-    }
-    if ((server_name = ptls_get_server_name(conn->crypto.tls)) != NULL &&
-        (ret = ptls_set_server_name(newtls, server_name, strlen(server_name))) != 0)
-        goto Exit;
-    ptls_free(conn->crypto.tls);
-    conn->crypto.tls = newtls;
-    newtls = NULL;
-
-    /* reinit properties of stream zero */
-    reinit_stream_properties(&conn->crypto.stream);
-
-    /* setup initial payload */
-    ptls_buffer_dispose(&conn->crypto.transport_parameters.buf);
-    if ((ret = setup_initial_packet_payload(conn)) != 0)
-        goto Exit;
-
-    ret = 0;
-Exit:
-    if (newtls != NULL)
-        ptls_free(newtls);
-    return ret;
-}
-
-static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
-{
-#define CAN_SELECT(v) ((v) != conn->super.version && (v) == QUICLY_PROTOCOL_VERSION)
-
-    const uint8_t *src = packet->payload.base, *end = src + packet->payload.len;
-
-    if ((end - src) % 4 != 0)
-        return QUICLY_ERROR_PROTOCOL_VIOLATION;
-    /* first supported version is contained in the packet_number field */
-    if (CAN_SELECT(packet->packet_number.bits))
-        return negotiate_using_version(conn, packet->packet_number.bits);
-    while (src != end) {
-        uint32_t supported_version = quicly_decode32(&src);
-        if (CAN_SELECT(supported_version))
-            return negotiate_using_version(conn, supported_version);
-    }
-    return QUICLY_ERROR_VERSION_NEGOTIATION_FAILURE;
-}
-
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
     ptls_aead_context_t *aead;
@@ -2060,8 +1958,6 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             goto Exit;
         }
     } else {
-        if (conn->super.state == QUICLY_STATE_BEFORE_SH && packet->version == 0)
-            return handle_version_negotiation_packet(conn, packet);
         switch (packet->first_byte) {
         case QUICLY_PACKET_TYPE_RETRY:
             if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_BEFORE_SH) ||

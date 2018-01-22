@@ -123,10 +123,6 @@ struct st_quicly_context_t {
         const void *key;
     } stateless_retry;
     /**
-     * client-only
-     */
-    unsigned enforce_version_negotiation : 1;
-    /**
      * callback for allocating memory for raw packet
      */
     quicly_alloc_packet_cb alloc_packet;
@@ -180,7 +176,6 @@ struct _st_quicly_conn_public_t {
         socklen_t salen;
         quicly_transport_parameters_t transport_params;
     } peer;
-    uint32_t version;
 };
 
 typedef enum {
@@ -330,11 +325,6 @@ void quicly_free(quicly_conn_t *conn);
  *
  */
 int64_t quicly_get_first_timeout(quicly_conn_t *conn);
-/**
- *
- */
-quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                     uint64_t connection_id);
 /**
  *
  */

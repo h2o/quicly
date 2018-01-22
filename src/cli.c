@@ -191,25 +191,6 @@ int on_stream_open(quicly_stream_t *stream)
     return 0;
 }
 
-static int send_one(int fd, quicly_raw_packet_t *p)
-{
-    int ret;
-    struct msghdr mess;
-    struct iovec vec;
-    memset(&mess, 0, sizeof(mess));
-    mess.msg_name = &p->sa;
-    mess.msg_namelen = p->salen;
-    vec.iov_base = p->data.base;
-    vec.iov_len = p->data.len;
-    mess.msg_iov = &vec;
-    mess.msg_iovlen = 1;
-    if (verbosity >= 2)
-        hexdump("sendmsg", vec.iov_base, vec.iov_len);
-    while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-        ;
-    return ret;
-}
-
 static int send_pending(int fd, quicly_conn_t *conn)
 {
     quicly_raw_packet_t *packets[16];
@@ -221,7 +202,20 @@ static int send_pending(int fd, quicly_conn_t *conn)
         ret = quicly_send(conn, packets, &num_packets);
 
         for (i = 0; i != num_packets; ++i) {
-            if ((ret = send_one(fd, packets[i])) == -1)
+            struct msghdr mess;
+            struct iovec vec;
+            memset(&mess, 0, sizeof(mess));
+            mess.msg_name = &packets[i]->sa;
+            mess.msg_namelen = packets[i]->salen;
+            vec.iov_base = packets[i]->data.base;
+            vec.iov_len = packets[i]->data.len;
+            mess.msg_iov = &vec;
+            mess.msg_iovlen = 1;
+            if (verbosity >= 2)
+                hexdump("sendmsg", vec.iov_base, vec.iov_len);
+            while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+                ;
+            if (ret == -1)
                 perror("sendmsg failed");
             ret = 0;
             quicly_default_free_packet(&ctx, packets[i]);
@@ -419,21 +413,13 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     quicly_receive(conn, &packet);
                 } else {
                     /* new connection */
-                    int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, NULL, &packet);
-                    if (ret == 0) {
+                    if (quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, NULL, &packet) == 0) {
                         assert(conn != NULL);
                         conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
                         assert(conns != NULL);
                         conns[num_conns++] = conn;
                     } else {
                         assert(conn == NULL);
-                        if (ret == QUICLY_ERROR_VERSION_NEGOTIATION) {
-                            quicly_raw_packet_t *rp =
-                                quicly_send_version_negotiation(&ctx, &sa, mess.msg_namelen, packet.connection_id);
-                            assert(rp != NULL);
-                            if (send_one(fd, rp) == -1)
-                                perror("sendmsg failed");
-                        }
                     }
                 }
                 if (conn != NULL && send_pending(fd, conn) != 0) {
@@ -461,7 +447,6 @@ static void usage(const char *cmd)
            "  -k key-file          specifies the credentials to be used for running the\n"
            "                       server. If omitted, the command runs as a client.\n"
            "  -l log-file          file to log traffic secrets\n"
-           "  -n                   enforce version negotiation (client-only)\n"
            "  -p path              path to request (can be set multiple times)\n"
            "  -r [initial-rto]     initial RTO (in milliseconds)\n"
            "  -s [secret]          use stateless retry protected by the secret\n"
@@ -483,7 +468,7 @@ int main(int argc, char **argv)
     ctx.tls = &tlsctx;
     ctx.on_stream_open = on_stream_open;
 
-    while ((ch = getopt(argc, argv, "a:c:k:l:np:r:s:Vvh")) != -1) {
+    while ((ch = getopt(argc, argv, "a:c:k:l:p:r:s:Vvh")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -496,9 +481,6 @@ int main(int argc, char **argv)
             break;
         case 'l':
             setup_log_secret(&tlsctx, optarg);
-            break;
-        case 'n':
-            ctx.enforce_version_negotiation = 1;
             break;
         case 'p': {
             size_t i;
