@@ -321,7 +321,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
                         ret = quicly_open_stream(conn, &stream);
                         assert(ret == 0);
                         stream->on_update = on_resp_receive;
-                        sprintf(req, "GET %s\n", req_paths[i]);
+                        sprintf(req, "GET %s\r\n", req_paths[i]);
                         send_data(stream, req);
                     }
                 }
