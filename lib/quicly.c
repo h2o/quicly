@@ -999,7 +999,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     if ((ret = ptls_decode32(&negotiated_version, &src, end)) != 0)
         goto Exit;
     if (negotiated_version != QUICLY_PROTOCOL_VERSION) {
-        fprintf(stderr, "version negotiation not supported\n");
+        fprintf(stderr, "unexpected negotiated version\n");
         ret = QUICLY_ERROR_TBD;
         goto Exit;
     }
@@ -1043,7 +1043,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     /* handshake */
     ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
-    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
+    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, conn->super.version);
     if ((ret = encode_transport_parameter_list(conn->super.ctx, &conn->crypto.transport_parameters.buf, 1)) != 0)
         goto Exit;
     conn->crypto.transport_parameters.ext[0] =
@@ -1086,11 +1086,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
         uint32_t initial_version;
         if ((ret = ptls_decode32(&initial_version, &src, end)) != 0)
             goto Exit;
-        if (initial_version != QUICLY_PROTOCOL_VERSION) {
-            fprintf(stderr, "version negotiation not supported\n");
-            ret = QUICLY_ERROR_VERSION_NEGOTIATION;
-            goto Exit;
-        }
+        /* TODO we need to check initial_version when supporting multiple versions */
         if ((ret = decode_transport_parameter_list(&conn->super.peer.transport_params, 0, src, end)) != 0)
             goto Exit;
     }
@@ -1409,7 +1405,7 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
         *s->dst++ = s->first_byte;
         s->dst = quicly_encode64(s->dst, conn->super.connection_id);
         if ((s->first_byte & 0x80) != 0)
-            s->dst = quicly_encode32(s->dst, QUICLY_PROTOCOL_VERSION);
+            s->dst = quicly_encode32(s->dst, conn->super.version);
         s->dst = quicly_encode32(s->dst, (uint32_t)conn->egress.packet_number);
         s->dst_unencrypted_from = s->dst;
         assert(s->aead != NULL);
@@ -1964,6 +1960,45 @@ static int handle_max_data_frame(quicly_conn_t *conn, quicly_max_data_frame_t *f
 
     /* TODO schedule for delivery */
     return 0;
+}
+
+static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
+{
+    /* set selected version */
+    conn->super.version = version;
+    DEBUG_LOG(conn, 0, "switching version to %" PRIx32, version);
+
+    { /* reschedule the Initial packet for immediate resend */
+        quicly_acks_iter_t iter;
+        quicly_acks_init_iter(&conn->egress.acks, &iter);
+        quicly_ack_t *ack = quicly_acks_get(&iter);
+        int ret = ack->acked(conn, 0, ack);
+        assert(ret == 0);
+        quicly_acks_release(&conn->egress.acks, &iter);
+    }
+
+    return 0;
+}
+
+static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
+{
+#define CAN_SELECT(v) ((v) != conn->super.version && (v) == QUICLY_PROTOCOL_VERSION)
+
+    const uint8_t *src = packet->payload.base, *end = src + packet->payload.len;
+
+    if ((end - src) % 4 != 0)
+        return QUICLY_ERROR_PROTOCOL_VIOLATION;
+    /* first supported version is contained in the packet_number field */
+    if (CAN_SELECT(packet->packet_number.bits))
+        return negotiate_using_version(conn, packet->packet_number.bits);
+    while (src != end) {
+        uint32_t supported_version = quicly_decode32(&src);
+        if (CAN_SELECT(supported_version))
+            return negotiate_using_version(conn, supported_version);
+    }
+    return QUICLY_ERROR_VERSION_NEGOTIATION_FAILURE;
+
+#undef CAN_SELECT
 }
 
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
