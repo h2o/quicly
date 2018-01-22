@@ -90,21 +90,7 @@ static ptls_context_t tls_ctx = {
     &cert_signer.super};
 
 int64_t quic_now;
-quicly_context_t quic_ctx = {&tls_ctx,
-                             1280,
-                             1000,
-                             8192,
-                             64,
-                             10,
-                             60,
-                             0,
-                             {0},
-                             quicly_default_alloc_packet,
-                             quicly_default_free_packet,
-                             quicly_default_alloc_stream,
-                             quicly_default_free_stream,
-                             on_stream_open_buffering,
-                             get_now};
+quicly_context_t quic_ctx;
 
 static int64_t get_now(quicly_context_t *ctx)
 {
