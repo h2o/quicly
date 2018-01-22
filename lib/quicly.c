@@ -871,11 +871,11 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID_UNI:
                     if ((ret = ptls_decode32(&params->initial_max_stream_id_uni, &src, end)) != 0)
                         goto Exit;
-                    if (!STREAM_IS_UNI(params->initial_max_stream_id_bidi)) {
+                    if (!STREAM_IS_UNI(params->initial_max_stream_id_uni)) {
                         ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
                         goto Exit;
                     }
-                    if (is_client != STREAM_IS_CLIENT_INITIATED(params->initial_max_stream_id_bidi)) {
+                    if (is_client != STREAM_IS_CLIENT_INITIATED(params->initial_max_stream_id_uni)) {
                         ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
                         goto Exit;
                     }
