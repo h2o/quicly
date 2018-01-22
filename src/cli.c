@@ -480,6 +480,7 @@ int main(int argc, char **argv)
     int ch;
 
     setup_session_cache(&tlsctx);
+    tlsctx.max_early_data_size = UINT32_MAX;
 
     ctx = quicly_default_context;
     ctx.tls = &tlsctx;
