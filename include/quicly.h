@@ -316,7 +316,7 @@ static void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
 /**
  *
  */
-void quicly_get_max_data(quicly_conn_t *conn, __uint128_t *send_permitted, __uint128_t *sent, __uint128_t *consumed);
+void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed);
 /**
  *
  */

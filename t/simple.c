@@ -215,7 +215,7 @@ static void test_rst_during_loss(void)
     quicly_stream_t *client_stream, *server_stream;
     quicly_raw_packet_t *reordered_packet;
     int ret;
-    __uint128_t max_data_at_start, tmp;
+    uint64_t max_data_at_start, tmp;
 
     quic_ctx.initial_max_stream_data = 4;
 

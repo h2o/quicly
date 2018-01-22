@@ -463,7 +463,7 @@ quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint64_t stream_id)
     return NULL;
 }
 
-void quicly_get_max_data(quicly_conn_t *conn, __uint128_t *send_permitted, __uint128_t *sent, __uint128_t *consumed)
+void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed)
 {
     if (send_permitted != NULL)
         *send_permitted = conn->egress.max_data.permitted;
