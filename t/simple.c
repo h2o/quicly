@@ -289,13 +289,13 @@ static void test_rst_during_loss(void)
 
 static void tiny_connection_window(void)
 {
-    uint32_t initial_max_data_kb_orig = quic_ctx.initial_max_data_kb;
+    uint32_t initial_max_data_kb_orig = quic_ctx.initial_max_data;
     quicly_stream_t *client_stream, *server_stream;
     size_t i;
     int ret;
     char testdata[1025];
 
-    quic_ctx.initial_max_data_kb = 1;
+    quic_ctx.initial_max_data = 1024;
     for (i = 0; i < 1024 / 16; ++i)
         strcpy(testdata + i * 16, "0123456789abcdef");
 
@@ -340,7 +340,7 @@ static void tiny_connection_window(void)
         ok(server_stream->recvbuf.data.len == 0);
     }
 
-    quic_ctx.initial_max_data_kb = initial_max_data_kb_orig;
+    quic_ctx.initial_max_data = initial_max_data_kb_orig;
 }
 
 void test_simple(void)

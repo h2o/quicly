@@ -61,9 +61,9 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint32_t initial_max_stream_data;
     /**
-     * in KB
+     * in octets
      */
-    uint32_t initial_max_data_kb;
+    uint32_t initial_max_data;
     /**
      * in seconds
      */
@@ -102,7 +102,7 @@ struct st_quicly_context_t {
     /**
      *
      */
-    uint32_t initial_max_data_kb;
+    uint32_t initial_max_data;
     /**
      *
      */

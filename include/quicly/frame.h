@@ -102,10 +102,10 @@ typedef struct st_quicly_close_frame_t {
 
 static int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_close_frame_t *frame);
 
-static uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data_kb);
+static uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data);
 
 typedef struct st_quicly_max_data_frame_t {
-    uint64_t max_data_kb;
+    uint64_t max_data;
 } quicly_max_data_frame_t;
 
 static int quicly_decode_max_data_frame(const uint8_t **src, const uint8_t *end, quicly_max_data_frame_t *frame);
@@ -393,16 +393,16 @@ Error:
     return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_CONNECTION_CLOSE);
 }
 
-inline uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data_kb)
+inline uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data)
 {
     *dst++ = QUICLY_FRAME_TYPE_MAX_DATA;
-    dst = quicly_encodev(dst, max_data_kb);
+    dst = quicly_encodev(dst, max_data);
     return dst;
 }
 
 inline int quicly_decode_max_data_frame(const uint8_t **src, const uint8_t *end, quicly_max_data_frame_t *frame)
 {
-    if ((frame->max_data_kb = quicly_decodev(src, end)) == UINT64_MAX)
+    if ((frame->max_data = quicly_decodev(src, end)) == UINT64_MAX)
         return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_MAX_DATA);
     return 0;
 }
