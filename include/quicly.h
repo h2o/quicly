@@ -305,6 +305,10 @@ static quicly_state_t quicly_get_state(quicly_conn_t *conn);
 /**
  *
  */
+int quicly_connection_is_ready(quicly_conn_t *conn);
+/**
+ *
+ */
 static uint32_t quicly_num_streams(quicly_conn_t *conn);
 /**
  *

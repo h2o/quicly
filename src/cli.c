@@ -258,6 +258,24 @@ static void set_alpn(ptls_handshake_properties_t *pro, const char *alpn_str)
     pro->client.negotiated_protocols.count = entries;
 }
 
+static void send_if_possible(quicly_conn_t *conn)
+{
+    int ret;
+
+    if (quicly_connection_is_ready(conn) && quicly_get_next_stream_id(conn, 0) == 4) {
+        size_t i;
+        for (i = 0; req_paths[i] != NULL; ++i) {
+            char req[1024];
+            quicly_stream_t *stream;
+            ret = quicly_open_stream(conn, &stream);
+            assert(ret == 0);
+            stream->on_update = on_resp_receive;
+            sprintf(req, "GET %s\r\n", req_paths[i]);
+            send_data(stream, req);
+        }
+    }
+}
+
 static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
 {
     int fd, ret;
@@ -276,6 +294,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
     }
     ret = quicly_connect(&conn, &ctx, host, sa, salen, &hs_properties);
     assert(ret == 0);
+    send_if_possible(conn);
     send_pending(fd, conn);
 
     while (1) {
@@ -319,18 +338,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
             quicly_decoded_packet_t packet;
             if (quicly_decode_packet(&packet, buf, rret) == 0) {
                 quicly_receive(conn, &packet);
-                if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED && quicly_get_next_stream_id(conn, 0) == 4) {
-                    size_t i;
-                    for (i = 0; req_paths[i] != NULL; ++i) {
-                        char req[1024];
-                        quicly_stream_t *stream;
-                        ret = quicly_open_stream(conn, &stream);
-                        assert(ret == 0);
-                        stream->on_update = on_resp_receive;
-                        sprintf(req, "GET %s\r\n", req_paths[i]);
-                        send_data(stream, req);
-                    }
-                }
+                send_if_possible(conn);
             }
         }
         if (conn != NULL && send_pending(fd, conn) != 0) {
