@@ -101,7 +101,7 @@ typedef struct quicly_loss_t {
     /**
      * The time at which the next packet will be considered lost based on exceeding the reordering window in time.
      */
-    uint64_t loss_time;
+    int64_t loss_time;
     /**
      *
      */
@@ -109,7 +109,7 @@ typedef struct quicly_loss_t {
     /**
      * The time at when lostdetect_on_alarm should be called.
      */
-    uint64_t alarm_at;
+    int64_t alarm_at;
     /**
      * rtt
      */
@@ -154,7 +154,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest)
 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt)
 {
-    *r = (quicly_loss_t){.conf = conf, .alarm_at = INT64_MAX};
+    *r = (quicly_loss_t){.conf = conf, .loss_time = INT64_MAX, .alarm_at = INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
 }
 
@@ -162,7 +162,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_out
 {
     if (has_outstanding) {
         int64_t alarm_duration;
-        if (r->loss_time != 0) {
+        if (r->loss_time != INT64_MAX) {
             /* Time loss detection */
             alarm_duration = r->loss_time - now;
         } else if (r->tlp_count < r->conf->max_tlps) {
@@ -213,7 +213,8 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked
 inline int quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint64_t largest_sent, quicly_loss_do_detect_cb do_detect,
                                 size_t *num_packets_to_send)
 {
-    if (r->loss_time != 0) {
+    r->alarm_at = INT64_MAX;
+    if (r->loss_time != INT64_MAX) {
         /* Early retransmit or Time Loss Detection */
         *num_packets_to_send = 0;
         return quicly_loss_detect_loss(r, now, largest_sent, r->largest_acked_packet, do_detect);
@@ -239,13 +240,13 @@ inline int quicly_loss_detect_loss(quicly_loss_t *r, int64_t now, uint64_t large
     int64_t loss_time;
     int ret;
 
-    r->loss_time = 0;
+    r->loss_time = INT64_MAX;
     if (largest_sent != largest_acked)
         return 0;
 
     if ((ret = do_detect(r, now, largest_acked, delay_until_lost, &loss_time)) != 0)
         return ret;
-    if (loss_time != INT64_MAX && r->loss_time == 0)
+    if (loss_time != INT64_MAX)
         r->loss_time = loss_time;
 
     return 0;
