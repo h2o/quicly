@@ -58,8 +58,12 @@ static int cond_even(quicly_decoded_packet_t *packet)
 
 static void test_even(void)
 {
+    quicly_loss_conf_t lossconf = quicly_loss_default_conf;
     size_t num_sent, num_received;
     int ret;
+
+    lossconf.max_tlps = 0;
+    quic_ctx.loss = &lossconf;
 
     quic_now = 0;
 
@@ -108,6 +112,8 @@ static void test_even(void)
     ok(num_sent == 2);
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
+
+    quic_ctx.loss = &quicly_loss_default_conf;
 }
 
 static unsigned rand_ratio;
