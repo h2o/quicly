@@ -22,6 +22,10 @@
 #ifndef quicly_h
 #define quicly_h
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -58,13 +62,9 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint32_t initial_max_stream_data;
     /**
-     * in KB
+     * in octets
      */
-    uint32_t initial_max_data_kb;
-    /**
-     *
-     */
-    uint32_t initial_max_stream_id;
+    uint32_t initial_max_data;
     /**
      * in seconds
      */
@@ -72,7 +72,15 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    unsigned truncate_connection_id : 1;
+    uint32_t initial_max_stream_id_bidi;
+    /**
+     *
+     */
+    uint32_t initial_max_stream_id_uni;
+    /**
+     *
+     */
+    unsigned omit_connection_id : 1;
 } quicly_transport_parameters_t;
 
 struct st_quicly_context_t {
@@ -87,11 +95,38 @@ struct st_quicly_context_t {
     /**
      * loss detection parameters
      */
-    quicly_loss_conf_t loss;
+    quicly_loss_conf_t *loss;
     /**
      * transport parameters
      */
-    quicly_transport_parameters_t transport_params;
+    uint32_t initial_max_stream_data;
+    /**
+     *
+     */
+    uint32_t initial_max_data;
+    /**
+     *
+     */
+    uint16_t idle_timeout;
+    /**
+     *
+     */
+    uint32_t max_concurrent_streams_bidi;
+    /**
+     *
+     */
+    uint32_t max_concurrent_streams_uni;
+    /**
+     * stateless reset
+     */
+    struct {
+        unsigned enforce_use : 1;
+        const void *key;
+    } stateless_retry;
+    /**
+     * client-only
+     */
+    unsigned enforce_version_negotiation : 1;
     /**
      * callback for allocating memory for raw packet
      */
@@ -122,7 +157,12 @@ struct st_quicly_context_t {
     quicly_debug_log_cb debug_log;
 };
 
-typedef enum { QUICLY_STATE_BEFORE_SH = 0, QUICLY_STATE_BEFORE_SF, QUICLY_STATE_1RTT_ENCRYPTED } quicly_state_t;
+typedef enum {
+    QUICLY_STATE_SEND_STATELESS_RETRY,
+    QUICLY_STATE_BEFORE_SH,
+    QUICLY_STATE_BEFORE_SF,
+    QUICLY_STATE_1RTT_ENCRYPTED
+} quicly_state_t;
 
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
@@ -130,15 +170,18 @@ struct _st_quicly_conn_public_t {
     quicly_state_t state;
     struct {
         uint32_t num_streams;
-        uint32_t next_stream_id;
+        uint64_t next_stream_id_bidi;
+        uint64_t next_stream_id_uni;
     } host;
     struct {
         uint32_t num_streams;
-        uint32_t next_stream_id;
+        uint64_t next_stream_id_bidi;
+        uint64_t next_stream_id_uni;
         struct sockaddr *sa;
         socklen_t salen;
         quicly_transport_parameters_t transport_params;
     } peer;
+    uint32_t version;
 };
 
 typedef enum {
@@ -156,7 +199,7 @@ struct st_quicly_stream_t {
     /**
      * stream id
      */
-    uint32_t stream_id;
+    uint64_t stream_id;
     /**
      * send buffer
      */
@@ -218,14 +261,12 @@ struct st_quicly_stream_t {
         /**
          *
          */
-        uint32_t rst_reason;
+        uint16_t rst_reason;
     } _recv_aux;
 };
 
 typedef struct st_quicly_decode_packet_t {
-    uint8_t type;
-    uint8_t is_long_header : 1;
-    uint8_t has_connection_id : 1;
+    uint8_t first_byte;
     uint64_t connection_id;
     struct {
         uint32_t bits;
@@ -239,6 +280,8 @@ typedef struct st_quicly_decode_packet_t {
 #define QUICLY_RESET_STREAM_EGRESS 1
 #define QUICLY_RESET_STREAM_INGRESS 2
 #define QUICLY_RESET_STREAM_BOTH_DIRECTIONS (QUICLY_RESET_STREAM_INGRESS | QUICLY_RESET_STREAM_EGRESS)
+
+extern const quicly_context_t quicly_default_context;
 
 /**
  *
@@ -263,6 +306,10 @@ static quicly_state_t quicly_get_state(quicly_conn_t *conn);
 /**
  *
  */
+int quicly_connection_is_ready(quicly_conn_t *conn);
+/**
+ *
+ */
 static uint32_t quicly_num_streams(quicly_conn_t *conn);
 /**
  *
@@ -271,7 +318,7 @@ static int quicly_is_client(quicly_conn_t *conn);
 /**
  *
  */
-static uint32_t quicly_get_next_stream_id(quicly_conn_t *conn);
+static uint64_t quicly_get_next_stream_id(quicly_conn_t *conn, int uni);
 /**
  *
  */
@@ -279,7 +326,7 @@ static void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
 /**
  *
  */
-void quicly_get_max_data(quicly_conn_t *conn, __uint128_t *send_permitted, __uint128_t *sent, __uint128_t *consumed);
+void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed);
 /**
  *
  */
@@ -288,6 +335,11 @@ void quicly_free(quicly_conn_t *conn);
  *
  */
 int64_t quicly_get_first_timeout(quicly_conn_t *conn);
+/**
+ *
+ */
+quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+                                                     uint64_t connection_id);
 /**
  *
  */
@@ -309,7 +361,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 /**
  *
  */
-quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint32_t stream_id);
+quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint64_t stream_id);
 /**
  *
  */
@@ -355,43 +407,43 @@ void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...) __att
 
 inline quicly_state_t quicly_get_state(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->state;
 }
 
 inline uint32_t quicly_num_streams(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return 1 + c->host.num_streams + c->peer.num_streams;
 }
 
 inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->ctx;
 }
 
 inline uint64_t quicly_get_connection_id(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->connection_id;
 }
 
 inline int quicly_is_client(quicly_conn_t *conn)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
-    return c->host.next_stream_id % 2 != 0;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return (c->host.next_stream_id_bidi & 2) == 0;
 }
 
-inline uint32_t quicly_get_next_stream_id(quicly_conn_t *conn)
+inline uint64_t quicly_get_next_stream_id(quicly_conn_t *conn, int uni)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
-    return c->host.next_stream_id;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return uni ? c->host.next_stream_id_uni : c->host.next_stream_id_bidi;
 }
 
 inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen)
 {
-    struct _st_quicly_conn_public_t *c = (void *)conn;
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     *sa = c->peer.sa;
     *salen = c->peer.salen;
 }
@@ -404,5 +456,9 @@ inline int quicly_stream_is_closable(quicly_stream_t *stream)
         return 0;
     return 1;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

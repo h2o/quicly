@@ -38,11 +38,11 @@ struct st_quicly_ack_t {
     quicly_ack_cb acked;
     union {
         struct {
-            uint32_t stream_id;
+            uint64_t stream_id;
             quicly_sendbuf_ackargs_t args;
         } stream;
         struct {
-            uint32_t stream_id;
+            uint64_t stream_id;
             quicly_maxsender_ackargs_t args;
         } max_stream_data;
         struct {
@@ -52,7 +52,7 @@ struct st_quicly_ack_t {
             quicly_maxsender_ackargs_t args;
         } max_stream_id;
         struct {
-            uint32_t stream_id;
+            uint64_t stream_id;
         } stream_state_sender;
     } data;
 };

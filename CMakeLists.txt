@@ -47,3 +47,19 @@ ADD_EXECUTABLE(test.t ${PICOTLS_OPENSSL_FILES} ${UNITTEST_SOURCE_FILES})
 TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 
 ADD_CUSTOM_TARGET(check prove --exec "sh -c" -v ./*.t DEPENDS test.t)
+
+IF (BUILD_FUZZER)
+    IF(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        MESSAGE(FATAL_ERROR "The fuzzer needs clang as a compiler")
+    ENDIF()
+    ADD_EXECUTABLE(quicly-fuzzer-packet fuzz/packet.cc ${PICOTLS_OPENSSL_FILES})
+    SET(LIB_FUZZER "${CMAKE_CURRENT_BINARY_DIR}/libFuzzer.a")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-coverage=edge,indirect-calls,8bit-counters")
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-coverage=edge,indirect-calls,8bit-counters")
+    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_C_FLAGS}")
+
+    ADD_CUSTOM_TARGET(libFuzzer ${CMAKE_CURRENT_SOURCE_DIR}/misc/build_libFuzzer.sh WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    ADD_DEPENDENCIES(quicly-fuzzer-packet libFuzzer)
+    TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS} ${LIB_FUZZER})
+ENDIF()
+

@@ -86,19 +86,11 @@ static int64_t get_now(quicly_context_t *ctx);
 static ptls_iovec_t cert;
 static ptls_openssl_sign_certificate_t cert_signer;
 static ptls_context_t tls_ctx = {
-    ptls_openssl_random_bytes, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL, &cert_signer.super};
+    ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL,
+    &cert_signer.super};
 
 int64_t quic_now;
-quicly_context_t quic_ctx = {&tls_ctx,
-                             1280,
-                             {0, 128, 0, 1000, 100},
-                             {8192, 64, 10, 60, 0},
-                             quicly_default_alloc_packet,
-                             quicly_default_free_packet,
-                             quicly_default_alloc_stream,
-                             quicly_default_free_stream,
-                             on_stream_open_buffering,
-                             get_now};
+quicly_context_t quic_ctx;
 
 static int64_t get_now(quicly_context_t *ctx)
 {
@@ -171,8 +163,8 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 
 int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
 {
-    __uint128_t client_sent, client_consumed;
-    __uint128_t server_sent, server_consumed;
+    uint64_t client_sent, client_consumed;
+    uint64_t server_sent, server_consumed;
 
     quicly_get_max_data(client, NULL, &client_sent, &client_consumed);
     quicly_get_max_data(server, NULL, &server_sent, &server_consumed);
@@ -202,6 +194,12 @@ static void test_next_packet_number(void)
 
 int main(int argc, char **argv)
 {
+    quic_ctx = quicly_default_context;
+    quic_ctx.tls = &tls_ctx;
+    quic_ctx.max_concurrent_streams_bidi = 10;
+    quic_ctx.on_stream_open = on_stream_open_buffering;
+    quic_ctx.now = get_now;
+
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
 #if !defined(OPENSSL_NO_ENGINE)
