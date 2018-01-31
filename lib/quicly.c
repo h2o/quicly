@@ -1361,6 +1361,14 @@ static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
+    if (1 /* CWND is not full (TODO) */) {
+        if (conn->crypto.pending_control || conn->crypto.pending_data)
+            return 0;
+        if (quicly_linklist_is_linked(&conn->pending_link.control) ||
+            quicly_linklist_is_linked(&conn->pending_link.stream_fin_only) ||
+            quicly_linklist_is_linked(&conn->pending_link.stream_with_payload))
+            return 0;
+    }
     return conn->egress.loss.alarm_at < conn->egress.send_ack_at ? conn->egress.loss.alarm_at : conn->egress.send_ack_at;
 }
 
