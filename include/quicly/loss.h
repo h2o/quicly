@@ -147,7 +147,10 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest)
 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt)
 {
-    *r = (quicly_loss_t){.conf = conf, .loss_time = INT64_MAX, .alarm_at = INT64_MAX};
+    *r = (quicly_loss_t){.conf = conf,
+                         .tlp_count = conf->max_tlps, /* start from max_tlps to disable TLP until seeing the first ack */
+                         .loss_time = INT64_MAX,
+                         .alarm_at = INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
 }
 
