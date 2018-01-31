@@ -25,7 +25,7 @@
 static quicly_conn_t *client, *server;
 
 static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received,
-                          int (*cond)(quicly_decoded_packet_t *))
+                          int (*cond)(quicly_decoded_packet_t *), int64_t latency)
 {
     quicly_raw_packet_t *packets[32];
     size_t i;
@@ -35,6 +35,7 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
     *num_sent = sizeof(packets) / sizeof(packets[0]);
     ret = quicly_send(src, packets, num_sent);
     ok(ret == 0);
+    quic_now += latency;
 
     *num_received = 0;
 
@@ -49,6 +50,12 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
         }
         free_packets(packets, *num_sent);
     }
+    quic_now += latency;
+}
+
+static int cond_true(quicly_decoded_packet_t *packet)
+{
+    return 1;
 }
 
 static int cond_even(quicly_decoded_packet_t *packet)
@@ -58,8 +65,12 @@ static int cond_even(quicly_decoded_packet_t *packet)
 
 static void test_even(void)
 {
+    quicly_loss_conf_t lossconf = quicly_loss_default_conf;
     size_t num_sent, num_received;
     int ret;
+
+    lossconf.max_tlps = 0;
+    quic_ctx.loss = &lossconf;
 
     quic_now = 0;
 
@@ -82,32 +93,34 @@ static void test_even(void)
     }
 
     /* drop 2nd packet from server */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even);
+    transmit_cond(server, client, &num_sent, &num_received, cond_even, 0);
     ok(num_sent == 2);
     ok(num_received == 1);
-    ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
+    ok(quicly_get_state(client) == QUICLY_STATE_HANDSHAKE);
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
     /* after ack-timeout, server sends the delayed ack */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even);
+    transmit_cond(server, client, &num_sent, &num_received, cond_even, 0);
     ok(num_sent == 1);
     ok(num_received == 1);
 
     /* client sends delayed-ack that gets dropped */
-    transmit_cond(client, server, &num_sent, &num_received, cond_even);
+    transmit_cond(client, server, &num_sent, &num_received, cond_even, 0);
     ok(num_sent == 1);
     ok(num_received == 0);
 
-    ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
+    ok(quicly_get_state(client) == QUICLY_STATE_HANDSHAKE);
 
     quic_now += 1000;
 
     /* server resends the contents of all the packets (in cleartext) */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even);
+    transmit_cond(server, client, &num_sent, &num_received, cond_even, 0);
     ok(num_sent == 2);
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
+
+    quic_ctx.loss = &quicly_loss_default_conf;
 }
 
 static unsigned rand_ratio;
@@ -144,18 +157,26 @@ static void loss_core(int downstream_only)
         ret = quicly_send(client, &raw, &num_packets);
         ok(ret == 0);
         ok(num_packets == 1);
+        quic_now += 10;
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
         ok(ret == 0);
         free_packets(&raw, 1);
+        quic_now += 10;
     }
 
     quicly_stream_t *client_stream = NULL, *server_stream = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
     size_t i;
-    for (i = 0; i < 100; ++i) {
-        transmit_cond(server, client, &num_sent, &num_received, cond_rand);
+    for (i = 0; i < 1000; ++i) {
+        int64_t client_timeout = quicly_get_first_timeout(client), server_timeout = quicly_get_first_timeout(server),
+                min_timeout = client_timeout < server_timeout ? client_timeout : server_timeout;
+        assert(min_timeout != INT64_MAX);
+        assert(min_timeout == 0 || quic_now < min_timeout + 40); /* we might have spent two RTTs in the loop below */
+        if (quic_now < min_timeout)
+            quic_now = min_timeout;
+        transmit_cond(server, client, &num_sent, &num_received, cond_rand, 10);
         if (quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED) {
             if (client_stream == NULL) {
                 ret = quicly_open_stream(client, &client_stream);
@@ -169,11 +190,7 @@ static void loss_core(int downstream_only)
                 return;
             }
         }
-        if (downstream_only) {
-            num_sent = num_received = transmit(client, server);
-        } else {
-            transmit_cond(client, server, &num_sent, &num_received, cond_rand);
-        }
+        transmit_cond(client, server, &num_sent, &num_received, downstream_only ? cond_true : cond_rand, 10);
         if (client_stream != NULL && (server_stream = quicly_get_stream(server, client_stream->stream_id)) != NULL) {
             if (fully_received(&server_stream->recvbuf) && server_stream->recvbuf.data_off == 0) {
                 ok(recvbuf_is(&server_stream->recvbuf, req));
@@ -181,7 +198,6 @@ static void loss_core(int downstream_only)
                 quicly_sendbuf_shutdown(&server_stream->sendbuf);
             }
         }
-        quic_now += 1000;
     }
     ok(0);
 }

@@ -518,7 +518,7 @@ int main(int argc, char **argv)
             req_paths[i] = optarg;
         } break;
         case 'r':
-            if (sscanf(optarg, "%" PRIu32, &ctx.initial_rto) != 1) {
+            if (sscanf(optarg, "%" PRIu32, &ctx.loss->default_initial_rtt) != 1) {
                 fprintf(stderr, "invalid argument passed to `-r`\n");
                 exit(1);
             }

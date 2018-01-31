@@ -59,7 +59,7 @@ void test_ack(void)
         for (i = 1; i <= 5; ++i) {
             for (j = 0; j < 3; ++j) {
                 quicly_ack_t *ack = quicly_acks_get(&iter);
-                ok(ack != NULL);
+                ok(ack->packet_number != UINT64_MAX);
                 ok(ack->packet_number == at * 5 + i);
                 ok(ack->sent_at == at);
                 ok(ack->acked == on_acked);
@@ -67,24 +67,24 @@ void test_ack(void)
             }
         }
     }
-    ok(quicly_acks_get(&iter) == NULL);
+    ok(quicly_acks_get(&iter)->packet_number == UINT64_MAX);
     ok(num_blocks(&acks) == 150 / 16 + 1);
 
     /* pop acks between 11 <= packet_number <= 40 */
     quicly_acks_init_iter(&acks, &iter);
     while (quicly_acks_get(&iter)->packet_number <= 10) {
         quicly_acks_next(&iter);
-        ok(quicly_acks_get(&iter) != NULL);
+        ok(quicly_acks_get(&iter)->packet_number != UINT64_MAX);
     }
     while (quicly_acks_get(&iter)->packet_number <= 40) {
         quicly_acks_release(&acks, &iter);
         quicly_acks_next(&iter);
-        ok(quicly_acks_get(&iter) != NULL);
+        ok(quicly_acks_get(&iter)->packet_number != UINT64_MAX);
     }
 
     quicly_acks_init_iter(&acks, &iter);
     size_t cnt = 0;
-    for (; quicly_acks_get(&iter) != NULL; quicly_acks_next(&iter)) {
+    for (; quicly_acks_get(&iter)->packet_number != UINT64_MAX; quicly_acks_next(&iter)) {
         quicly_ack_t *ack = quicly_acks_get(&iter);
         ok(ack->acked != NULL);
         ok(ack->packet_number <= 10 || 40 < ack->packet_number);

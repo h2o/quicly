@@ -73,6 +73,8 @@ typedef struct st_quicly_acks_iter_t {
     struct st_quicly_ack_block_t **ref;
 } quicly_acks_iter_t;
 
+extern const quicly_ack_t quicly_acks__end_iter;
+
 static void quicly_acks_init(quicly_acks_t *acks);
 void quicly_acks_dispose(quicly_acks_t *acks);
 static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked);
@@ -118,7 +120,7 @@ inline void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter)
             ;
         iter->count = acks->head->active;
     } else {
-        iter->p = NULL;
+        iter->p = (void *)&quicly_acks__end_iter;
         iter->count = 0;
     }
 }
@@ -133,7 +135,7 @@ inline void quicly_acks_next(quicly_acks_iter_t *iter)
     if (--iter->count != 0) {
         ++iter->p;
     } else if (*(iter->ref = &(*iter->ref)->next) == NULL) {
-        iter->p = NULL;
+        iter->p = (void *)&quicly_acks__end_iter;
         iter->count = 0;
         return;
     } else {

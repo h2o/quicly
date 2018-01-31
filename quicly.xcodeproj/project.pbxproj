@@ -25,6 +25,9 @@
 		E92D43ED1F41DCF5002AC767 /* sendbuf.h in Headers */ = {isa = PBXBuildFile; fileRef = E92D43EC1F41DCF5002AC767 /* sendbuf.h */; };
 		E93E546A1F663851001C50FE /* pembase64.c in Sources */ = {isa = PBXBuildFile; fileRef = E93E54681F663849001C50FE /* pembase64.c */; };
 		E93E546B1F663852001C50FE /* pembase64.c in Sources */ = {isa = PBXBuildFile; fileRef = E93E54681F663849001C50FE /* pembase64.c */; };
+		E93E54BB1F69B750001C50FE /* loss.h in Headers */ = {isa = PBXBuildFile; fileRef = E93E54BA1F69B750001C50FE /* loss.h */; };
+		E93E54BD1F6CA76C001C50FE /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E93E54BC1F6CA76C001C50FE /* loss.c */; };
+		E93E54BE1F6CA76C001C50FE /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E93E54BC1F6CA76C001C50FE /* loss.c */; };
 		E984482C1EA48D1200390927 /* picotls.h in Headers */ = {isa = PBXBuildFile; fileRef = E984482B1EA48D1200390927 /* picotls.h */; };
 		E984483A1EA48D7A00390927 /* libquicly.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E98448171EA48BD400390927 /* libquicly.a */; };
 		E984483B1EA48DD300390927 /* openssl.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448271EA48D0000390927 /* openssl.c */; };
@@ -89,6 +92,8 @@
 		E920D22F1F49EE0B00799777 /* loss.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E92D43EC1F41DCF5002AC767 /* sendbuf.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = sendbuf.h; sourceTree = "<group>"; };
 		E93E54681F663849001C50FE /* pembase64.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pembase64.c; sourceTree = "<group>"; };
+		E93E54BA1F69B750001C50FE /* loss.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = loss.h; sourceTree = "<group>"; };
+		E93E54BC1F6CA76C001C50FE /* loss.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E98448171EA48BD400390927 /* libquicly.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libquicly.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		E98448271EA48D0000390927 /* openssl.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = openssl.c; sourceTree = "<group>"; };
 		E98448281EA48D0000390927 /* picotls.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = picotls.c; sourceTree = "<group>"; };
@@ -179,6 +184,7 @@
 				E920D22A1F49533800799777 /* ack.c */,
 				E920D2181F42E9CE00799777 /* buffer.c */,
 				E99F8C251F4E9EBF00C26B3D /* frame.c */,
+				E93E54BC1F6CA76C001C50FE /* loss.c */,
 				E99B75EA1F5D353A00CF503E /* maxsender.c */,
 				E98448411EA490A500390927 /* quicly.c */,
 				E9F6A41F1F3C0B6D0083F0B2 /* ranges.c */,
@@ -283,6 +289,7 @@
 				E920D2201F44047C00799777 /* constants.h */,
 				E99F8C231F4E863200C26B3D /* frame.h */,
 				E9056C071F56965300E2B96C /* linklist.h */,
+				E93E54BA1F69B750001C50FE /* loss.h */,
 				E920D2221F4536CB00799777 /* maxsender.h */,
 				E9F6A4261F3C3B050083F0B2 /* ranges.h */,
 				E920D21B1F43DE4100799777 /* recvbuf.h */,
@@ -305,6 +312,7 @@
 				E984482C1EA48D1200390927 /* picotls.h in Headers */,
 				E9F6A4271F3C3B050083F0B2 /* ranges.h in Headers */,
 				E9056C081F56965300E2B96C /* linklist.h in Headers */,
+				E93E54BB1F69B750001C50FE /* loss.h in Headers */,
 				E98448401EA48F6B00390927 /* quicly.h in Headers */,
 				E99F8C241F4E863200C26B3D /* frame.h in Headers */,
 				E92D43ED1F41DCF5002AC767 /* sendbuf.h in Headers */,
@@ -412,6 +420,7 @@
 				E9F6A4201F3C0B6D0083F0B2 /* ranges.c in Sources */,
 				E920D21E1F43E05000799777 /* recvbuf.c in Sources */,
 				E9F6A42E1F41375B0083F0B2 /* sendbuf.c in Sources */,
+				E93E54BD1F6CA76C001C50FE /* loss.c in Sources */,
 				E99F8C261F4E9EBF00C26B3D /* frame.c in Sources */,
 				E984483E1EA48E7200390927 /* cli.c in Sources */,
 				E920D2191F42E9CE00799777 /* buffer.c in Sources */,
@@ -438,6 +447,7 @@
 				E99F8C291F4EAEF800C26B3D /* frame.c in Sources */,
 				E920D22C1F49533800799777 /* ack.c in Sources */,
 				E920D2301F49EE0B00799777 /* loss.c in Sources */,
+				E93E54BE1F6CA76C001C50FE /* loss.c in Sources */,
 				E99B75E71F5CF96900CF503E /* maxsender.c in Sources */,
 				E9F6A42F1F41375B0083F0B2 /* sendbuf.c in Sources */,
 				E920D2251F49412900799777 /* simple.c in Sources */,

@@ -32,6 +32,7 @@ extern "C" {
 #include "picotls.h"
 #include "quicly/constants.h"
 #include "quicly/linklist.h"
+#include "quicly/loss.h"
 #include "quicly/recvbuf.h"
 #include "quicly/sendbuf.h"
 #include "quicly/maxsender.h"
@@ -92,9 +93,9 @@ struct st_quicly_context_t {
      */
     uint16_t max_packet_size;
     /**
-     * initial retransmission timeout (in milliseconds)
+     * loss detection parameters
      */
-    uint32_t initial_rto;
+    quicly_loss_conf_t *loss;
     /**
      * transport parameters
      */
@@ -157,9 +158,9 @@ struct st_quicly_context_t {
 };
 
 typedef enum {
-    QUICLY_STATE_SEND_STATELESS_RETRY,
-    QUICLY_STATE_BEFORE_SH,
-    QUICLY_STATE_BEFORE_SF,
+    QUICLY_STATE_FIRSTFLIGHT,
+    QUICLY_STATE_SEND_RETRY,
+    QUICLY_STATE_HANDSHAKE,
     QUICLY_STATE_1RTT_ENCRYPTED
 } quicly_state_t;
 
