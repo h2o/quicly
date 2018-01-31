@@ -170,6 +170,12 @@ static void loss_core(int downstream_only)
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
     size_t i;
     for (i = 0; i < 1000; ++i) {
+        int64_t client_timeout = quicly_get_first_timeout(client), server_timeout = quicly_get_first_timeout(server),
+                min_timeout = client_timeout < server_timeout ? client_timeout : server_timeout;
+        assert(min_timeout != INT64_MAX);
+        assert(min_timeout == 0 || quic_now < min_timeout + 40); /* we might have spent two RTTs in the loop below */
+        if (quic_now < min_timeout)
+            quic_now = min_timeout;
         transmit_cond(server, client, &num_sent, &num_received, cond_rand, 10);
         if (quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED) {
             if (client_stream == NULL) {
