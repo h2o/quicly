@@ -96,7 +96,7 @@ static void test_even(void)
     transmit_cond(server, client, &num_sent, &num_received, cond_even, 0);
     ok(num_sent == 2);
     ok(num_received == 1);
-    ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
+    ok(quicly_get_state(client) == QUICLY_STATE_HANDSHAKE);
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
@@ -110,7 +110,7 @@ static void test_even(void)
     ok(num_sent == 1);
     ok(num_received == 0);
 
-    ok(quicly_get_state(client) == QUICLY_STATE_BEFORE_SF);
+    ok(quicly_get_state(client) == QUICLY_STATE_HANDSHAKE);
 
     quic_now += 1000;
 

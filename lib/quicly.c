@@ -671,14 +671,15 @@ static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
             ret = conn->crypto.stream.on_update(&conn->crypto.stream);
         break;
     case PTLS_ERROR_IN_PROGRESS:
-        if (conn->super.state == QUICLY_STATE_BEFORE_SH)
-            conn->super.state = QUICLY_STATE_BEFORE_SF;
+        if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
+            conn->super.state = QUICLY_STATE_HANDSHAKE;
+        assert(conn->super.state == QUICLY_STATE_HANDSHAKE);
         ret = 0;
         break;
     case PTLS_ERROR_STATELESS_RETRY:
         assert(!quicly_is_client(conn));
-        assert(conn->super.state == QUICLY_STATE_BEFORE_SH);
-        conn->super.state = QUICLY_STATE_SEND_STATELESS_RETRY;
+        assert(conn->super.state == QUICLY_STATE_FIRSTFLIGHT);
+        conn->super.state = QUICLY_STATE_SEND_RETRY;
         conn->egress.packet_number = conn->ingress.next_expected_packet_number - 1;
         ret = 0;
         break;
@@ -956,7 +957,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint64_t connecti
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
     conn->super.connection_id = connection_id;
-    conn->super.state = QUICLY_STATE_BEFORE_SH;
+    conn->super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
         conn->super.host.next_stream_id_bidi = 4;
         conn->super.host.next_stream_id_uni = 1;
@@ -1762,11 +1763,11 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
 
     /* send cleartext frames */
     switch (quicly_get_state(conn)) {
-    case QUICLY_STATE_SEND_STATELESS_RETRY:
+    case QUICLY_STATE_SEND_RETRY:
         assert(!quicly_is_client(conn));
         s.first_byte = QUICLY_PACKET_TYPE_RETRY;
         break;
-    case QUICLY_STATE_BEFORE_SH:
+    case QUICLY_STATE_FIRSTFLIGHT:
         assert(quicly_is_client(conn));
         s.first_byte = QUICLY_PACKET_TYPE_INITIAL;
         break;
@@ -1794,7 +1795,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         goto Exit;
 
     if (conn->egress.pp.early_data != NULL) {
-        assert(quicly_get_state(conn) == QUICLY_STATE_BEFORE_SH || quicly_get_state(conn) == QUICLY_STATE_BEFORE_SF);
+        assert(conn->egress.pp.one_rtt[0] != NULL);
         s.first_byte = QUICLY_PACKET_TYPE_0RTT_PROTECTED;
         s.aead = conn->egress.pp.early_data;
         if ((ret = send_stream_frames(conn, &s)) != 0)
@@ -2108,6 +2109,12 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         goto Exit;
     }
 
+    /* the client-side starts sending HANDSHAKE when it first observes a response from the server */
+    if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
+        assert(quicly_is_client(conn));
+        conn->super.state = QUICLY_STATE_HANDSHAKE;
+    }
+
     if (conn->super.state != QUICLY_STATE_1RTT_ENCRYPTED && QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
         /* FIXME enqueue the packet? */
         ret = QUICLY_ERROR_PACKET_IGNORED;
@@ -2122,11 +2129,11 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             goto Exit;
         }
     } else {
-        if (conn->super.state == QUICLY_STATE_BEFORE_SH && packet->version == 0)
+        if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT && packet->version == 0)
             return handle_version_negotiation_packet(conn, packet);
         switch (packet->first_byte) {
         case QUICLY_PACKET_TYPE_RETRY:
-            if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_BEFORE_SH) ||
+            if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_FIRSTFLIGHT) ||
                 (aead = conn->ingress.pp.handshake) == NULL) {
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
