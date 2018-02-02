@@ -51,8 +51,6 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
     }
 }
 
-static int on_stream_open(quicly_stream_t *stream);
-
 static ptls_handshake_properties_t hs_properties;
 static ptls_context_t tlsctx = {ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx;
@@ -185,10 +183,16 @@ static int on_resp_receive(quicly_stream_t *stream)
     return 0;
 }
 
-int on_stream_open(quicly_stream_t *stream)
+static int on_stream_open(quicly_stream_t *stream)
 {
     stream->on_update = on_req_receive;
     return 0;
+}
+
+static void on_conn_close(quicly_conn_t *conn, uint8_t type, uint16_t code, const char *reason, size_t reason_len)
+{
+    fprintf(stderr, "%s close:%" PRIx16 ":%.*s\n", type == QUICLY_FRAME_TYPE_CONNECTION_CLOSE ? "connection" : "application", code,
+            (int)reason_len, reason);
 }
 
 static int send_one(int fd, quicly_raw_packet_t *p)
@@ -493,6 +497,7 @@ int main(int argc, char **argv)
     ctx = quicly_default_context;
     ctx.tls = &tlsctx;
     ctx.on_stream_open = on_stream_open;
+    ctx.on_conn_close = on_conn_close;
 
     while ((ch = getopt(argc, argv, "a:c:k:l:np:r:S:s:Vvh")) != -1) {
         switch (ch) {

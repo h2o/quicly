@@ -31,6 +31,7 @@ extern "C" {
 #include <sys/types.h>
 #include "picotls.h"
 #include "quicly/constants.h"
+#include "quicly/frame.h"
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
 #include "quicly/recvbuf.h"
@@ -53,6 +54,7 @@ typedef quicly_stream_t *(*quicly_alloc_stream_cb)(quicly_context_t *ctx);
 typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
+typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint8_t type, uint16_t code, const char *reason, size_t reason_len);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
 typedef void (*quicly_debug_log_cb)(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
@@ -148,6 +150,10 @@ struct st_quicly_context_t {
      */
     quicly_stream_open_cb on_stream_open;
     /**
+     * callback called when a connection is closed by peer
+     */
+    quicly_conn_close_cb on_conn_close;
+    /**
      * returns current time in milliseconds
      */
     quicly_now_cb now;
@@ -157,11 +163,30 @@ struct st_quicly_context_t {
     quicly_debug_log_cb debug_log;
 };
 
+/**
+ * connection state
+ */
 typedef enum {
+    /**
+     * before observing the first message from peer
+     */
     QUICLY_STATE_FIRSTFLIGHT,
+    /**
+     * indicates that quicly_send will send a retry
+     */
     QUICLY_STATE_SEND_RETRY,
+    /**
+     * during handshake
+     */
     QUICLY_STATE_HANDSHAKE,
-    QUICLY_STATE_1RTT_ENCRYPTED
+    /**
+     * 1 RTT
+     */
+    QUICLY_STATE_1RTT_ENCRYPTED,
+    /**
+     * we do not send CLOSE (at the moment), enter draining mode when receiving CLOSE
+     */
+    QUICLY_STATE_DRAINING
 } quicly_state_t;
 
 struct _st_quicly_conn_public_t {

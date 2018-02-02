@@ -199,6 +199,7 @@ const quicly_context_t quicly_default_context = {
     quicly_default_alloc_stream,
     quicly_default_free_stream,
     NULL, /* on_stream_open */
+    NULL, /* on_conn_close */
     quicly_default_now,
     NULL, /* debug_log */
 };
@@ -1361,6 +1362,9 @@ static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
+    if (conn->super.state == QUICLY_STATE_DRAINING)
+        return INT64_MAX;
+
     if (1 /* CWND is not full (TODO) */) {
         if (conn->crypto.pending_control || conn->crypto.pending_data)
             return 0;
@@ -1754,6 +1758,9 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
                                          *num_packets};
     int ret;
 
+    if (quicly_get_state(conn) == QUICLY_STATE_DRAINING)
+        return QUICLY_ERROR_CONNECTION_CLOSED;
+
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= s.now) {
         size_t min_packets_to_send;
@@ -2108,19 +2115,23 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     uint64_t packet_number;
     int ret;
 
-    /* FIXME check peer address (and also invocation timing?) */
-    conn->super.connection_id = packet->connection_id;
-
     /* ignore packets having wrong connection id */
     if (packet->connection_id != conn->super.connection_id) {
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
 
-    /* the client-side starts sending HANDSHAKE when it first observes a response from the server */
-    if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
+    switch (conn->super.state) {
+    case QUICLY_STATE_FIRSTFLIGHT:
         assert(quicly_is_client(conn));
+        conn->super.connection_id = packet->connection_id; /* FIXME check peer address */
         conn->super.state = QUICLY_STATE_HANDSHAKE;
+        break;
+    case QUICLY_STATE_DRAINING:
+        ret = 0;
+        goto Exit;
+    default:
+        break;
     }
 
     if (conn->super.state != QUICLY_STATE_1RTT_ENCRYPTED && QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
@@ -2230,11 +2241,12 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             case QUICLY_FRAME_TYPE_CONNECTION_CLOSE:
             case QUICLY_FRAME_TYPE_APPLICATION_CLOSE: {
                 quicly_close_frame_t frame;
-                if ((ret = quicly_decode_connection_close_frame(&src, end, &frame)) != 0)
+                if ((ret = quicly_decode_close_frame(&src, end, &frame)) != 0)
                     goto Exit;
-                fprintf(stderr, "%s close:%" PRIx32 ":%.*s\n",
-                        type_flags == QUICLY_FRAME_TYPE_CONNECTION_CLOSE ? "connection" : "application", frame.error_code,
-                        (int)frame.reason_phrase.len, frame.reason_phrase.base);
+                conn->super.state = QUICLY_STATE_DRAINING;
+                if (conn->super.ctx->on_conn_close != NULL)
+                    conn->super.ctx->on_conn_close(conn, type_flags, frame.error_code, (const char *)frame.reason_phrase.base,
+                                                   frame.reason_phrase.len);
             } break;
             case QUICLY_FRAME_TYPE_MAX_DATA: {
                 quicly_max_data_frame_t frame;
