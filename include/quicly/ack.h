@@ -54,6 +54,9 @@ struct st_quicly_ack_t {
         struct {
             uint64_t stream_id;
         } stream_state_sender;
+        struct {
+            size_t bytes_in_flight;
+        } cc;
     } data;
 };
 

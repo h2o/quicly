@@ -192,8 +192,6 @@ inline int quicly_loss_on_packet_acked(quicly_loss_t *r, uint64_t acked)
     return rto_verified;
 }
 
-/* After processing ack frames (including calls to on_packet_acked), application should call on_ack_received, detect_lost_packets,
- * and then update_alarm. */
 inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked, uint32_t latest_rtt)
 {
     if (r->largest_acked_packet < largest_acked)
