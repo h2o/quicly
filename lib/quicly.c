@@ -2125,7 +2125,6 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     case QUICLY_STATE_FIRSTFLIGHT:
         assert(quicly_is_client(conn));
         conn->super.connection_id = packet->connection_id; /* FIXME check peer address */
-        conn->super.state = QUICLY_STATE_HANDSHAKE;
         break;
     case QUICLY_STATE_DRAINING:
         ret = 0;
@@ -2148,8 +2147,11 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             goto Exit;
         }
     } else {
-        if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT && packet->version == 0)
-            return handle_version_negotiation_packet(conn, packet);
+        if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
+            if (packet->version == 0)
+                return handle_version_negotiation_packet(conn, packet);
+            conn->super.state = QUICLY_STATE_HANDSHAKE;
+        }
         switch (packet->first_byte) {
         case QUICLY_PACKET_TYPE_RETRY:
             if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_FIRSTFLIGHT) ||
