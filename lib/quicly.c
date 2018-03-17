@@ -715,7 +715,9 @@ static int crypto_stream_receive_stateless_retry(quicly_stream_t *_stream)
     if (buf.off == 0)
         goto Error;
 
-    /* send the 2nd ClientHello */
+    /* send the 2nd ClientHello, reinitializing the transport */
+    quicly_acks_dispose(&conn->egress.acks);
+    quicly_acks_init(&conn->egress.acks);
     reinit_stream_properties(&conn->crypto.stream);
     conn->crypto.stream.on_update = crypto_stream_receive_handshake;
     write_tlsbuf(conn, &buf);
