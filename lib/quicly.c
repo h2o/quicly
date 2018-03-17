@@ -1813,7 +1813,8 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         goto Exit;
 
     if (conn->egress.pp.early_data != NULL) {
-        assert(conn->egress.pp.one_rtt[0] != NULL);
+        assert(conn->egress.pp.early_data != NULL);
+        assert(conn->egress.pp.one_rtt[0] == NULL);
         s.first_byte = QUICLY_PACKET_TYPE_0RTT_PROTECTED;
         s.aead = conn->egress.pp.early_data;
         if ((ret = send_stream_frames(conn, &s)) != 0)
