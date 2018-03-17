@@ -222,7 +222,7 @@ static int send_pending(int fd, quicly_conn_t *conn)
 
     do {
         num_packets = sizeof(packets) / sizeof(packets[0]);
-        if ((ret = quicly_send(conn, packets, &num_packets)) == 0) {
+        if ((ret = quicly_send(conn, packets, &num_packets)) == 0 || ret == QUICLY_ERROR_CONNECTION_CLOSED) {
             for (i = 0; i != num_packets; ++i) {
                 if ((ret = send_one(fd, packets[i])) == -1)
                     perror("sendmsg failed");

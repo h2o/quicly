@@ -1222,7 +1222,10 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     aead_egress = NULL;
     conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
     /* TODO should there be a way to set use of stateless reset per SNI or something? */
-    conn->crypto.handshake_properties.server.enforce_retry = ctx->stateless_retry.enforce_use;
+    if (ctx->stateless_retry.enforce_use) {
+        conn->crypto.handshake_properties.server.enforce_retry = 1;
+        conn->crypto.handshake_properties.server.retry_uses_cookie = 1;
+    }
     conn->crypto.handshake_properties.server.cookie.key = ctx->stateless_retry.key;
 
     if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number.bits,
@@ -1768,8 +1771,10 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
                                          *num_packets};
     int ret;
 
-    if (quicly_get_state(conn) == QUICLY_STATE_DRAINING)
+    if (quicly_get_state(conn) == QUICLY_STATE_DRAINING) {
+        *num_packets = 0;
         return QUICLY_ERROR_CONNECTION_CLOSED;
+    }
 
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= s.now) {
