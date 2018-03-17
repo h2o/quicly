@@ -23,12 +23,12 @@
 #include <string.h>
 #include "quicly/frame.h"
 
-uint8_t *quicly_encode_ping_frame(uint8_t *dst, ptls_iovec_t data)
+uint8_t *quicly_encode_ping_frame(uint8_t *dst, int is_pong, const void *data, size_t len)
 {
-    *dst++ = QUICLY_FRAME_TYPE_PING;
-    *dst++ = (uint8_t)data.len;
-    memcpy(dst, data.base, data.len);
-    dst += data.len;
+    *dst++ = is_pong ? QUICLY_FRAME_TYPE_PONG : QUICLY_FRAME_TYPE_PING;
+    *dst++ = (uint8_t)data;
+    memcpy(dst, data, len);
+    dst += len;
     return dst;
 }
 

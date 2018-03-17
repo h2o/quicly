@@ -128,7 +128,7 @@ typedef struct st_quicly_max_stream_id_frame_t {
 static int quicly_decode_max_stream_id_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_id_frame_t *frame);
 
 static size_t quicly_calc_ping_frame_size(size_t data_len);
-uint8_t *quicly_encode_ping_frame(uint8_t *dst, ptls_iovec_t data);
+uint8_t *quicly_encode_ping_frame(uint8_t *dst, int is_pong, const void *data, size_t len);
 
 typedef struct st_quicly_ping_frame_t {
     ptls_iovec_t data;

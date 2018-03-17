@@ -79,6 +79,13 @@ struct st_quicly_packet_protection_t {
     ptls_aead_context_t *one_rtt[2];
 };
 
+struct st_quicly_pending_ping_t {
+    struct st_quicly_pending_ping_t *next;
+    uint8_t is_pong;
+    uint8_t len;
+    uint8_t data[1];
+};
+
 struct st_quicly_conn_t {
     struct _st_quicly_conn_public_t super;
     /**
@@ -156,6 +163,12 @@ struct st_quicly_conn_t {
          *
          */
         quicly_sender_state_t stream_id_blocked_state;
+        /**
+         *
+         */
+        struct {
+            struct st_quicly_pending_ping_t *head, **tail_ref;
+        } ping;
         /**
          *
          */
@@ -386,6 +399,23 @@ static void on_recvbuf_change(quicly_recvbuf_t *buf, size_t shift_amount)
     }
 }
 
+static int schedule_ping(quicly_conn_t *conn, int is_pong, const void *data, size_t len)
+{
+    struct st_quicly_pending_ping_t *pending;
+
+    if ((pending = malloc(offsetof(struct st_quicly_pending_ping_t, data) + len)) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+
+    pending->next = NULL;
+    pending->is_pong = is_pong;
+    pending->len = len;
+    memcpy(pending->data, data, len);
+
+    *conn->egress.ping.tail_ref = pending;
+    conn->egress.ping.tail_ref = &pending->next;
+    return 0;
+}
+
 static void init_stream_properties(quicly_stream_t *stream)
 {
     quicly_sendbuf_init(&stream->sendbuf, on_sendbuf_change);
@@ -492,6 +522,11 @@ void quicly_free(quicly_conn_t *conn)
     quicly_maxsender_dispose(&conn->ingress.max_stream_id_uni);
     free_packet_protection(&conn->egress.pp);
     quicly_acks_dispose(&conn->egress.acks);
+    while (conn->egress.ping.head != NULL) {
+        struct st_quicly_pending_ping_t *pending = conn->egress.ping.head;
+        conn->egress.ping.head = pending->next;
+        free(pending);
+    }
 
     kh_foreach_value(conn->streams, stream, { destroy_stream(stream); });
     kh_destroy(quicly_stream_t, conn->streams);
@@ -997,6 +1032,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint64_t connecti
     quicly_acks_init(&conn->egress.acks);
     quicly_loss_init(&conn->egress.loss, conn->super.ctx->loss,
                      conn->super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
+    conn->egress.ping.tail_ref = &conn->egress.ping.head;
     conn->egress.send_ack_at = INT64_MAX;
     init_stream(&conn->crypto.stream, conn, 0);
     conn->crypto.stream.on_update = crypto_stream_receive_handshake;
@@ -1844,6 +1880,18 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
         }
+        /* ping */
+        if (conn->egress.ping.head != NULL) {
+            do {
+                struct st_quicly_pending_ping_t *ping = conn->egress.ping.head;
+                if ((ret = prepare_packet(conn, &s, quicly_calc_ping_frame_size(ping->len))) != 0)
+                    goto Exit;
+                s.dst = quicly_encode_ping_frame(s.dst, ping->is_pong, ping->data, ping->len);
+                conn->egress.ping.head = ping->next;
+                free(ping);
+            } while (conn->egress.ping.head != NULL);
+            conn->egress.ping.tail_ref = &conn->egress.ping.head;
+        }
         /* max_stream_id (TODO uni) */
         uint64_t max_stream_id;
         if ((max_stream_id = quicly_maxsender_should_update_stream_id(
@@ -2059,8 +2107,7 @@ static int handle_max_stream_id_frame(quicly_conn_t *conn, quicly_max_stream_id_
 
 static int handle_ping_frame(quicly_conn_t *conn, quicly_ping_frame_t *frame)
 {
-    fprintf(stderr, "received ping; TODO implement pong\n");
-    return 0;
+    return schedule_ping(conn, 1, frame->data.base, frame->data.len);
 }
 
 static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_frame_t *frame)
