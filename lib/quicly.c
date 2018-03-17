@@ -32,7 +32,7 @@
 #include "quicly/ack.h"
 #include "quicly/frame.h"
 
-#define QUICLY_PROTOCOL_VERSION 0xff000008
+#define QUICLY_PROTOCOL_VERSION 0xff000009
 
 #define QUICLY_PACKET_TYPE_INITIAL 0xff
 #define QUICLY_PACKET_TYPE_RETRY 0xfe
