@@ -222,13 +222,15 @@ static int send_pending(int fd, quicly_conn_t *conn)
 
     do {
         num_packets = sizeof(packets) / sizeof(packets[0]);
-        ret = quicly_send(conn, packets, &num_packets);
-
-        for (i = 0; i != num_packets; ++i) {
-            if ((ret = send_one(fd, packets[i])) == -1)
-                perror("sendmsg failed");
-            ret = 0;
-            quicly_default_free_packet(&ctx, packets[i]);
+        if ((ret = quicly_send(conn, packets, &num_packets)) == 0) {
+            for (i = 0; i != num_packets; ++i) {
+                if ((ret = send_one(fd, packets[i])) == -1)
+                    perror("sendmsg failed");
+                ret = 0;
+                quicly_default_free_packet(&ctx, packets[i]);
+            }
+        } else {
+            fprintf(stderr, "quicly_send returned %d\n", ret);
         }
     } while (ret == 0 && num_packets != 0);
 
