@@ -739,7 +739,7 @@ static int do_apply_stream_frame(quicly_stream_t *stream, uint64_t off, ptls_iov
     int ret;
 
     /* adjust the range of supplied data so that we not go above eos */
-    if (stream->recvbuf.eos <= off)
+    if (stream->recvbuf.eos < off)
         return 0;
     if (stream->recvbuf.eos < off + data.len)
         data.len = stream->recvbuf.eos - off;
