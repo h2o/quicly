@@ -2165,6 +2165,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
+            /* FIXME we need to remember the original packet number, since `-1` will fail if we have sent 0rtt packets */
             if (conn->egress.packet_number - 1 != packet->packet_number.bits) {
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
