@@ -1774,8 +1774,8 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             goto Exit;
         if (min_packets_to_send != 0) {
             /* better way to notify the app that we want to send some packets outside the congestion window? */
-            assert(min_packets_to_send <= *num_packets);
-            *num_packets = min_packets_to_send;
+            assert(min_packets_to_send <= s.max_packets);
+            s.max_packets = min_packets_to_send;
             if ((ret = retire_acks(conn, min_packets_to_send)) != 0)
                 goto Exit;
         }
