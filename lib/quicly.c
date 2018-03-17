@@ -716,6 +716,11 @@ static int crypto_stream_receive_stateless_retry(quicly_stream_t *_stream)
         goto Error;
 
     /* send the 2nd ClientHello, reinitializing the transport */
+    ptls_aead_free(conn->ingress.pp.handshake);
+    ptls_aead_free(conn->egress.pp.handshake);
+    if ((ret = setup_handshake_encryption(&conn->ingress.pp.handshake, &conn->egress.pp.handshake, conn->super.ctx,
+                                          conn->super.connection_id, 1)) != 0)
+        goto Error;
     quicly_acks_dispose(&conn->egress.acks);
     quicly_acks_init(&conn->egress.acks);
     reinit_stream_properties(&conn->crypto.stream);
