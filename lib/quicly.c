@@ -54,6 +54,8 @@
 
 #define STATELESS_RESET_TOKEN_SIZE 16
 
+#define QHKDF_BASE_LABEL "QUIC "
+
 #define STREAM_IS_CLIENT_INITIATED(stream_id) (((stream_id)&1) == 0)
 #define STREAM_IS_UNI(stream_id) (((stream_id)&2) != 0)
 
@@ -509,9 +511,10 @@ static int setup_handshake_secret(ptls_aead_context_t **aead, ptls_cipher_suite_
     int ret;
 
     if ((ret = ptls_hkdf_expand_label(cs->hash, aead_secret, cs->hash->digest_size,
-                                      ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0))) != 0)
+                                      ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0),
+                                      QHKDF_BASE_LABEL)) != 0)
         goto Exit;
-    if ((*aead = ptls_aead_new(cs->aead, cs->hash, is_enc, aead_secret)) == NULL) {
+    if ((*aead = ptls_aead_new(cs->aead, cs->hash, is_enc, aead_secret, QHKDF_BASE_LABEL)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -526,7 +529,7 @@ static int setup_handshake_encryption(ptls_aead_context_t **ingress, ptls_aead_c
 {
     static const uint8_t salt[] = {0xaf, 0xc8, 0x24, 0xec, 0x5f, 0xc7, 0x7e, 0xca, 0x1e, 0x9d,
                                    0x36, 0xf3, 0x7f, 0xb2, 0xd4, 0x65, 0x18, 0xc3, 0x66, 0x39};
-    static const char *labels[2] = {"QUIC client handshake secret", "QUIC server handshake secret"};
+    static const char *labels[2] = {"client hs", "server hs"};
     ptls_cipher_suite_t **cs;
     uint8_t ikm[8], secret[PTLS_MAX_DIGEST_SIZE];
     int ret;
@@ -563,7 +566,7 @@ static int setup_secret(struct st_quicly_packet_protection_t *pp, ptls_t *tls, c
 
     if ((ret = ptls_export_secret(tls, secret, cipher->hash->digest_size, label, ptls_iovec_init(NULL, 0), is_early)) != 0)
         return ret;
-    if ((*aead = ptls_aead_new(cipher->aead, cipher->hash, is_enc, secret)) == NULL) {
+    if ((*aead = ptls_aead_new(cipher->aead, cipher->hash, is_enc, secret, QHKDF_BASE_LABEL)) == NULL) {
         ptls_clear_memory(secret, sizeof(secret));
         return PTLS_ERROR_NO_MEMORY;
     }
@@ -579,7 +582,7 @@ static void apply_peer_transport_params(quicly_conn_t *conn)
 
 static int setup_1rtt(quicly_conn_t *conn, ptls_t *tls)
 {
-    static const char *labels[2] = {"EXPORTER-QUIC client 1-RTT Secret", "EXPORTER-QUIC server 1-RTT Secret"};
+    static const char *labels[2] = {"EXPORTER-QUIC client 1rtt", "EXPORTER-QUIC server 1rtt"};
     int ret;
 
     /* release early-data AEAD for egress, but not for ingress since they can arrive later */
@@ -663,7 +666,7 @@ static int crypto_stream_receive_handshake(quicly_stream_t *_stream)
         if (conn->super.state < QUICLY_STATE_1RTT_ENCRYPTED) {
             if (!quicly_is_client(conn)) {
                 /* ignore error, which will be returned if early secret is unavailable */
-                setup_secret(&conn->ingress.pp, conn->crypto.tls, "EXPORTER-QUIC 0-RTT Secret", 1, 0);
+                setup_secret(&conn->ingress.pp, conn->crypto.tls, "EXPORTER-QUIC 0rtt", 1, 0);
             }
             if ((ret = setup_1rtt(conn, conn->crypto.tls)) != 0)
                 goto Exit;
@@ -1093,7 +1096,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     write_tlsbuf(conn, &buf);
 
     if (max_early_data_size != 0) {
-        if ((ret = setup_secret(&conn->egress.pp, conn->crypto.tls, "EXPORTER-QUIC 0-RTT Secret", 1, 1)) != 0)
+        if ((ret = setup_secret(&conn->egress.pp, conn->crypto.tls, "EXPORTER-QUIC 0rtt", 1, 1)) != 0)
             goto Exit;
         apply_peer_transport_params(conn);
     }
@@ -1212,7 +1215,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     aead_egress = NULL;
     conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
     /* TODO should there be a way to set use of stateless reset per SNI or something? */
-    conn->crypto.handshake_properties.server.cookie.enforce_use = ctx->stateless_retry.enforce_use;
+    conn->crypto.handshake_properties.server.enforce_retry = ctx->stateless_retry.enforce_use;
     conn->crypto.handshake_properties.server.cookie.key = ctx->stateless_retry.key;
 
     if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number.bits,
