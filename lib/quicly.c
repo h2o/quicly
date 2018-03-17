@@ -2152,11 +2152,10 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
             if (packet->version == 0)
                 return handle_version_negotiation_packet(conn, packet);
-            conn->super.state = QUICLY_STATE_HANDSHAKE;
         }
         switch (packet->first_byte) {
         case QUICLY_PACKET_TYPE_RETRY:
-            if (!(quicly_is_client(conn) && quicly_get_state(conn) == QUICLY_STATE_FIRSTFLIGHT) ||
+            if (!(quicly_is_client(conn) && conn->super.state == QUICLY_STATE_FIRSTFLIGHT) ||
                 (aead = conn->ingress.pp.handshake) == NULL) {
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
@@ -2172,6 +2171,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
+            if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
+                conn->super.state = QUICLY_STATE_HANDSHAKE;
             break;
         case QUICLY_PACKET_TYPE_0RTT_PROTECTED:
             if (quicly_is_client(conn)) {
