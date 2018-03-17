@@ -2119,22 +2119,18 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     uint64_t packet_number;
     int ret;
 
-    /* ignore packets having wrong connection id */
-    if (packet->connection_id != conn->super.connection_id) {
-        ret = QUICLY_ERROR_PACKET_IGNORED;
-        goto Exit;
-    }
-
-    switch (conn->super.state) {
-    case QUICLY_STATE_FIRSTFLIGHT:
+    if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
         assert(quicly_is_client(conn));
         conn->super.connection_id = packet->connection_id; /* FIXME check peer address */
-        break;
-    case QUICLY_STATE_DRAINING:
-        ret = 0;
-        goto Exit;
-    default:
-        break;
+    } else {
+        if (packet->connection_id != conn->super.connection_id) {
+            ret = QUICLY_ERROR_PACKET_IGNORED;
+            goto Exit;
+        }
+        if (conn->super.state == QUICLY_STATE_DRAINING) {
+            ret = 0;
+            goto Exit;
+        }
     }
 
     if (conn->super.state != QUICLY_STATE_1RTT_ENCRYPTED && QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
