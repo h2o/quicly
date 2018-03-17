@@ -2278,10 +2278,13 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 if ((ret = handle_ping_frame(conn, &frame)) != 0)
                     goto Exit;
             } break;
-            case QUICLY_FRAME_TYPE_BLOCKED:
+            case QUICLY_FRAME_TYPE_BLOCKED: {
+                quicly_blocked_frame_t frame;
+                if ((ret = quicly_decode_blocked_frame(&src, end, &frame)) != 0)
+                    goto Exit;
                 quicly_maxsender_reset(&conn->ingress.max_data.sender, 0);
                 ret = 0;
-                break;
+            } break;
             case QUICLY_FRAME_TYPE_STREAM_BLOCKED: {
                 quicly_stream_blocked_frame_t frame;
                 if ((ret = quicly_decode_stream_blocked_frame(&src, end, &frame)) != 0)

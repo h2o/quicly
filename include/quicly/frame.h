@@ -136,6 +136,12 @@ typedef struct st_quicly_ping_frame_t {
 
 static int quicly_decode_ping_frame(const uint8_t **src, const uint8_t *end, quicly_ping_frame_t *frame);
 
+typedef struct st_quicly_blocked_frame_t {
+    uint64_t offset;
+} quicly_blocked_frame_t;
+
+static int quicly_decode_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_blocked_frame_t *frame);
+
 typedef struct st_quicly_stream_blocked_frame_t {
     uint64_t stream_id;
     uint64_t offset;
@@ -458,6 +464,15 @@ inline int quicly_decode_ping_frame(const uint8_t **src, const uint8_t *end, qui
     return 0;
 Error:
     return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_PING);
+}
+
+inline int quicly_decode_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_blocked_frame_t *frame)
+{
+    if ((frame->offset = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
+    return 0;
+Error:
+    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_BLOCKED);
 }
 
 inline int quicly_decode_stream_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_stream_blocked_frame_t *frame)
