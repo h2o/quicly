@@ -22,6 +22,50 @@
 #include "quicly/frame.h"
 #include "test.h"
 
+static void test_ack_decode_underflow(void)
+{
+    quicly_ack_frame_t decoded;
+
+    { /* ack pn=0 */
+        uint8_t pat[] = {0xe, 0, 0, 0, 0};
+        const uint8_t *src = pat + 1;
+        ok(quicly_decode_ack_frame(pat[0], &src, pat + sizeof(pat), &decoded) == 0);
+        ok(src == pat + sizeof(pat));
+        ok(decoded.largest_acknowledged == 0);
+        ok(decoded.num_gaps == 0);
+        ok(decoded.ack_block_lengths[0] == 1);
+        ok(decoded.smallest_acknowledged == 0);
+    }
+    { /* underflow in first block length */
+        uint8_t pat[] = {0xe, 0, 0, 0, 1};
+        const uint8_t *src = pat + 1;
+        ok(quicly_decode_ack_frame(pat[0], &src, pat + sizeof(pat), &decoded) != 0);
+    }
+
+    { /* frame with gap going down to pn=0 */
+        uint8_t pat[] = {0xe, 2, 0, 1, 0, 0, 0};
+        const uint8_t *src = pat + 1;
+        ok(quicly_decode_ack_frame(pat[0], &src, pat + sizeof(pat), &decoded) == 0);
+        ok(src == pat + sizeof(pat));
+        ok(decoded.largest_acknowledged == 2);
+        ok(decoded.num_gaps == 1);
+        ok(decoded.ack_block_lengths[0] == 1);
+        ok(decoded.ack_block_lengths[1] == 1);
+        ok(decoded.smallest_acknowledged == 0);
+    }
+
+    { /* additional block length going negative */
+        uint8_t pat[] = {0xe, 2, 0, 1, 0, 0, 1};
+        const uint8_t *src = pat + 1;
+        ok(quicly_decode_ack_frame(pat[0], &src, pat + sizeof(pat), &decoded) != 0);
+    }
+    { /* gap going negative */
+        uint8_t pat[] = {0xe, 2, 0, 1, 0, 3, 0};
+        const uint8_t *src = pat + 1;
+        ok(quicly_decode_ack_frame(pat[0], &src, pat + sizeof(pat), &decoded) != 0);
+    }
+}
+
 static void test_ack_decode(void)
 {
     {
@@ -53,6 +97,8 @@ static void test_ack_decode(void)
         ok(decoded.ack_block_lengths[2] == 5);
         ok(decoded.smallest_acknowledged == 0x34 - 1 - 2 - 3 - 4 - 5 + 1);
     }
+
+    subtest("underflow", test_ack_decode_underflow);
 }
 
 static void test_ack_encode(void)
