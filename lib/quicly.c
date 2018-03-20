@@ -2377,10 +2377,11 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
     } while (src != end);
 
-    if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet_number, packet_number + 1)) != 0)
-        goto Exit;
-    if (!is_ack_only && conn->egress.send_ack_at == INT64_MAX) {
-        conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
+    if (packet->first_byte != QUICLY_PACKET_TYPE_RETRY) {
+        if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet_number, packet_number + 1)) != 0)
+            goto Exit;
+        if (!is_ack_only && conn->egress.send_ack_at == INT64_MAX)
+            conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
 Exit:
