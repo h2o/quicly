@@ -1596,15 +1596,14 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
 {
     quicly_ack_t *ack;
     size_t copysize;
-    int must_pad, ret;
+    int ret;
 
     if ((ret = prepare_acked_packet(stream->conn, s, QUICLY_STREAM_FRAME_CAPACITY, &ack, on_ack_stream)) != 0)
         return ret;
 
     copysize = max_bytes - (iter->stream_off + max_bytes > stream->sendbuf.eos);
-    s->dst =
-        quicly_encode_stream_frame_header(s->dst, s->dst_end, stream->stream_id, iter->stream_off + copysize >= stream->sendbuf.eos,
-                                          iter->stream_off, &copysize, &must_pad);
+    s->dst = quicly_encode_stream_frame_header(s->dst, s->dst_end, stream->stream_id,
+                                               iter->stream_off + copysize >= stream->sendbuf.eos, iter->stream_off, &copysize);
     encrypt_packet(s);
 
     DEBUG_LOG(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
@@ -1625,12 +1624,6 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
     quicly_sendbuf_emit(&stream->sendbuf, iter, copysize, s->dst, &ack->data.stream.args, s->aead);
     s->dst += copysize;
     s->dst_unencrypted_from = s->dst;
-
-    /* pad if necessary */
-    if (must_pad) {
-        while (s->dst != s->dst_end)
-            *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
-    }
 
     ack->data.stream.stream_id = stream->stream_id;
 
