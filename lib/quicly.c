@@ -599,6 +599,30 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
         *consumed = conn->ingress.max_data.bytes_consumed;
 }
 
+static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
+{
+    quicly_stream_t *stream;
+
+    if ((stream = open_stream(conn, UINT64_MAX - epoch)) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+
+    stream->on_update = crypto_hs_on_update;
+    return 0;
+}
+
+static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
+{
+    if (conn->crypto.pending_flows_to_destroy.is_active) {
+        conn->crypto.pending_flows_to_destroy.bits |= (uint8_t)(1 << epoch);
+        return;
+    }
+
+    quicly_stream_t *stream = quicly_get_stream(conn, UINT64_MAX - epoch);
+    assert(stream != NULL);
+    destroy_stream(stream);
+    retire_acks(conn, SIZE_MAX, epoch);
+}
+
 static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
 {
     struct st_quicly_pn_space_t *space;
@@ -618,11 +642,6 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
-static struct st_quicly_handshake_space_t *alloc_handshake_space(void)
-{
-    return (void *)alloc_pn_space(sizeof(struct st_quicly_handshake_space_t));
-}
-
 static void free_handshake_space(struct st_quicly_handshake_space_t **space)
 {
     if (*space != NULL) {
@@ -635,9 +654,12 @@ static void free_handshake_space(struct st_quicly_handshake_space_t **space)
     }
 }
 
-static struct st_quicly_application_space_t *alloc_application_space(void)
+static int setup_handshake_space_and_flow(quicly_conn_t *conn, size_t epoch)
 {
-    return (void *)alloc_pn_space(sizeof(struct st_quicly_application_space_t));
+    struct st_quicly_handshake_space_t **space = epoch == 0 ? &conn->initial : &conn->handshake;
+    if ((*space = (void *)alloc_pn_space(sizeof(struct st_quicly_handshake_space_t))) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+    return create_handshake_flow(conn, epoch);
 }
 
 static void free_application_space(struct st_quicly_application_space_t **space)
@@ -656,28 +678,16 @@ static void free_application_space(struct st_quicly_application_space_t **space)
     }
 }
 
-static quicly_stream_t *create_handshake_flow(quicly_conn_t *conn, size_t epoch)
+static int setup_application_space_and_flow(quicly_conn_t *conn, int setup_0rtt)
 {
-    quicly_stream_t *stream;
-
-    if ((stream = open_stream(conn, UINT64_MAX - epoch)) == NULL)
-        return NULL;
-    stream->on_update = crypto_hs_on_update;
-
-    return stream;
-}
-
-static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
-{
-    if (conn->crypto.pending_flows_to_destroy.is_active) {
-        conn->crypto.pending_flows_to_destroy.bits |= (uint8_t)(1 << epoch);
-        return;
+    if ((conn->application = (void *)alloc_pn_space(sizeof(struct st_quicly_application_space_t))) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+    if (setup_0rtt) {
+        int ret;
+        if ((ret = create_handshake_flow(conn, 1)) != 0)
+            return ret;
     }
-
-    quicly_stream_t *stream = quicly_get_stream(conn, UINT64_MAX - epoch);
-    assert(stream != NULL);
-    destroy_stream(stream);
-    retire_acks(conn, SIZE_MAX, epoch);
+    return create_handshake_flow(conn, 3);
 }
 
 static void apply_peer_transport_params(quicly_conn_t *conn)
@@ -1142,10 +1152,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    if ((conn->initial = alloc_handshake_space()) == NULL || create_handshake_flow(conn, 0) == NULL) {
-        ret = PTLS_ERROR_NO_MEMORY;
+    if ((ret = setup_handshake_space_and_flow(conn, 0)) != 0)
         goto Exit;
-    }
     if ((ret = setup_initial_encryption(&conn->initial->aead.ingress, &conn->initial->aead.egress, ctx, connection_id, 1)) != 0)
         goto Exit;
 
@@ -1282,10 +1290,8 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    if ((conn->initial = alloc_handshake_space()) == NULL || create_handshake_flow(conn, 0) == NULL) {
-        ret = PTLS_ERROR_NO_MEMORY;
+    if ((ret = setup_handshake_space_and_flow(conn, 0)) != 0)
         goto Exit;
-    }
     conn->initial->aead.ingress = aead_ingress;
     aead_ingress = NULL;
     conn->initial->aead.egress = aead_egress;
@@ -1908,17 +1914,15 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
     quicly_conn_t *conn = *ptls_get_data_ptr(_tls);
     ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
     ptls_aead_context_t **aead_slot;
+    int ret;
 
     DEBUG_LOG(conn, 0, "%s: is_enc=%d,epoch=%zu", __FUNCTION__, is_enc, epoch);
 
     switch (epoch) {
     case 1: /* 0-RTT */
         assert(is_enc == quicly_is_client(conn));
-        if (conn->application == NULL) {
-            if ((conn->application = alloc_application_space()) == NULL || create_handshake_flow(conn, 1) == NULL ||
-                create_handshake_flow(conn, 3) == NULL)
-                return PTLS_ERROR_NO_MEMORY;
-        }
+        if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 1)) != 0)
+            return ret;
         aead_slot = is_enc ? &conn->application->aead.egress_0rtt : &conn->application->aead.ingress[0];
         break;
     case 2: /* handshake */
@@ -1929,10 +1933,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
             conn->application->aead.egress_0rtt = NULL;
             retire_acks(conn, SIZE_MAX, 1);
         }
-        if (conn->handshake == NULL) {
-            if ((conn->handshake = (void *)alloc_handshake_space()) == NULL || create_handshake_flow(conn, 2) == NULL)
-                return PTLS_ERROR_NO_MEMORY;
-        }
+        if (conn->handshake == NULL && (ret = setup_handshake_space_and_flow(conn, 2)) != 0)
+            return ret;
         aead_slot = is_enc ? &conn->handshake->aead.egress : &conn->handshake->aead.ingress;
         break;
     case 3: /* 1-RTT */
@@ -1950,10 +1952,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
                 conn->egress.send_handshake_done = 1;
             }
         }
-        if (conn->application == NULL) {
-            if ((conn->application = alloc_application_space()) == NULL || create_handshake_flow(conn, 3) == NULL)
-                return PTLS_ERROR_NO_MEMORY;
-        }
+        if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 0)) != 0)
+            return ret;
         aead_slot = is_enc ? &conn->application->aead.egress_1rtt : &conn->application->aead.ingress[1];
         break;
     default:
