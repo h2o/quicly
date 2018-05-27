@@ -85,9 +85,6 @@ static int64_t get_now(quicly_context_t *ctx);
 
 static ptls_iovec_t cert;
 static ptls_openssl_sign_certificate_t cert_signer;
-static ptls_context_t tls_ctx = {
-    ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL,
-    &cert_signer.super};
 
 int64_t quic_now;
 quicly_context_t quic_ctx;
@@ -195,7 +192,12 @@ static void test_next_packet_number(void)
 int main(int argc, char **argv)
 {
     quic_ctx = quicly_default_context;
-    quic_ctx.tls = &tls_ctx;
+    quic_ctx.tls.random_bytes = ptls_openssl_random_bytes;
+    quic_ctx.tls.key_exchanges = ptls_openssl_key_exchanges;
+    quic_ctx.tls.cipher_suites = ptls_openssl_cipher_suites;
+    quic_ctx.tls.certificates.list = &cert;
+    quic_ctx.tls.certificates.count = 1;
+    quic_ctx.tls.sign_certificate = &cert_signer.super;
     quic_ctx.max_concurrent_streams_bidi = 10;
     quic_ctx.on_stream_open = on_stream_open_buffering;
     quic_ctx.now = get_now;
