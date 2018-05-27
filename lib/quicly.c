@@ -87,6 +87,10 @@ struct st_quicly_pn_space_t {
      *
      */
     uint64_t next_expected_packet_number;
+    /**
+     *
+     */
+    int64_t send_ack_at;
 };
 
 struct st_quicly_handshake_space_t {
@@ -195,10 +199,6 @@ struct st_quicly_conn_t {
         struct {
             struct st_quicly_pending_ping_t *head, **tail_ref;
         } ping;
-        /**
-         *
-         */
-        int64_t send_ack_at;
         /**
          *
          */
@@ -630,8 +630,11 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
     if ((space = malloc(sz)) == NULL)
         return NULL;
 
-    memset(space, 0, sz);
     quicly_ranges_init(&space->ack_queue);
+    space->next_expected_packet_number = 0;
+    space->send_ack_at = INT64_MAX;
+    if (sz != sizeof(*space))
+        memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
 
     return space;
 }
@@ -1069,7 +1072,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint64_t connecti
     quicly_loss_init(&conn->egress.loss, conn->super.ctx->loss,
                      conn->super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
     conn->egress.ping.tail_ref = &conn->egress.ping.head;
-    conn->egress.send_ack_at = INT64_MAX;
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -1307,8 +1309,8 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     if ((ret = quicly_ranges_update(&conn->initial->super.ack_queue, packet->packet_number.bits,
                                     (uint64_t)packet->packet_number.bits + 1)) != 0)
         goto Exit;
-    assert(conn->egress.send_ack_at == INT64_MAX);
-    conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
+    assert(conn->initial->super.send_ack_at == INT64_MAX);
+    conn->initial->super.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
     conn->initial->super.next_expected_packet_number = (uint64_t)packet->packet_number.bits + 1;
 
     if ((ret = apply_handshake_flow(conn, 0, &frame)) != 0)
@@ -1464,7 +1466,18 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
             quicly_linklist_is_linked(&conn->pending_link.stream_with_payload))
             return 0;
     }
-    return conn->egress.loss.alarm_at < conn->egress.send_ack_at ? conn->egress.loss.alarm_at : conn->egress.send_ack_at;
+
+    int64_t at = conn->egress.loss.alarm_at;
+
+#define CHECK_SPACE(label) \
+    if (conn->label != NULL && conn->label->super.send_ack_at < at) \
+        at = conn->label->super.send_ack_at
+    CHECK_SPACE(initial);
+    CHECK_SPACE(handshake);
+    CHECK_SPACE(application);
+#undef CHECK_SPACE
+
+    return at;
 }
 
 struct st_quicly_send_context_t {
@@ -1561,23 +1574,23 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
     return ret;
 }
 
-static int send_ack(quicly_conn_t *conn, quicly_ranges_t *ack_queue, struct st_quicly_send_context_t *s)
+static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, struct st_quicly_send_context_t *s)
 {
     size_t range_index;
     int ret;
 
-    if (ack_queue->num_ranges == 0)
+    if (space->ack_queue.num_ranges == 0)
         return 0;
 
-    range_index = ack_queue->num_ranges - 1;
+    range_index = space->ack_queue.num_ranges - 1;
     do {
         if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
             break;
-        s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, ack_queue, &range_index);
+        s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, &range_index);
     } while (range_index != SIZE_MAX);
 
-    quicly_ranges_clear(ack_queue);
-    conn->egress.send_ack_at = INT64_MAX;
+    quicly_ranges_clear(&space->ack_queue);
+    space->send_ack_at = INT64_MAX;
     return ret;
 }
 
@@ -1862,7 +1875,7 @@ quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, stru
 
 static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quicly_send_context_t *s)
 {
-    quicly_ranges_t *ack_queue = NULL;
+    struct st_quicly_pn_space_t *ack_space = NULL;
     int ret = 0;
 
     switch (epoch) {
@@ -1870,7 +1883,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
         if (conn->initial == NULL || (s->aead = conn->initial->aead.egress) == NULL)
             return 0;
         s->first_byte = QUICLY_PACKET_TYPE_INITIAL;
-        ack_queue = &conn->initial->super.ack_queue;
+        ack_space = &conn->initial->super;
         break;
     case 1:
         if (conn->application == NULL || (s->aead = conn->application->aead.egress_0rtt) == NULL)
@@ -1881,7 +1894,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
         if (conn->handshake == NULL || (s->aead = conn->handshake->aead.egress) == NULL)
             return 0;
         s->first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
-        ack_queue = &conn->handshake->super.ack_queue;
+        ack_space = &conn->handshake->super;
         break;
     default:
         assert(!"logic flaw");
@@ -1889,8 +1902,8 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
     }
 
     /* send ACK */
-    if (ack_queue != NULL && conn->egress.send_ack_at <= s->now)
-        if ((ret = send_ack(conn, ack_queue, s)) != 0)
+    if (ack_space != NULL && ack_space->send_ack_at <= s->now)
+        if ((ret = send_ack(conn, ack_space, s)) != 0)
             goto Exit;
 
     /* send data */
@@ -2010,8 +2023,8 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         if ((s.aead = conn->application->aead.egress_1rtt) != NULL) {
             s.first_byte = 0x1d; /* 1rtt,has-connection-id,key-phase=0,packet-number-size=4 */
             /* acks */
-            if (conn->egress.send_ack_at <= s.now) {
-                if ((ret = send_ack(conn, &conn->application->super.ack_queue, &s)) != 0)
+            if (conn->application->super.send_ack_at <= s.now) {
+                if ((ret = send_ack(conn, &conn->application->super, &s)) != 0)
                     goto Exit;
             }
             /* handshake_done */
@@ -2089,7 +2102,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             /* commit */
             if (s.target != NULL) {
                 if (conn->application->aead.egress_1rtt != NULL &&
-                    (ret = send_ack(conn, &conn->application->super.ack_queue, &s)) != 0)
+                    (ret = send_ack(conn, &conn->application->super, &s)) != 0)
                     goto Exit;
                 commit_send_packet(conn, &s);
             }
@@ -2328,11 +2341,12 @@ static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded
 #undef CAN_SELECT
 }
 
-static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src, size_t _len)
+static int handle_payload(quicly_conn_t *conn, size_t epoch, int64_t now, const uint8_t *src, size_t _len, int *is_ack_only)
 {
     const uint8_t *end = src + _len;
-    int64_t now = conn->super.ctx->now(conn->super.ctx);
-    int is_ack_only = 1, ret = 0;
+    int ret = 0;
+
+    *is_ack_only = 1;
 
     do {
         uint8_t type_flags = *src++;
@@ -2362,7 +2376,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 goto Exit;
             if ((ret = apply_handshake_flow(conn, epoch, &frame)) != 0)
                 goto Exit;
-            is_ack_only = 0;
+            *is_ack_only = 0;
         } break;
         default:
             /* 0-rtt, 1-rtt only frames */
@@ -2453,8 +2467,10 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                         ptls_aead_free(conn->application->aead.egress_0rtt);
                         conn->application->aead.egress_0rtt = NULL;
                     }
-                    free_handshake_space(&conn->handshake);
-                    destroy_handshake_flow(conn, 2);
+                    if (conn->handshake != NULL) {
+                        free_handshake_space(&conn->handshake);
+                        destroy_handshake_flow(conn, 2);
+                    }
                     DEBUG_LOG(conn, 0, "got handshake_done");
                     break;
                 default:
@@ -2463,12 +2479,10 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                     goto Exit;
                 }
             }
-            is_ack_only = 0;
+            *is_ack_only = 0;
         }
     } while (src != end);
 
-    if (!is_ack_only && conn->egress.send_ack_at == INT64_MAX)
-        conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
 
 Exit:
     return ret;
@@ -2476,11 +2490,11 @@ Exit:
 
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
-    struct st_quicly_pn_space_t *space;
+    struct st_quicly_pn_space_t **space;
     size_t epoch;
     ptls_aead_context_t *aead;
     uint64_t packet_number;
-    int ret;
+    int is_ack_only, ret;
 
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
         assert(quicly_is_client(conn));
@@ -2502,7 +2516,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             ret = QUICLY_ERROR_PACKET_IGNORED;
             goto Exit;
         }
-        space = &conn->application->super;
+        space = (void *)&conn->application;
         epoch = 3;
     } else {
         if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
@@ -2518,7 +2532,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            space = &conn->initial->super;
+            space = (void *)&conn->initial;
             epoch = 0;
             break;
         case QUICLY_PACKET_TYPE_HANDSHAKE:
@@ -2526,7 +2540,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            space = &conn->handshake->super;
+            space = (void *)&conn->handshake;
             epoch = 2;
             break;
         case QUICLY_PACKET_TYPE_0RTT_PROTECTED:
@@ -2538,7 +2552,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            space = &conn->application->super;
+            space = (void *)&conn->application;
             epoch = 1;
             break;
         default:
@@ -2547,13 +2561,13 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
     }
 
-    packet_number = quicly_determine_packet_number(packet, space->next_expected_packet_number);
+    packet_number = quicly_determine_packet_number(packet, (*space)->next_expected_packet_number);
     if ((packet->payload.len = ptls_aead_decrypt(aead, packet->payload.base, packet->payload.base, packet->payload.len,
                                                  packet_number, packet->header.base, packet->header.len)) == SIZE_MAX) {
         ret = QUICLY_ERROR_TBD;
         goto Exit;
     }
-    space->next_expected_packet_number = packet_number + 1;
+    (*space)->next_expected_packet_number = packet_number + 1;
 
     if (epoch == 2 && conn->initial != NULL) {
         free_handshake_space(&conn->initial);
@@ -2573,10 +2587,17 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
 
-    if ((ret = quicly_ranges_update(&space->ack_queue, packet_number, packet_number + 1)) != 0)
+    int64_t now = conn->super.ctx->now(conn->super.ctx);
+
+    if ((ret = handle_payload(conn, epoch, now, packet->payload.base, packet->payload.len, &is_ack_only)) != 0)
         goto Exit;
 
-    ret = handle_payload(conn, epoch, packet->payload.base, packet->payload.len);
+    if (*space != NULL) {
+        if ((ret = quicly_ranges_update(&(*space)->ack_queue, packet_number, packet_number + 1)) != 0)
+            goto Exit;
+        if (!is_ack_only && (*space)->send_ack_at == INT64_MAX)
+            (*space)->send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
+    }
 
 Exit:
     return ret;
