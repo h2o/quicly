@@ -462,7 +462,7 @@ inline int quicly_decode_path_challenge_frame(const uint8_t **src, const uint8_t
     if (end - *src < QUICLY_PATH_CHALLENGE_DATA_LEN)
         goto Error;
     frame->data = *src;
-    src += QUICLY_PATH_CHALLENGE_DATA_LEN;
+    *src += QUICLY_PATH_CHALLENGE_DATA_LEN;
     return 0;
 Error:
     return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_PATH_CHALLENGE);

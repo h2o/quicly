@@ -32,7 +32,7 @@
 #include "quicly/ack.h"
 #include "quicly/frame.h"
 
-#define QUICLY_PROTOCOL_VERSION 0xff00000a
+#define QUICLY_PROTOCOL_VERSION 0xff00000b
 
 #define QUICLY_PACKET_TYPE_INITIAL 0xff
 #define QUICLY_PACKET_TYPE_RETRY 0xfe
@@ -940,10 +940,10 @@ static int encode_transport_parameter_list(quicly_context_t *ctx, ptls_buffer_t 
         }
         if (ctx->max_streams_bidi != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI,
-                                     { ptls_buffer_push32(buf, ctx->max_streams_bidi); });
+                                     { ptls_buffer_push16(buf, ctx->max_streams_bidi); });
         if (ctx->max_streams_uni != 0) {
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
-                                     { ptls_buffer_push32(buf, ctx->max_streams_uni); });
+                                     { ptls_buffer_push16(buf, ctx->max_streams_uni); });
         }
     });
     ret = 0;
@@ -1006,11 +1006,11 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI:
-                    if ((ret = ptls_decode32(&params->initial_max_streams_bidi, &src, end)) != 0)
+                    if ((ret = ptls_decode16(&params->initial_max_streams_bidi, &src, end)) != 0)
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI:
-                    if ((ret = ptls_decode32(&params->initial_max_streams_uni, &src, end)) != 0)
+                    if ((ret = ptls_decode16(&params->initial_max_streams_uni, &src, end)) != 0)
                         goto Exit;
                     break;
                 default:
@@ -1923,6 +1923,17 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         }
         break;
     }
+    if (conn->egress.path_challenge.head != NULL) {
+        do {
+            struct st_quicly_pending_path_challenge_t *c = conn->egress.path_challenge.head;
+            if ((ret = prepare_packet(conn, &s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY)) != 0)
+                goto Exit;
+            s.dst = quicly_encode_path_challenge_frame(s.dst, c->is_response, c->data);
+            conn->egress.path_challenge.head = c->next;
+            free(c);
+        } while (conn->egress.path_challenge.head != NULL);
+        conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
+    }
     if (conn->crypto.pending_control || conn->crypto.pending_data) {
         if (conn->crypto.pending_control) {
             if ((ret = send_stream_control_frames(&conn->crypto.stream, &s)) != 0)
@@ -1957,18 +1968,6 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         if (conn->egress.send_ack_at <= s.now) {
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
-        }
-        /* path_challenge */
-        if (conn->egress.path_challenge.head != NULL) {
-            do {
-                struct st_quicly_pending_path_challenge_t *c = conn->egress.path_challenge.head;
-                if ((ret = prepare_packet(conn, &s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY)) != 0)
-                    goto Exit;
-                s.dst = quicly_encode_path_challenge_frame(s.dst, c->is_response, c->data);
-                conn->egress.path_challenge.head = c->next;
-                free(c);
-            } while (conn->egress.path_challenge.head != NULL);
-            conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
         }
         /* max_stream_id (TODO uni) */
         uint64_t max_stream_id;
@@ -2361,7 +2360,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             if ((ret = handle_stream_frame(conn, &frame)) != 0)
                 goto Exit;
             is_ack_only = 0;
-        } else if (type_flags >= QUICLY_FRAME_TYPE_ACK) {
+        } else if (type_flags == QUICLY_FRAME_TYPE_ACK) {
             /* TODO use separate decoding logic (like the one in quicly_accept) for stateless-retry */
             if (packet->first_byte == QUICLY_PACKET_TYPE_RETRY) {
                 ret = QUICLY_ERROR_TBD;

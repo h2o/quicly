@@ -75,11 +75,11 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint32_t initial_max_streams_bidi;
+    uint16_t initial_max_streams_bidi;
     /**
      *
      */
-    uint32_t initial_max_streams_uni;
+    uint16_t initial_max_streams_uni;
 } quicly_transport_parameters_t;
 
 typedef struct st_quicly_cid_t {
