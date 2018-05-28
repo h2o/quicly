@@ -1295,9 +1295,14 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     if ((packet->payload.len = ptls_aead_decrypt(aead_ingress, packet->payload.base, packet->payload.base, packet->payload.len,
                                                  packet->packet_number.bits, packet->header.base, packet->header.len)) ==
         SIZE_MAX) {
+fprintf(stderr, "%s: aead decryption failure\n", __FUNCTION__);
         ret = QUICLY_ERROR_TBD;
         goto Exit;
     }
+
+fprintf(stderr, "%s: plaintext:\n", __FUNCTION__);
+hexdump(packet->payload.base, packet->payload.len);
+fprintf(stderr, "\n");
 
     {
         const uint8_t *src = packet->payload.base, *end = src + packet->payload.len;
@@ -1306,18 +1311,21 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
                 break;
         }
         if (src == end || *src++ != QUICLY_FRAME_TYPE_CRYPTO_HS) {
+fprintf(stderr, "%s: unexpected frame type: %02x\n", __FUNCTION__, src[-1]);
             ret = QUICLY_ERROR_TBD;
             goto Exit;
         }
         if ((ret = quicly_decode_crypto_hs_frame(&src, end, &frame)) != 0)
             goto Exit;
         if (frame.offset != 0) {
+fprintf(stderr, "%s: unexpected offset\n", __FUNCTION__);
             ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
             goto Exit;
         }
         /* FIXME check packet size */
         for (; src < end; ++src) {
             if (*src != QUICLY_FRAME_TYPE_PADDING) {
+fprintf(stderr, "%s: unexpected frame type, not padding: %02x\n", __FUNCTION__, src[0]);
                 ret = QUICLY_ERROR_TBD;
                 goto Exit;
             }
@@ -1349,6 +1357,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     conn->initial->super.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
     conn->initial->super.next_expected_packet_number = (uint64_t)packet->packet_number.bits + 1;
 
+fprintf(stderr, "%s: applying handshake\n", __FUNCTION__);
     if ((ret = apply_handshake_flow(conn, 0, &frame)) != 0)
         goto Exit;
 
