@@ -1433,14 +1433,8 @@ struct st_quicly_send_context_t {
     quicly_raw_packet_t *target;
     uint8_t *dst;
     uint8_t *dst_end;
-    uint8_t *dst_unencrypted_from;
+    uint8_t *dst_encrypt_from;
 };
-
-static inline void encrypt_packet(struct st_quicly_send_context_t *s)
-{
-    ptls_aead_encrypt_update(s->aead, s->dst_unencrypted_from, s->dst_unencrypted_from, s->dst - s->dst_unencrypted_from);
-    s->dst_unencrypted_from = s->dst;
-}
 
 static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
 {
@@ -1455,9 +1449,9 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
         s->dst = s->target->data.base + max_size;
     }
 
-    if (s->dst != s->dst_unencrypted_from)
-        encrypt_packet(s);
-    s->dst += ptls_aead_encrypt_final(s->aead, s->dst);
+    s->dst = s->dst_encrypt_from + ptls_aead_encrypt(s->aead, s->dst_encrypt_from, s->dst_encrypt_from,
+                                                     s->dst - s->dst_encrypt_from, conn->egress.packet_number, s->target->data.base,
+                                                     s->dst_encrypt_from - s->target->data.base);
 
     s->target->data.len = s->dst - s->target->data.base;
     s->packets[s->num_packets++] = s->target;
@@ -1466,7 +1460,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     s->target = NULL;
     s->dst = NULL;
     s->dst_end = NULL;
-    s->dst_unencrypted_from = NULL;
+    s->dst_encrypt_from = NULL;
 
     return 0;
 }
@@ -1494,10 +1488,9 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
         if ((s->first_byte & 0x80) != 0)
             s->dst = quicly_encode32(s->dst, conn->super.version);
         s->dst = quicly_encode32(s->dst, (uint32_t)conn->egress.packet_number);
-        s->dst_unencrypted_from = s->dst;
+        s->dst_encrypt_from = s->dst;
         assert(s->aead != NULL);
         s->dst_end -= s->aead->algo->tag_size;
-        ptls_aead_encrypt_init(s->aead, conn->egress.packet_number, s->target->data.base, s->dst - s->target->data.base);
         assert(s->dst < s->dst_end);
     }
 
@@ -1602,7 +1595,6 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
     copysize = max_bytes - (iter->stream_off + max_bytes > stream->sendbuf.eos);
     s->dst = quicly_encode_stream_frame_header(s->dst, s->dst_end, stream->stream_id,
                                                iter->stream_off + copysize >= stream->sendbuf.eos, iter->stream_off, &copysize);
-    encrypt_packet(s);
 
     DEBUG_LOG(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
 
@@ -1619,9 +1611,8 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
     }
 
     /* send */
-    quicly_sendbuf_emit(&stream->sendbuf, iter, copysize, s->dst, &ack->data.stream.args, s->aead);
+    quicly_sendbuf_emit(&stream->sendbuf, iter, copysize, s->dst, &ack->data.stream.args);
     s->dst += copysize;
-    s->dst_unencrypted_from = s->dst;
 
     ack->data.stream.stream_id = stream->stream_id;
 

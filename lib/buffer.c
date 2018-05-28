@@ -227,7 +227,7 @@ size_t quicly_buffer_shift(quicly_buffer_t *buf, size_t delta)
     return delta;
 }
 
-void quicly_buffer_emit(quicly_buffer_iter_t *iter, size_t nbytes, void *_dst, ptls_aead_context_t *aead)
+void quicly_buffer_emit(quicly_buffer_iter_t *iter, size_t nbytes, void *_dst)
 {
     uint8_t *dst = _dst;
 
@@ -235,11 +235,7 @@ void quicly_buffer_emit(quicly_buffer_iter_t *iter, size_t nbytes, void *_dst, p
         size_t l = iter->vec->len - iter->vec_off;
         if (nbytes < l)
             l = nbytes;
-        if (aead != NULL) {
-            ptls_aead_encrypt_update(aead, dst, iter->vec->p + iter->vec_off, l);
-        } else {
-            memcpy(dst, iter->vec->p + iter->vec_off, l);
-        }
+        memcpy(dst, iter->vec->p + iter->vec_off, l);
         dst += l;
         if ((iter->vec_off += l) == iter->vec->len) {
             iter->vec = iter->vec->next;

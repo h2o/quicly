@@ -76,14 +76,14 @@ Exit:
 }
 
 void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
-                         quicly_sendbuf_ackargs_t *ackargs, ptls_aead_context_t *aead)
+                         quicly_sendbuf_ackargs_t *ackargs)
 {
     ackargs->start = iter->stream_off;
 
     /* emit data */
     if (nbytes != 0) {
         iter->stream_off += nbytes;
-        quicly_buffer_emit(&iter->d, nbytes, dst, aead);
+        quicly_buffer_emit(&iter->d, nbytes, dst);
     }
 
     /* adjust iter->stream_off to off-by-one indicating that FIN has been sent */
