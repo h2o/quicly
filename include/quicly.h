@@ -27,6 +27,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include "picotls.h"
@@ -79,11 +80,12 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint32_t initial_max_stream_id_uni;
-    /**
-     *
-     */
-    unsigned omit_connection_id : 1;
 } quicly_transport_parameters_t;
+
+typedef struct st_quicly_cid_t {
+    uint8_t cid[18];
+    uint8_t len;
+} quicly_cid_t;
 
 struct st_quicly_context_t {
     /**
@@ -191,14 +193,15 @@ typedef enum {
 
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
-    uint64_t connection_id;
     quicly_state_t state;
     struct {
+        quicly_cid_t cid;
         uint32_t num_streams;
         uint64_t next_stream_id_bidi;
         uint64_t next_stream_id_uni;
     } host;
     struct {
+        quicly_cid_t cid;
         uint32_t num_streams;
         uint64_t next_stream_id_bidi;
         uint64_t next_stream_id_uni;
@@ -292,7 +295,9 @@ struct st_quicly_stream_t {
 
 typedef struct st_quicly_decode_packet_t {
     uint8_t first_byte;
-    uint64_t connection_id;
+    struct {
+        ptls_iovec_t dest, src;
+    } cid;
     struct {
         uint32_t bits;
         uint32_t mask;
@@ -311,7 +316,7 @@ extern const quicly_context_t quicly_default_context;
 /**
  *
  */
-int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, size_t len);
+size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, size_t len, size_t host_cidl);
 /**
  *
  */
@@ -319,11 +324,19 @@ uint64_t quicly_determine_packet_number(quicly_decoded_packet_t *packet, uint64_
 /**
  *
  */
+static int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec);
+/**
+ *
+ */
 static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
 /**
  *
  */
-static uint64_t quicly_get_connection_id(quicly_conn_t *conn);
+static const quicly_cid_t *quicly_get_host_connection_id(quicly_conn_t *conn);
+/**
+ *
+ */
+static const quicly_cid_t *quicly_get_peer_connection_id(quicly_conn_t *conn);
 /**
  *
  */
@@ -364,7 +377,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn);
  *
  */
 quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                     uint64_t connection_id);
+                                                     ptls_iovec_t dest_cid, ptls_iovec_t src_cid);
 /**
  *
  */
@@ -442,16 +455,27 @@ inline uint32_t quicly_num_streams(quicly_conn_t *conn)
     return 1 + c->host.num_streams + c->peer.num_streams;
 }
 
+inline int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec)
+{
+    return cid->len == vec.len && memcmp(cid->cid, vec.base, vec.len) == 0;
+}
+
 inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->ctx;
 }
 
-inline uint64_t quicly_get_connection_id(quicly_conn_t *conn)
+inline const quicly_cid_t *quicly_get_host_connection_id(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return c->connection_id;
+    return &c->host.cid;
+}
+
+inline const quicly_cid_t *quicly_get_peer_connection_id(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return &c->peer.cid;
 }
 
 inline int quicly_is_client(quicly_conn_t *conn)

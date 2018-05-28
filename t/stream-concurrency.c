@@ -41,7 +41,7 @@ void test_stream_concurrency(void)
         ret = quicly_send(client, &raw, &num_packets);
         ok(ret == 0);
         ok(num_packets == 1);
-        decode_packets(&decoded, &raw, 1);
+        ok(decode_packets(&decoded, &raw, 1, 8) == 1);
         ok(num_packets == 1);
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
         ok(ret == 0);

@@ -41,7 +41,7 @@ static void test_handshake(void)
     ok(packets[0]->data.len == 1280);
 
     /* receive CH, send handshake upto ServerFinished */
-    decode_packets(decoded, packets, num_packets);
+    decode_packets(decoded, packets, num_packets, 8);
     ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, decoded);
     ok(ret == 0);
     free_packets(packets, num_packets);
@@ -52,7 +52,7 @@ static void test_handshake(void)
     ok(num_packets != 0);
 
     /* receive ServerFinished */
-    decode_packets(decoded, packets, num_packets);
+    decode_packets(decoded, packets, num_packets, 0);
     for (i = 0; i != num_packets; ++i) {
         ret = quicly_receive(client, decoded + i);
         ok(ret == 0);
@@ -258,7 +258,7 @@ static void test_rst_during_loss(void)
 
     {
         quicly_decoded_packet_t decoded;
-        decode_packets(&decoded, &reordered_packet, 1);
+        decode_packets(&decoded, &reordered_packet, 1, 8);
         ret = quicly_receive(server, &decoded);
         ok(ret == 0);
     }
@@ -310,7 +310,7 @@ static void tiny_connection_window(void)
         ret = quicly_send(client, &raw, &num_packets);
         ok(ret == 0);
         ok(num_packets == 1);
-        decode_packets(&decoded, &raw, 1);
+        decode_packets(&decoded, &raw, 1, 8);
         ok(num_packets == 1);
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
         ok(ret == 0);

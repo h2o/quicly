@@ -341,11 +341,16 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
                 ;
             if (verbosity >= 2)
                 hexdump("recvmsg", buf, rret);
-            quicly_decoded_packet_t packet;
-            if (quicly_decode_packet(&packet, buf, rret) == 0) {
+            size_t off = 0;
+            while (off != rret) {
+                quicly_decoded_packet_t packet;
+                size_t plen = quicly_decode_packet(&packet, buf + off, rret - off, 0);
+                if (plen == SIZE_MAX)
+                    break;
                 quicly_receive(conn, &packet);
-                send_if_possible(conn);
+                off += plen;
             }
+            send_if_possible(conn);
         }
         if (conn != NULL && send_pending(fd, conn) != 0) {
             quicly_free(conn);
@@ -418,12 +423,16 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 ;
             if (verbosity >= 2)
                 hexdump("recvmsg", buf, rret);
-            quicly_decoded_packet_t packet;
-            if (quicly_decode_packet(&packet, buf, rret) == 0) {
+            size_t off = 0;
+            while (off != rret) {
+                quicly_decoded_packet_t packet;
+                size_t plen = quicly_decode_packet(&packet, buf + off, rret - off, 8);
+                if (plen == SIZE_MAX)
+                    break;
                 quicly_conn_t *conn = NULL;
                 size_t i;
                 for (i = 0; i != num_conns; ++i) {
-                    if (quicly_get_connection_id(conns[i]) == packet.connection_id) {
+                    if (quicly_cid_is_equal(quicly_get_host_connection_id(conns[i]), packet.cid.dest)) {
                         conn = conns[i];
                         break;
                     }
@@ -443,7 +452,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                         assert(conn == NULL);
                         if (ret == QUICLY_ERROR_VERSION_NEGOTIATION) {
                             quicly_raw_packet_t *rp =
-                                quicly_send_version_negotiation(&ctx, &sa, mess.msg_namelen, packet.connection_id);
+                                quicly_send_version_negotiation(&ctx, &sa, salen, packet.cid.src, packet.cid.dest);
                             assert(rp != NULL);
                             if (send_one(fd, rp) == -1)
                                 perror("sendmsg failed");
@@ -460,6 +469,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     }
                     quicly_free(conn);
                 }
+                off += plen;
             }
         }
     }
