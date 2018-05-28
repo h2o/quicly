@@ -75,11 +75,11 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint32_t initial_max_stream_id_bidi;
+    uint32_t initial_max_streams_bidi;
     /**
      *
      */
-    uint32_t initial_max_stream_id_uni;
+    uint32_t initial_max_streams_uni;
 } quicly_transport_parameters_t;
 
 typedef struct st_quicly_cid_t {
@@ -115,11 +115,11 @@ struct st_quicly_context_t {
     /**
      *
      */
-    uint32_t max_concurrent_streams_bidi;
+    uint32_t max_streams_bidi;
     /**
      *
      */
-    uint32_t max_concurrent_streams_uni;
+    uint32_t max_streams_uni;
     /**
      * stateless reset
      */

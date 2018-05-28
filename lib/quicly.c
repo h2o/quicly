@@ -48,8 +48,8 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA 1
 #define QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT 3
 #define QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN 6
-#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID_BIDI 2
-#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID_UNI 8
+#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI 2
+#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI 8
 
 #define STATELESS_RESET_TOKEN_SIZE 16
 
@@ -689,8 +689,10 @@ static int setup_secret(struct st_quicly_packet_protection_t *pp, ptls_t *tls, c
 static void apply_peer_transport_params(quicly_conn_t *conn)
 {
     conn->egress.max_data.permitted = conn->super.peer.transport_params.initial_max_data;
-    conn->egress.max_stream_id_bidi = conn->super.peer.transport_params.initial_max_stream_id_bidi;
-    conn->egress.max_stream_id_uni = conn->super.peer.transport_params.initial_max_stream_id_uni;
+    conn->egress.max_stream_id_bidi =
+        conn->super.peer.transport_params.initial_max_streams_bidi * 4 - (quicly_is_client(conn) ? 0 : 3);
+    conn->egress.max_stream_id_uni =
+        conn->super.peer.transport_params.initial_max_streams_uni * 4 + (quicly_is_client(conn) ? 2 : 1);
 }
 
 static int setup_1rtt(quicly_conn_t *conn, ptls_t *tls)
@@ -936,15 +938,12 @@ static int encode_transport_parameter_list(quicly_context_t *ctx, ptls_buffer_t 
                 ptls_buffer_pushv(buf, zeroes, sizeof(zeroes));
             });
         }
-        if (ctx->max_concurrent_streams_bidi != 0) {
-            uint32_t max_stream_id = ctx->max_concurrent_streams_bidi * 4 - (is_client ? 3 : 0);
-            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID_BIDI,
-                                     { ptls_buffer_push32(buf, max_stream_id); });
-        }
-        if (ctx->max_concurrent_streams_uni != 0) {
-            uint32_t max_stream_id = ctx->max_concurrent_streams_uni * 4 - (is_client ? 1 : 2);
-            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID_UNI,
-                                     { ptls_buffer_push32(buf, max_stream_id); });
+        if (ctx->max_streams_bidi != 0)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI,
+                                     { ptls_buffer_push32(buf, ctx->max_streams_bidi); });
+        if (ctx->max_streams_uni != 0) {
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
+                                     { ptls_buffer_push32(buf, ctx->max_streams_uni); });
         }
     });
     ret = 0;
@@ -967,8 +966,8 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
         must_found_id_bits = ID_TO_BIT(QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN);
 
     /* set optional parameters to their default values */
-    params->initial_max_stream_id_bidi = 0;
-    params->initial_max_stream_id_uni = 0;
+    params->initial_max_streams_bidi = 0;
+    params->initial_max_streams_uni = 0;
 
     /* decode the parameters block */
     ptls_decode_block(src, end, 2, {
@@ -1006,29 +1005,13 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
                     if ((ret = ptls_decode16(&params->idle_timeout, &src, end)) != 0)
                         goto Exit;
                     break;
-                case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID_BIDI:
-                    if ((ret = ptls_decode32(&params->initial_max_stream_id_bidi, &src, end)) != 0)
+                case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI:
+                    if ((ret = ptls_decode32(&params->initial_max_streams_bidi, &src, end)) != 0)
                         goto Exit;
-                    if (STREAM_IS_UNI(params->initial_max_stream_id_bidi)) {
-                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
-                        goto Exit;
-                    }
-                    if (is_client != STREAM_IS_CLIENT_INITIATED(params->initial_max_stream_id_bidi)) {
-                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
-                        goto Exit;
-                    }
                     break;
-                case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_ID_UNI:
-                    if ((ret = ptls_decode32(&params->initial_max_stream_id_uni, &src, end)) != 0)
+                case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI:
+                    if ((ret = ptls_decode32(&params->initial_max_streams_uni, &src, end)) != 0)
                         goto Exit;
-                    if (!STREAM_IS_UNI(params->initial_max_stream_id_uni)) {
-                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
-                        goto Exit;
-                    }
-                    if (is_client != STREAM_IS_CLIENT_INITIATED(params->initial_max_stream_id_uni)) {
-                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
-                        goto Exit;
-                    }
                     break;
                 default:
                     src = end;
@@ -1104,9 +1087,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, ptls_iovec_t host
     quicly_ranges_init(&conn->ingress.ack_queue);
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->initial_max_data);
     quicly_maxsender_init(&conn->ingress.max_stream_id_bidi,
-                          conn->super.ctx->max_concurrent_streams_bidi * 4 + conn->super.peer.next_stream_id_bidi);
+                          conn->super.ctx->max_streams_bidi * 4 + conn->super.peer.next_stream_id_bidi);
     quicly_maxsender_init(&conn->ingress.max_stream_id_uni,
-                          conn->super.ctx->max_concurrent_streams_uni * 4 + conn->super.peer.next_stream_id_uni);
+                          conn->super.ctx->max_streams_uni * 4 + conn->super.peer.next_stream_id_uni);
     quicly_acks_init(&conn->egress.acks);
     quicly_loss_init(&conn->egress.loss, conn->super.ctx->loss,
                      conn->super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
@@ -1991,7 +1974,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         uint64_t max_stream_id;
         if ((max_stream_id = quicly_maxsender_should_update_stream_id(
                  &conn->ingress.max_stream_id_bidi, conn->super.peer.next_stream_id_bidi, conn->super.peer.num_streams,
-                 conn->super.ctx->max_concurrent_streams_bidi, 768)) != 0) {
+                 conn->super.ctx->max_streams_bidi, 768)) != 0) {
             quicly_ack_t *ack;
             if ((ret = prepare_acked_packet(conn, &s, QUICLY_MAX_STREAM_ID_FRAME_CAPACITY, &ack, on_ack_max_stream_id_bidi)) != 0)
                 goto Exit;

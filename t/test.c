@@ -204,7 +204,7 @@ int main(int argc, char **argv)
 {
     quic_ctx = quicly_default_context;
     quic_ctx.tls = &tls_ctx;
-    quic_ctx.max_concurrent_streams_bidi = 10;
+    quic_ctx.max_streams_bidi = 10;
     quic_ctx.on_stream_open = on_stream_open_buffering;
     quic_ctx.now = get_now;
 

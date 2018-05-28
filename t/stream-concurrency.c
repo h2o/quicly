@@ -25,7 +25,7 @@
 void test_stream_concurrency(void)
 {
     quicly_conn_t *client, *server;
-    size_t limit = quic_ctx.max_concurrent_streams_bidi;
+    size_t limit = quic_ctx.max_streams_bidi;
     quicly_stream_t *client_streams[limit + 1], *server_stream;
     size_t i;
     int ret;
