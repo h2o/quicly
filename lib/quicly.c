@@ -58,6 +58,13 @@
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
+static void hexdump(const uint8_t *p, size_t len)
+{
+    size_t i;
+    for (i = 0; i != len; ++i)
+        fprintf(stderr, "%02x", p[i]);
+}
+
 #define DEBUG_LOG(conn, stream_id, ...)                                                                                            \
     do {                                                                                                                           \
         quicly_conn_t *_conn = (conn);                                                                                             \
@@ -785,6 +792,9 @@ static int setup_initial_key(ptls_aead_context_t **aead, ptls_cipher_suite_t *cs
                                       ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0),
                                       NULL)) != 0)
         goto Exit;
+fprintf(stderr, "%s: label: %s, aead-secret:", __FUNCTION__, label);
+hexdump(aead_secret, cs->hash->digest_size);
+fprintf(stderr, "\n");
     if ((ret = setup_key(aead, cs, aead_secret, is_enc)) != 0)
         goto Exit;
 
@@ -811,8 +821,13 @@ static int setup_initial_encryption(ptls_aead_context_t **ingress, ptls_aead_con
     }
 
     /* extract master secret */
+fprintf(stderr, "%s: cid:", __FUNCTION__);
+hexdump(cid.base, cid.len);
     if ((ret = ptls_hkdf_extract((*cs)->hash, secret, ptls_iovec_init(salt, sizeof(salt)), cid)) != 0)
         goto Exit;
+fprintf(stderr, " -> ");
+hexdump(secret, (*cs)->hash->digest_size);
+fprintf(stderr, "\n");
 
     /* create aead contexts */
     if ((ret = setup_initial_key(ingress, *cs, secret, labels[is_client], 0)) != 0)
@@ -2005,7 +2020,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
             } else {
                 free_handshake_space(&conn->handshake);
                 destroy_handshake_flow(conn, 2);
-                conn->egress.send_handshake_done = 1;
+                //conn->egress.send_handshake_done = 1;
             }
         }
         if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 0)) != 0)
