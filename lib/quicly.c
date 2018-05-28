@@ -79,11 +79,10 @@ struct st_quicly_packet_protection_t {
     ptls_aead_context_t *one_rtt[2];
 };
 
-struct st_quicly_pending_ping_t {
-    struct st_quicly_pending_ping_t *next;
-    uint8_t is_pong;
-    uint8_t len;
-    uint8_t data[1];
+struct st_quicly_pending_path_challenge_t {
+    struct st_quicly_pending_path_challenge_t *next;
+    uint8_t is_response;
+    uint8_t data[QUICLY_PATH_CHALLENGE_DATA_LEN];
 };
 
 struct st_quicly_conn_t {
@@ -167,8 +166,8 @@ struct st_quicly_conn_t {
          *
          */
         struct {
-            struct st_quicly_pending_ping_t *head, **tail_ref;
-        } ping;
+            struct st_quicly_pending_path_challenge_t *head, **tail_ref;
+        } path_challenge;
         /**
          *
          */
@@ -399,20 +398,19 @@ static void on_recvbuf_change(quicly_recvbuf_t *buf, size_t shift_amount)
     }
 }
 
-static int schedule_ping(quicly_conn_t *conn, int is_pong, const void *data, size_t len)
+static int schedule_path_challenge(quicly_conn_t *conn, int is_response, const uint8_t *data)
 {
-    struct st_quicly_pending_ping_t *pending;
+    struct st_quicly_pending_path_challenge_t *pending;
 
-    if ((pending = malloc(offsetof(struct st_quicly_pending_ping_t, data) + len)) == NULL)
+    if ((pending = malloc(sizeof(struct st_quicly_pending_path_challenge_t))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     pending->next = NULL;
-    pending->is_pong = is_pong;
-    pending->len = len;
-    memcpy(pending->data, data, len);
+    pending->is_response = is_response;
+    memcpy(pending->data, data, QUICLY_PATH_CHALLENGE_DATA_LEN);
 
-    *conn->egress.ping.tail_ref = pending;
-    conn->egress.ping.tail_ref = &pending->next;
+    *conn->egress.path_challenge.tail_ref = pending;
+    conn->egress.path_challenge.tail_ref = &pending->next;
     return 0;
 }
 
@@ -522,9 +520,9 @@ void quicly_free(quicly_conn_t *conn)
     quicly_maxsender_dispose(&conn->ingress.max_stream_id_uni);
     free_packet_protection(&conn->egress.pp);
     quicly_acks_dispose(&conn->egress.acks);
-    while (conn->egress.ping.head != NULL) {
-        struct st_quicly_pending_ping_t *pending = conn->egress.ping.head;
-        conn->egress.ping.head = pending->next;
+    while (conn->egress.path_challenge.head != NULL) {
+        struct st_quicly_pending_path_challenge_t *pending = conn->egress.path_challenge.head;
+        conn->egress.path_challenge.head = pending->next;
         free(pending);
     }
 
@@ -1032,7 +1030,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint64_t connecti
     quicly_acks_init(&conn->egress.acks);
     quicly_loss_init(&conn->egress.loss, conn->super.ctx->loss,
                      conn->super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
-    conn->egress.ping.tail_ref = &conn->egress.ping.head;
+    conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
     conn->egress.send_ack_at = INT64_MAX;
     init_stream(&conn->crypto.stream, conn, 0);
     conn->crypto.stream.on_update = crypto_stream_receive_handshake;
@@ -1873,17 +1871,17 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
         }
-        /* ping */
-        if (conn->egress.ping.head != NULL) {
+        /* path_challenge */
+        if (conn->egress.path_challenge.head != NULL) {
             do {
-                struct st_quicly_pending_ping_t *ping = conn->egress.ping.head;
-                if ((ret = prepare_packet(conn, &s, quicly_calc_ping_frame_size(ping->len))) != 0)
+                struct st_quicly_pending_path_challenge_t *c = conn->egress.path_challenge.head;
+                if ((ret = prepare_packet(conn, &s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY)) != 0)
                     goto Exit;
-                s.dst = quicly_encode_ping_frame(s.dst, ping->is_pong, ping->data, ping->len);
-                conn->egress.ping.head = ping->next;
-                free(ping);
-            } while (conn->egress.ping.head != NULL);
-            conn->egress.ping.tail_ref = &conn->egress.ping.head;
+                s.dst = quicly_encode_path_challenge_frame(s.dst, c->is_response, c->data);
+                conn->egress.path_challenge.head = c->next;
+                free(c);
+            } while (conn->egress.path_challenge.head != NULL);
+            conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
         }
         /* max_stream_id (TODO uni) */
         uint64_t max_stream_id;
@@ -2098,9 +2096,9 @@ static int handle_max_stream_id_frame(quicly_conn_t *conn, quicly_max_stream_id_
     return 0;
 }
 
-static int handle_ping_frame(quicly_conn_t *conn, quicly_ping_frame_t *frame)
+static int handle_path_challenge_frame(quicly_conn_t *conn, quicly_path_challenge_frame_t *frame)
 {
-    return schedule_ping(conn, 1, frame->data.base, frame->data.len);
+    return schedule_path_challenge(conn, 1, frame->data);
 }
 
 static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_frame_t *frame)
@@ -2325,13 +2323,16 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 if ((ret = handle_max_stream_id_frame(conn, &frame)) != 0)
                     goto Exit;
             } break;
-            case QUICLY_FRAME_TYPE_PING: {
-                quicly_ping_frame_t frame;
-                if ((ret = quicly_decode_ping_frame(&src, end, &frame)) != 0)
+            case QUICLY_FRAME_TYPE_PATH_CHALLENGE: {
+                quicly_path_challenge_frame_t frame;
+                if ((ret = quicly_decode_path_challenge_frame(&src, end, &frame)) != 0)
                     goto Exit;
-                if ((ret = handle_ping_frame(conn, &frame)) != 0)
+                if ((ret = handle_path_challenge_frame(conn, &frame)) != 0)
                     goto Exit;
             } break;
+            case QUICLY_FRAME_TYPE_PING:
+                ret = 0;
+                break;
             case QUICLY_FRAME_TYPE_BLOCKED: {
                 quicly_blocked_frame_t frame;
                 if ((ret = quicly_decode_blocked_frame(&src, end, &frame)) != 0)
