@@ -362,8 +362,6 @@ inline int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, c
 
     /* fin bit */
     frame->is_fin = (type_flags & QUICLY_FRAME_TYPE_STREAM_BIT_FIN) != 0;
-    if (!frame->is_fin && frame->data.len == 0)
-        goto Error;
 
     return 0;
 Error:
