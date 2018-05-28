@@ -23,12 +23,11 @@
 #include <string.h>
 #include "quicly/frame.h"
 
-uint8_t *quicly_encode_ping_frame(uint8_t *dst, int is_pong, const void *data, size_t len)
+uint8_t *quicly_encode_path_challenge_frame(uint8_t *dst, int is_response, const uint8_t *data)
 {
-    *dst++ = is_pong ? QUICLY_FRAME_TYPE_PONG : QUICLY_FRAME_TYPE_PING;
-    *dst++ = (uint8_t)data;
-    memcpy(dst, data, len);
-    dst += len;
+    *dst++ = is_response ? QUICLY_FRAME_TYPE_PATH_CHALLENGE : QUICLY_FRAME_TYPE_PATH_RESPONSE;
+    memcpy(dst, data, QUICLY_PATH_CHALLENGE_DATA_LEN);
+    dst += QUICLY_PATH_CHALLENGE_DATA_LEN;
     return dst;
 }
 

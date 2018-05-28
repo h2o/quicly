@@ -101,13 +101,21 @@ void free_packets(quicly_raw_packet_t **packets, size_t cnt)
         quicly_default_free_packet(&quic_ctx, packets[i]);
 }
 
-void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt)
+size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt, size_t host_cidl)
 {
-    size_t i;
-    for (i = 0; i != cnt; ++i) {
-        int ret = quicly_decode_packet(decoded + i, raw[i]->data.base, raw[i]->data.len);
-        ok(ret == 0);
+    size_t ri, dc = 0;
+
+    for (ri = 0; ri != cnt; ++ri) {
+        size_t off = 0;
+        do {
+            size_t dl = quicly_decode_packet(decoded + dc, raw[ri]->data.base + off, raw[ri]->data.len - off, host_cidl);
+            assert(dl != SIZE_MAX);
+            ++dc;
+            off += dl;
+        } while (off != raw[ri]->data.len);
     }
+
+    return dc;
 }
 
 int on_update_noop(quicly_stream_t *stream)
@@ -147,7 +155,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     ok(ret == 0);
 
     if (num_packets != 0) {
-        decode_packets(decoded, packets, num_packets);
+        decode_packets(decoded, packets, num_packets, quicly_is_client(dst) ? 0 : 8);
         for (i = 0; i != num_packets; ++i) {
             ret = quicly_receive(dst, decoded + i);
             ok(ret == 0);
@@ -198,7 +206,7 @@ int main(int argc, char **argv)
     quic_ctx.tls.certificates.list = &cert;
     quic_ctx.tls.certificates.count = 1;
     quic_ctx.tls.sign_certificate = &cert_signer.super;
-    quic_ctx.max_concurrent_streams_bidi = 10;
+    quic_ctx.max_streams_bidi = 10;
     quic_ctx.on_stream_open = on_stream_open_buffering;
     quic_ctx.now = get_now;
 

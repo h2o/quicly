@@ -23,7 +23,6 @@
 #define quicly_buffer_h
 
 #include <stddef.h>
-#include "picotls.h"
 
 struct st_quicly_buffer_vec_t;
 
@@ -82,7 +81,7 @@ void quicly_buffer_set_fast_external(quicly_buffer_t *buf, struct st_quicly_buff
 int quicly_buffer_push(quicly_buffer_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb);
 int quicly_buffer_write(quicly_buffer_t *buf, size_t pos, const void *p, size_t len);
 size_t quicly_buffer_shift(quicly_buffer_t *buf, size_t delta);
-void quicly_buffer_emit(quicly_buffer_iter_t *iter, size_t nbytes, void *_dst, ptls_aead_context_t *aead);
+void quicly_buffer_emit(quicly_buffer_iter_t *iter, size_t nbytes, void *_dst);
 static void quicly_buffer_init_iter(quicly_buffer_t *buf, quicly_buffer_iter_t *iter);
 static void quicly_buffer_advance_iter(quicly_buffer_iter_t *iter, size_t nbytes);
 

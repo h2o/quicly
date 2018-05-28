@@ -40,15 +40,15 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
     *num_received = 0;
 
     if (*num_sent != 0) {
-        decode_packets(decoded, packets, *num_sent);
-        for (i = 0; i != *num_sent; ++i) {
+        size_t num_decoded = decode_packets(decoded, packets, *num_sent, quicly_is_client(dst) ? 0 : 8);
+        for (i = 0; i != num_decoded; ++i) {
             if (cond(decoded + i)) {
                 ret = quicly_receive(dst, decoded + i);
                 ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
                 ++*num_received;
             }
         }
-        free_packets(packets, *num_sent);
+        free_packets(packets, num_decoded);
     }
     quic_now += latency;
 }
@@ -85,7 +85,7 @@ static void test_even(void)
         ret = quicly_send(client, &raw, &num_packets);
         ok(ret == 0);
         ok(num_packets == 1);
-        decode_packets(&decoded, &raw, 1);
+        decode_packets(&decoded, &raw, 1, 8);
         ok(num_packets == 1);
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
         ok(ret == 0);
@@ -161,7 +161,7 @@ static void loss_core(int downstream_only)
         ok(ret == 0);
         ok(num_packets == 1);
         quic_now += 10;
-        decode_packets(&decoded, &raw, 1);
+        decode_packets(&decoded, &raw, 1, 8);
         ok(num_packets == 1);
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
         ok(ret == 0);

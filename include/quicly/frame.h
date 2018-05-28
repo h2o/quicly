@@ -45,9 +45,11 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_STREAM_ID_BLOCKED 10
 #define QUICLY_FRAME_TYPE_NEW_CONNECTION_ID 11
 #define QUICLY_FRAME_TYPE_STOP_SENDING 12
-#define QUICLY_FRAME_TYPE_PONG 13
-#define QUICLY_FRAME_TYPE_ACK 14
-#define QUICLY_FRAME_TYPE_HANDSHAKE_DONE 15
+#define QUICLY_FRAME_TYPE_ACK 13
+#define QUICLY_FRAME_TYPE_PATH_CHALLENGE 14
+#define QUICLY_FRAME_TYPE_PATH_RESPONSE 15
+#define QUICLY_FRAME_TYPE_HANDSHAKE_DONE 25
+
 #define QUICLY_FRAME_TYPE_STREAM_BASE 0x10
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
 #define QUICLY_FRAME_TYPE_CRYPTO_HS 0x18
@@ -62,6 +64,7 @@ extern "C" {
 #define QUICLY_STREAM_ID_BLOCKED_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STOP_SENDING_FRAME_CAPACITY (1 + 8 + 2)
 #define QUICLY_ACK_FRAME_CAPACITY (1 + 8 + 8 + 1 + 8)
+#define QUICLY_PATH_CHALLENGE_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STREAM_FRAME_CAPACITY (1 + 8 + 8 + 1)
 
 static uint16_t quicly_decode16(const uint8_t **src);
@@ -131,14 +134,15 @@ typedef struct st_quicly_max_stream_id_frame_t {
 
 static int quicly_decode_max_stream_id_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_id_frame_t *frame);
 
-static size_t quicly_calc_ping_frame_size(size_t data_len);
-uint8_t *quicly_encode_ping_frame(uint8_t *dst, int is_pong, const void *data, size_t len);
+#define QUICLY_PATH_CHALLENGE_DATA_LEN 8
 
-typedef struct st_quicly_ping_frame_t {
-    ptls_iovec_t data;
-} quicly_ping_frame_t;
+uint8_t *quicly_encode_path_challenge_frame(uint8_t *dst, int is_response, const uint8_t *data);
 
-static int quicly_decode_ping_frame(const uint8_t **src, const uint8_t *end, quicly_ping_frame_t *frame);
+typedef struct st_quicly_path_challenge_frame_t {
+    const uint8_t *data;
+} quicly_path_challenge_frame_t;
+
+static int quicly_decode_path_challenge_frame(const uint8_t **src, const uint8_t *end, quicly_path_challenge_frame_t *frame);
 
 typedef struct st_quicly_blocked_frame_t {
     uint64_t offset;
@@ -362,8 +366,6 @@ inline int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, c
 
     /* fin bit */
     frame->is_fin = (type_flags & QUICLY_FRAME_TYPE_STREAM_BIT_FIN) != 0;
-    if (!frame->is_fin && frame->data.len == 0)
-        goto Error;
 
     return 0;
 Error:
@@ -495,12 +497,6 @@ inline uint8_t *quicly_encode_max_stream_id_frame(uint8_t *dst, uint64_t max_str
     return dst;
 }
 
-inline size_t quicly_calc_ping_frame_size(size_t data_len)
-{
-    assert(data_len < 256);
-    return 2 + data_len;
-}
-
 inline int quicly_decode_max_stream_id_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_id_frame_t *frame)
 {
     if ((frame->max_stream_id = quicly_decodev(src, end)) == UINT64_MAX)
@@ -508,18 +504,17 @@ inline int quicly_decode_max_stream_id_frame(const uint8_t **src, const uint8_t 
     return 0;
 }
 
-inline int quicly_decode_ping_frame(const uint8_t **src, const uint8_t *end, quicly_ping_frame_t *frame)
+inline int quicly_decode_path_challenge_frame(const uint8_t **src, const uint8_t *end, quicly_path_challenge_frame_t *frame)
 {
     if (end - *src < 1)
         goto Error;
-    frame->data.len = *(*src)++;
-    if (end - *src < frame->data.len)
+    if (end - *src < QUICLY_PATH_CHALLENGE_DATA_LEN)
         goto Error;
-    frame->data.base = (void *)src;
-    src += frame->data.len;
+    frame->data = *src;
+    *src += QUICLY_PATH_CHALLENGE_DATA_LEN;
     return 0;
 Error:
-    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_PING);
+    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_PATH_CHALLENGE);
 }
 
 inline int quicly_decode_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_blocked_frame_t *frame)
