@@ -2637,9 +2637,15 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     packet_number = quicly_determine_packet_number(packet, (*space)->next_expected_packet_number);
     if ((packet->payload.len = ptls_aead_decrypt(aead, packet->payload.base, packet->payload.base, packet->payload.len,
                                                  packet_number, packet->header.base, packet->header.len)) == SIZE_MAX) {
+fprintf(stderr, "%s: aead decryption failure\n", __FUNCTION__);
         ret = QUICLY_ERROR_TBD;
         goto Exit;
     }
+
+fprintf(stderr, "%s: plaintext:\n", __FUNCTION__);
+hexdump(packet->payload.base, packet->payload.len);
+fprintf(stderr, "\n");
+
     (*space)->next_expected_packet_number = packet_number + 1;
 
     if (epoch == 2 && conn->initial != NULL) {
