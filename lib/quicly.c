@@ -32,7 +32,7 @@
 #include "quicly/ack.h"
 #include "quicly/frame.h"
 
-#define QUICLY_PROTOCOL_VERSION 0xff00000b
+#define QUICLY_PROTOCOL_VERSION 0xff00000c
 
 #define QUICLY_PACKET_TYPE_INITIAL 0xff
 #define QUICLY_PACKET_TYPE_RETRY 0xfe
@@ -74,10 +74,15 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         }                                                                                                                          \
     } while (0)
 
+struct st_quicly_cipher_context_t {
+    ptls_aead_context_t *aead;
+    ptls_cipher_context_t *pne;
+};
+
 struct st_quicly_packet_protection_t {
-    ptls_aead_context_t *handshake;
-    ptls_aead_context_t *early_data;
-    ptls_aead_context_t *one_rtt[2];
+    struct st_quicly_cipher_context_t handshake;
+    struct st_quicly_cipher_context_t early_data;
+    struct st_quicly_cipher_context_t one_rtt[2];
 };
 
 struct st_quicly_pending_path_challenge_t {
@@ -221,16 +226,22 @@ const quicly_context_t quicly_default_context = {
 
 static const quicly_transport_parameters_t transport_params_before_handshake = {16384, 16384, 10, 60, 0};
 
+static void dispose_cipher(struct st_quicly_cipher_context_t *ctx)
+{
+    ptls_aead_free(ctx->aead);
+    ptls_cipher_free(ctx->pne);
+}
+
 static void free_packet_protection(struct st_quicly_packet_protection_t *pp)
 {
-    if (pp->handshake != NULL)
-        ptls_aead_free(pp->handshake);
-    if (pp->early_data != NULL)
-        ptls_aead_free(pp->early_data);
-    if (pp->one_rtt[0] != NULL)
-        ptls_aead_free(pp->one_rtt[0]);
-    if (pp->one_rtt[1] != NULL)
-        ptls_aead_free(pp->one_rtt[1]);
+    if (pp->handshake.aead != NULL)
+        dispose_cipher(&pp->handshake);
+    if (pp->early_data.aead != NULL)
+        dispose_cipher(&pp->early_data);
+    if (pp->one_rtt[0].aead != NULL)
+        dispose_cipher(&pp->one_rtt[0]);
+    if (pp->one_rtt[1].aead != NULL)
+        dispose_cipher(&pp->one_rtt[1]);
 }
 
 static size_t decode_cid_length(uint8_t src)
@@ -245,17 +256,17 @@ static uint8_t encode_cid_length(size_t len)
 
 size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, size_t len, size_t host_cidl)
 {
+    const uint8_t *src_end = src + len;
+
     if (len < 2)
         goto Error;
 
-    packet->header.base = (void *)src;
+    packet->octets = ptls_iovec_init(src, len);
+    ++src;
 
-    const uint8_t *src_end = src + len;
-
-    packet->first_byte = *src++;
-    if (!QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
+    if (!QUICLY_PACKET_TYPE_IS_1RTT(packet->octets.base[0])) {
         /* long header */
-        uint64_t payload_length;
+        uint64_t rest_length;
         if (src_end - src < 5)
             goto Error;
         packet->version = quicly_decode32(&src);
@@ -270,15 +281,19 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
         src += packet->cid.dest.len;
         packet->cid.src.base = (void *)src;
         src += packet->cid.src.len;
-        if ((payload_length = quicly_decodev(&src, src_end)) == UINT64_MAX)
-            goto Error;
-        if (src_end - src < 4 + payload_length)
-            goto Error;
-        packet->packet_number.bits = quicly_decode32(&src);
-        packet->packet_number.mask = UINT32_MAX;
-        packet->header.len = src - packet->header.base;
-        packet->payload = ptls_iovec_init(src, (size_t)payload_length);
-        src += payload_length;
+        if (packet->version == 0) {
+            /* version negotiation packet does not have the length field nor is ever coalesced */
+            packet->encrypted_off = src - packet->octets.base;
+        } else {
+            if ((rest_length = quicly_decodev(&src, src_end)) == UINT64_MAX)
+                goto Error;
+            if (rest_length < 1)
+                goto Error;
+            if (src_end - src < rest_length)
+                goto Error;
+            packet->encrypted_off = src - packet->octets.base;
+            packet->octets.len = packet->encrypted_off + rest_length;
+        }
     } else {
         /* short header */
         if (host_cidl != 0) {
@@ -291,46 +306,22 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
         }
         packet->cid.src = ptls_iovec_init(NULL, 0);
         packet->version = 0;
-        switch (packet->first_byte & 0x3f) {
-        case 0x30:
-            if (src_end - src < 1)
-                goto Error;
-            packet->packet_number.bits = *src++;
-            packet->packet_number.mask = UINT8_MAX;
-            break;
-        case 0x31:
-            if (src_end - src < 2)
-                goto Error;
-            packet->packet_number.bits = quicly_decode16(&src);
-            packet->packet_number.mask = UINT16_MAX;
-            break;
-        case 0x32:
-            if (src_end - src < 4)
-                goto Error;
-            packet->packet_number.bits = quicly_decode32(&src);
-            packet->packet_number.mask = UINT32_MAX;
-            break;
-        default:
-            goto Error;
-        }
-        packet->header.len = src - packet->header.base;
-        packet->payload = ptls_iovec_init(src, src_end - src);
-        src = src_end;
+        packet->encrypted_off = src - packet->octets.base;
     }
 
-    return src - packet->header.base;
+    return packet->octets.len;
 
 Error:
     return SIZE_MAX;
 }
 
-uint64_t quicly_determine_packet_number(quicly_decoded_packet_t *packet, uint64_t next_expected)
+uint64_t quicly_determine_packet_number(uint32_t bits, uint32_t mask, uint64_t next_expected)
 {
-    uint64_t actual = (next_expected & ~(uint64_t)packet->packet_number.mask) + packet->packet_number.bits;
+    uint64_t actual = (next_expected & ~(uint64_t)mask) + bits;
 
-    if (((packet->packet_number.bits - (uint32_t)next_expected) & packet->packet_number.mask) > (packet->packet_number.mask >> 1)) {
-        if (actual >= (uint64_t)packet->packet_number.mask + 1)
-            actual -= (uint64_t)packet->packet_number.mask + 1;
+    if (((bits - (uint32_t)next_expected) & mask) > (mask >> 1)) {
+        if (actual >= (uint64_t)mask + 1)
+            actual -= (uint64_t)mask + 1;
     }
 
     return actual;
@@ -338,7 +329,7 @@ uint64_t quicly_determine_packet_number(quicly_decoded_packet_t *packet, uint64_
 
 int quicly_connection_is_ready(quicly_conn_t *conn)
 {
-    return conn->egress.pp.one_rtt[0] != NULL || conn->egress.pp.early_data != NULL;
+    return conn->egress.pp.one_rtt[0].aead != NULL || conn->egress.pp.early_data.aead != NULL;
 }
 
 static int set_peeraddr(quicly_conn_t *conn, struct sockaddr *addr, socklen_t addrlen)
@@ -595,51 +586,64 @@ Exit:
     return ret;
 }
 
-static ptls_aead_context_t *new_aead(ptls_aead_algorithm_t *aead, ptls_hash_algorithm_t *hash, int is_enc, const void *secret)
+static int setup_cipher(struct st_quicly_cipher_context_t *ctx, ptls_aead_algorithm_t *aead, ptls_hash_algorithm_t *hash,
+                        int is_enc, const void *secret)
 {
-    ptls_aead_context_t *ctx = NULL;
     uint8_t key[PTLS_MAX_SECRET_SIZE];
     int ret;
 
+    *ctx = (struct st_quicly_cipher_context_t){NULL};
+
     if ((ret = qhkdf_expand(hash, key, aead->key_size, secret, "key")) != 0)
         goto Exit;
-    if ((ctx = ptls_aead_new(aead, is_enc, key)) == NULL) {
+    if ((ctx->aead = ptls_aead_new(aead, is_enc, key)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    if ((ret = qhkdf_expand(hash, ctx->static_iv, aead->iv_size, secret, "iv")) != 0)
+    if ((ret = qhkdf_expand(hash, ctx->aead->static_iv, aead->iv_size, secret, "iv")) != 0)
         goto Exit;
+
+    if ((ret = qhkdf_expand(hash, key, aead->ctr_cipher->key_size, secret, "pn")) != 0)
+        goto Exit;
+    if ((ctx->pne = ptls_cipher_new(aead->ctr_cipher, is_enc, secret)) == NULL) {
+        ret = PTLS_ERROR_NO_MEMORY;
+        goto Exit;
+    }
 
     ret = 0;
 Exit:
-    if (ret != 0 && ctx != NULL) {
-        ptls_aead_free(ctx);
-        ctx = NULL;
+    if (ret != 0) {
+        if (ctx->aead != NULL) {
+            ptls_aead_free(ctx->aead);
+            ctx->aead = NULL;
+        }
+        if (ctx->pne != NULL) {
+            ptls_cipher_free(ctx->pne);
+            ctx->pne = NULL;
+        }
     }
     ptls_clear_memory(key, sizeof(key));
-    return ctx;
+    return ret;
 }
 
-static int setup_handshake_secret(ptls_aead_context_t **aead, ptls_cipher_suite_t *cs, const void *master_secret, const char *label,
-                                  int is_enc)
+static int setup_handshake_secret(struct st_quicly_cipher_context_t *ctx, ptls_cipher_suite_t *cs, const void *master_secret,
+                                  const char *label, int is_enc)
 {
     uint8_t aead_secret[PTLS_MAX_DIGEST_SIZE];
     int ret;
 
     if ((ret = qhkdf_expand(cs->hash, aead_secret, cs->hash->digest_size, master_secret, label)) != 0)
         goto Exit;
-    if ((*aead = new_aead(cs->aead, cs->hash, is_enc, aead_secret)) == NULL) {
-        ret = PTLS_ERROR_NO_MEMORY;
+    if ((ret = setup_cipher(ctx, cs->aead, cs->hash, is_enc, aead_secret)) != 0)
         goto Exit;
-    }
 
 Exit:
     ptls_clear_memory(aead_secret, sizeof(aead_secret));
     return ret;
 }
 
-static int setup_handshake_encryption(ptls_aead_context_t **ingress, ptls_aead_context_t **egress, quicly_context_t *ctx,
-                                      ptls_iovec_t cid, int is_client)
+static int setup_handshake_encryption(struct st_quicly_cipher_context_t *ingress, struct st_quicly_cipher_context_t *egress,
+                                      quicly_context_t *ctx, ptls_iovec_t cid, int is_client)
 {
     static const uint8_t salt[] = {0x9c, 0x10, 0x8f, 0x98, 0x52, 0x0a, 0x5c, 0x5c, 0x32, 0x96,
                                    0x8e, 0x95, 0x0e, 0x8a, 0x2c, 0x5f, 0xe0, 0x6d, 0x6c, 0x38};
@@ -673,17 +677,18 @@ Exit:
 static int setup_secret(struct st_quicly_packet_protection_t *pp, ptls_t *tls, const char *label, int is_early, int is_enc)
 {
     ptls_cipher_suite_t *cipher = ptls_get_cipher(tls);
-    ptls_aead_context_t **aead = is_early ? &pp->early_data : &pp->one_rtt[0];
+    struct st_quicly_cipher_context_t *ctx = is_early ? &pp->early_data : &pp->one_rtt[0];
     uint8_t secret[PTLS_MAX_DIGEST_SIZE];
     int ret;
 
     if ((ret = ptls_export_secret(tls, secret, cipher->hash->digest_size, label, ptls_iovec_init(NULL, 0), is_early)) != 0)
-        return ret;
-    if ((*aead = new_aead(cipher->aead, cipher->hash, is_enc, secret)) == NULL) {
-        ptls_clear_memory(secret, sizeof(secret));
-        return PTLS_ERROR_NO_MEMORY;
-    }
-    return 0;
+        goto Exit;
+    if ((ret = setup_cipher(ctx, cipher->aead, cipher->hash, is_enc, secret)) != 0)
+        goto Exit;
+
+Exit:
+    ptls_clear_memory(secret, sizeof(secret));
+    return ret;
 }
 
 static void apply_peer_transport_params(quicly_conn_t *conn)
@@ -701,9 +706,9 @@ static int setup_1rtt(quicly_conn_t *conn, ptls_t *tls)
     int ret;
 
     /* release early-data AEAD for egress, but not for ingress since they can arrive later */
-    if (conn->egress.pp.early_data != NULL) {
-        ptls_aead_free(conn->egress.pp.early_data);
-        conn->egress.pp.early_data = NULL;
+    if (conn->egress.pp.early_data.aead != NULL) {
+        dispose_cipher(&conn->egress.pp.early_data);
+        conn->egress.pp.early_data = (struct st_quicly_cipher_context_t){NULL};
     }
 
     if ((ret = setup_secret(&conn->ingress.pp, tls, labels[quicly_is_client(conn)], 0, 0)) != 0)
@@ -831,8 +836,7 @@ static int crypto_stream_receive_stateless_retry(quicly_stream_t *_stream)
         goto Error;
 
     /* send the 2nd ClientHello, reinitializing the transport */
-    ptls_aead_free(conn->ingress.pp.handshake);
-    ptls_aead_free(conn->egress.pp.handshake);
+    dispose_cipher(&conn->egress.pp.handshake);
     if ((ret = setup_handshake_encryption(&conn->ingress.pp.handshake, &conn->egress.pp.handshake, conn->super.ctx,
                                           ptls_iovec_init(conn->super.peer.cid.cid, conn->super.peer.cid.len), 1)) != 0)
         goto Error;
@@ -1261,16 +1265,71 @@ Exit:
     return ret;
 }
 
+static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, quicly_decoded_packet_t *packet,
+                                   uint64_t *next_expected_pn)
+{
+    size_t encrypted_len = packet->octets.len - packet->encrypted_off, iv_offset;
+    uint8_t pnbuf[4];
+    uint32_t pnbits, pnmask;
+    size_t pnlen;
+
+    /* determine the IV offset of pne */
+    if (encrypted_len < ctx->pne->algo->iv_size + 1) {
+        goto Error;
+    } else if (encrypted_len < ctx->pne->algo->iv_size + 4) {
+        iv_offset = packet->octets.len - ctx->pne->algo->iv_size;
+    } else {
+        iv_offset = packet->encrypted_off + 4;
+    }
+
+    /* decrypt PN */
+    ptls_cipher_init(ctx->pne, packet->octets.base + iv_offset);
+    ptls_cipher_encrypt(ctx->pne, pnbuf, packet->octets.base + packet->encrypted_off, sizeof(pnbuf));
+    if ((pnbuf[0] & 0x80) == 0) {
+        pnbits = pnbuf[0];
+        pnmask = UINT8_MAX;
+        pnlen = 1;
+    } else {
+        pnbits = ((uint32_t)(pnbuf[0] & 0x3f) << 8) | pnbuf[1];
+        if ((pnbuf[0] & 0x40) == 0) {
+            pnmask = UINT16_MAX;
+            pnlen = 2;
+        } else {
+            pnbits = (pnbits << 16) | ((uint32_t)pnbuf[2] << 8) | pnbuf[3];
+            pnmask = UINT32_MAX;
+            pnlen = 4;
+        }
+    }
+
+    /* write-back the decrypted PN for AEAD */
+    memcpy(packet->octets.base + packet->encrypted_off, pnbuf, pnlen);
+
+    /* AEAD */
+    uint64_t pn = quicly_determine_packet_number(pnbits, pnmask, *next_expected_pn);
+    size_t aead_off = packet->encrypted_off + pnlen, ptlen;
+    if ((ptlen = ptls_aead_decrypt(ctx->aead, packet->octets.base + aead_off, packet->octets.base + aead_off,
+                                   packet->octets.len - aead_off, pn, packet->octets.base, aead_off)) == SIZE_MAX)
+        goto Error;
+
+    *next_expected_pn = pn + 1;
+    return ptls_iovec_init(packet->octets.base + aead_off, ptlen);
+
+Error:
+    return ptls_iovec_init(NULL, 0);
+}
+
 int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
                   ptls_handshake_properties_t *handshake_properties, quicly_decoded_packet_t *packet)
 {
     quicly_conn_t *conn = NULL;
-    ptls_aead_context_t *aead_ingress = NULL, *aead_egress = NULL;
+    struct st_quicly_cipher_context_t ingress_cipher = {NULL}, egress_cipher = {NULL};
+    ptls_iovec_t payload;
+    uint64_t next_expected_pn;
     quicly_stream_frame_t frame;
     int ret;
 
     /* ignore any packet that does not  */
-    if (packet->first_byte != QUICLY_PACKET_TYPE_INITIAL) {
+    if (packet->octets.base[0] != QUICLY_PACKET_TYPE_INITIAL) {
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
@@ -1278,17 +1337,16 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         ret = QUICLY_ERROR_VERSION_NEGOTIATION;
         goto Exit;
     }
-    if ((ret = setup_handshake_encryption(&aead_ingress, &aead_egress, ctx, packet->cid.dest, 0)) != 0)
+    if ((ret = setup_handshake_encryption(&ingress_cipher, &egress_cipher, ctx, packet->cid.dest, 0)) != 0)
         goto Exit;
-    if ((packet->payload.len = ptls_aead_decrypt(aead_ingress, packet->payload.base, packet->payload.base, packet->payload.len,
-                                                 packet->packet_number.bits, packet->header.base, packet->header.len)) ==
-        SIZE_MAX) {
+    next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
+    if ((payload = decrypt_packet(&ingress_cipher, packet, &next_expected_pn)).base == NULL) {
         ret = QUICLY_ERROR_TBD;
         goto Exit;
     }
 
     {
-        const uint8_t *src = packet->payload.base, *end = src + packet->payload.len;
+        const uint8_t *src = payload.base, *end = src + payload.len;
         uint8_t type_flags;
         for (; src < end; ++src) {
             if (*src != QUICLY_FRAME_TYPE_PADDING)
@@ -1315,10 +1373,10 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
 
     if ((conn = create_connection(ctx, packet->cid.dest, packet->cid.src, NULL, sa, salen, handshake_properties)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    conn->ingress.pp.handshake = aead_ingress;
-    aead_ingress = NULL;
-    conn->egress.pp.handshake = aead_egress;
-    aead_egress = NULL;
+    conn->ingress.pp.handshake = ingress_cipher;
+    ingress_cipher = (struct st_quicly_cipher_context_t){NULL};
+    conn->egress.pp.handshake = egress_cipher;
+    egress_cipher = (struct st_quicly_cipher_context_t){NULL};
     conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
     /* TODO should there be a way to set use of stateless reset per SNI or something? */
     if (ctx->stateless_retry.enforce_use) {
@@ -1327,12 +1385,11 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     }
     conn->crypto.handshake_properties.server.cookie.key = ctx->stateless_retry.key;
 
-    if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet->packet_number.bits,
-                                    (uint64_t)packet->packet_number.bits + 1)) != 0)
+    if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, next_expected_pn - 1, next_expected_pn)) != 0)
         goto Exit;
     assert(conn->egress.send_ack_at == INT64_MAX);
     conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
-    conn->ingress.next_expected_packet_number = (uint64_t)packet->packet_number.bits + 1;
+    conn->ingress.next_expected_packet_number = next_expected_pn;
 
     if ((ret = apply_stream_frame(&conn->crypto.stream, &frame)) != 0)
         goto Exit;
@@ -1348,10 +1405,10 @@ Exit:
     if (!(ret == 0 || ret == PTLS_ERROR_IN_PROGRESS)) {
         if (conn != NULL)
             quicly_free(conn);
-        if (aead_ingress != NULL)
-            ptls_aead_free(aead_ingress);
-        if (aead_egress != NULL)
-            ptls_aead_free(aead_egress);
+        if (ingress_cipher.aead != NULL)
+            dispose_cipher(&ingress_cipher);
+        if (egress_cipher.aead != NULL)
+            dispose_cipher(&egress_cipher);
     }
     return ret;
 }
@@ -1490,7 +1547,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
 struct st_quicly_send_context_t {
     uint8_t first_byte;
-    ptls_aead_context_t *aead;
+    struct st_quicly_cipher_context_t *cipher;
     int64_t now;
     quicly_raw_packet_t **packets;
     size_t max_packets;
@@ -1503,7 +1560,7 @@ struct st_quicly_send_context_t {
 
 static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
 {
-    assert(s->aead != NULL);
+    assert(s->cipher->aead != NULL);
 
     if (s->first_byte == QUICLY_PACKET_TYPE_INITIAL) {
         if (s->num_packets != 0)
@@ -1515,14 +1572,18 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     }
 
     if ((s->first_byte & 0x80) != 0) {
-        uint16_t payload_length = s->dst - s->dst_encrypt_from + s->aead->algo->tag_size;
-        payload_length |= 0x4000;
-        quicly_encode16(s->dst_encrypt_from - 6, payload_length);
+        uint16_t length = s->dst - s->dst_encrypt_from + s->cipher->aead->algo->tag_size + 4;
+        length |= 0x4000;
+        quicly_encode16(s->dst_encrypt_from - 6, length);
     }
+    quicly_encode32(s->dst_encrypt_from - 4, (uint32_t)conn->egress.packet_number | 0xc0000000);
 
-    s->dst = s->dst_encrypt_from + ptls_aead_encrypt(s->aead, s->dst_encrypt_from, s->dst_encrypt_from,
+    s->dst = s->dst_encrypt_from + ptls_aead_encrypt(s->cipher->aead, s->dst_encrypt_from, s->dst_encrypt_from,
                                                      s->dst - s->dst_encrypt_from, conn->egress.packet_number, s->target->data.base,
                                                      s->dst_encrypt_from - s->target->data.base);
+
+    ptls_cipher_init(s->cipher->pne, s->dst_encrypt_from);
+    ptls_cipher_encrypt(s->cipher->pne, s->dst_encrypt_from - 4, s->dst_encrypt_from - 4, 4);
 
     s->target->data.len = s->dst - s->target->data.base;
     s->packets[s->num_packets++] = s->target;
@@ -1575,10 +1636,10 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
         } else {
             s->dst = emit_cid(s->dst, &conn->super.peer.cid);
         }
-        s->dst = quicly_encode32(s->dst, (uint32_t)conn->egress.packet_number);
+        s->dst += 4; /* space for PN bits, filled in at commit time */
         s->dst_encrypt_from = s->dst;
-        assert(s->aead != NULL);
-        s->dst_end -= s->aead->algo->tag_size;
+        assert(s->cipher->aead != NULL);
+        s->dst_end -= s->cipher->aead->algo->tag_size;
         assert(s->dst < s->dst_end);
     }
 
@@ -1881,7 +1942,7 @@ quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, stru
 
 int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_packets)
 {
-    struct st_quicly_send_context_t s = {UINT8_MAX, conn->egress.pp.handshake, conn->super.ctx->now(conn->super.ctx), packets,
+    struct st_quicly_send_context_t s = {UINT8_MAX, &conn->egress.pp.handshake, conn->super.ctx->now(conn->super.ctx), packets,
                                          *num_packets};
     int ret;
 
@@ -1949,11 +2010,11 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
     if (s.target != NULL && (ret = commit_send_packet(conn, &s)) != 0)
         goto Exit;
 
-    if (conn->egress.pp.early_data != NULL) {
-        assert(conn->egress.pp.early_data != NULL);
-        assert(conn->egress.pp.one_rtt[0] == NULL);
+    if (conn->egress.pp.early_data.aead != NULL) {
+        assert(conn->egress.pp.early_data.aead != NULL);
+        assert(conn->egress.pp.one_rtt[0].aead == NULL);
         s.first_byte = QUICLY_PACKET_TYPE_0RTT_PROTECTED;
-        s.aead = conn->egress.pp.early_data;
+        s.cipher = &conn->egress.pp.early_data;
         if ((ret = send_stream_frames(conn, &s)) != 0)
             goto Exit;
         if (s.target != NULL && (ret = commit_send_packet(conn, &s)) != 0)
@@ -1963,7 +2024,7 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
     /* send encrypted frames */
     if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED) {
         s.first_byte = 0x32; /* 1rtt,has-connection-id,key-phase=0,packet-number-size=4 */
-        s.aead = conn->egress.pp.one_rtt[0];
+        s.cipher = &conn->egress.pp.one_rtt[0];
         /* acks */
         if (conn->egress.send_ack_at <= s.now) {
             if ((ret = send_ack(conn, &s)) != 0)
@@ -2231,13 +2292,10 @@ static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded
 {
 #define CAN_SELECT(v) ((v) != conn->super.version && (v) == QUICLY_PROTOCOL_VERSION)
 
-    const uint8_t *src = packet->payload.base, *end = src + packet->payload.len;
+    const uint8_t *src = packet->octets.base + packet->encrypted_off, *end = packet->octets.base + packet->octets.len;
 
-    if ((end - src) % 4 != 0)
+    if (src == end || (end - src) % 4 != 0)
         return QUICLY_ERROR_PROTOCOL_VIOLATION;
-    /* first supported version is contained in the packet_number field */
-    if (CAN_SELECT(packet->packet_number.bits))
-        return negotiate_using_version(conn, packet->packet_number.bits);
     while (src != end) {
         uint32_t supported_version = quicly_decode32(&src);
         if (CAN_SELECT(supported_version))
@@ -2251,13 +2309,13 @@ static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
     int64_t now = conn->super.ctx->now(conn->super.ctx);
-    ptls_aead_context_t *aead;
-    uint64_t packet_number;
+    struct st_quicly_cipher_context_t *cipher;
+    ptls_iovec_t payload;
     int ret;
 
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
         assert(quicly_is_client(conn));
-        if (QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
+        if (QUICLY_PACKET_TYPE_IS_1RTT(packet->octets.base[0])) {
             ret = QUICLY_ERROR_PACKET_IGNORED;
             goto Exit;
         }
@@ -2274,15 +2332,15 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         goto Exit;
     }
 
-    if (conn->super.state != QUICLY_STATE_1RTT_ENCRYPTED && QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
+    if (conn->super.state != QUICLY_STATE_1RTT_ENCRYPTED && QUICLY_PACKET_TYPE_IS_1RTT(packet->octets.base[0])) {
         /* FIXME enqueue the packet? */
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
 
-    if (QUICLY_PACKET_TYPE_IS_1RTT(packet->first_byte)) {
-        int key_phase = QUICLY_PACKET_TYPE_1RTT_TO_KEY_PHASE(packet->first_byte);
-        if ((aead = conn->ingress.pp.one_rtt[key_phase]) == NULL) {
+    if (QUICLY_PACKET_TYPE_IS_1RTT(packet->octets.base[0])) {
+        int key_phase = QUICLY_PACKET_TYPE_1RTT_TO_KEY_PHASE(packet->octets.base[0]);
+        if ((cipher = &conn->ingress.pp.one_rtt[key_phase])->aead == NULL) {
             /* drop 1rtt-encrypted packets received prior to handshake completion (due to loss of the packet carrying the latter) */
             ret = key_phase == 0 && quicly_get_state(conn) != QUICLY_STATE_1RTT_ENCRYPTED ? 0 : QUICLY_ERROR_TBD;
             goto Exit;
@@ -2292,22 +2350,18 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             if (packet->version == 0)
                 return handle_version_negotiation_packet(conn, packet);
         }
-        switch (packet->first_byte) {
+        switch (packet->octets.base[0]) {
         case QUICLY_PACKET_TYPE_RETRY:
             if (!(quicly_is_client(conn) && conn->super.state == QUICLY_STATE_FIRSTFLIGHT) ||
-                (aead = conn->ingress.pp.handshake) == NULL) {
+                (cipher = &conn->ingress.pp.handshake)->aead == NULL) {
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
-            /* FIXME we need to remember the original packet number, since `-1` will fail if we have sent 0rtt packets */
-            if (conn->egress.packet_number - 1 != packet->packet_number.bits) {
-                ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
-                goto Exit;
-            }
+            /* FIXME verify that the PN is the same as that of the Initial that we have sent */
             conn->crypto.stream.on_update = crypto_stream_receive_stateless_retry;
             break;
         case QUICLY_PACKET_TYPE_HANDSHAKE:
-            if ((aead = conn->ingress.pp.handshake) == NULL) {
+            if ((cipher = &conn->ingress.pp.handshake)->aead == NULL) {
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
@@ -2319,12 +2373,11 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
-            if (conn->ingress.pp.early_data == NULL) {
+            if ((cipher = &conn->ingress.pp.early_data)->aead == NULL) {
                 /* could happen upon resumption failure, VN, etc. */
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            aead = conn->ingress.pp.early_data;
             break;
         case QUICLY_PACKET_TYPE_INITIAL:
             /* FIXME ignore for time being */
@@ -2336,20 +2389,17 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
     }
 
-    packet_number = quicly_determine_packet_number(packet, conn->ingress.next_expected_packet_number);
-    if ((packet->payload.len = ptls_aead_decrypt(aead, packet->payload.base, packet->payload.base, packet->payload.len,
-                                                 packet_number, packet->header.base, packet->header.len)) == SIZE_MAX) {
+    if ((payload = decrypt_packet(cipher, packet, &conn->ingress.next_expected_packet_number)).base == NULL) {
         ret = QUICLY_ERROR_TBD;
         goto Exit;
     }
-    conn->ingress.next_expected_packet_number = packet_number + 1;
 
-    if (packet->payload.len == 0) {
+    if (payload.len == 0) {
         ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
         goto Exit;
     }
 
-    const uint8_t *src = packet->payload.base, *end = src + packet->payload.len;
+    const uint8_t *src = payload.base, *end = src + payload.len;
     int is_ack_only = 1;
     do {
         uint8_t type_flags = *src++;
@@ -2362,7 +2412,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             is_ack_only = 0;
         } else if (type_flags == QUICLY_FRAME_TYPE_ACK) {
             /* TODO use separate decoding logic (like the one in quicly_accept) for stateless-retry */
-            if (packet->first_byte == QUICLY_PACKET_TYPE_RETRY) {
+            if (packet->octets.base[0] == QUICLY_PACKET_TYPE_RETRY) {
                 ret = QUICLY_ERROR_TBD;
                 goto Exit;
             }
@@ -2462,8 +2512,9 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
     } while (src != end);
 
-    if (packet->first_byte != QUICLY_PACKET_TYPE_RETRY) {
-        if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, packet_number, packet_number + 1)) != 0)
+    if (packet->octets.base[0] != QUICLY_PACKET_TYPE_RETRY) {
+        if ((ret = quicly_ranges_update(&conn->ingress.ack_queue, conn->ingress.next_expected_packet_number - 1,
+                                        conn->ingress.next_expected_packet_number)) != 0)
             goto Exit;
         if (!is_ack_only && conn->egress.send_ack_at == INT64_MAX)
             conn->egress.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;

@@ -187,16 +187,10 @@ int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
 
 static void test_next_packet_number(void)
 {
-    quicly_decoded_packet_t d = {0};
-    uint64_t n;
-
-    d.packet_number.bits = 0xc0;
-    d.packet_number.mask = 0xff;
-
     /* prefer lower in case the distance in both directions are equal; see https://github.com/quicwg/base-drafts/issues/674 */
-    n = quicly_determine_packet_number(&d, 0x140);
+    uint64_t n = quicly_determine_packet_number(0xc0, 0xff, 0x140);
     ok(n == 0xc0);
-    n = quicly_determine_packet_number(&d, 0x141);
+    n = quicly_determine_packet_number(0xc0, 0xff, 0x141);
     ok(n == 0x1c0);
 }
 

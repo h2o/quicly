@@ -293,18 +293,13 @@ struct st_quicly_stream_t {
     } _recv_aux;
 };
 
-typedef struct st_quicly_decode_packet_t {
-    uint8_t first_byte;
+typedef struct st_quicly_decoded_packet_t {
+    ptls_iovec_t octets;
     struct {
         ptls_iovec_t dest, src;
     } cid;
-    struct {
-        uint32_t bits;
-        uint32_t mask;
-    } packet_number;
     uint32_t version;
-    ptls_iovec_t header;
-    ptls_iovec_t payload;
+    size_t encrypted_off;
 } quicly_decoded_packet_t;
 
 #define QUICLY_RESET_STREAM_EGRESS 1
@@ -320,7 +315,7 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
 /**
  *
  */
-uint64_t quicly_determine_packet_number(quicly_decoded_packet_t *packet, uint64_t next_expected);
+uint64_t quicly_determine_packet_number(uint32_t bits, uint32_t mask, uint64_t next_expected);
 /**
  *
  */
