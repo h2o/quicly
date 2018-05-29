@@ -1287,16 +1287,16 @@ static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, quicl
     ptls_cipher_encrypt(ctx->pne, pnbuf, packet->octets.base + packet->encrypted_off, sizeof(pnbuf));
     if ((pnbuf[0] & 0x80) == 0) {
         pnbits = pnbuf[0];
-        pnmask = UINT8_MAX;
+        pnmask = 0x7f;
         pnlen = 1;
     } else {
         pnbits = ((uint32_t)(pnbuf[0] & 0x3f) << 8) | pnbuf[1];
         if ((pnbuf[0] & 0x40) == 0) {
-            pnmask = UINT16_MAX;
+            pnmask = 0x3fff;
             pnlen = 2;
         } else {
             pnbits = (pnbits << 16) | ((uint32_t)pnbuf[2] << 8) | pnbuf[3];
-            pnmask = UINT32_MAX;
+            pnmask = 0x3fffffff;
             pnlen = 4;
         }
     }
