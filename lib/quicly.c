@@ -2005,7 +2005,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
             } else {
                 free_handshake_space(&conn->handshake);
                 destroy_handshake_flow(conn, 2);
-                conn->egress.send_handshake_done = 1;
+                // conn->egress.send_handshake_done = 1;
             }
         }
         if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 0)) != 0)
