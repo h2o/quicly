@@ -643,7 +643,7 @@ Exit:
 }
 
 static int setup_handshake_encryption(struct st_quicly_cipher_context_t *ingress, struct st_quicly_cipher_context_t *egress,
-                                      quicly_context_t *ctx, ptls_iovec_t cid, int is_client)
+                                      ptls_cipher_suite_t **cipher_suites, ptls_iovec_t cid, int is_client)
 {
     static const uint8_t salt[] = {0x9c, 0x10, 0x8f, 0x98, 0x52, 0x0a, 0x5c, 0x5c, 0x32, 0x96,
                                    0x8e, 0x95, 0x0e, 0x8a, 0x2c, 0x5f, 0xe0, 0x6d, 0x6c, 0x38};
@@ -653,7 +653,7 @@ static int setup_handshake_encryption(struct st_quicly_cipher_context_t *ingress
     int ret;
 
     /* find aes128gcm cipher */
-    for (cs = ctx->tls->cipher_suites;; ++cs) {
+    for (cs = cipher_suites;; ++cs) {
         assert(cs != NULL);
         if ((*cs)->id == PTLS_CIPHER_SUITE_AES_128_GCM_SHA256)
             break;
@@ -837,7 +837,8 @@ static int crypto_stream_receive_stateless_retry(quicly_stream_t *_stream)
 
     /* send the 2nd ClientHello, reinitializing the transport */
     dispose_cipher(&conn->egress.pp.handshake);
-    if ((ret = setup_handshake_encryption(&conn->ingress.pp.handshake, &conn->egress.pp.handshake, conn->super.ctx,
+    if ((ret = setup_handshake_encryption(&conn->ingress.pp.handshake, &conn->egress.pp.handshake,
+                                          conn->super.ctx->tls->cipher_suites,
                                           ptls_iovec_init(conn->super.peer.cid.cid, conn->super.peer.cid.len), 1)) != 0)
         goto Error;
     quicly_acks_dispose(&conn->egress.acks);
@@ -1181,7 +1182,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    if ((ret = setup_handshake_encryption(&conn->ingress.pp.handshake, &conn->egress.pp.handshake, ctx,
+    if ((ret = setup_handshake_encryption(&conn->ingress.pp.handshake, &conn->egress.pp.handshake, ctx->tls->cipher_suites,
                                           ptls_iovec_init(random_cid, sizeof(random_cid)), 1)) != 0)
         goto Exit;
 
@@ -1337,7 +1338,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         ret = QUICLY_ERROR_VERSION_NEGOTIATION;
         goto Exit;
     }
-    if ((ret = setup_handshake_encryption(&ingress_cipher, &egress_cipher, ctx, packet->cid.dest, 0)) != 0)
+    if ((ret = setup_handshake_encryption(&ingress_cipher, &egress_cipher, ctx->tls->cipher_suites, packet->cid.dest, 0)) != 0)
         goto Exit;
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
     if ((payload = decrypt_packet(&ingress_cipher, packet, &next_expected_pn)).base == NULL) {

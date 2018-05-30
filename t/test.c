@@ -97,6 +97,25 @@ static int64_t get_now(quicly_context_t *ctx)
     return quic_now;
 }
 
+static void test_pne(void)
+{
+    static const uint8_t cid[] = {0x77, 0x0d, 0xc2, 0x6c, 0x17, 0x50, 0x9b, 0x35},
+                         iv[] = {0x05, 0x80, 0x24, 0xa9, 0x72, 0x75, 0xf0, 0x1d, 0x2a, 0x1e, 0xc9, 0x1f, 0xd1, 0xc2, 0x65, 0xbb},
+                         encrypted_pn[] = {0x3b, 0xb4, 0xb1, 0x74}, expected_pn[] = {0xc0, 0x00, 0x00, 0x00};
+    struct st_quicly_cipher_context_t ingress, egress;
+    uint8_t pn[sizeof(encrypted_pn)];
+    int ret;
+
+    ret = setup_handshake_encryption(&ingress, &egress, ptls_openssl_cipher_suites, ptls_iovec_init(cid, sizeof(cid)), 0);
+    ok(ret == 0);
+    ptls_cipher_init(ingress.pne, iv);
+    ptls_cipher_encrypt(ingress.pne, pn, encrypted_pn, sizeof(encrypted_pn));
+    ok(memcmp(pn, expected_pn, sizeof(expected_pn)) == 0);
+
+    dispose_cipher(&ingress);
+    dispose_cipher(&egress);
+}
+
 void free_packets(quicly_raw_packet_t **packets, size_t cnt)
 {
     size_t i;
@@ -234,6 +253,7 @@ int main(int argc, char **argv)
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
     subtest("ack", test_ack);
+    subtest("pne", test_pne);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("loss", test_loss);
