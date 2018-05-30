@@ -62,15 +62,14 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
     do {                                                                                                                           \
         quicly_conn_t *_conn = (conn);                                                                                             \
         if (_conn->super.ctx->debug_log != NULL) {                                                                                 \
-            char cidbuf[37] = {0}, buf[1024];                                                                                      \
+            char buf[1024];                                                                                                        \
             int is_client = quicly_is_client(_conn);                                                                               \
             const quicly_cid_t *cid = is_client ? &conn->super.peer.cid : &conn->super.host.cid;                                   \
-            size_t i;                                                                                                              \
-            for (i = 0; i != cid->len; ++i)                                                                                        \
-                sprintf(cidbuf + i * 2, "%02x", (unsigned)cid->cid[i]);                                                            \
+            char *cidhex = quicly_hexdump(cid->cid, cid->len, SIZE_MAX);                                                           \
             snprintf(buf, sizeof(buf), __VA_ARGS__);                                                                               \
-            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%s,%" PRIu64 ": %s\n", is_client ? "client" : "server", cidbuf,      \
+            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%s,%" PRIu64 ": %s\n", is_client ? "client" : "server", cidhex,      \
                                         (uint64_t)(stream_id), buf);                                                               \
+            free(cidhex);                                                                                                          \
         }                                                                                                                          \
     } while (0)
 
@@ -634,6 +633,11 @@ static int setup_handshake_secret(struct st_quicly_cipher_context_t *ctx, ptls_c
 
     if ((ret = qhkdf_expand(cs->hash, aead_secret, cs->hash->digest_size, master_secret, label)) != 0)
         goto Exit;
+    if (QUICLY_DEBUG) {
+        char *aead_secret_hex = quicly_hexdump(aead_secret, cs->hash->digest_size, SIZE_MAX);
+        fprintf(stderr, "%s: label: \"%s\", aead-secret: %s\n", __FUNCTION__, label, aead_secret_hex);
+        free(aead_secret_hex);
+    }
     if ((ret = setup_cipher(ctx, cs->aead, cs->hash, is_enc, aead_secret)) != 0)
         goto Exit;
 
@@ -662,6 +666,13 @@ static int setup_handshake_encryption(struct st_quicly_cipher_context_t *ingress
     /* extract master secret */
     if ((ret = ptls_hkdf_extract((*cs)->hash, secret, ptls_iovec_init(salt, sizeof(salt)), cid)) != 0)
         goto Exit;
+    if (QUICLY_DEBUG) {
+        char *cid_hex = quicly_hexdump(cid.base, cid.len, SIZE_MAX),
+             *secret_hex = quicly_hexdump(secret, (*cs)->hash->digest_size, SIZE_MAX);
+        fprintf(stderr, "%s: cid: %s -> secret: %s\n", __FUNCTION__, cid_hex, secret_hex);
+        free(cid_hex);
+        free(secret_hex);
+    }
 
     /* create aead contexts */
     if ((ret = setup_handshake_secret(ingress, *cs, secret, labels[is_client], 0)) != 0)
@@ -1309,8 +1320,17 @@ static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, quicl
     uint64_t pn = quicly_determine_packet_number(pnbits, pnmask, *next_expected_pn);
     size_t aead_off = packet->encrypted_off + pnlen, ptlen;
     if ((ptlen = ptls_aead_decrypt(ctx->aead, packet->octets.base + aead_off, packet->octets.base + aead_off,
-                                   packet->octets.len - aead_off, pn, packet->octets.base, aead_off)) == SIZE_MAX)
+                                   packet->octets.len - aead_off, pn, packet->octets.base, aead_off)) == SIZE_MAX) {
+        if (QUICLY_DEBUG)
+            fprintf(stderr, "%s: aead decryption failure\n", __FUNCTION__);
         goto Error;
+    }
+
+    if (QUICLY_DEBUG) {
+        char *payload_hex = quicly_hexdump(packet->octets.base + aead_off, ptlen, 4);
+        fprintf(stderr, "%s: AEAD payload:\n%s", __FUNCTION__, payload_hex);
+        free(payload_hex);
+    }
 
     *next_expected_pn = pn + 1;
     return ptls_iovec_init(packet->octets.base + aead_off, ptlen);
@@ -2615,4 +2635,62 @@ void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...)
     va_start(args, fmt);
     vfprintf(stderr, fmt, args);
     va_end(args);
+}
+
+static void tohex(char *dst, uint8_t v)
+{
+    dst[0] = "0123456789abcdef"[v >> 4];
+    dst[1] = "0123456789abcdef"[v & 0xf];
+}
+
+char *quicly_hexdump(const uint8_t *bytes, size_t len, size_t indent)
+{
+    size_t i, line, row, bufsize = indent == SIZE_MAX ? len * 2 + 1 : (indent + 5 + 3 * 16 + 2 + 16 + 1) * ((len + 15) / 16) + 1;
+    char *buf, *p;
+
+    if ((buf = malloc(bufsize)) == NULL)
+        return NULL;
+    p = buf;
+    if (indent == SIZE_MAX) {
+        for (i = 0; i != len; ++i) {
+            tohex(p, bytes[i]);
+            p += 2;
+        }
+    } else {
+        for (line = 0; line * 16 < len; ++line) {
+            for (i = 0; i < indent; ++i)
+                *p++ = ' ';
+            tohex(p, (line >> 4) & 0xff);
+            p += 2;
+            tohex(p, (line << 4) & 0xff);
+            p += 2;
+            *p++ = ' ';
+            for (row = 0; row < 16; ++row) {
+                *p++ = row == 8 ? '-' : ' ';
+                if (line * 16 + row < len) {
+                    tohex(p, bytes[line * 16 + row]);
+                    p += 2;
+                } else {
+                    *p++ = ' ';
+                    *p++ = ' ';
+                }
+            }
+            *p++ = ' ';
+            *p++ = ' ';
+            for (row = 0; row < 16; ++row) {
+                if (line * 16 + row < len) {
+                    int ch = bytes[line * 16 + row];
+                    *p++ = 0x20 <= ch && ch < 0x7f ? ch : '.';
+                } else {
+                    *p++ = ' ';
+                }
+            }
+            *p++ = '\n';
+        }
+    }
+    *p++ = '\0';
+
+    assert(p - buf <= bufsize);
+
+    return buf;
 }

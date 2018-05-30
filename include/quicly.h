@@ -39,6 +39,10 @@ extern "C" {
 #include "quicly/sendbuf.h"
 #include "quicly/maxsender.h"
 
+#ifndef QUICLY_DEBUG
+#define QUICLY_DEBUG 0
+#endif
+
 typedef struct st_quicly_raw_packet_t {
     ptls_iovec_t data;
     socklen_t salen;
@@ -435,6 +439,10 @@ int64_t quicly_default_now(quicly_context_t *ctx);
  *
  */
 void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/**
+ *
+ */
+char *quicly_hexdump(const uint8_t *bytes, size_t len, size_t indent);
 
 /* inline definitions */
 
