@@ -605,7 +605,7 @@ static int setup_cipher(struct st_quicly_cipher_context_t *ctx, ptls_aead_algori
 
     if ((ret = qhkdf_expand(hash, key, aead->ctr_cipher->key_size, secret, "pn")) != 0)
         goto Exit;
-    if ((ctx->pne = ptls_cipher_new(aead->ctr_cipher, is_enc, secret)) == NULL) {
+    if ((ctx->pne = ptls_cipher_new(aead->ctr_cipher, is_enc, key)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
