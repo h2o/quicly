@@ -24,8 +24,8 @@
 
 static quicly_conn_t *client, *server;
 
-static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received,
-                          int (*cond)(quicly_decoded_packet_t *), int64_t latency)
+static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, int (*cond)(void),
+                          int64_t latency)
 {
     quicly_raw_packet_t *packets[32];
     size_t i;
@@ -41,8 +41,9 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
 
     if (*num_sent != 0) {
         size_t num_decoded = decode_packets(decoded, packets, *num_sent, quicly_is_client(dst) ? 0 : 8);
+        assert(*num_sent == num_decoded);
         for (i = 0; i != num_decoded; ++i) {
-            if (cond(decoded + i)) {
+            if (cond()) {
                 ret = quicly_receive(dst, decoded + i);
                 ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
                 ++*num_received;
@@ -53,14 +54,21 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
     quic_now += latency;
 }
 
-static int cond_true(quicly_decoded_packet_t *packet)
+static int cond_true(void)
 {
     return 1;
 }
 
-static int cond_even(quicly_decoded_packet_t *packet)
+static int cond_even_up(void)
 {
-    return packet->packet_number.bits % 2 == 0;
+    static size_t cnt;
+    return cnt++ % 2 == 0;
+}
+
+static int cond_even_down(void)
+{
+    static size_t cnt;
+    return cnt++ % 2 == 0;
 }
 
 static void test_even(void)
@@ -90,10 +98,11 @@ static void test_even(void)
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
         ok(ret == 0);
         free_packets(&raw, 1);
+        cond_even_up();
     }
 
     /* drop 2nd packet from server */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even, 0);
+    transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
     ok(num_sent == 2);
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
@@ -102,12 +111,12 @@ static void test_even(void)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
     /* after ack-timeout, server sends the delayed ack */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even, 0);
+    transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
     ok(num_sent == 1);
     ok(num_received == 1);
 
     /* client sends delayed-ack that gets dropped */
-    transmit_cond(client, server, &num_sent, &num_received, cond_even, 0);
+    transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
     ok(num_sent == 1);
     ok(num_received == 0);
 
@@ -117,7 +126,7 @@ static void test_even(void)
     quic_now += 1000;
 
     /* server resends the contents of all the packets (in cleartext) */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even, 0);
+    transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
     ok(num_sent == 2);
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
@@ -128,7 +137,7 @@ static void test_even(void)
 
 static unsigned rand_ratio;
 
-static int cond_rand(quicly_decoded_packet_t *packet)
+static int cond_rand(void)
 {
     static uint32_t seed = 1;
     seed = seed * 1103515245 + 12345;

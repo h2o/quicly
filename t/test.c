@@ -94,6 +94,25 @@ static int64_t get_now(quicly_context_t *ctx)
     return quic_now;
 }
 
+static void test_pne(void)
+{
+    static const uint8_t cid[] = {0x69, 0xbd, 0xdf, 0xea, 0xac, 0x2c, 0xff, 0xd7},
+                         iv[] = {0x43, 0xd2, 0xad, 0x97, 0x34, 0x40, 0xe2, 0xd6, 0xae, 0xd2, 0x0c, 0xc9, 0xc9, 0x2c, 0x6f, 0x23},
+                         encrypted_pn[] = {0xa1, 0x66, 0x36, 0x27}, expected_pn[] = {0xc0, 0x00, 0x00, 0x00};
+    struct st_quicly_cipher_context_t ingress, egress;
+    uint8_t pn[sizeof(encrypted_pn)];
+    int ret;
+
+    ret = setup_initial_encryption(&ingress, &egress, ptls_openssl_cipher_suites, ptls_iovec_init(cid, sizeof(cid)), 0);
+    ok(ret == 0);
+    ptls_cipher_init(ingress.pne, iv);
+    ptls_cipher_encrypt(ingress.pne, pn, encrypted_pn, sizeof(encrypted_pn));
+    ok(memcmp(pn, expected_pn, sizeof(expected_pn)) == 0);
+
+    dispose_cipher(&ingress);
+    dispose_cipher(&egress);
+}
+
 void free_packets(quicly_raw_packet_t **packets, size_t cnt)
 {
     size_t i;
@@ -184,16 +203,10 @@ int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
 
 static void test_next_packet_number(void)
 {
-    quicly_decoded_packet_t d = {0};
-    uint64_t n;
-
-    d.packet_number.bits = 0xc0;
-    d.packet_number.mask = 0xff;
-
     /* prefer lower in case the distance in both directions are equal; see https://github.com/quicwg/base-drafts/issues/674 */
-    n = quicly_determine_packet_number(&d, 0x140);
+    uint64_t n = quicly_determine_packet_number(0xc0, 0xff, 0x140);
     ok(n == 0xc0);
-    n = quicly_determine_packet_number(&d, 0x141);
+    n = quicly_determine_packet_number(0xc0, 0xff, 0x141);
     ok(n == 0x1c0);
 }
 
@@ -242,6 +255,7 @@ int main(int argc, char **argv)
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
     subtest("ack", test_ack);
+    subtest("pne", test_pne);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("loss", test_loss);
