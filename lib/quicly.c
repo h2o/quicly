@@ -1332,7 +1332,8 @@ static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, quicl
         free(payload_hex);
     }
 
-    *next_expected_pn = pn + 1;
+    if (*next_expected_pn <= pn)
+        *next_expected_pn = pn + 1;
     return ptls_iovec_init(packet->octets.base + aead_off, ptlen);
 
 Error:
