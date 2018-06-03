@@ -304,6 +304,7 @@ typedef struct st_quicly_decoded_packet_t {
     } cid;
     uint32_t version;
     size_t encrypted_off;
+    size_t datagram_size;
 } quicly_decoded_packet_t;
 
 #define QUICLY_RESET_STREAM_EGRESS 1

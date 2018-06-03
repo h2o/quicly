@@ -261,6 +261,7 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
         goto Error;
 
     packet->octets = ptls_iovec_init(src, len);
+    packet->datagram_size = len;
     ++src;
 
     if (!QUICLY_PACKET_TYPE_IS_1RTT(packet->octets.base[0])) {
