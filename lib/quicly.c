@@ -2468,16 +2468,15 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 goto Exit;
             is_ack_only = 0;
         } else if (type_flags == QUICLY_FRAME_TYPE_ACK) {
-            /* TODO use separate decoding logic (like the one in quicly_accept) for stateless-retry */
-            if (packet->octets.base[0] == QUICLY_PACKET_TYPE_RETRY) {
-                ret = QUICLY_ERROR_TBD;
-                goto Exit;
-            }
             quicly_ack_frame_t frame;
             if ((ret = quicly_decode_ack_frame(type_flags, &src, end, &frame)) != 0)
                 goto Exit;
-            if ((ret = handle_ack_frame(conn, &frame, now)) != 0)
-                goto Exit;
+            if (packet->octets.base[0] == QUICLY_PACKET_TYPE_RETRY) {
+                /* skip, TODO use separate decoding logic (like the one in quicly_accept) for stateless-retry */
+            } else {
+                if ((ret = handle_ack_frame(conn, &frame, now)) != 0)
+                    goto Exit;
+            }
         } else {
             switch (type_flags) {
             case QUICLY_FRAME_TYPE_PADDING:
