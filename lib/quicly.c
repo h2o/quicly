@@ -1613,9 +1613,10 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
 {
     assert(s->target.cipher->aead != NULL);
 
-    if (!coalesced && s->target.packet->data.base[0] == QUICLY_PACKET_TYPE_INITIAL && conn->egress.packet_number == 0 &&
-        quicly_is_client(conn)) {
+    if (!coalesced && s->target.packet->data.base[0] == QUICLY_PACKET_TYPE_INITIAL &&
+        conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
         const size_t max_size = 1264; /* max UDP packet size excluding aead tag */
+        assert(quicly_is_client(conn));
         assert(s->dst - s->target.packet->data.base <= max_size);
         memset(s->dst, 0, s->target.packet->data.base + max_size - s->dst);
         s->dst = s->target.packet->data.base + max_size;
