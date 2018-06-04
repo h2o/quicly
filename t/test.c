@@ -116,14 +116,14 @@ static void test_pne(void)
     dispose_cipher(&egress);
 }
 
-void free_packets(quicly_raw_packet_t **packets, size_t cnt)
+void free_packets(quicly_datagram_t **packets, size_t cnt)
 {
     size_t i;
     for (i = 0; i != cnt; ++i)
         quicly_default_free_packet(&quic_ctx, packets[i]);
 }
 
-size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt, size_t host_cidl)
+size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw, size_t cnt, size_t host_cidl)
 {
     size_t ri, dc = 0;
 
@@ -167,7 +167,7 @@ int recvbuf_is(quicly_recvbuf_t *buf, const char *s)
 
 size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 {
-    quicly_raw_packet_t *datagrams[32];
+    quicly_datagram_t *datagrams[32];
     size_t num_datagrams, i;
     quicly_decoded_packet_t decoded[32];
     int ret;

@@ -1574,12 +1574,12 @@ struct st_quicly_send_context_t {
         int first_byte;
     } current;
     struct {
-        quicly_raw_packet_t *packet;
+        quicly_datagram_t *packet;
         struct st_quicly_cipher_context_t *cipher;
         uint8_t *first_byte_at;
     } target;
     int64_t now;
-    quicly_raw_packet_t **packets;
+    quicly_datagram_t **packets;
     size_t max_packets;
     size_t num_packets;
     uint8_t *dst;
@@ -1963,10 +1963,10 @@ Exit:
     return 0;
 }
 
-quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
                                                      ptls_iovec_t dest_cid, ptls_iovec_t src_cid)
 {
-    quicly_raw_packet_t *packet;
+    quicly_datagram_t *packet;
     uint8_t *dst;
 
     if ((packet = ctx->alloc_packet(ctx, salen, ctx->max_packet_size)) == NULL)
@@ -1999,7 +1999,7 @@ quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, stru
     return packet;
 }
 
-int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_packets)
+int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_packets)
 {
     struct st_quicly_send_context_t s = {
         {&conn->egress.pp.handshake, -1}, {NULL, NULL, NULL}, conn->super.ctx->now(conn->super.ctx), packets, *num_packets};
@@ -2630,19 +2630,19 @@ void quicly_close_stream(quicly_stream_t *stream)
     destroy_stream(stream);
 }
 
-quicly_raw_packet_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize)
+quicly_datagram_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize)
 {
-    quicly_raw_packet_t *packet;
+    quicly_datagram_t *packet;
 
-    if ((packet = malloc(offsetof(quicly_raw_packet_t, sa) + salen + payloadsize)) == NULL)
+    if ((packet = malloc(offsetof(quicly_datagram_t, sa) + salen + payloadsize)) == NULL)
         return NULL;
     packet->salen = salen;
-    packet->data.base = (uint8_t *)packet + offsetof(quicly_raw_packet_t, sa) + salen;
+    packet->data.base = (uint8_t *)packet + offsetof(quicly_datagram_t, sa) + salen;
 
     return packet;
 }
 
-void quicly_default_free_packet(quicly_context_t *ctx, quicly_raw_packet_t *packet)
+void quicly_default_free_packet(quicly_context_t *ctx, quicly_datagram_t *packet)
 {
     free(packet);
 }

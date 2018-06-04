@@ -26,7 +26,7 @@ static quicly_conn_t *client, *server;
 
 static void test_handshake(void)
 {
-    quicly_raw_packet_t *packets[32];
+    quicly_datagram_t *packets[32];
     size_t num_packets;
     quicly_decoded_packet_t decoded[32];
     int ret, i;
@@ -213,7 +213,7 @@ static void test_rst_during_loss(void)
 {
     uint32_t initial_max_stream_data_orig = quic_ctx.initial_max_stream_data;
     quicly_stream_t *client_stream, *server_stream;
-    quicly_raw_packet_t *reordered_packet;
+    quicly_datagram_t *reordered_packet;
     int ret;
     uint64_t max_data_at_start, tmp;
 
@@ -300,7 +300,7 @@ static void tiny_connection_window(void)
         strcpy(testdata + i * 16, "0123456789abcdef");
 
     { /* transmit first flight */
-        quicly_raw_packet_t *raw;
+        quicly_datagram_t *raw;
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 

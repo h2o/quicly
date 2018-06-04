@@ -27,7 +27,7 @@ static quicly_conn_t *client, *server;
 static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, int (*cond)(void),
                           int64_t latency)
 {
-    quicly_raw_packet_t *packets[32];
+    quicly_datagram_t *packets[32];
     int ret;
 
     *num_sent = sizeof(packets) / sizeof(packets[0]);
@@ -85,7 +85,7 @@ static void test_even(void)
     quic_now = 0;
 
     { /* transmit first flight */
-        quicly_raw_packet_t *raw;
+        quicly_datagram_t *raw;
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
@@ -168,7 +168,7 @@ static void loss_core(int downstream_only)
     quic_now = 0;
 
     { /* transmit first flight */
-        quicly_raw_packet_t *raw;
+        quicly_datagram_t *raw;
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
