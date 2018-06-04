@@ -1569,53 +1569,53 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 }
 
 struct st_quicly_send_context_t {
-    uint8_t first_byte;
-    struct st_quicly_cipher_context_t *cipher;
+    struct {
+        struct st_quicly_cipher_context_t *cipher;
+        int first_byte;
+    } current;
+    struct {
+        quicly_raw_packet_t *packet;
+        struct st_quicly_cipher_context_t *cipher;
+        uint8_t *first_byte_at;
+    } target;
     int64_t now;
     quicly_raw_packet_t **packets;
     size_t max_packets;
     size_t num_packets;
-    quicly_raw_packet_t *target;
     uint8_t *dst;
     uint8_t *dst_end;
     uint8_t *dst_encrypt_from;
 };
 
-static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
+static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, int coalesced)
 {
-    assert(s->cipher->aead != NULL);
+    assert(s->target.cipher->aead != NULL);
 
-    if (s->first_byte == QUICLY_PACKET_TYPE_INITIAL) {
-        if (s->num_packets != 0)
-            return QUICLY_ERROR_HANDSHAKE_TOO_LARGE;
+    if (!coalesced && s->target.packet->data.base[0] == QUICLY_PACKET_TYPE_INITIAL) {
         const size_t max_size = 1264; /* max UDP packet size excluding aead tag */
-        assert(s->dst - s->target->data.base <= max_size);
-        memset(s->dst, 0, s->target->data.base + max_size - s->dst);
-        s->dst = s->target->data.base + max_size;
+        assert(s->dst - s->target.packet->data.base <= max_size);
+        memset(s->dst, 0, s->target.packet->data.base + max_size - s->dst);
+        s->dst = s->target.packet->data.base + max_size;
     }
 
-    if ((s->first_byte & 0x80) != 0) {
-        uint16_t length = s->dst - s->dst_encrypt_from + s->cipher->aead->algo->tag_size + 4;
+    if ((*s->target.first_byte_at & 0x80) != 0) {
+        uint16_t length = s->dst - s->dst_encrypt_from + s->target.cipher->aead->algo->tag_size + 4;
         length |= 0x4000;
         quicly_encode16(s->dst_encrypt_from - 6, length);
     }
     quicly_encode32(s->dst_encrypt_from - 4, (uint32_t)conn->egress.packet_number | 0xc0000000);
 
-    s->dst = s->dst_encrypt_from + ptls_aead_encrypt(s->cipher->aead, s->dst_encrypt_from, s->dst_encrypt_from,
-                                                     s->dst - s->dst_encrypt_from, conn->egress.packet_number, s->target->data.base,
-                                                     s->dst_encrypt_from - s->target->data.base);
+    s->dst = s->dst_encrypt_from + ptls_aead_encrypt(s->target.cipher->aead, s->dst_encrypt_from, s->dst_encrypt_from,
+                                                     s->dst - s->dst_encrypt_from, conn->egress.packet_number,
+                                                     s->target.first_byte_at, s->dst_encrypt_from - s->target.first_byte_at);
 
-    ptls_cipher_init(s->cipher->pne, s->dst_encrypt_from);
-    ptls_cipher_encrypt(s->cipher->pne, s->dst_encrypt_from - 4, s->dst_encrypt_from - 4, 4);
+    ptls_cipher_init(s->target.cipher->pne, s->dst_encrypt_from);
+    ptls_cipher_encrypt(s->target.cipher->pne, s->dst_encrypt_from - 4, s->dst_encrypt_from - 4, 4);
 
-    s->target->data.len = s->dst - s->target->data.base;
-    s->packets[s->num_packets++] = s->target;
+    s->target.packet->data.len = s->dst - s->target.packet->data.base;
+    if (!coalesced)
+        s->packets[s->num_packets++] = s->target.packet;
     ++conn->egress.packet_number;
-
-    s->target = NULL;
-    s->dst = NULL;
-    s->dst_end = NULL;
-    s->dst_encrypt_from = NULL;
 
     return 0;
 }
@@ -1631,40 +1631,76 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
 
 static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
 {
-    int ret;
+    int coalescible, ret;
+
+    assert(s->current.first_byte != -1);
 
     /* allocate and setup the new packet if necessary */
-    if (s->dst_end - s->dst < min_space || *s->target->data.base != s->first_byte) {
-        if (s->target != NULL && (ret = commit_send_packet(conn, s)) != 0)
+    if (s->dst_end - s->dst < min_space || s->target.first_byte_at == NULL) {
+        coalescible = 0;
+    } else if (*s->target.first_byte_at != s->current.first_byte) {
+        coalescible = (*s->target.first_byte_at & 0x80) != 0;
+    } else if (s->dst_end - s->dst < min_space) {
+        coalescible = 0;
+    } else {
+        /* use the existing packet */
+        return 0;
+    }
+
+    /* commit at the same time determining if we will coalesce the packets */
+    if (s->target.packet != NULL) {
+        if (coalescible) {
+            size_t overhead = s->target.cipher->aead->algo->tag_size;
+            if ((s->current.first_byte & 0x80) != 0) {
+                overhead = 1 + 4 + 1 + conn->super.peer.cid.len + conn->super.host.cid.len + 2 + 4;
+            } else {
+                overhead = 1 + conn->super.peer.cid.len + 4;
+            }
+            overhead += s->current.cipher->aead->algo->tag_size;
+            if (overhead + min_space > s->dst_end - s->dst)
+                coalescible = 0;
+        }
+        if ((ret = commit_send_packet(conn, s, coalescible)) != 0)
             return ret;
+    } else {
+        coalescible = 0;
+    }
+
+    /* allocate packet */
+    if (coalescible) {
+        s->target.cipher = s->current.cipher;
+    } else {
         if (s->num_packets >= s->max_packets)
             return QUICLY_ERROR_SENDBUF_FULL;
-        if ((s->target =
+        if ((s->target.packet =
                  conn->super.ctx->alloc_packet(conn->super.ctx, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
-        s->target->salen = conn->super.peer.salen;
-        memcpy(&s->target->sa, conn->super.peer.sa, conn->super.peer.salen);
-        s->dst = s->target->data.base;
-        s->dst_end = s->target->data.base + conn->super.ctx->max_packet_size;
-        /* emit header */
-        *s->dst++ = s->first_byte;
-        if ((s->first_byte & 0x80) != 0) {
-            s->dst = quicly_encode32(s->dst, conn->super.version);
-            *s->dst++ = (encode_cid_length(conn->super.peer.cid.len) << 4) | encode_cid_length(conn->super.host.cid.len);
-            s->dst = emit_cid(s->dst, &conn->super.peer.cid);
-            s->dst = emit_cid(s->dst, &conn->super.host.cid);
-            /* payload length is filled laterwards */
-            *s->dst++ = 0;
-            *s->dst++ = 0;
-        } else {
-            s->dst = emit_cid(s->dst, &conn->super.peer.cid);
-        }
-        s->dst += 4; /* space for PN bits, filled in at commit time */
-        s->dst_encrypt_from = s->dst;
-        assert(s->cipher->aead != NULL);
-        s->dst_end -= s->cipher->aead->algo->tag_size;
-        assert(s->dst < s->dst_end);
+        s->target.packet->salen = conn->super.peer.salen;
+        memcpy(&s->target.packet->sa, conn->super.peer.sa, conn->super.peer.salen);
+        s->target.cipher = s->current.cipher;
+        s->dst = s->target.packet->data.base;
+        s->dst_end = s->target.packet->data.base + conn->super.ctx->max_packet_size;
     }
+
+    /* emit header */
+    s->target.first_byte_at = s->dst;
+    *s->dst++ = s->current.first_byte;
+    if ((s->current.first_byte & 0x80) != 0) {
+        s->dst = quicly_encode32(s->dst, conn->super.version);
+        *s->dst++ = (encode_cid_length(conn->super.peer.cid.len) << 4) | encode_cid_length(conn->super.host.cid.len);
+        s->dst = emit_cid(s->dst, &conn->super.peer.cid);
+        s->dst = emit_cid(s->dst, &conn->super.host.cid);
+        /* payload length is filled laterwards */
+        *s->dst++ = 0;
+        *s->dst++ = 0;
+    } else {
+        s->dst = emit_cid(s->dst, &conn->super.peer.cid);
+    }
+    s->dst += 4; /* space for PN bits, filled in at commit time */
+    s->dst_encrypt_from = s->dst;
+    assert(s->target.cipher->aead != NULL);
+    s->dst_end -= s->target.cipher->aead->algo->tag_size;
+    assert(s->dst < s->dst_end);
 
     return 0;
 }
@@ -1965,8 +2001,8 @@ quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, stru
 
 int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_packets)
 {
-    struct st_quicly_send_context_t s = {UINT8_MAX, &conn->egress.pp.handshake, conn->super.ctx->now(conn->super.ctx), packets,
-                                         *num_packets};
+    struct st_quicly_send_context_t s = {
+        {&conn->egress.pp.handshake, -1}, {NULL, NULL, NULL}, conn->super.ctx->now(conn->super.ctx), packets, *num_packets};
     int ret;
 
     if (quicly_get_state(conn) == QUICLY_STATE_DRAINING) {
@@ -1993,14 +2029,14 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
     switch (quicly_get_state(conn)) {
     case QUICLY_STATE_SEND_RETRY:
         assert(!quicly_is_client(conn));
-        s.first_byte = QUICLY_PACKET_TYPE_RETRY;
+        s.current.first_byte = QUICLY_PACKET_TYPE_RETRY;
         break;
     case QUICLY_STATE_FIRSTFLIGHT:
         assert(quicly_is_client(conn));
-        s.first_byte = QUICLY_PACKET_TYPE_INITIAL;
+        s.current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
         break;
     default:
-        s.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
+        s.current.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
         if (conn->egress.send_ack_at <= s.now && quicly_get_state(conn) != QUICLY_STATE_1RTT_ENCRYPTED) {
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
@@ -2030,24 +2066,20 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
             conn->crypto.pending_data = 0;
         }
     }
-    if (s.target != NULL && (ret = commit_send_packet(conn, &s)) != 0)
-        goto Exit;
 
     if (conn->egress.pp.early_data.aead != NULL) {
         assert(conn->egress.pp.early_data.aead != NULL);
         assert(conn->egress.pp.one_rtt[0].aead == NULL);
-        s.first_byte = QUICLY_PACKET_TYPE_0RTT_PROTECTED;
-        s.cipher = &conn->egress.pp.early_data;
+        s.current.cipher = &conn->egress.pp.early_data;
+        s.current.first_byte = QUICLY_PACKET_TYPE_0RTT_PROTECTED;
         if ((ret = send_stream_frames(conn, &s)) != 0)
-            goto Exit;
-        if (s.target != NULL && (ret = commit_send_packet(conn, &s)) != 0)
             goto Exit;
     }
 
     /* send encrypted frames */
     if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED) {
-        s.first_byte = 0x32; /* 1rtt,has-connection-id,key-phase=0,packet-number-size=4 */
-        s.cipher = &conn->egress.pp.one_rtt[0];
+        s.current.cipher = &conn->egress.pp.one_rtt[0];
+        s.current.first_byte = 0x32; /* 1rtt,has-connection-id,key-phase=0,packet-number-size=4 */
         /* acks */
         if (conn->egress.send_ack_at <= s.now) {
             if ((ret = send_ack(conn, &s)) != 0)
@@ -2099,12 +2131,14 @@ int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_
         if ((ret = send_stream_frames(conn, &s)) != 0)
             goto Exit;
         /* commit */
-        if (s.target != NULL) {
+        if (s.target.packet != NULL) {
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
-            commit_send_packet(conn, &s);
         }
     }
+
+    if (s.target.packet != NULL)
+        commit_send_packet(conn, &s, 0);
 
     quicly_loss_update_alarm(&conn->egress.loss, s.now, conn->egress.acks.head != NULL);
 
@@ -2114,7 +2148,7 @@ Exit:
         ret = 0;
     if (ret == 0) {
         *num_packets = s.num_packets;
-        if (s.first_byte == QUICLY_PACKET_TYPE_RETRY)
+        if (s.current.first_byte == QUICLY_PACKET_TYPE_RETRY)
             ret = QUICLY_ERROR_CONNECTION_CLOSED;
     }
     return ret;
