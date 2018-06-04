@@ -167,25 +167,25 @@ int recvbuf_is(quicly_recvbuf_t *buf, const char *s)
 
 size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 {
-    quicly_raw_packet_t *packets[32];
-    size_t num_packets, i;
+    quicly_raw_packet_t *datagrams[32];
+    size_t num_datagrams, i;
     quicly_decoded_packet_t decoded[32];
     int ret;
 
-    num_packets = sizeof(packets) / sizeof(packets[0]);
-    ret = quicly_send(src, packets, &num_packets);
+    num_datagrams = sizeof(datagrams) / sizeof(datagrams[0]);
+    ret = quicly_send(src, datagrams, &num_datagrams);
     ok(ret == 0);
 
-    if (num_packets != 0) {
-        decode_packets(decoded, packets, num_packets, quicly_is_client(dst) ? 0 : 8);
+    if (num_datagrams != 0) {
+        size_t num_packets = decode_packets(decoded, datagrams, num_datagrams, quicly_is_client(dst) ? 0 : 8);
         for (i = 0; i != num_packets; ++i) {
             ret = quicly_receive(dst, decoded + i);
             ok(ret == 0);
         }
-        free_packets(packets, num_packets);
+        free_packets(datagrams, num_datagrams);
     }
 
-    return num_packets;
+    return num_datagrams;
 }
 
 int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
