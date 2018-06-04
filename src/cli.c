@@ -195,7 +195,7 @@ static void on_conn_close(quicly_conn_t *conn, uint8_t type, uint16_t code, cons
             (int)reason_len, reason);
 }
 
-static int send_one(int fd, quicly_raw_packet_t *p)
+static int send_one(int fd, quicly_datagram_t *p)
 {
     int ret;
     struct msghdr mess;
@@ -216,7 +216,7 @@ static int send_one(int fd, quicly_raw_packet_t *p)
 
 static int send_pending(int fd, quicly_conn_t *conn)
 {
-    quicly_raw_packet_t *packets[16];
+    quicly_datagram_t *packets[16];
     size_t num_packets, i;
     int ret;
 
@@ -451,7 +451,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     } else {
                         assert(conn == NULL);
                         if (ret == QUICLY_ERROR_VERSION_NEGOTIATION) {
-                            quicly_raw_packet_t *rp =
+                            quicly_datagram_t *rp =
                                 quicly_send_version_negotiation(&ctx, &sa, salen, packet.cid.src, packet.cid.dest);
                             assert(rp != NULL);
                             if (send_one(fd, rp) == -1)

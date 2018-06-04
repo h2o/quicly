@@ -28,8 +28,8 @@
 extern int64_t quic_now;
 extern quicly_context_t quic_ctx;
 
-void free_packets(quicly_raw_packet_t **packets, size_t cnt);
-size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt, size_t host_cidl);
+void free_packets(quicly_datagram_t **packets, size_t cnt);
+size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw, size_t cnt, size_t host_cidl);
 int on_update_noop(quicly_stream_t *stream);
 int on_stream_open_buffering(quicly_stream_t *stream);
 int recvbuf_is(quicly_recvbuf_t *buf, const char *s);

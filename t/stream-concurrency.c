@@ -31,7 +31,7 @@ void test_stream_concurrency(void)
     int ret;
 
     { /* connect */
-        quicly_raw_packet_t *raw;
+        quicly_datagram_t *raw;
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
