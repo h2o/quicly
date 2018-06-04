@@ -273,7 +273,7 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
         packet->cid.dest.len = decode_cid_length(*src >> 4);
         packet->cid.src.len = decode_cid_length(*src & 0xf);
         ++src;
-        if (src_end - src < packet->cid.dest.len + packet->cid.src.len + 5)
+        if (src_end - src < packet->cid.dest.len + packet->cid.src.len)
             goto Error;
         if (packet->cid.dest.len != host_cidl)
             goto Error;
