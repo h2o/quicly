@@ -43,18 +43,18 @@ extern "C" {
 #define QUICLY_DEBUG 0
 #endif
 
-typedef struct st_quicly_raw_packet_t {
+typedef struct st_quicly_datagram_t {
     ptls_iovec_t data;
     socklen_t salen;
     struct sockaddr sa;
-} quicly_raw_packet_t;
+} quicly_datagram_t;
 
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 
-typedef quicly_raw_packet_t *(*quicly_alloc_packet_cb)(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
-typedef void (*quicly_free_packet_cb)(quicly_context_t *ctx, quicly_raw_packet_t *packet);
+typedef quicly_datagram_t *(*quicly_alloc_packet_cb)(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
+typedef void (*quicly_free_packet_cb)(quicly_context_t *ctx, quicly_datagram_t *packet);
 typedef quicly_stream_t *(*quicly_alloc_stream_cb)(quicly_context_t *ctx);
 typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
@@ -300,6 +300,7 @@ typedef struct st_quicly_decoded_packet_t {
     } cid;
     uint32_t version;
     size_t encrypted_off;
+    size_t datagram_size;
 } quicly_decoded_packet_t;
 
 #define QUICLY_RESET_STREAM_EGRESS 1
@@ -371,12 +372,12 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn);
 /**
  *
  */
-quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
                                                      ptls_iovec_t dest_cid, ptls_iovec_t src_cid);
 /**
  *
  */
-int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_packets);
+int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_packets);
 /**
  *
  */
@@ -414,11 +415,11 @@ void quicly_close_stream(quicly_stream_t *stream);
 /**
  *
  */
-quicly_raw_packet_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
+quicly_datagram_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
 /**
  *
  */
-void quicly_default_free_packet(quicly_context_t *ctx, quicly_raw_packet_t *packet);
+void quicly_default_free_packet(quicly_context_t *ctx, quicly_datagram_t *packet);
 /**
  *
  */

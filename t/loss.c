@@ -27,9 +27,7 @@ static quicly_conn_t *client, *server;
 static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, int (*cond)(void),
                           int64_t latency)
 {
-    quicly_raw_packet_t *packets[32];
-    size_t i;
-    quicly_decoded_packet_t decoded[32];
+    quicly_datagram_t *packets[32];
     int ret;
 
     *num_sent = sizeof(packets) / sizeof(packets[0]);
@@ -40,16 +38,20 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
     *num_received = 0;
 
     if (*num_sent != 0) {
-        size_t num_decoded = decode_packets(decoded, packets, *num_sent, quicly_is_client(dst) ? 0 : 8);
-        assert(*num_sent == num_decoded);
-        for (i = 0; i != num_decoded; ++i) {
+        size_t i;
+        for (i = 0; i != *num_sent; ++i) {
             if (cond()) {
-                ret = quicly_receive(dst, decoded + i);
-                ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+                quicly_decoded_packet_t decoded[4];
+                size_t num_decoded = decode_packets(decoded, packets + i, 1, quicly_is_client(dst) ? 0 : 8), j;
+                assert(num_decoded != 0);
+                for (j = 0; j != num_decoded; ++j) {
+                    ret = quicly_receive(dst, decoded + j);
+                    ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+                }
                 ++*num_received;
             }
         }
-        free_packets(packets, num_decoded);
+        free_packets(packets, *num_sent);
     }
     quic_now += latency;
 }
@@ -83,7 +85,7 @@ static void test_even(void)
     quic_now = 0;
 
     { /* transmit first flight */
-        quicly_raw_packet_t *raw;
+        quicly_datagram_t *raw;
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
@@ -110,11 +112,6 @@ static void test_even(void)
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
-    /* after ack-timeout, server sends the delayed ack */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
-    ok(num_sent == 1);
-    ok(num_received == 1);
-
     /* client sends delayed-ack that gets dropped */
     transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
     ok(num_sent == 1);
@@ -129,6 +126,23 @@ static void test_even(void)
     transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
     ok(num_sent == 2);
     ok(num_received == 1);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(!quicly_connection_is_ready(client));
+
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+
+    /* client sends delayed-ack that gets accepted */
+    transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ok(num_sent == 1);
+    ok(num_received == 1);
+
+    quic_now += 1000;
+
+    /* server resends the contents of all the packets (in cleartext) */
+    transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ok(num_sent == 1);
+    ok(num_received == 1);
+
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
     ok(quicly_connection_is_ready(client));
 
@@ -159,7 +173,7 @@ static void loss_core(int downstream_only)
     quic_now = 0;
 
     { /* transmit first flight */
-        quicly_raw_packet_t *raw;
+        quicly_datagram_t *raw;
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
@@ -172,10 +186,12 @@ static void loss_core(int downstream_only)
         quic_now += 10;
         decode_packets(&decoded, &raw, 1, 8);
         ok(num_packets == 1);
+quicly_get_first_timeout(client);
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
         ok(ret == 0);
         free_packets(&raw, 1);
         quic_now += 10;
+quicly_get_first_timeout(client);
     }
 
     quicly_stream_t *client_stream = NULL, *server_stream = NULL;
