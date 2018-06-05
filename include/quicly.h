@@ -200,6 +200,10 @@ struct _st_quicly_conn_public_t {
     quicly_state_t state;
     struct {
         quicly_cid_t cid;
+        /**
+         * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
+         */
+        quicly_cid_t offered_cid;
         uint32_t num_streams;
         uint64_t next_stream_id_bidi;
         uint64_t next_stream_id_uni;
@@ -336,6 +340,10 @@ static const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn);
 /**
  *
  */
+static const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn);
+/**
+ *
+ */
 static const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn);
 /**
  *
@@ -386,6 +394,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
  *
  */
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet);
+/**
+ *
+ */
+int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid);
 /**
  *
  */
@@ -474,6 +486,12 @@ inline const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->host.cid;
+}
+
+inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return &c->host.offered_cid;
 }
 
 inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)

@@ -1055,8 +1055,13 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
     return type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS;
 }
 
-static quicly_conn_t *create_connection(quicly_context_t *ctx, ptls_iovec_t host_cid, ptls_iovec_t peer_cid,
-                                        const char *server_name, struct sockaddr *sa, socklen_t salen,
+static void set_cid(quicly_cid_t *dest, ptls_iovec_t src)
+{
+    memcpy(dest->cid, src.base, src.len);
+    dest->len = src.len;
+}
+
+static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
                                         ptls_handshake_properties_t *handshake_properties)
 {
     ptls_t *tls = NULL;
@@ -1075,12 +1080,10 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, ptls_iovec_t host
 
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
-    memcpy(conn->super.host.cid.cid, host_cid.base, host_cid.len);
-    conn->super.host.cid.len = host_cid.len;
-    memcpy(conn->super.peer.cid.cid, peer_cid.base, peer_cid.len);
-    conn->super.peer.cid.len = peer_cid.len;
     conn->super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
+        ctx->tls->random_bytes(conn->super.peer.cid.cid, 8);
+        conn->super.peer.cid.len = 8;
         conn->super.host.next_stream_id_bidi = 4;
         conn->super.host.next_stream_id_uni = 1;
         conn->super.peer.next_stream_id_bidi = 2;
@@ -1181,19 +1184,18 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
                    ptls_handshake_properties_t *handshake_properties)
 {
     quicly_conn_t *conn;
-    uint8_t random_cid[8];
+    const quicly_cid_t *server_cid;
     ptls_buffer_t buf;
     size_t max_early_data_size;
     int ret;
 
-    ctx->tls->random_bytes(random_cid, sizeof(random_cid));
-    if ((conn = create_connection(ctx, ptls_iovec_init(NULL, 0), ptls_iovec_init(random_cid, sizeof(random_cid)), server_name, sa,
-                                  salen, handshake_properties)) == NULL) {
+    if ((conn = create_connection(ctx, server_name, sa, salen, handshake_properties)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
+    server_cid = quicly_get_peer_cid(conn);
     if ((ret = setup_handshake_encryption(&conn->ingress.pp.handshake, &conn->egress.pp.handshake, ctx->tls->cipher_suites,
-                                          ptls_iovec_init(random_cid, sizeof(random_cid)), 1)) != 0)
+                                          ptls_iovec_init(server_cid->cid, server_cid->len), 1)) != 0)
         goto Exit;
 
     /* handshake */
@@ -1396,8 +1398,15 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         }
     }
 
-    if ((conn = create_connection(ctx, packet->cid.dest, packet->cid.src, NULL, sa, salen, handshake_properties)) == NULL)
-        return PTLS_ERROR_NO_MEMORY;
+    if ((conn = create_connection(ctx, NULL, sa, salen, handshake_properties)) == NULL) {
+        ret = PTLS_ERROR_NO_MEMORY;
+        goto Exit;
+    }
+    set_cid(&conn->super.peer.cid, packet->cid.src);
+    /* TODO let the app set host cid after successful return from quicly_accept / quicly_connect */
+    ctx->tls->random_bytes(conn->super.host.cid.cid, 8);
+    conn->super.host.cid.len = 8;
+    set_cid(&conn->super.host.offered_cid, packet->cid.dest);
     conn->ingress.pp.handshake = ingress_cipher;
     ingress_cipher = (struct st_quicly_cipher_context_t){NULL};
     conn->egress.pp.handshake = egress_cipher;
@@ -2379,6 +2388,17 @@ static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded
 #undef CAN_SELECT
 }
 
+int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid)
+{
+    if (quicly_cid_is_equal(&conn->super.host.cid, cid)) {
+        return 1;
+    } else if (!is_1rtt && !quicly_is_client(conn) && quicly_cid_is_equal(&conn->super.host.offered_cid, cid)) {
+        /* long header pacekt carrying the offered CID */
+        return 1;
+    }
+    return 0;
+}
+
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
     int64_t now = conn->super.ctx->now(conn->super.ctx);
@@ -2395,10 +2415,6 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         /* FIXME check peer address */
         memcpy(conn->super.peer.cid.cid, packet->cid.src.base, packet->cid.src.len);
         conn->super.peer.cid.len = packet->cid.src.len;
-    }
-    if (!quicly_cid_is_equal(&conn->super.host.cid, packet->cid.dest)) {
-        ret = QUICLY_ERROR_PACKET_IGNORED;
-        goto Exit;
     }
     if (conn->super.state == QUICLY_STATE_DRAINING) {
         ret = 0;
