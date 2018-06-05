@@ -2052,6 +2052,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         }
         break;
     }
+
+    /* respond to all pending received PATH_CHALLENGE frames */
     if (conn->egress.path_challenge.head != NULL) {
         do {
             struct st_quicly_pending_path_challenge_t *c = conn->egress.path_challenge.head;
@@ -2063,6 +2065,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         } while (conn->egress.path_challenge.head != NULL);
         conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
     }
+
+    /* process crypto stream */
     if (conn->crypto.pending_control || conn->crypto.pending_data) {
         if (conn->crypto.pending_control) {
             if ((ret = send_stream_control_frames(&conn->crypto.stream, &s)) != 0)
@@ -2076,8 +2080,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         }
     }
 
+    /* send 0RTT packets if 0RTT key is available */
     if (conn->egress.pp.early_data.aead != NULL) {
-        assert(conn->egress.pp.early_data.aead != NULL);
         assert(conn->egress.pp.one_rtt[0].aead == NULL);
         s.current.cipher = &conn->egress.pp.early_data;
         s.current.first_byte = QUICLY_PACKET_TYPE_0RTT_PROTECTED;
@@ -2085,16 +2089,17 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             goto Exit;
     }
 
-    /* send encrypted frames */
+    /* send 1RTT-encrypted packets */
     if (quicly_get_state(conn) == QUICLY_STATE_1RTT_ENCRYPTED) {
+        assert(conn->egress.pp.early_data.aead == NULL);
         s.current.cipher = &conn->egress.pp.one_rtt[0];
-        s.current.first_byte = 0x32; /* 1rtt,has-connection-id,key-phase=0,packet-number-size=4 */
-        /* acks */
+        s.current.first_byte = 0x30; /* short header, key-phase=0 */
+	/* send ack frame */
         if (conn->egress.send_ack_at <= s.now) {
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
         }
-        /* max_stream_id (TODO uni) */
+        /* send max_stream_id frame (TODO uni) */
         uint64_t max_stream_id;
         if ((max_stream_id = quicly_maxsender_should_update_stream_id(
                  &conn->ingress.max_stream_id_bidi, conn->super.peer.next_stream_id_bidi, conn->super.peer.num_streams,
@@ -2105,7 +2110,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             s.dst = quicly_encode_max_stream_id_frame(s.dst, max_stream_id);
             quicly_maxsender_record(&conn->ingress.max_stream_id_bidi, max_stream_id, &ack->data.max_stream_id.args);
         }
-        /* max_data */
+        /* send connection-level flow control frame */
         if (quicly_maxsender_should_update(&conn->ingress.max_data.sender, conn->ingress.max_data.bytes_consumed,
                                            conn->super.ctx->initial_max_data, 512)) {
             quicly_ack_t *ack;
@@ -2115,7 +2120,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             s.dst = quicly_encode_max_data_frame(s.dst, new_value);
             quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &ack->data.max_data.args);
         }
-        /* stream_id_blocked (TODO uni) */
+        /* send stream_id_blocked frame (TODO uni) */
         if (conn->egress.stream_id_blocked_state == QUICLY_SENDER_STATE_SEND) {
             if (stream_id_blocked(conn, 0)) {
                 quicly_ack_t *ack;
@@ -2128,7 +2133,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                 conn->egress.stream_id_blocked_state = QUICLY_SENDER_STATE_NONE;
             }
         }
-        /* stream-level control frames */
+        /* send stream-level control frames */
         while (s.num_packets != s.max_packets && quicly_linklist_is_linked(&conn->pending_link.control)) {
             quicly_stream_t *stream =
                 (void *)((char *)conn->pending_link.control.next - offsetof(quicly_stream_t, _send_aux.pending_link.control));
@@ -2139,7 +2144,9 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         /* send STREAM frames */
         if ((ret = send_stream_frames(conn, &s)) != 0)
             goto Exit;
-        /* commit */
+        /* piggyback an ack if a packet is under construction.
+	 * TODO: This may cause a second packet to be emitted. Check for packet size before piggybacking ack.
+	 */
         if (s.target.packet != NULL) {
             if ((ret = send_ack(conn, &s)) != 0)
                 goto Exit;
