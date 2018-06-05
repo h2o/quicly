@@ -1613,9 +1613,16 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     ptls_cipher_encrypt(s->target.cipher->pne, s->dst_encrypt_from - 4, s->dst_encrypt_from - 4, 4);
 
     s->target.packet->data.len = s->dst - s->target.packet->data.base;
-    if (!coalesced)
-        s->packets[s->num_packets++] = s->target.packet;
+    assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
+
     ++conn->egress.packet_number;
+
+    if (!coalesced) {
+        s->packets[s->num_packets++] = s->target.packet;
+        s->target.packet = NULL;
+        s->target.cipher = NULL;
+        s->target.first_byte_at = NULL;
+    }
 
     return 0;
 }
