@@ -275,8 +275,6 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
         ++src;
         if (src_end - src < packet->cid.dest.len + packet->cid.src.len)
             goto Error;
-        if (packet->cid.dest.len != host_cidl)
-            goto Error;
         packet->cid.dest.base = (void *)src;
         src += packet->cid.dest.len;
         packet->cid.src.base = (void *)src;
@@ -1358,6 +1356,10 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     }
     if (packet->version != QUICLY_PROTOCOL_VERSION) {
         ret = QUICLY_ERROR_VERSION_NEGOTIATION;
+        goto Exit;
+    }
+    if (packet->cid.dest.len < 8) {
+        ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
         goto Exit;
     }
     if ((ret = setup_handshake_encryption(&ingress_cipher, &egress_cipher, ctx->tls->cipher_suites, packet->cid.dest, 0)) != 0)
