@@ -459,17 +459,20 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                         }
                     }
                 }
-                if (conn != NULL && send_pending(fd, conn) != 0) {
-                    for (i = 0; i != num_conns; ++i) {
-                        if (conns[i] == conn) {
-                            memcpy(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(*conns));
-                            --num_conns;
-                            break;
-                        }
-                    }
-                    quicly_free(conn);
-                }
                 off += plen;
+            }
+        }
+        {
+            size_t i;
+            for (i = 0; i != num_conns; ++i) {
+                if (quicly_get_first_timeout(conns[i]) <= ctx.now(&ctx)) {
+                    if (send_pending(fd, conns[i]) != 0) {
+                        quicly_free(conns[i]);
+                        memmove(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(*conns));
+                        --i;
+                        --num_conns;
+                    }
+                }
             }
         }
     }
