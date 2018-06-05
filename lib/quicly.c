@@ -1973,7 +1973,7 @@ Exit:
 }
 
 quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                     ptls_iovec_t dest_cid, ptls_iovec_t src_cid)
+                                                   ptls_iovec_t dest_cid, ptls_iovec_t src_cid)
 {
     quicly_datagram_t *packet;
     uint8_t *dst;

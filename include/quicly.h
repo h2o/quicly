@@ -332,11 +332,11 @@ static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_cid_t *quicly_get_host_connection_id(quicly_conn_t *conn);
+static const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_cid_t *quicly_get_peer_connection_id(quicly_conn_t *conn);
+static const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn);
 /**
  *
  */
@@ -377,7 +377,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn);
  *
  */
 quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                     ptls_iovec_t dest_cid, ptls_iovec_t src_cid);
+                                                   ptls_iovec_t dest_cid, ptls_iovec_t src_cid);
 /**
  *
  */
@@ -470,13 +470,13 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
     return c->ctx;
 }
 
-inline const quicly_cid_t *quicly_get_host_connection_id(quicly_conn_t *conn)
+inline const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->host.cid;
 }
 
-inline const quicly_cid_t *quicly_get_peer_connection_id(quicly_conn_t *conn)
+inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->peer.cid;

@@ -432,7 +432,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 quicly_conn_t *conn = NULL;
                 size_t i;
                 for (i = 0; i != num_conns; ++i) {
-                    if (quicly_cid_is_equal(quicly_get_host_connection_id(conns[i]), packet.cid.dest)) {
+                    if (quicly_cid_is_equal(quicly_get_host_cid(conns[i]), packet.cid.dest)) {
                         conn = conns[i];
                         break;
                     }
