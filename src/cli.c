@@ -52,7 +52,6 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
 }
 
 static ptls_handshake_properties_t hs_properties;
-static ptls_context_t tlsctx = {ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites};
 static quicly_context_t ctx;
 static const char *req_paths[1024];
 
@@ -268,7 +267,7 @@ static void send_if_possible(quicly_conn_t *conn)
 {
     int ret;
 
-    if (quicly_connection_is_ready(conn) && quicly_get_next_stream_id(conn, 0) == 4) {
+    if (quicly_connection_is_ready(conn) && quicly_get_next_stream_id(conn, 0) == 0) {
         size_t i;
         for (i = 0; req_paths[i] != NULL; ++i) {
             char req[1024];
@@ -506,13 +505,15 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
-    setup_session_cache(&tlsctx);
-    tlsctx.max_early_data_size = UINT32_MAX;
-
     ctx = quicly_default_context;
-    ctx.tls = &tlsctx;
+    ctx.tls.random_bytes = ptls_openssl_random_bytes;
+    ctx.tls.key_exchanges = ptls_openssl_key_exchanges;
+    ctx.tls.cipher_suites = ptls_openssl_cipher_suites;
+    ctx.tls.max_early_data_size = UINT32_MAX;
     ctx.on_stream_open = on_stream_open;
     ctx.on_conn_close = on_conn_close;
+
+    setup_session_cache(&ctx.tls);
 
     while ((ch = getopt(argc, argv, "a:c:k:l:np:r:S:s:Vvh")) != -1) {
         switch (ch) {
@@ -520,13 +521,13 @@ int main(int argc, char **argv)
             set_alpn(&hs_properties, optarg);
             break;
         case 'c':
-            load_certificate_chain(&tlsctx, optarg);
+            load_certificate_chain(&ctx.tls, optarg);
             break;
         case 'k':
-            load_private_key(&tlsctx, optarg);
+            load_private_key(&ctx.tls, optarg);
             break;
         case 'l':
-            setup_log_secret(&tlsctx, optarg);
+            setup_log_secret(&ctx.tls, optarg);
             break;
         case 'n':
             ctx.enforce_version_negotiation = 1;
@@ -546,17 +547,17 @@ int main(int argc, char **argv)
         case 'S':
             ctx.stateless_retry.enforce_use = 1;
             ctx.stateless_retry.key = optarg;
-            if (strlen(ctx.stateless_retry.key) < tlsctx.cipher_suites[0]->hash->digest_size) {
+            if (strlen(ctx.stateless_retry.key) < ctx.tls.cipher_suites[0]->hash->digest_size) {
                 fprintf(stderr, "secret for stateless retry is too short (should be at least %zu bytes long)\n",
-                        tlsctx.cipher_suites[0]->hash->digest_size);
+                        ctx.tls.cipher_suites[0]->hash->digest_size);
                 exit(1);
             }
             break;
         case 's':
-            setup_session_file(&tlsctx, &hs_properties, optarg);
+            setup_session_file(&ctx.tls, &hs_properties, optarg);
             break;
         case 'V':
-            setup_verify_certificate(&tlsctx);
+            setup_verify_certificate(&ctx.tls);
             break;
         case 'v':
             ++verbosity;
@@ -575,9 +576,9 @@ int main(int argc, char **argv)
     if (verbosity != 0)
         ctx.debug_log = quicly_default_debug_log;
 
-    if (tlsctx.certificates.count != 0 || tlsctx.sign_certificate != NULL) {
+    if (ctx.tls.certificates.count != 0 || ctx.tls.sign_certificate != NULL) {
         /* server */
-        if (tlsctx.certificates.count == 0 || tlsctx.sign_certificate == NULL) {
+        if (ctx.tls.certificates.count == 0 || ctx.tls.sign_certificate == NULL) {
             fprintf(stderr, "-ck and -k options must be used together\n");
             exit(1);
         }
@@ -594,5 +595,5 @@ int main(int argc, char **argv)
     if (resolve_address((void *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
-    return tlsctx.certificates.count != 0 ? run_server((void *)&sa, salen) : run_client((void *)&sa, salen, host);
+    return ctx.tls.certificates.count != 0 ? run_server((void *)&sa, salen) : run_client((void *)&sa, salen, host);
 }

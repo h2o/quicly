@@ -85,9 +85,6 @@ static int64_t get_now(quicly_context_t *ctx);
 
 static ptls_iovec_t cert;
 static ptls_openssl_sign_certificate_t cert_signer;
-static ptls_context_t tls_ctx = {
-    ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL,
-    &cert_signer.super};
 
 int64_t quic_now;
 quicly_context_t quic_ctx;
@@ -99,14 +96,14 @@ static int64_t get_now(quicly_context_t *ctx)
 
 static void test_pne(void)
 {
-    static const uint8_t cid[] = {0x77, 0x0d, 0xc2, 0x6c, 0x17, 0x50, 0x9b, 0x35},
-                         iv[] = {0x05, 0x80, 0x24, 0xa9, 0x72, 0x75, 0xf0, 0x1d, 0x2a, 0x1e, 0xc9, 0x1f, 0xd1, 0xc2, 0x65, 0xbb},
-                         encrypted_pn[] = {0x3b, 0xb4, 0xb1, 0x74}, expected_pn[] = {0xc0, 0x00, 0x00, 0x00};
+    static const uint8_t cid[] = {0x69, 0xbd, 0xdf, 0xea, 0xac, 0x2c, 0xff, 0xd7},
+                         iv[] = {0x43, 0xd2, 0xad, 0x97, 0x34, 0x40, 0xe2, 0xd6, 0xae, 0xd2, 0x0c, 0xc9, 0xc9, 0x2c, 0x6f, 0x23},
+                         encrypted_pn[] = {0xa1, 0x66, 0x36, 0x27}, expected_pn[] = {0xc0, 0x00, 0x00, 0x00};
     struct st_quicly_cipher_context_t ingress, egress;
     uint8_t pn[sizeof(encrypted_pn)];
     int ret;
 
-    ret = setup_handshake_encryption(&ingress, &egress, ptls_openssl_cipher_suites, ptls_iovec_init(cid, sizeof(cid)), 0);
+    ret = setup_initial_encryption(&ingress, &egress, ptls_openssl_cipher_suites, ptls_iovec_init(cid, sizeof(cid)), 0);
     ok(ret == 0);
     ptls_cipher_init(ingress.pne, iv);
     ptls_cipher_encrypt(ingress.pne, pn, encrypted_pn, sizeof(encrypted_pn));
@@ -216,7 +213,12 @@ static void test_next_packet_number(void)
 int main(int argc, char **argv)
 {
     quic_ctx = quicly_default_context;
-    quic_ctx.tls = &tls_ctx;
+    quic_ctx.tls.random_bytes = ptls_openssl_random_bytes;
+    quic_ctx.tls.key_exchanges = ptls_openssl_key_exchanges;
+    quic_ctx.tls.cipher_suites = ptls_openssl_cipher_suites;
+    quic_ctx.tls.certificates.list = &cert;
+    quic_ctx.tls.certificates.count = 1;
+    quic_ctx.tls.sign_certificate = &cert_signer.super;
     quic_ctx.max_streams_bidi = 10;
     quic_ctx.on_stream_open = on_stream_open_buffering;
     quic_ctx.now = get_now;

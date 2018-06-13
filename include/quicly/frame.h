@@ -48,9 +48,11 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_ACK 13
 #define QUICLY_FRAME_TYPE_PATH_CHALLENGE 14
 #define QUICLY_FRAME_TYPE_PATH_RESPONSE 15
+#define QUICLY_FRAME_TYPE_HANDSHAKE_DONE 25
 
 #define QUICLY_FRAME_TYPE_STREAM_BASE 0x10
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
+#define QUICLY_FRAME_TYPE_CRYPTO_HS 0x18
 #define QUICLY_FRAME_TYPE_STREAM_BIT_OFF 0x4
 #define QUICLY_FRAME_TYPE_STREAM_BIT_LEN 0x2
 #define QUICLY_FRAME_TYPE_STREAM_BIT_FIN 0x1
@@ -87,6 +89,8 @@ typedef struct st_quicly_stream_frame_t {
 } quicly_stream_frame_t;
 
 static int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame);
+static uint8_t *quicly_encode_crypto_hs_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t offset, size_t *data_len);
+static int quicly_decode_crypto_hs_frame(const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame);
 
 static uint8_t *quicly_encode_rst_stream_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code, uint64_t final_offset);
 
@@ -180,7 +184,7 @@ typedef struct st_quicly_ack_frame_t {
     uint64_t gaps[256];
 } quicly_ack_frame_t;
 
-int quicly_decode_ack_frame(uint8_t type_flags, const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame);
+int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame);
 
 /* inline definitions */
 
@@ -366,6 +370,51 @@ inline int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, c
     return 0;
 Error:
     return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_STREAM_BASE);
+}
+
+inline uint8_t *quicly_encode_crypto_hs_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t offset, size_t *data_len)
+{
+    size_t sizeleft, len_length;
+
+    *dst++ = QUICLY_FRAME_TYPE_CRYPTO_HS;
+    dst = quicly_encodev(dst, offset);
+
+    sizeleft = dst_end - dst;
+    if (sizeleft <= 64 || *data_len < 64) {
+        if (*data_len >= sizeleft)
+            *data_len = sizeleft - 1;
+        len_length = 1;
+    } else {
+        if (*data_len > 16383)
+            *data_len = 16383;
+        len_length = 2;
+    }
+
+    if (*data_len >= sizeleft)
+        *data_len = sizeleft - len_length;
+    dst = quicly_encodev(dst, *data_len);
+    return dst;
+}
+
+inline int quicly_decode_crypto_hs_frame(const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame)
+{
+    uint64_t len;
+
+    frame->stream_id = 0;
+    frame->is_fin = 0;
+
+    if ((frame->offset = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
+    if ((len = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
+    if (end - *src < len)
+        goto Error;
+    frame->data = ptls_iovec_init(*src, len);
+    *src += len;
+
+    return 0;
+Error:
+    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_CRYPTO_HS);
 }
 
 inline uint8_t *quicly_encode_rst_stream_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code, uint64_t final_offset)

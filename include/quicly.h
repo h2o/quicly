@@ -95,7 +95,7 @@ struct st_quicly_context_t {
     /**
      * tls context to use
      */
-    ptls_context_t *tls;
+    ptls_context_t tls;
     /**
      * MTU
      */
@@ -182,13 +182,9 @@ typedef enum {
      */
     QUICLY_STATE_SEND_RETRY,
     /**
-     * during handshake
+     * while connected
      */
-    QUICLY_STATE_HANDSHAKE,
-    /**
-     * 1 RTT
-     */
-    QUICLY_STATE_1RTT_ENCRYPTED,
+    QUICLY_STATE_CONNECTED,
     /**
      * we do not send CLOSE (at the moment), enter draining mode when receiving CLOSE
      */

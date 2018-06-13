@@ -27,7 +27,7 @@ static quicly_conn_t *client, *server;
 static void test_handshake(void)
 {
     quicly_datagram_t *packets[32];
-    size_t num_packets;
+    size_t num_packets, num_decoded;
     quicly_decoded_packet_t decoded[32];
     int ret, i;
 
@@ -41,24 +41,27 @@ static void test_handshake(void)
     ok(packets[0]->data.len == 1280);
 
     /* receive CH, send handshake upto ServerFinished */
-    decode_packets(decoded, packets, num_packets, 8);
+    num_decoded = decode_packets(decoded, packets, num_packets, 8);
+    ok(num_decoded == 1);
     ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, decoded);
     ok(ret == 0);
     free_packets(packets, num_packets);
-    ok(quicly_get_state(server) == QUICLY_STATE_1RTT_ENCRYPTED);
+    ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
+    ok(quicly_connection_is_ready(server));
     num_packets = sizeof(packets) / sizeof(packets[0]);
     ret = quicly_send(server, packets, &num_packets);
     ok(ret == 0);
     ok(num_packets != 0);
 
     /* receive ServerFinished */
-    decode_packets(decoded, packets, num_packets, 0);
-    for (i = 0; i != num_packets; ++i) {
+    num_decoded = decode_packets(decoded, packets, num_packets, 0);
+    for (i = 0; i != num_decoded; ++i) {
         ret = quicly_receive(client, decoded + i);
         ok(ret == 0);
     }
     free_packets(packets, num_packets);
-    ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_connection_is_ready(client));
 }
 
 static void simple_http(void)
@@ -69,7 +72,7 @@ static void simple_http(void)
 
     ret = quicly_open_stream(client, &client_stream);
     ok(ret == 0);
-    ok(client_stream->stream_id == 4);
+    ok(client_stream->stream_id == 0);
     client_stream->on_update = on_update_noop;
     quicly_sendbuf_write(&client_stream->sendbuf, req, strlen(req), NULL);
     quicly_sendbuf_shutdown(&client_stream->sendbuf);
@@ -318,7 +321,8 @@ static void tiny_connection_window(void)
     }
 
     transmit(server, client);
-    ok(quicly_get_state(client) == QUICLY_STATE_1RTT_ENCRYPTED);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_connection_is_ready(client));
 
     ret = quicly_open_stream(client, &client_stream);
     ok(ret == 0);
