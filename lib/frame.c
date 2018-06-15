@@ -23,12 +23,11 @@
 #include <string.h>
 #include "quicly/frame.h"
 
-uint8_t *quicly_encode_ping_frame(uint8_t *dst, ptls_iovec_t data)
+uint8_t *quicly_encode_path_challenge_frame(uint8_t *dst, int is_response, const uint8_t *data)
 {
-    *dst++ = QUICLY_FRAME_TYPE_PING;
-    *dst++ = (uint8_t)data.len;
-    memcpy(dst, data.base, data.len);
-    dst += data.len;
+    *dst++ = is_response ? QUICLY_FRAME_TYPE_PATH_CHALLENGE : QUICLY_FRAME_TYPE_PATH_RESPONSE;
+    memcpy(dst, data, QUICLY_PATH_CHALLENGE_DATA_LEN);
+    dst += QUICLY_PATH_CHALLENGE_DATA_LEN;
     return dst;
 }
 
@@ -54,7 +53,7 @@ uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t
     return dst;
 }
 
-int quicly_decode_ack_frame(uint8_t type_flags, const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame)
+int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame)
 {
     uint64_t ack_delay, i, tmp;
 
@@ -67,18 +66,25 @@ int quicly_decode_ack_frame(uint8_t type_flags, const uint8_t **src, const uint8
 
     if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
+    if (frame->largest_acknowledged < tmp)
+        goto Error;
+    frame->smallest_acknowledged = frame->largest_acknowledged - tmp;
     frame->ack_block_lengths[0] = tmp + 1;
-    frame->smallest_acknowledged = frame->largest_acknowledged - frame->ack_block_lengths[0] + 1;
 
     for (i = 0; i != frame->num_gaps; ++i) {
         if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)
             goto Error;
         frame->gaps[i] = tmp + 1;
+        if (frame->smallest_acknowledged < frame->gaps[i])
+            goto Error;
         frame->smallest_acknowledged -= frame->gaps[i];
         if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)
             goto Error;
-        frame->ack_block_lengths[i + 1] = tmp + 1;
-        frame->smallest_acknowledged -= frame->ack_block_lengths[i + 1];
+        tmp += 1;
+        if (frame->smallest_acknowledged < tmp)
+            goto Error;
+        frame->ack_block_lengths[i + 1] = tmp;
+        frame->smallest_acknowledged -= tmp;
     }
 
     return 0;

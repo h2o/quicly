@@ -175,7 +175,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_out
             alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance;
             if (alarm_duration < r->conf->min_rto_timeout)
                 alarm_duration = r->conf->min_rto_timeout;
-            alarm_duration *= 1 << r->rto_count;
+            alarm_duration *= (int64_t)1 << r->rto_count;
         }
         if (r->alarm_at > now + alarm_duration)
             r->alarm_at = now + alarm_duration;

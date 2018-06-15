@@ -81,6 +81,8 @@ extern const quicly_ack_t quicly_acks__end_iter;
 static void quicly_acks_init(quicly_acks_t *acks);
 void quicly_acks_dispose(quicly_acks_t *acks);
 static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked);
+static int quicly_acks_is_empty(quicly_acks_t *acks);
+static quicly_ack_t *quicly_acks_get_tail(quicly_acks_t *acks);
 struct st_quicly_ack_block_t *quicly_acks__new_block(quicly_acks_t *acks);
 static void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter);
 static quicly_ack_t *quicly_acks_get(quicly_acks_iter_t *iter);
@@ -112,6 +114,16 @@ inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_n
     ack->acked = acked;
 
     return ack;
+}
+
+inline int quicly_acks_is_empty(quicly_acks_t *acks)
+{
+    return acks->head == NULL;
+}
+
+inline quicly_ack_t *quicly_acks_get_tail(quicly_acks_t *acks)
+{
+    return acks->tail->entries + acks->tail->total - 1;
 }
 
 inline void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter)

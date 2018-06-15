@@ -27,6 +27,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include "picotls.h"
@@ -38,18 +39,22 @@ extern "C" {
 #include "quicly/sendbuf.h"
 #include "quicly/maxsender.h"
 
-typedef struct st_quicly_raw_packet_t {
+#ifndef QUICLY_DEBUG
+#define QUICLY_DEBUG 0
+#endif
+
+typedef struct st_quicly_datagram_t {
     ptls_iovec_t data;
     socklen_t salen;
     struct sockaddr sa;
-} quicly_raw_packet_t;
+} quicly_datagram_t;
 
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 
-typedef quicly_raw_packet_t *(*quicly_alloc_packet_cb)(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
-typedef void (*quicly_free_packet_cb)(quicly_context_t *ctx, quicly_raw_packet_t *packet);
+typedef quicly_datagram_t *(*quicly_alloc_packet_cb)(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
+typedef void (*quicly_free_packet_cb)(quicly_context_t *ctx, quicly_datagram_t *packet);
 typedef quicly_stream_t *(*quicly_alloc_stream_cb)(quicly_context_t *ctx);
 typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
@@ -74,22 +79,23 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint32_t initial_max_stream_id_bidi;
+    uint16_t initial_max_streams_bidi;
     /**
      *
      */
-    uint32_t initial_max_stream_id_uni;
-    /**
-     *
-     */
-    unsigned omit_connection_id : 1;
+    uint16_t initial_max_streams_uni;
 } quicly_transport_parameters_t;
+
+typedef struct st_quicly_cid_t {
+    uint8_t cid[18];
+    uint8_t len;
+} quicly_cid_t;
 
 struct st_quicly_context_t {
     /**
      * tls context to use
      */
-    ptls_context_t *tls;
+    ptls_context_t tls;
     /**
      * MTU
      */
@@ -113,11 +119,11 @@ struct st_quicly_context_t {
     /**
      *
      */
-    uint32_t max_concurrent_streams_bidi;
+    uint32_t max_streams_bidi;
     /**
      *
      */
-    uint32_t max_concurrent_streams_uni;
+    uint32_t max_streams_uni;
     /**
      * stateless reset
      */
@@ -176,13 +182,9 @@ typedef enum {
      */
     QUICLY_STATE_SEND_RETRY,
     /**
-     * during handshake
+     * while connected
      */
-    QUICLY_STATE_HANDSHAKE,
-    /**
-     * 1 RTT
-     */
-    QUICLY_STATE_1RTT_ENCRYPTED,
+    QUICLY_STATE_CONNECTED,
     /**
      * we do not send CLOSE (at the moment), enter draining mode when receiving CLOSE
      */
@@ -191,14 +193,19 @@ typedef enum {
 
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
-    uint64_t connection_id;
     quicly_state_t state;
     struct {
+        quicly_cid_t cid;
+        /**
+         * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
+         */
+        quicly_cid_t offered_cid;
         uint32_t num_streams;
         uint64_t next_stream_id_bidi;
         uint64_t next_stream_id_uni;
     } host;
     struct {
+        quicly_cid_t cid;
         uint32_t num_streams;
         uint64_t next_stream_id_bidi;
         uint64_t next_stream_id_uni;
@@ -290,16 +297,14 @@ struct st_quicly_stream_t {
     } _recv_aux;
 };
 
-typedef struct st_quicly_decode_packet_t {
-    uint8_t first_byte;
-    uint64_t connection_id;
+typedef struct st_quicly_decoded_packet_t {
+    ptls_iovec_t octets;
     struct {
-        uint32_t bits;
-        uint32_t mask;
-    } packet_number;
+        ptls_iovec_t dest, src;
+    } cid;
     uint32_t version;
-    ptls_iovec_t header;
-    ptls_iovec_t payload;
+    size_t encrypted_off;
+    size_t datagram_size;
 } quicly_decoded_packet_t;
 
 #define QUICLY_RESET_STREAM_EGRESS 1
@@ -311,11 +316,15 @@ extern const quicly_context_t quicly_default_context;
 /**
  *
  */
-int quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, size_t len);
+size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, size_t len, size_t host_cidl);
 /**
  *
  */
-uint64_t quicly_determine_packet_number(quicly_decoded_packet_t *packet, uint64_t next_expected);
+uint64_t quicly_determine_packet_number(uint32_t bits, uint32_t mask, uint64_t next_expected);
+/**
+ *
+ */
+static int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec);
 /**
  *
  */
@@ -323,7 +332,15 @@ static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
 /**
  *
  */
-static uint64_t quicly_get_connection_id(quicly_conn_t *conn);
+static const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn);
+/**
+ *
+ */
+static const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn);
+/**
+ *
+ */
+static const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn);
 /**
  *
  */
@@ -363,16 +380,20 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn);
 /**
  *
  */
-quicly_raw_packet_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                     uint64_t connection_id);
+quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+                                                   ptls_iovec_t dest_cid, ptls_iovec_t src_cid);
 /**
  *
  */
-int quicly_send(quicly_conn_t *conn, quicly_raw_packet_t **packets, size_t *num_packets);
+int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_packets);
 /**
  *
  */
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet);
+/**
+ *
+ */
+int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid);
 /**
  *
  */
@@ -406,11 +427,11 @@ void quicly_close_stream(quicly_stream_t *stream);
 /**
  *
  */
-quicly_raw_packet_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
+quicly_datagram_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
 /**
  *
  */
-void quicly_default_free_packet(quicly_context_t *ctx, quicly_raw_packet_t *packet);
+void quicly_default_free_packet(quicly_context_t *ctx, quicly_datagram_t *packet);
 /**
  *
  */
@@ -427,6 +448,10 @@ int64_t quicly_default_now(quicly_context_t *ctx);
  *
  */
 void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/**
+ *
+ */
+char *quicly_hexdump(const uint8_t *bytes, size_t len, size_t indent);
 
 /* inline definitions */
 
@@ -442,16 +467,33 @@ inline uint32_t quicly_num_streams(quicly_conn_t *conn)
     return 1 + c->host.num_streams + c->peer.num_streams;
 }
 
+inline int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec)
+{
+    return cid->len == vec.len && memcmp(cid->cid, vec.base, vec.len) == 0;
+}
+
 inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->ctx;
 }
 
-inline uint64_t quicly_get_connection_id(quicly_conn_t *conn)
+inline const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return c->connection_id;
+    return &c->host.cid;
+}
+
+inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return &c->host.offered_cid;
+}
+
+inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return &c->peer.cid;
 }
 
 inline int quicly_is_client(quicly_conn_t *conn)

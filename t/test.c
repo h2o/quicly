@@ -85,9 +85,6 @@ static int64_t get_now(quicly_context_t *ctx);
 
 static ptls_iovec_t cert;
 static ptls_openssl_sign_certificate_t cert_signer;
-static ptls_context_t tls_ctx = {
-    ptls_openssl_random_bytes, &ptls_get_time, ptls_openssl_key_exchanges, ptls_openssl_cipher_suites, {&cert, 1}, NULL, NULL,
-    &cert_signer.super};
 
 int64_t quic_now;
 quicly_context_t quic_ctx;
@@ -97,20 +94,47 @@ static int64_t get_now(quicly_context_t *ctx)
     return quic_now;
 }
 
-void free_packets(quicly_raw_packet_t **packets, size_t cnt)
+static void test_pne(void)
+{
+    static const uint8_t cid[] = {0x69, 0xbd, 0xdf, 0xea, 0xac, 0x2c, 0xff, 0xd7},
+                         iv[] = {0x43, 0xd2, 0xad, 0x97, 0x34, 0x40, 0xe2, 0xd6, 0xae, 0xd2, 0x0c, 0xc9, 0xc9, 0x2c, 0x6f, 0x23},
+                         encrypted_pn[] = {0xa1, 0x66, 0x36, 0x27}, expected_pn[] = {0xc0, 0x00, 0x00, 0x00};
+    struct st_quicly_cipher_context_t ingress, egress;
+    uint8_t pn[sizeof(encrypted_pn)];
+    int ret;
+
+    ret = setup_initial_encryption(&ingress, &egress, ptls_openssl_cipher_suites, ptls_iovec_init(cid, sizeof(cid)), 0);
+    ok(ret == 0);
+    ptls_cipher_init(ingress.pne, iv);
+    ptls_cipher_encrypt(ingress.pne, pn, encrypted_pn, sizeof(encrypted_pn));
+    ok(memcmp(pn, expected_pn, sizeof(expected_pn)) == 0);
+
+    dispose_cipher(&ingress);
+    dispose_cipher(&egress);
+}
+
+void free_packets(quicly_datagram_t **packets, size_t cnt)
 {
     size_t i;
     for (i = 0; i != cnt; ++i)
         quicly_default_free_packet(&quic_ctx, packets[i]);
 }
 
-void decode_packets(quicly_decoded_packet_t *decoded, quicly_raw_packet_t **raw, size_t cnt)
+size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw, size_t cnt, size_t host_cidl)
 {
-    size_t i;
-    for (i = 0; i != cnt; ++i) {
-        int ret = quicly_decode_packet(decoded + i, raw[i]->data.base, raw[i]->data.len);
-        ok(ret == 0);
+    size_t ri, dc = 0;
+
+    for (ri = 0; ri != cnt; ++ri) {
+        size_t off = 0;
+        do {
+            size_t dl = quicly_decode_packet(decoded + dc, raw[ri]->data.base + off, raw[ri]->data.len - off, host_cidl);
+            assert(dl != SIZE_MAX);
+            ++dc;
+            off += dl;
+        } while (off != raw[ri]->data.len);
     }
+
+    return dc;
 }
 
 int on_update_noop(quicly_stream_t *stream)
@@ -140,25 +164,25 @@ int recvbuf_is(quicly_recvbuf_t *buf, const char *s)
 
 size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 {
-    quicly_raw_packet_t *packets[32];
-    size_t num_packets, i;
+    quicly_datagram_t *datagrams[32];
+    size_t num_datagrams, i;
     quicly_decoded_packet_t decoded[32];
     int ret;
 
-    num_packets = sizeof(packets) / sizeof(packets[0]);
-    ret = quicly_send(src, packets, &num_packets);
+    num_datagrams = sizeof(datagrams) / sizeof(datagrams[0]);
+    ret = quicly_send(src, datagrams, &num_datagrams);
     ok(ret == 0);
 
-    if (num_packets != 0) {
-        decode_packets(decoded, packets, num_packets);
+    if (num_datagrams != 0) {
+        size_t num_packets = decode_packets(decoded, datagrams, num_datagrams, quicly_is_client(dst) ? 0 : 8);
         for (i = 0; i != num_packets; ++i) {
             ret = quicly_receive(dst, decoded + i);
             ok(ret == 0);
         }
-        free_packets(packets, num_packets);
+        free_packets(datagrams, num_datagrams);
     }
 
-    return num_packets;
+    return num_datagrams;
 }
 
 int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
@@ -179,24 +203,23 @@ int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
 
 static void test_next_packet_number(void)
 {
-    quicly_decoded_packet_t d = {0};
-    uint64_t n;
-
-    d.packet_number.bits = 0xc0;
-    d.packet_number.mask = 0xff;
-
     /* prefer lower in case the distance in both directions are equal; see https://github.com/quicwg/base-drafts/issues/674 */
-    n = quicly_determine_packet_number(&d, 0x140);
+    uint64_t n = quicly_determine_packet_number(0xc0, 0xff, 0x140);
     ok(n == 0xc0);
-    n = quicly_determine_packet_number(&d, 0x141);
+    n = quicly_determine_packet_number(0xc0, 0xff, 0x141);
     ok(n == 0x1c0);
 }
 
 int main(int argc, char **argv)
 {
     quic_ctx = quicly_default_context;
-    quic_ctx.tls = &tls_ctx;
-    quic_ctx.max_concurrent_streams_bidi = 10;
+    quic_ctx.tls.random_bytes = ptls_openssl_random_bytes;
+    quic_ctx.tls.key_exchanges = ptls_openssl_key_exchanges;
+    quic_ctx.tls.cipher_suites = ptls_openssl_cipher_suites;
+    quic_ctx.tls.certificates.list = &cert;
+    quic_ctx.tls.certificates.count = 1;
+    quic_ctx.tls.sign_certificate = &cert_signer.super;
+    quic_ctx.max_streams_bidi = 10;
     quic_ctx.on_stream_open = on_stream_open_buffering;
     quic_ctx.now = get_now;
 
@@ -232,6 +255,7 @@ int main(int argc, char **argv)
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
     subtest("ack", test_ack);
+    subtest("pne", test_pne);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("loss", test_loss);
