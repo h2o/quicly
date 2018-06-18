@@ -58,7 +58,7 @@
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
-#define DEBUG_LOG(conn, stream_id, ...)                                                                                            \
+#define DEBUG__LOG(conn, stream_id_pat, stream_id_val, ...)                                                                        \
     do {                                                                                                                           \
         quicly_conn_t *_conn = (conn);                                                                                             \
         if (_conn->super.ctx->debug_log != NULL) {                                                                                 \
@@ -67,11 +67,13 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
             const quicly_cid_t *cid = is_client ? &conn->super.peer.cid : &conn->super.host.cid;                                   \
             char *cidhex = quicly_hexdump(cid->cid, cid->len, SIZE_MAX);                                                           \
             snprintf(buf, sizeof(buf), __VA_ARGS__);                                                                               \
-            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%s,%" PRId64 ": %s\n", is_client ? "client" : "server", cidhex,      \
-                                        (int64_t)(stream_id), buf);                                                                \
+            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%s," stream_id_pat ": %s\n", is_client ? "client" : "server",        \
+                                        cidhex, stream_id_val, buf);                                                               \
             free(cidhex);                                                                                                          \
         }                                                                                                                          \
     } while (0)
+#define DEBUG_CONN(conn, ...) DEBUG__LOG(conn, "%c", '-', __VA_ARGS__)
+#define DEBUG_STREAM(conn, stream_id, ...) DEBUG__LOG(conn, "%" PRId64, ((int64_t)stream_id), __VA_ARGS__)
 
 struct st_quicly_cipher_context_t {
     ptls_aead_context_t *aead;
@@ -509,13 +511,13 @@ static int crypto_hs_on_update(quicly_stream_t *flow)
         quicly_recvbuf_shift(&flow->recvbuf, input.len);
         switch (ret) {
         case 0:
-            DEBUG_LOG(conn, 0, "handshake complete");
+            DEBUG_CONN(conn, "handshake complete");
             break;
         case PTLS_ERROR_IN_PROGRESS:
             ret = 0;
             break;
         default:
-            DEBUG_LOG(conn, 0, "handshake error %d", ret);
+            DEBUG_CONN(conn, "handshake error %d", ret);
             goto Exit;
         }
     }
@@ -898,7 +900,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 {
     int ret;
 
-    DEBUG_LOG(stream->conn, stream->stream_id, "received; off=%" PRIu64 ",len=%zu", frame->offset, frame->data.len);
+    DEBUG_STREAM(stream->conn, stream->stream_id, "received; off=%" PRIu64 ",len=%zu", frame->offset, frame->data.len);
 
     if (frame->is_fin && (ret = quicly_recvbuf_mark_eos(&stream->recvbuf, frame->offset + frame->data.len)) != 0)
         return ret;
@@ -1457,8 +1459,8 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
     quicly_stream_t *stream;
     int ret;
 
-    DEBUG_LOG(conn, ack->data.stream.stream_id, "%s; off=%" PRIu64 ",len=%zu", acked ? "acked" : "lost",
-              ack->data.stream.args.start, (size_t)(ack->data.stream.args.end - ack->data.stream.args.start));
+    DEBUG_STREAM(conn, ack->data.stream.stream_id, "%s; off=%" PRIu64 ",len=%zu", acked ? "acked" : "lost",
+                 ack->data.stream.args.start, (size_t)(ack->data.stream.args.end - ack->data.stream.args.start));
 
     /* TODO cache pointer to stream (using a generation counter?) */
     if ((stream = quicly_get_stream(conn, ack->data.stream.stream_id)) == NULL)
@@ -1843,7 +1845,7 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
                                                    iter->stream_off + copysize >= stream->sendbuf.eos, iter->stream_off, &copysize);
     }
 
-    DEBUG_LOG(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
+    DEBUG_STREAM(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
 
     /* adjust remaining send window */
     if (stream->_send_aux.max_sent < iter->stream_off + copysize) {
@@ -1980,7 +1982,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     while ((ack = quicly_acks_get(&iter))->sent_at <= sent_before) {
         if (ack->packet_number != logged_pn) {
             logged_pn = ack->packet_number;
-            DEBUG_LOG(conn, 0, "RTO; packet-number: %" PRIu64, logged_pn);
+            DEBUG_CONN(conn, "RTO; packet-number: %" PRIu64, logged_pn);
         }
         if ((ret = ack->acked(conn, 0, ack)) != 0)
             return ret;
@@ -2109,7 +2111,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
     struct st_quicly_cipher_context_t *cipher_slot;
     int ret;
 
-    DEBUG_LOG(conn, 0, "%s: is_enc=%d,epoch=%zu", __FUNCTION__, is_enc, epoch);
+    DEBUG_CONN(conn, "%s: is_enc=%d,epoch=%zu", __FUNCTION__, is_enc, epoch);
 
     switch (epoch) {
     case 1: /* 0-RTT */
@@ -2489,7 +2491,7 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
 {
     /* set selected version */
     conn->super.version = version;
-    DEBUG_LOG(conn, 0, "switching version to %" PRIx32, version);
+    DEBUG_CONN(conn, "switching version to %" PRIx32, version);
 
     { /* reschedule the Initial packet for immediate resend */
         quicly_acks_t *acks = &conn->egress.acks;
@@ -2666,7 +2668,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, int64_t now, const 
                         free_handshake_space(&conn->handshake);
                         destroy_handshake_flow(conn, 2);
                     }
-                    DEBUG_LOG(conn, 0, "got handshake_done");
+                    DEBUG_CONN(conn, "got handshake_done");
                     break;
                 default:
                     fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)type_flags);
