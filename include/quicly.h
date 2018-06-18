@@ -201,14 +201,14 @@ struct _st_quicly_conn_public_t {
          */
         quicly_cid_t offered_cid;
         uint32_t num_streams;
-        uint64_t next_stream_id_bidi;
-        uint64_t next_stream_id_uni;
+        quicly_stream_id_t next_stream_id_bidi;
+        quicly_stream_id_t next_stream_id_uni;
     } host;
     struct {
         quicly_cid_t cid;
         uint32_t num_streams;
-        uint64_t next_stream_id_bidi;
-        uint64_t next_stream_id_uni;
+        quicly_stream_id_t next_stream_id_bidi;
+        quicly_stream_id_t next_stream_id_uni;
         struct sockaddr *sa;
         socklen_t salen;
         quicly_transport_parameters_t transport_params;
@@ -231,7 +231,7 @@ struct st_quicly_stream_t {
     /**
      * stream id
      */
-    uint64_t stream_id;
+    quicly_stream_id_t stream_id;
     /**
      * send buffer
      */
@@ -360,7 +360,7 @@ static int quicly_is_client(quicly_conn_t *conn);
 /**
  *
  */
-static uint64_t quicly_get_next_stream_id(quicly_conn_t *conn, int uni);
+static quicly_stream_id_t quicly_get_next_stream_id(quicly_conn_t *conn, int uni);
 /**
  *
  */
@@ -407,7 +407,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 /**
  *
  */
-quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint64_t stream_id);
+quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, quicly_stream_id_t stream_id);
 /**
  *
  */
@@ -502,7 +502,7 @@ inline int quicly_is_client(quicly_conn_t *conn)
     return (c->host.next_stream_id_bidi & 2) == 0;
 }
 
-inline uint64_t quicly_get_next_stream_id(quicly_conn_t *conn, int uni)
+inline quicly_stream_id_t quicly_get_next_stream_id(quicly_conn_t *conn, int uni)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return uni ? c->host.next_stream_id_uni : c->host.next_stream_id_bidi;
