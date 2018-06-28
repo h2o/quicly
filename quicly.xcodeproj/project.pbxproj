@@ -35,6 +35,7 @@
 		E984483E1EA48E7200390927 /* cli.c in Sources */ = {isa = PBXBuildFile; fileRef = E984483D1EA48E7200390927 /* cli.c */; };
 		E98448401EA48F6B00390927 /* quicly.h in Headers */ = {isa = PBXBuildFile; fileRef = E984483F1EA48F6800390927 /* quicly.h */; };
 		E98448421EA490A500390927 /* quicly.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448411EA490A500390927 /* quicly.c */; };
+		E98F4CBE20E5CF4000362F15 /* udpfw.c in Sources */ = {isa = PBXBuildFile; fileRef = E98F4CBC20E5CF3A00362F15 /* udpfw.c */; };
 		E99B75E71F5CF96900CF503E /* maxsender.c in Sources */ = {isa = PBXBuildFile; fileRef = E99B75E61F5CF96900CF503E /* maxsender.c */; };
 		E99B75E91F5D259400CF503E /* stream-concurrency.c in Sources */ = {isa = PBXBuildFile; fileRef = E99B75E81F5D259400CF503E /* stream-concurrency.c */; };
 		E99B75EB1F5D353A00CF503E /* maxsender.c in Sources */ = {isa = PBXBuildFile; fileRef = E99B75EA1F5D353A00CF503E /* maxsender.c */; };
@@ -67,6 +68,15 @@
 
 /* Begin PBXCopyFilesBuildPhase section */
 		E98448311EA48D6B00390927 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = /usr/share/man/man1/;
+			dstSubfolderSpec = 0;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		E98F4CB720E5CF1B00362F15 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = /usr/share/man/man1/;
@@ -112,6 +122,8 @@
 		E984483D1EA48E7200390927 /* cli.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = cli.c; sourceTree = "<group>"; };
 		E984483F1EA48F6800390927 /* quicly.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = quicly.h; sourceTree = "<group>"; };
 		E98448411EA490A500390927 /* quicly.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = quicly.c; sourceTree = "<group>"; };
+		E98F4CBB20E5CF1B00362F15 /* udpfw */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = udpfw; sourceTree = BUILT_PRODUCTS_DIR; };
+		E98F4CBC20E5CF3A00362F15 /* udpfw.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = udpfw.c; sourceTree = "<group>"; };
 		E99B75E61F5CF96900CF503E /* maxsender.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = maxsender.c; sourceTree = "<group>"; };
 		E99B75E81F5D259400CF503E /* stream-concurrency.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "stream-concurrency.c"; sourceTree = "<group>"; };
 		E99B75EA1F5D353A00CF503E /* maxsender.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = maxsender.c; sourceTree = "<group>"; };
@@ -152,6 +164,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E98F4CB620E5CF1B00362F15 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E9CC441D1EC195DF00DC7D3E /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -180,6 +199,7 @@
 				E98448171EA48BD400390927 /* libquicly.a */,
 				E98448331EA48D6B00390927 /* cli */,
 				E9CC44231EC195DF00DC7D3E /* test */,
+				E98F4CBB20E5CF1B00362F15 /* udpfw */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -284,6 +304,7 @@
 				E99B75E81F5D259400CF503E /* stream-concurrency.c */,
 				E9F6A4281F3C3B3F0083F0B2 /* test.h */,
 				E9CC44241EC1962700DC7D3E /* test.c */,
+				E98F4CBC20E5CF3A00362F15 /* udpfw.c */,
 			);
 			path = t;
 			sourceTree = "<group>";
@@ -390,6 +411,23 @@
 			productReference = E98448331EA48D6B00390927 /* cli */;
 			productType = "com.apple.product-type.tool";
 		};
+		E98F4C9D20E5CF1B00362F15 /* udpfw */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E98F4CB820E5CF1B00362F15 /* Build configuration list for PBXNativeTarget "udpfw" */;
+			buildPhases = (
+				E98F4C9E20E5CF1B00362F15 /* Sources */,
+				E98F4CB620E5CF1B00362F15 /* Frameworks */,
+				E98F4CB720E5CF1B00362F15 /* CopyFiles */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = udpfw;
+			productName = cli;
+			productReference = E98F4CBB20E5CF1B00362F15 /* udpfw */;
+			productType = "com.apple.product-type.tool";
+		};
 		E9CC44191EC195DF00DC7D3E /* test */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = E9CC44201EC195DF00DC7D3E /* Build configuration list for PBXNativeTarget "test" */;
@@ -440,6 +478,7 @@
 				E98448161EA48BD400390927 /* quicly */,
 				E98448321EA48D6B00390927 /* cli */,
 				E9CC44191EC195DF00DC7D3E /* test */,
+				E98F4C9D20E5CF1B00362F15 /* udpfw */,
 			);
 		};
 /* End PBXProject section */
@@ -472,6 +511,14 @@
 				E984483B1EA48DD300390927 /* openssl.c in Sources */,
 				E93E546A1F663851001C50FE /* pembase64.c in Sources */,
 				E984483C1EA48DD300390927 /* picotls.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E98F4C9E20E5CF1B00362F15 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E98F4CBE20E5CF4000362F15 /* udpfw.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -649,6 +696,28 @@
 			};
 			name = Release;
 		};
+		E98F4CB920E5CF1B00362F15 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				OTHER_LDFLAGS = (
+					"-L/usr/local/openssl-1.1.0/lib",
+					"-lcrypto",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		E98F4CBA20E5CF1B00362F15 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				OTHER_LDFLAGS = (
+					"-L/usr/local/openssl-1.1.0/lib",
+					"-lcrypto",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
 		E9CC44211EC195DF00DC7D3E /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -697,6 +766,15 @@
 			buildConfigurations = (
 				E98448381EA48D6B00390927 /* Debug */,
 				E98448391EA48D6B00390927 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E98F4CB820E5CF1B00362F15 /* Build configuration list for PBXNativeTarget "udpfw" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E98F4CB920E5CF1B00362F15 /* Debug */,
+				E98F4CBA20E5CF1B00362F15 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
