@@ -223,10 +223,11 @@ struct st_quicly_conn_t {
             size_t bytes_in_flight;
             uint64_t end_of_recovery;
             /**
-             * collected by on_ack_cc
+             * collected by on_ack_cc, number of packets / octets that have been newly acknowledged or declared lost
              */
             struct {
-                size_t nsegs, nbytes;
+                size_t nsegs;
+                size_t nbytes;
             } this_ack;
         } cc;
     } egress;
@@ -2068,6 +2069,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
         quicly_acks_release(&conn->egress.acks, &iter);
         quicly_acks_next(&iter);
     }
+    assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
     if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0)
         cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
@@ -2501,6 +2503,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     }
 
     /* update bytes in pipe */
+    assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
 
     /* loss-detection, as well as verifying  */
