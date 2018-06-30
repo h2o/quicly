@@ -60,7 +60,7 @@
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
-#define DEBUG_LOG(conn, stream_id, ...)                                                                                            \
+#define DEBUG__LOG(conn, stream_id_pat, stream_id_val, ...)                                                                        \
     do {                                                                                                                           \
         quicly_conn_t *_conn = (conn);                                                                                             \
         if (_conn->super.ctx->debug_log != NULL) {                                                                                 \
@@ -69,11 +69,13 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
             const quicly_cid_t *cid = is_client ? &conn->super.peer.cid : &conn->super.host.cid;                                   \
             char *cidhex = quicly_hexdump(cid->cid, cid->len, SIZE_MAX);                                                           \
             snprintf(buf, sizeof(buf), __VA_ARGS__);                                                                               \
-            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%s,%" PRIu64 ": %s\n", is_client ? "client" : "server", cidhex,      \
-                                        (uint64_t)(stream_id), buf);                                                               \
+            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%s," stream_id_pat ": %s\n", is_client ? "client" : "server",        \
+                                        cidhex, stream_id_val, buf);                                                               \
             free(cidhex);                                                                                                          \
         }                                                                                                                          \
     } while (0)
+#define DEBUG_CONN(conn, ...) DEBUG__LOG(conn, "%c", '-', __VA_ARGS__)
+#define DEBUG_STREAM(conn, stream_id, ...) DEBUG__LOG(conn, "%" PRId64, ((int64_t)stream_id), __VA_ARGS__)
 
 struct st_quicly_cipher_context_t {
     ptls_aead_context_t *aead;
@@ -192,11 +194,11 @@ struct st_quicly_conn_t {
         /**
          *
          */
-        uint64_t max_stream_id_bidi;
+        quicly_stream_id_t max_stream_id_bidi;
         /**
          *
          */
-        uint64_t max_stream_id_uni;
+        quicly_stream_id_t max_stream_id_uni;
         /**
          *
          */
@@ -430,14 +432,9 @@ Exit:
     return ret;
 }
 
-static inline int stream_is_handshake_flow(uint64_t stream_id, size_t max_epoch_inclusive)
-{
-    return stream_id >= UINT64_MAX - max_epoch_inclusive;
-}
-
 static void sched_stream_control(quicly_stream_t *stream)
 {
-    assert(!stream_is_handshake_flow(stream->stream_id, 3));
+    assert(stream->stream_id >= 0);
 
     if (!quicly_linklist_is_linked(&stream->_send_aux.pending_link.control))
         quicly_linklist_insert(&stream->conn->pending_link.control, &stream->_send_aux.pending_link.control);
@@ -447,8 +444,8 @@ static void resched_stream_data(quicly_stream_t *stream)
 {
     quicly_linklist_t *target = NULL;
 
-    if (stream_is_handshake_flow(stream->stream_id, 2)) {
-        uint8_t mask = 1 << (UINT64_MAX - stream->stream_id);
+    if (stream->stream_id < 0 && -3 <= stream->stream_id) {
+        uint8_t mask = 1 << -(1 + stream->stream_id);
         if (stream->sendbuf.pending.num_ranges != 0) {
             stream->conn->crypto.pending_flows |= mask;
         } else {
@@ -478,8 +475,8 @@ static void resched_stream_data(quicly_stream_t *stream)
 
 static int stream_id_blocked(quicly_conn_t *conn, int uni)
 {
-    uint64_t *next_id = uni ? &conn->super.host.next_stream_id_uni : &conn->super.host.next_stream_id_bidi,
-             *max_id = uni ? &conn->egress.max_stream_id_uni : &conn->egress.max_stream_id_bidi;
+    quicly_stream_id_t *next_id = uni ? &conn->super.host.next_stream_id_uni : &conn->super.host.next_stream_id_bidi,
+                       *max_id = uni ? &conn->egress.max_stream_id_uni : &conn->egress.max_stream_id_bidi;
     return *next_id > *max_id;
 }
 
@@ -492,7 +489,7 @@ static int should_update_max_stream_data(quicly_stream_t *stream)
 static void on_sendbuf_change(quicly_sendbuf_t *buf)
 {
     quicly_stream_t *stream = (void *)((char *)buf - offsetof(quicly_stream_t, sendbuf));
-    assert(!stream_is_handshake_flow(stream->stream_id, 3) || buf->eos == UINT64_MAX);
+    assert(stream->stream_id >= 0 || buf->eos == UINT64_MAX);
 
     resched_stream_data(stream);
 }
@@ -501,7 +498,7 @@ static void on_recvbuf_change(quicly_recvbuf_t *buf, size_t shift_amount)
 {
     quicly_stream_t *stream = (void *)((char *)buf - offsetof(quicly_stream_t, recvbuf));
 
-    if (!stream_is_handshake_flow(stream->stream_id, 3)) {
+    if (stream->stream_id >= 0) {
         stream->conn->ingress.max_data.bytes_consumed += shift_amount;
         if (should_update_max_stream_data(stream))
             sched_stream_control(stream);
@@ -535,7 +532,7 @@ static void write_tlsbuf(quicly_conn_t *conn, ptls_buffer_t *tlsbuf, size_t epoc
         size_t len = epoch_offsets[epoch + 1] - epoch_offsets[epoch];
         if (len == 0)
             continue;
-        quicly_stream_t *stream = quicly_get_stream(conn, UINT64_MAX - epoch);
+        quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
         assert(stream != NULL);
         quicly_sendbuf_write(&stream->sendbuf, tlsbuf->base + epoch_offsets[epoch], len, NULL);
     }
@@ -545,7 +542,7 @@ static int crypto_hs_on_update(quicly_stream_t *flow)
 {
     quicly_conn_t *conn = flow->conn;
     ptls_buffer_t buf;
-    size_t in_epoch = UINT64_MAX - flow->stream_id, epoch_offsets[5] = {0};
+    size_t in_epoch = -(1 + flow->stream_id), epoch_offsets[5] = {0};
     ptls_iovec_t input;
     int ret = 0;
 
@@ -558,13 +555,13 @@ static int crypto_hs_on_update(quicly_stream_t *flow)
         quicly_recvbuf_shift(&flow->recvbuf, input.len);
         switch (ret) {
         case 0:
-            DEBUG_LOG(conn, 0, "handshake complete");
+            DEBUG_CONN(conn, "handshake complete");
             break;
         case PTLS_ERROR_IN_PROGRESS:
             ret = 0;
             break;
         default:
-            DEBUG_LOG(conn, 0, "handshake error %d", ret);
+            DEBUG_CONN(conn, "handshake error %d", ret);
             goto Exit;
         }
     }
@@ -632,8 +629,8 @@ static void destroy_stream(quicly_stream_t *stream)
     assert(iter != kh_end(conn->streams));
     kh_del(quicly_stream_t, conn->streams, iter);
 
-    if (stream_is_handshake_flow(stream->stream_id, 3)) {
-        uint64_t epoch = UINT64_MAX - stream->stream_id;
+    if (stream->stream_id < 0) {
+        size_t epoch = -(1 + stream->stream_id);
         if (epoch <= 2)
             stream->conn->crypto.pending_flows &= ~(uint8_t)(1 << epoch);
     } else {
@@ -649,7 +646,7 @@ static void destroy_stream(quicly_stream_t *stream)
     conn->super.ctx->free_stream(stream);
 }
 
-quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, uint64_t stream_id)
+quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, quicly_stream_id_t stream_id)
 {
     khiter_t iter = kh_get(quicly_stream_t, conn->streams, stream_id);
     if (iter != kh_end(conn->streams))
@@ -671,7 +668,7 @@ static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
 {
     quicly_stream_t *stream;
 
-    if ((stream = open_stream(conn, UINT64_MAX - epoch)) == NULL)
+    if ((stream = open_stream(conn, -(1 + epoch))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     stream->on_update = crypto_hs_on_update;
@@ -685,7 +682,7 @@ static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
         return;
     }
 
-    quicly_stream_t *stream = quicly_get_stream(conn, UINT64_MAX - epoch);
+    quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
     assert(stream != NULL);
     destroy_stream(stream);
     retire_acks(conn, SIZE_MAX, epoch);
@@ -948,7 +945,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 {
     int ret;
 
-    DEBUG_LOG(stream->conn, stream->stream_id, "received; off=%" PRIu64 ",len=%zu", frame->offset, frame->data.len);
+    DEBUG_STREAM(stream->conn, stream->stream_id, "received; off=%" PRIu64 ",len=%zu", frame->offset, frame->data.len);
 
     if (frame->is_fin && (ret = quicly_recvbuf_mark_eos(&stream->recvbuf, frame->offset + frame->data.len)) != 0)
         return ret;
@@ -962,7 +959,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 
 static int apply_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_stream_frame_t *frame)
 {
-    quicly_stream_t *stream = quicly_get_stream(conn, UINT64_MAX - epoch);
+    quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
     int ret;
 
     assert(stream != NULL);
@@ -1510,8 +1507,8 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
     quicly_stream_t *stream;
     int ret;
 
-    DEBUG_LOG(conn, ack->data.stream.stream_id, "%s; off=%" PRIu64 ",len=%zu", acked ? "acked" : "lost",
-              ack->data.stream.args.start, (size_t)(ack->data.stream.args.end - ack->data.stream.args.start));
+    DEBUG_STREAM(conn, ack->data.stream.stream_id, "%s; off=%" PRIu64 ",len=%zu", acked ? "acked" : "lost",
+                 ack->data.stream.args.start, (size_t)(ack->data.stream.args.end - ack->data.stream.args.start));
 
     /* TODO cache pointer to stream (using a generation counter?) */
     if ((stream = quicly_get_stream(conn, ack->data.stream.stream_id)) == NULL)
@@ -1915,18 +1912,18 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
         return ret;
 
     copysize = max_bytes - (iter->stream_off + max_bytes > stream->sendbuf.eos);
-    if (stream_is_handshake_flow(stream->stream_id, 3)) {
+    if (stream->stream_id < 0) {
         s->dst = quicly_encode_crypto_hs_frame_header(s->dst, s->dst_end, iter->stream_off, &copysize);
     } else {
         s->dst = quicly_encode_stream_frame_header(s->dst, s->dst_end, stream->stream_id,
                                                    iter->stream_off + copysize >= stream->sendbuf.eos, iter->stream_off, &copysize);
     }
 
-    DEBUG_LOG(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
+    DEBUG_STREAM(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
 
     /* adjust remaining send window */
     if (stream->_send_aux.max_sent < iter->stream_off + copysize) {
-        if (!stream_is_handshake_flow(stream->stream_id, 3)) {
+        if (stream->stream_id >= 0) {
             uint64_t delta = iter->stream_off + copysize - stream->_send_aux.max_sent;
             assert(stream->conn->egress.max_data.sent + delta <= stream->conn->egress.max_data.permitted);
             stream->conn->egress.max_data.sent += delta;
@@ -1957,8 +1954,7 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
         max_stream_data = stream->sendbuf.eos + 1;
     } else {
         uint64_t delta = stream->_send_aux.max_stream_data - stream->_send_aux.max_sent;
-        if (!stream_is_handshake_flow(stream->stream_id, 3) &&
-            stream->conn->egress.max_data.permitted - stream->conn->egress.max_data.sent < delta)
+        if (stream->stream_id >= 0 && stream->conn->egress.max_data.permitted - stream->conn->egress.max_data.sent < delta)
             delta = (uint64_t)(stream->conn->egress.max_data.permitted - stream->conn->egress.max_data.sent);
         max_stream_data = stream->_send_aux.max_sent + delta;
         if (max_stream_data == stream->sendbuf.eos)
@@ -2003,7 +1999,7 @@ ShrinkRanges:
 
 static inline int ack_is_handshake_flow(quicly_ack_t *ack, size_t epoch)
 {
-    return ack->acked == on_ack_stream && ack->data.stream.stream_id == UINT64_MAX - epoch;
+    return ack->acked == on_ack_stream && ack->data.stream.stream_id == -(1 + epoch);
 }
 
 int retire_acks(quicly_conn_t *conn, size_t count, size_t epoch)
@@ -2025,7 +2021,7 @@ int retire_acks(quicly_conn_t *conn, size_t count, size_t epoch)
         if (epoch != SIZE_MAX) {
             if (ack_is_handshake_flow(ack, epoch)) {
                 skip = 0;
-            } else if (epoch == 1 && (ack->acked == on_ack_stream && !stream_is_handshake_flow(ack->data.stream.stream_id, 3))) {
+            } else if (epoch == 1 && (ack->acked == on_ack_stream && ack->data.stream.stream_id >= 0)) {
                 /* NACK all application data upon 0-RTT denial */
                 skip = 0;
             } else {
@@ -2062,7 +2058,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     while ((ack = quicly_acks_get(&iter))->sent_at <= sent_before) {
         if (ack->packet_number != logged_pn) {
             logged_pn = ack->packet_number;
-            DEBUG_LOG(conn, 0, "RTO; packet-number: %" PRIu64, logged_pn);
+            DEBUG_CONN(conn, "RTO; packet-number: %" PRIu64, logged_pn);
         }
         if ((ret = ack->acked(conn, 0, ack)) != 0)
             return ret;
@@ -2177,7 +2173,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
 
     /* send data */
     if ((conn->crypto.pending_flows & (uint8_t)(1 << epoch)) != 0) {
-        quicly_stream_t *stream = quicly_get_stream(conn, UINT64_MAX - epoch);
+        quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
         assert(stream != NULL);
         if ((ret = send_stream_data(stream, s)) != 0)
             goto Exit;
@@ -2195,7 +2191,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
     struct st_quicly_cipher_context_t *cipher_slot;
     int ret;
 
-    DEBUG_LOG(conn, 0, "%s: is_enc=%d,epoch=%zu", __FUNCTION__, is_enc, epoch);
+    DEBUG_CONN(conn, "%s: is_enc=%d,epoch=%zu", __FUNCTION__, is_enc, epoch);
 
     switch (epoch) {
     case 1: /* 0-RTT */
@@ -2555,7 +2551,8 @@ static int handle_stream_blocked_frame(quicly_conn_t *conn, quicly_stream_blocke
 
 static int handle_max_stream_id_frame(quicly_conn_t *conn, quicly_max_stream_id_frame_t *frame)
 {
-    uint64_t *slot = STREAM_IS_UNI(frame->max_stream_id) ? &conn->egress.max_stream_id_uni : &conn->egress.max_stream_id_bidi;
+    quicly_stream_id_t *slot =
+        STREAM_IS_UNI(frame->max_stream_id) ? &conn->egress.max_stream_id_uni : &conn->egress.max_stream_id_bidi;
     if (frame->max_stream_id < *slot)
         return 0;
     *slot = frame->max_stream_id;
@@ -2594,7 +2591,7 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
 {
     /* set selected version */
     conn->super.version = version;
-    DEBUG_LOG(conn, 0, "switching version to %" PRIx32, version);
+    DEBUG_CONN(conn, "switching version to %" PRIx32, version);
 
     { /* reschedule the Initial packet for immediate resend */
         quicly_acks_t *acks = &conn->egress.acks;
@@ -2771,7 +2768,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, int64_t now, const 
                         free_handshake_space(&conn->handshake);
                         destroy_handshake_flow(conn, 2);
                     }
-                    DEBUG_LOG(conn, 0, "got handshake_done");
+                    DEBUG_CONN(conn, "got handshake_done");
                     break;
                 default:
                     fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)type_flags);

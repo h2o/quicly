@@ -23,6 +23,7 @@
 #define quicly_constants_h
 
 #include <stddef.h>
+#include <stdint.h>
 
 #define QUICLY_DELAYED_ACK_TIMEOUT 25 /* milliseconds */
 
@@ -52,5 +53,7 @@
 #define QUICLY_ERROR_VERSION_NEGOTIATION_FAILURE QUICLY_INTERNAL_ERROR_CODE(7)
 
 #define QUICLY_BUILD_ASSERT(condition) ((void)sizeof(char[2 * !!(!__builtin_constant_p(condition) || (condition)) - 1]))
+
+typedef int64_t quicly_stream_id_t;
 
 #endif
