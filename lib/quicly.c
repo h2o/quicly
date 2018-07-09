@@ -1736,7 +1736,7 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
-static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
+static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, int to_be_acked)
 {
     int coalescible, ret;
 
@@ -1779,6 +1779,8 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
     } else {
         if (s->num_packets >= s->max_packets)
             return QUICLY_ERROR_SENDBUF_FULL;
+        if (to_be_acked && s->send_window < min_space)
+            return QUICLY_ERROR_SENDBUF_FULL;
         if ((s->target.packet =
                  conn->super.ctx->alloc_packet(conn->super.ctx, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
@@ -1812,20 +1814,22 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
     return 0;
 }
 
+static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
+{
+    return _do_prepare_packet(conn, s, min_space, 0);
+}
+
 static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, quicly_ack_t **ack,
                                 quicly_ack_cb ack_cb)
 {
     int ret;
 
-    if ((ret = prepare_packet(conn, s, min_space)) != 0)
+    if ((ret = _do_prepare_packet(conn, s, min_space, 1)) != 0)
         return ret;
-    /* FIXME move the window size check into prepare_packet to avoid sending an empty QUIC packet */
-    /* TODO return the remaining window that the sender can use */
-    if (s->send_window < (s->dst - s->target.packet->data.base) + min_space)
-        return QUICLY_ERROR_SENDBUF_FULL;
     if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, ack_cb)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
+    /* TODO return the remaining window that the sender can use */
     return ret;
 }
 
