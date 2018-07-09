@@ -2468,7 +2468,10 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 {
     quicly_acks_iter_t iter;
     uint64_t packet_number = frame->smallest_acknowledged;
-    int64_t last_packet_sent_at = INT64_MAX;
+    struct {
+        uint64_t packet_number;
+        int64_t sent_at;
+    } largest_newly_acked = {UINT64_MAX, INT64_MAX};
     int ret;
 
     if (epoch == 1)
@@ -2489,8 +2492,10 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                 quicly_ack_t *ack;
                 if ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
                     int apply = epoch == 3 || ack_is_handshake_flow(ack, epoch);
-                    if (apply)
-                        last_packet_sent_at = ack->sent_at;
+                    if (apply) {
+                        largest_newly_acked.packet_number = packet_number;
+                        largest_newly_acked.sent_at = ack->sent_at;
+                    }
                     do {
                         if (apply) {
                             if ((ret = ack->acked(conn, 1, ack)) != 0)
@@ -2513,10 +2518,13 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
 
     /* loss-detection, as well as verifying  */
-    quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged,
-                                last_packet_sent_at <= now && packet_number >= frame->largest_acknowledged
-                                    ? (uint32_t)(now - last_packet_sent_at)
-                                    : UINT32_MAX);
+    uint32_t latest_rtt = UINT32_MAX;
+    if (largest_newly_acked.packet_number == frame->largest_acknowledged && largest_newly_acked.sent_at <= now) {
+        uint64_t t = now - largest_newly_acked.sent_at;
+        if (t < 100000) /* ignore RTT above 100 seconds */
+            latest_rtt = (uint32_t)t;
+    }
+    quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt);
     int rto_verified = quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged);
     quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
     quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.acks.head != NULL);
