@@ -2011,6 +2011,9 @@ int retire_acks(quicly_conn_t *conn, size_t count, size_t epoch)
 
     assert(count != 0);
 
+    conn->egress.cc.this_ack.nsegs = 0;
+    conn->egress.cc.this_ack.nbytes = 0;
+
     quicly_acks_init_iter(&conn->egress.acks, &iter);
     ack = quicly_acks_get(&iter);
 
@@ -2037,6 +2040,9 @@ int retire_acks(quicly_conn_t *conn, size_t count, size_t epoch)
             quicly_acks_next(&iter);
         } while ((ack = quicly_acks_get(&iter))->packet_number == pn);
     } while (--count != 0);
+
+    assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
+    conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
 
     return 0;
 }
