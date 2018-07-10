@@ -229,6 +229,7 @@ struct st_quicly_conn_t {
             struct cc_var ccv;
             size_t bytes_in_flight;
             uint64_t end_of_recovery;
+            unsigned in_first_rto : 1;
             /**
              * collected by on_ack_cc, number of packets / octets that have been newly acknowledged or declared lost
              */
@@ -2124,8 +2125,9 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     }
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
-    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0 && (conn->egress.cc.ccv.ccvc.ccv.t_flags & CC_TF_RETRANSMIT) == 0) {
+    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0 && !conn->egress.cc.in_first_rto) {
         fprintf(stderr, "cc_cong_signal(CC_FIRST_RTO)\n");
+        conn->egress.cc.in_first_rto = 1;
         cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
     }
 
@@ -2592,15 +2594,15 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
             latest_rtt = (uint32_t)t;
     }
     quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt);
-    { /* OnPacketAckedCC */
-        uint8_t prev_rto_count = conn->egress.loss.rto_count;
-        if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
-            fprintf(stderr, "cc_cong_signal(CC_RTO)\n");
-            cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
-        } else if (prev_rto_count != 0) {
-            fprintf(stderr, "cc_cong_signal(CC_RTO_ERR)\n");
-            cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
-        }
+    /* OnPacketAckedCC */
+    if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
+        fprintf(stderr, "cc_cong_signal(CC_RTO)\n");
+        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
+        conn->egress.cc.in_first_rto = 0;
+    } else if (conn->egress.cc.in_first_rto) {
+        fprintf(stderr, "cc_cong_signal(CC_RTO_ERR)\n");
+        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
+        conn->egress.cc.in_first_rto = 0;
     }
     fprintf(stderr, "cc_ack_received: segs:%zu, bytes: %zu, bytes_in_pipe: %" PRIu32 ", cwnd: %" PRIu32 " -> ", conn->egress.cc.this_ack.nsegs, conn->egress.cc.this_ack.nbytes, bytes_in_pipe, cc_get_cwnd(&conn->egress.cc.ccv));
     cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_pipe,
