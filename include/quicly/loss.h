@@ -132,8 +132,12 @@ inline void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, u
     rtt->variance = rtt->latest / 2;
 }
 
+#include <stdio.h>
+#include <inttypes.h>
+
 inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest)
 {
+fprintf(stderr, "latest-rtt: %" PRIu32 "\n", latest);
     rtt->latest = latest;
     if (rtt->smoothed == 0) {
         rtt->smoothed = latest;

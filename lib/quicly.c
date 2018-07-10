@@ -2297,6 +2297,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
 
 int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_packets)
 {
+    fprintf(stderr, "srtt: %" PRIu32 ", bytes-in-flight: %zu, cwnd: %" PRIu32 "\n", conn->egress.loss.rtt.smoothed,
+            conn->egress.cc.bytes_in_flight, cc_get_cwnd(&conn->egress.cc.ccv));
     struct st_quicly_send_context_t s = {
         {NULL, -1}, {NULL, NULL, NULL}, conn->super.ctx->now(conn->super.ctx), packets, *num_packets};
     int ret;
@@ -2571,8 +2573,11 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 
     /* loss-detection, as well as verifying  */
     uint32_t latest_rtt = UINT32_MAX;
+    fprintf(stderr, "largest_newly_acked: %" PRIu64 ", frame->largest_acknowledged: %" PRIu64 "\n",
+            largest_newly_acked.packet_number, frame->largest_acknowledged);
     if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
         uint64_t ack_delay = ((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000;
+        fprintf(stderr, "ack delay: %" PRIu64 "\n", ack_delay);
         int64_t t = now - largest_newly_acked.sent_at - ack_delay;
         if (0 <= t && t < 100000) /* ignore RTT above 100 seconds */
             latest_rtt = (uint32_t)t;
