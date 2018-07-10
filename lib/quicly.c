@@ -1665,7 +1665,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     if (conn->super.state == QUICLY_STATE_DRAINING)
         return INT64_MAX;
 
-    if (1 /* CWND is not full (TODO) */) {
+    if (conn->egress.cc.bytes_in_flight < cc_get_cwnd(&conn->egress.cc.ccv)) {
         if (conn->crypto.pending_flows != 0 || conn->egress.send_handshake_done ||
             quicly_linklist_is_linked(&conn->pending_link.control) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_fin_only) ||
