@@ -1505,6 +1505,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     }
     conn->crypto.handshake_properties.server.cookie.key = ctx->stateless_retry.key;
 
+    ++conn->super.num_packets.received;
     assert(conn->initial->super.send_ack_at == INT64_MAX);
     if ((ret = record_receipt(&conn->initial->super, pn, 0, conn->super.ctx->now(conn->super.ctx))) != 0)
         goto Exit;
@@ -1749,6 +1750,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
     ++conn->egress.packet_number;
+    ++conn->super.num_packets.sent;
 
     if (!coalesced) {
         s->packets[s->num_packets++] = s->target.packet;
@@ -2110,6 +2112,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     conn->egress.cc.this_ack.nbytes = 0;
     while ((ack = quicly_acks_get(&iter))->sent_at <= sent_before) {
         if (ack->packet_number != logged_pn) {
+            ++conn->super.num_packets.lost;
             logged_pn = ack->packet_number;
             DEBUG_CONN(conn, "RTO; packet-number: %" PRIu64, logged_pn);
         }
@@ -2948,6 +2951,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 
     if ((ret = handle_payload(conn, epoch, now, payload.base, payload.len, &is_ack_only)) != 0)
         goto Exit;
+    ++conn->super.num_packets.received;
 
     if (*space != NULL) {
         if ((ret = record_receipt(*space, pn, is_ack_only, now)) != 0)
