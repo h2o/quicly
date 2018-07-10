@@ -25,6 +25,7 @@
 #include <inttypes.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +58,8 @@ struct queue_t {
     } ring;
     int64_t interval_usec;
     int64_t congested_until; /* in usec */
+    uint64_t num_forwarded;
+    uint64_t num_dropped;
 } up = {{16}, 10}, down = {{16}, 10};
 
 static int listen_fd = -1;
@@ -164,7 +167,7 @@ static void emit_queue(struct queue_t *q, int up, int64_t now)
         sendto(listen_fd, q->ring.elements[q->ring.head].data, q->ring.elements[q->ring.head].len, 0,
                (void *)&q->ring.elements[q->ring.head].conn->down_addr.ss, q->ring.elements[q->ring.head].conn->down_addr.len);
     }
-fprintf(stderr, "%" PRId64 ":%zu:%c:forward\n", now, q->ring.elements[q->ring.head].conn->cid, up ? 'u' : 'd');
+    fprintf(stderr, "%" PRId64 ":%zu:%c:forward\n", now, q->ring.elements[q->ring.head].conn->cid, up ? 'u' : 'd');
     q->ring.head = (q->ring.head + 1) % q->ring.depth;
     q->congested_until = now + q->interval_usec;
 }
@@ -186,17 +189,35 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
     fprintf(stderr, "%" PRId64 ":%zu:%c:", now, q->ring.elements[q->ring.tail].conn->cid, conn != NULL ? 'd' : 'u');
     if (next_tail != q->ring.head) {
         q->ring.tail = next_tail;
+        ++q->num_forwarded;
         fprintf(stderr, "queue\n");
     } else {
+        ++q->num_dropped;
         fprintf(stderr, "drop\n");
     }
 
     return 1;
 }
 
+static void on_signal(int signo)
+{
+    fprintf(stderr, "up:\n"
+                    "  forwarded: %" PRIu64 "\n"
+                    "  dropped: %" PRIu64 "\n"
+                    "down:\n"
+                    "  forwarded: %" PRIu64 "\n"
+                    "  dropped: %" PRIu64 "\n",
+            up.num_forwarded, up.num_dropped, down.num_forwarded, down.num_dropped);
+    if (signo == SIGINT)
+        _exit(0);
+}
+
 int main(int argc, char **argv)
 {
     int ch;
+
+    signal(SIGINT, on_signal);
+    signal(SIGHUP, on_signal);
 
     while ((ch = getopt(argc, argv, "d:D:i:I:l:h")) != -1) {
         switch (ch) {
