@@ -2124,7 +2124,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     }
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
-    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0) {
+    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0 && (conn->egress.cc.ccv.ccvc.ccv.t_flags & CC_TF_RETRANSMIT) == 0) {
         fprintf(stderr, "cc_cong_signal(CC_FIRST_RTO)\n");
         cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
     }
