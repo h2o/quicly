@@ -2312,6 +2312,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         break;
     }
 
+    { /* calculate send window */
+        uint32_t cwnd = cc_get_cwnd(&conn->egress.cc.ccv);
+        if (conn->egress.cc.bytes_in_flight < cwnd)
+            s.send_window = cwnd - conn->egress.cc.bytes_in_flight;
+    }
+
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= s.now) {
         size_t min_packets_to_send;
@@ -2324,10 +2330,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             s.max_packets = min_packets_to_send;
             if ((ret = retire_acks(conn, min_packets_to_send, SIZE_MAX)) != 0)
                 goto Exit;
+            if (s.send_window < min_packets_to_send * conn->super.ctx->max_packet_size)
+                s.send_window = min_packets_to_send * conn->super.ctx->max_packet_size;
         }
     }
-
-    s.send_window = cc_get_cwnd(&conn->egress.cc.ccv);
 
     { /* send handshake flows */
         size_t epoch;
