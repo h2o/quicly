@@ -53,6 +53,10 @@ ADD_EXECUTABLE(udpfw t/udpfw.c)
 
 ADD_CUSTOM_TARGET(check prove --exec "sh -c" -v ./*.t DEPENDS test.t)
 
+IF (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+     SET(CMAKE_C_FLAGS "-D_GNU_SOURCE ${CMAKE_C_FLAGS}")
+ENDIF ()
+
 IF (BUILD_FUZZER)
     IF(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         MESSAGE(FATAL_ERROR "The fuzzer needs clang as a compiler")

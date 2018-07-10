@@ -38,7 +38,10 @@ struct connection_t {
     struct connection_t *prev, *next;
     size_t cid;
     int up_fd;
-    struct sockaddr_storage down_addr;
+    struct {
+        struct sockaddr_storage ss;
+        socklen_t len;
+    } down_addr;
 };
 
 struct queue_t {
@@ -95,15 +98,15 @@ static int new_socket(int sin_family)
     return s;
 }
 
-static struct connection_t *find_or_create_connection(struct sockaddr *sa)
+static struct connection_t *find_or_create_connection(struct sockaddr *sa, socklen_t salen)
 {
     struct connection_t *c;
     static size_t cid;
 
     for (c = connections.next; c != &connections; c = c->next) {
-        if (c->down_addr.ss_family != sa->sa_family)
+        if (c->down_addr.ss.ss_family != sa->sa_family)
             continue;
-        switch (c->down_addr.ss_family) {
+        switch (c->down_addr.ss.ss_family) {
         case AF_INET: {
             struct sockaddr_in *x = (void *)&c->down_addr, *y = (void *)sa;
             if (!(memcmp(&x->sin_addr, &y->sin_addr, sizeof(x->sin_addr)) == 0 && x->sin_port == y->sin_port))
@@ -130,7 +133,8 @@ static struct connection_t *find_or_create_connection(struct sockaddr *sa)
         fprintf(stderr, "failed to connect to server:%s\n", strerror(errno));
         exit(1);
     }
-    memcpy(&c->down_addr, sa, sa->sa_len);
+    memcpy(&c->down_addr.ss, sa, salen);
+    c->down_addr.len = salen;
     c->prev = connections.prev;
     c->next = &connections;
     connections.prev = c;
@@ -158,7 +162,7 @@ static void emit_queue(struct queue_t *q, int up, int64_t now)
              0);
     } else {
         sendto(listen_fd, q->ring.elements[q->ring.head].data, q->ring.elements[q->ring.head].len, 0,
-               (void *)&q->ring.elements[q->ring.head].conn->down_addr, q->ring.elements[q->ring.head].conn->down_addr.ss_len);
+               (void *)&q->ring.elements[q->ring.head].conn->down_addr.ss, q->ring.elements[q->ring.head].conn->down_addr.len);
     }
 fprintf(stderr, "%" PRId64 ":%zu:%c:forward\n", now, q->ring.elements[q->ring.head].conn->cid, up ? 'u' : 'd');
     q->ring.head = (q->ring.head + 1) % q->ring.depth;
@@ -177,7 +181,7 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
         return 0;
 
     q->ring.elements[q->ring.tail].len = readlen;
-    q->ring.elements[q->ring.tail].conn = conn != NULL ? conn : find_or_create_connection((void *)&ss);
+    q->ring.elements[q->ring.tail].conn = conn != NULL ? conn : find_or_create_connection((void *)&ss, sslen);
     size_t next_tail = (q->ring.tail + 1) % q->ring.depth;
     fprintf(stderr, "%" PRId64 ":%zu:%c:", now, q->ring.elements[q->ring.tail].conn->cid, conn != NULL ? 'd' : 'u');
     if (next_tail != q->ring.head) {
@@ -223,7 +227,7 @@ int main(int argc, char **argv)
         case 'l': { /* listen port */
             struct sockaddr_in sin;
             uint16_t port;
-            if (sscanf(optarg, "%" PRIu16, &port) != 1) {
+            if (sscanf(optarg, "%" SCNu16, &port) != 1) {
                 fprintf(stderr, "argument to `-l` must be a port number\n");
                 exit(1);
             }

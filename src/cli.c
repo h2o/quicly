@@ -19,10 +19,6 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef _XOPEN_SOURCE
-#define _XOPEN_SOURCE 700 /* required for glibc to use getaddrinfo, etc. */
-#endif
-
 #include <getopt.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -30,6 +26,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
 #include "quicly.h"
 #include "../deps/picotls/t/util.h"
 
