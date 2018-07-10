@@ -280,8 +280,8 @@ const quicly_context_t quicly_default_context = {
      NULL, &update_traffic_key}, /* tls */
     1280,                        /* max_packet_size */
     &quicly_loss_default_conf,   /* loss */
-    16384,                       /* initial_max_stream_data */
-    65536,                       /* initial_max_data */
+    16 * 1024 * 1024,            /* initial_max_stream_data */
+    16 * 1024 * 1024,            /* initial_max_data */
     600,                         /* idle_timeout */
     100,                         /* max_concurrent_streams_bidi */
     0,                           /* max_concurrent_streams_uni */
