@@ -2592,12 +2592,12 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
             latest_rtt = (uint32_t)t;
     }
     quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt);
-    /* OnPacketAckedCC */
-    if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
-        fprintf(stderr, "cc_cong_signal(CC_RTO)\n");
-        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
-    } else {
-        if ((conn->egress.cc.ccv.ccvc.ccv.t_flags & CC_TF_PREVVALID) != 0) {
+    { /* OnPacketAckedCC */
+        uint8_t prev_rto_count = conn->egress.loss.rto_count;
+        if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
+            fprintf(stderr, "cc_cong_signal(CC_RTO)\n");
+            cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
+        } else if (prev_rto_count != 0) {
             fprintf(stderr, "cc_cong_signal(CC_RTO_ERR)\n");
             cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
         }
