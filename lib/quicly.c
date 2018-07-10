@@ -229,6 +229,7 @@ struct st_quicly_conn_t {
             struct cc_var ccv;
             size_t bytes_in_flight;
             uint64_t end_of_recovery;
+            unsigned in_first_rto : 1;
             /**
              * collected by on_ack_cc, number of packets / octets that have been newly acknowledged or declared lost
              */
@@ -2124,8 +2125,10 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     }
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
-    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0)
+    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0 && !conn->egress.cc.in_first_rto) {
+        conn->egress.cc.in_first_rto = 1;
         cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
+    }
 
     /* schedule next alarm */
     *loss_time = ack->sent_at == INT64_MAX ? INT64_MAX : ack->sent_at + delay_until_lost;
@@ -2521,6 +2524,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 {
     quicly_acks_iter_t iter;
     uint64_t packet_number = frame->smallest_acknowledged;
+    uint32_t bytes_in_pipe = (uint32_t)conn->egress.cc.bytes_in_flight;
     struct {
         uint64_t packet_number;
         int64_t sent_at;
@@ -2570,7 +2574,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
 
-    /* loss-detection, as well as verifying  */
+    /* OnPacketAcked */
     uint32_t latest_rtt = UINT32_MAX;
     if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
         uint64_t ack_delay = ((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000;
@@ -2579,17 +2583,22 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
             latest_rtt = (uint32_t)t;
     }
     quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt);
-    int rto_verified = quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged);
-    quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
-    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.acks.head != NULL);
-
     /* OnPacketAckedCC */
-    if (rto_verified)
-        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
-    cc_ack_received(&conn->egress.cc.ccv, CC_ACK, (uint32_t)conn->egress.cc.bytes_in_flight,
-                    (uint16_t)conn->egress.cc.this_ack.nsegs, (uint32_t)conn->egress.cc.this_ack.nbytes,
+    if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
+        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
+        conn->egress.cc.in_first_rto = 0;
+    } else if (conn->egress.cc.in_first_rto) {
+        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
+        conn->egress.cc.in_first_rto = 0;
+    }
+    cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_pipe, (uint16_t)conn->egress.cc.this_ack.nsegs,
+                    (uint32_t)conn->egress.cc.this_ack.nbytes,
                     conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */,
                     frame->largest_acknowledged >= conn->egress.cc.end_of_recovery);
+
+    /* loss-detection  */
+    quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
+    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.acks.head != NULL);
 
     return 0;
 }
