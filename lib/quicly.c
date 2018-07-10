@@ -1815,7 +1815,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
     } else {
         if (s->num_packets >= s->max_packets)
             return QUICLY_ERROR_SENDBUF_FULL;
-        if (to_be_acked && s->send_window < min_space)
+        if (to_be_acked && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
         if ((s->target.packet =
                  conn->super.ctx->alloc_packet(conn->super.ctx, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
