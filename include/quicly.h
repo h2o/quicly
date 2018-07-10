@@ -84,6 +84,10 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint16_t initial_max_streams_uni;
+    /**
+     *
+     */
+    uint8_t ack_delay_exponent;
 } quicly_transport_parameters_t;
 
 typedef struct st_quicly_cid_t {

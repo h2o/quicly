@@ -104,7 +104,7 @@ static void test_ack_encode(void)
     quicly_ranges_update(&ranges, 0x12, 0x13);
 
     range_index = 0;
-    end = quicly_encode_ack_frame(buf, buf + sizeof(buf), &ranges, &range_index);
+    end = quicly_encode_ack_frame(buf, buf + sizeof(buf), ranges.ranges[ranges.num_ranges - 1].end - 1, 63, &ranges, &range_index);
     ok(end - buf == 5);
 
     quicly_ranges_dispose(&ranges);
@@ -112,6 +112,7 @@ static void test_ack_encode(void)
     src = buf + 1;
     ok(quicly_decode_ack_frame(&src, end, &decoded) == 0);
     ok(src == end);
+    ok(decoded.ack_delay == 63);
     ok(decoded.num_gaps == 0);
     ok(decoded.largest_acknowledged == 0x12);
     ok(decoded.ack_block_lengths[0] == 1);
