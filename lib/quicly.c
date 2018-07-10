@@ -1197,6 +1197,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->egress.send_ack_at = INT64_MAX;
     update_cc_ticks(conn->super.ctx);
     cc_init(&conn->egress.cc.ccv, &newreno_cc_algo, 1280 * 8, 1280);
+    conn->egress.cc.ccv.ccvc.ccv.snd_scale = 14; /* FIXME */
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
