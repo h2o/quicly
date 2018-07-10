@@ -239,8 +239,6 @@ inline int quicly_loss_detect_loss(quicly_loss_t *r, int64_t now, uint64_t large
     int ret;
 
     r->loss_time = INT64_MAX;
-    if (largest_sent != largest_acked)
-        return 0;
 
     if ((ret = do_detect(r, now, largest_acked, delay_until_lost, &loss_time)) != 0)
         return ret;

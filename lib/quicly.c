@@ -2124,8 +2124,10 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     }
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
-    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0)
+    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0) {
+        fprintf(stderr, "cc_cong_signal(CC_FIRST_RTO)\n");
         cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
+    }
 
     /* schedule next alarm */
     *loss_time = ack->sent_at == INT64_MAX ? INT64_MAX : ack->sent_at + delay_until_lost;
@@ -2317,8 +2319,11 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     { /* calculate send window */
         uint32_t cwnd = cc_get_cwnd(&conn->egress.cc.ccv);
-        if (conn->egress.cc.bytes_in_flight < cwnd)
+        if (conn->egress.cc.bytes_in_flight < cwnd) {
             s.send_window = cwnd - conn->egress.cc.bytes_in_flight;
+            if (s.send_window < conn->super.ctx->max_packet_size)
+                s.send_window = conn->super.ctx->max_packet_size;
+        }
     }
 
     /* handle timeouts */
@@ -2327,12 +2332,13 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1, do_detect_loss,
                                         &min_packets_to_send)) != 0)
             goto Exit;
+fprintf(stderr, "loss alarm: cwnd is now %" PRIu32 "\n", cc_get_cwnd(&conn->egress.cc.ccv));
         if (min_packets_to_send != 0) {
             /* better way to notify the app that we want to send some packets outside the congestion window? */
             assert(min_packets_to_send <= s.max_packets);
             s.max_packets = min_packets_to_send;
-            if ((ret = retire_acks(conn, min_packets_to_send, SIZE_MAX)) != 0)
-                goto Exit;
+//            if ((ret = retire_acks(conn, min_packets_to_send, SIZE_MAX)) != 0)
+//                goto Exit;
             if (s.send_window < min_packets_to_send * conn->super.ctx->max_packet_size)
                 s.send_window = min_packets_to_send * conn->super.ctx->max_packet_size;
         }
@@ -2449,6 +2455,7 @@ Exit:
         ret = 0;
     if (ret == 0) {
         *num_packets = s.num_packets;
+fprintf(stderr, "sending %zu packets\n", s.num_packets);
         if (s.current.first_byte == QUICLY_PACKET_TYPE_RETRY)
             ret = QUICLY_ERROR_CONNECTION_CLOSED;
     }
@@ -2523,6 +2530,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 {
     quicly_acks_iter_t iter;
     uint64_t packet_number = frame->smallest_acknowledged;
+    uint32_t bytes_in_pipe = (uint32_t)conn->egress.cc.bytes_in_flight;
     struct {
         uint64_t packet_number;
         int64_t sent_at;
@@ -2572,10 +2580,10 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
 
-    /* loss-detection, as well as verifying  */
+    /* OnPacketAcked */
     uint32_t latest_rtt = UINT32_MAX;
-    fprintf(stderr, "largest_newly_acked: %" PRIu64 ", frame->largest_acknowledged: %" PRIu64 "\n",
-            largest_newly_acked.packet_number, frame->largest_acknowledged);
+    fprintf(stderr, "largest_newly_acked: %" PRIu64 ", frame->largest_acknowledged: %" PRIu64 ", this_ack: %zu\n",
+            largest_newly_acked.packet_number, frame->largest_acknowledged, conn->egress.cc.this_ack.nbytes);
     if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
         uint64_t ack_delay = ((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000;
         fprintf(stderr, "ack delay: %" PRIu64 "\n", ack_delay);
@@ -2584,17 +2592,27 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
             latest_rtt = (uint32_t)t;
     }
     quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt);
-    int rto_verified = quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged);
-    quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
-    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.acks.head != NULL);
-
     /* OnPacketAckedCC */
-    if (rto_verified)
-        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
-    cc_ack_received(&conn->egress.cc.ccv, CC_ACK, (uint32_t)conn->egress.cc.bytes_in_flight,
+    if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
+        fprintf(stderr, "cc_cong_signal(CC_RTO)\n");
+        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
+    } else {
+        if ((conn->egress.cc.ccv.ccvc.ccv.t_flags & CC_TF_PREVVALID) != 0) {
+            fprintf(stderr, "cc_cong_signal(CC_RTO_ERR)\n");
+            cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
+        }
+    }
+    fprintf(stderr, "cc_ack_received: segs:%zu, bytes: %zu, bytes_in_pipe: %" PRIu32 ", cwnd: %" PRIu32 " -> ", conn->egress.cc.this_ack.nsegs, conn->egress.cc.this_ack.nbytes, bytes_in_pipe, cc_get_cwnd(&conn->egress.cc.ccv));
+    cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_pipe,
                     (uint16_t)conn->egress.cc.this_ack.nsegs, (uint32_t)conn->egress.cc.this_ack.nbytes,
                     conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */,
                     frame->largest_acknowledged >= conn->egress.cc.end_of_recovery);
+    fprintf(stderr, " %" PRIu32 "\n", cc_get_cwnd(&conn->egress.cc.ccv));
+
+    /* loss-detection  */
+    quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
+    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.acks.head != NULL);
+
 
     return 0;
 }
