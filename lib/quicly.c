@@ -1668,7 +1668,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     if (conn->super.state == QUICLY_STATE_DRAINING)
         return INT64_MAX;
 
-    if (conn->egress.cc.bytes_in_flight < cc_get_cwnd(&conn->egress.cc.ccv)) {
+    if (conn->egress.cc.bytes_in_flight + 64 <= cc_get_cwnd(&conn->egress.cc.ccv)) {
         if (conn->crypto.pending_flows != 0 || conn->egress.send_handshake_done ||
             quicly_linklist_is_linked(&conn->pending_link.control) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_fin_only) ||
@@ -1892,6 +1892,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
     } else {
         ack_delay = 0;
     }
+fprintf(stderr, "ack-delay: %" PRIu64 "\n", s->now - space->largest_pn_received_at);
     do {
         if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
             break;
@@ -2162,9 +2163,9 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
         conn->egress.acks.max_lost_pn = largest_newly_lost_pn + 1;
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
-    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0 && !conn->egress.cc.in_first_rto) {
-        conn->egress.cc.in_first_rto = 1;
-        cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
+    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0) {
+fprintf(stderr, "loss\n");
+        cc_cong_signal(&conn->egress.cc.ccv, CC_NDUPACK, (uint32_t)conn->egress.cc.bytes_in_flight);
     }
 
     /* schedule next alarm */
@@ -2338,8 +2339,6 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
 
 int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_packets)
 {
-    fprintf(stderr, "srtt: %" PRIu32 ", bytes-in-flight: %zu, cwnd: %" PRIu32 "\n", conn->egress.loss.rtt.smoothed,
-            conn->egress.cc.bytes_in_flight, cc_get_cwnd(&conn->egress.cc.ccv));
     struct st_quicly_send_context_t s = {
         {NULL, -1}, {NULL, NULL, NULL}, conn->super.ctx->now(conn->super.ctx), packets, *num_packets};
     int ret;
@@ -2361,12 +2360,19 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             s.send_window = cwnd - conn->egress.cc.bytes_in_flight;
     }
 
+    fprintf(stderr, "in quicly_send:\n");
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= s.now) {
         size_t min_packets_to_send;
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1, do_detect_loss,
                                         &min_packets_to_send)) != 0)
             goto Exit;
+        if (min_packets_to_send == 2 && !conn->egress.cc.in_first_rto) {
+fprintf(stderr, "rto\n");
+            cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, conn->egress.cc.bytes_in_flight);
+            conn->egress.cc.in_first_rto = 1;
+        }
+fprintf(stderr, "loss-alarm: send %zu additional packets\n", min_packets_to_send);
         if (min_packets_to_send != 0) {
             /* better way to notify the app that we want to send some packets outside the congestion window? */
             assert(min_packets_to_send <= s.max_packets);
@@ -2377,6 +2383,9 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                 s.send_window = min_packets_to_send * conn->super.ctx->max_packet_size;
         }
     }
+
+    fprintf(stderr, "%" PRId64 " srtt: %" PRIu32 ", bytes-in-flight: %zu, cwnd: %" PRIu32 "\n", s.now, conn->egress.loss.rtt.smoothed,
+            conn->egress.cc.bytes_in_flight, cc_get_cwnd(&conn->egress.cc.ccv));
 
     { /* send handshake flows */
         size_t epoch;
@@ -2586,10 +2595,12 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                 quicly_acks_next(&iter);
             do {
                 quicly_ack_t *ack;
+fprintf(stderr, "%" PRId64 " ack-received: %" PRIu64, now, packet_number);
                 if ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
                     ++conn->super.num_packets.ack_received;
                     int apply = epoch == 3 || ack_is_handshake_flow(ack, epoch);
                     if (apply) {
+fprintf(stderr, ", apply");
                         largest_newly_acked.packet_number = packet_number;
                         largest_newly_acked.sent_at = ack->sent_at;
                     }
@@ -2601,6 +2612,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                         }
                         quicly_acks_next(&iter);
                     } while ((ack = quicly_acks_get(&iter))->packet_number == packet_number);
+fprintf(stderr, "\n");
                 }
                 ++packet_number;
             } while (--block_length != 0);
@@ -2619,15 +2631,18 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
         uint64_t ack_delay = ((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000;
         int64_t t = now - largest_newly_acked.sent_at - ack_delay;
+fprintf(stderr, "latest-rtt: %" PRId64 ", ack-delay: %" PRIu64 "\n", t, ack_delay);
         if (0 <= t && t < 100000) /* ignore RTT above 100 seconds */
             latest_rtt = (uint32_t)t;
     }
     quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt);
     /* OnPacketAckedCC */
     if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
+fprintf(stderr, "rto verified\n");
         cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
         conn->egress.cc.in_first_rto = 0;
     } else if (conn->egress.cc.in_first_rto) {
+fprintf(stderr, "rto error\n");
         cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
         conn->egress.cc.in_first_rto = 0;
     }
