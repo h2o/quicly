@@ -2587,6 +2587,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
             do {
                 quicly_ack_t *ack;
                 if ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
+                    ++conn->super.num_packets.ack_received;
                     int apply = epoch == 3 || ack_is_handshake_flow(ack, epoch);
                     if (apply) {
                         largest_newly_acked.packet_number = packet_number;
