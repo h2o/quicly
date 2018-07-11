@@ -70,7 +70,7 @@ static inline int merge_update(quicly_ranges_t *ranges, uint64_t start, uint64_t
     return 0;
 }
 
-int quicly_ranges_update(quicly_ranges_t *ranges, uint64_t start, uint64_t end)
+int quicly_ranges_add(quicly_ranges_t *ranges, uint64_t start, uint64_t end)
 {
     size_t slot, end_slot;
 
@@ -103,6 +103,67 @@ int quicly_ranges_update(quicly_ranges_t *ranges, uint64_t start, uint64_t end)
     } while (slot-- != 0);
 
     return merge_update(ranges, start, end, 0, end_slot);
+}
+
+int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end)
+{
+    size_t shrink_from, slot;
+
+    if (ranges->num_ranges == 0) {
+        return 0;
+    } else if (end <= ranges->ranges[0].start) {
+        return 0;
+    } else if (ranges->ranges[ranges->num_ranges - 1].end <= start) {
+        return 0;
+    }
+
+    /* find the first overlapping slot */
+    for (slot = 0; ranges->ranges[slot].end < start; ++slot)
+        ;
+
+    if (end <= ranges->ranges[slot].end) {
+        /* first overlapping slot is the only slot that we will ever modify */
+        if (end <= ranges->ranges[slot].start)
+            return 0;
+        if (start <= ranges->ranges[slot].start) {
+            ranges->ranges[slot].start = end;
+        } else if (end == ranges->ranges[slot].end) {
+            ranges->ranges[slot].end = start;
+        } else {
+            /* split */
+            if (insert_at(ranges, end, ranges->ranges[slot].end, slot + 1) != 0)
+                return -1;
+            ranges->ranges[slot].end = start;
+            return 0;
+        }
+        /* remove the slot if the range has become empty */
+        if (ranges->ranges[slot].start == ranges->ranges[slot].end)
+            quicly_ranges_shrink(ranges, slot, slot + 1);
+        return 0;
+    }
+
+    /* specified region covers multiple slots */
+    if (start <= ranges->ranges[slot].start) {
+        shrink_from = slot;
+    } else {
+        ranges->ranges[slot].end = start;
+        shrink_from = slot + 1;
+    }
+
+    /* find the last overlapping slot */
+    for (++slot; slot != ranges->num_ranges; ++slot) {
+        if (end <= ranges->ranges[slot].start)
+            break;
+        if (end < ranges->ranges[slot].end) {
+            ranges->ranges[slot].start = end;
+            break;
+        }
+    }
+
+    /* remove shrink_from..slot */
+    quicly_ranges_shrink(ranges, shrink_from, slot);
+
+    return 0;
 }
 
 void quicly_ranges_shrink(quicly_ranges_t *ranges, size_t start, size_t end)
