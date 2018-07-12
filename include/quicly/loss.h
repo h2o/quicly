@@ -162,8 +162,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_out
             /* Time loss detection */
             alarm_duration = r->loss_time - now;
         } else {
-            /* RTO or TLP alarm */
-            alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance * 4 + QUICLY_DELAYED_ACK_TIMEOUT /* FIXME observe max_ack_delay */;
+            /* RTO or TLP alarm (FIXME observe and use max_ack_delay) */
+            alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance * 4 + QUICLY_DELAYED_ACK_TIMEOUT;
             if (alarm_duration < r->conf->min_rto_timeout)
                 alarm_duration = r->conf->min_rto_timeout;
             alarm_duration <<= r->rto_count;
