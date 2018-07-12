@@ -161,21 +161,20 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_out
         if (r->loss_time != INT64_MAX) {
             /* Time loss detection */
             alarm_duration = r->loss_time - now;
-        } else if (r->tlp_count < r->conf->max_tlps) {
-            /* Tail Loss Probe */
-            if (has_outstanding) {
-                alarm_duration = r->rtt.smoothed * 3 / 2 + QUICLY_DELAYED_ACK_TIMEOUT;
-            } else {
-                alarm_duration = r->conf->min_tlp_timeout;
-            }
-            if (alarm_duration < 2 * r->rtt.smoothed)
-                alarm_duration = 2 * r->rtt.smoothed;
         } else {
-            /* RTO alarm */
-            alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance;
+            /* RTO or TLP alarm (FIXME observe and use max_ack_delay) */
+            alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance * 4 + QUICLY_DELAYED_ACK_TIMEOUT;
             if (alarm_duration < r->conf->min_rto_timeout)
                 alarm_duration = r->conf->min_rto_timeout;
-            alarm_duration *= (int64_t)1 << r->rto_count;
+            alarm_duration <<= r->rto_count;
+            if (r->tlp_count < r->conf->max_tlps) {
+                /* Tail Loss Probe */
+                int64_t tlp_alarm_duration = r->rtt.smoothed * 3 / 2 + QUICLY_DELAYED_ACK_TIMEOUT;
+                if (tlp_alarm_duration < r->conf->min_tlp_timeout)
+                    tlp_alarm_duration = r->conf->min_tlp_timeout;
+                if (tlp_alarm_duration < alarm_duration)
+                    alarm_duration = tlp_alarm_duration;
+            }
         }
         if (r->alarm_at > now + alarm_duration)
             r->alarm_at = now + alarm_duration;
