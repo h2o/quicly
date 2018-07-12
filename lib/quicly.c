@@ -226,6 +226,10 @@ struct st_quicly_conn_t {
         /**
          *
          */
+        int64_t last_retransmittable_sent_at;
+        /**
+         *
+         */
         unsigned send_handshake_done : 1;
         /**
          *
@@ -1890,6 +1894,7 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
     if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, ack_cb)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
+    conn->egress.last_retransmittable_sent_at = s->now;
     /* TODO return the remaining window that the sender can use */
     return ret;
 }
@@ -2189,6 +2194,11 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     *loss_time = ack->sent_at == INT64_MAX ? INT64_MAX : ack->sent_at + delay_until_lost;
 
     return 0;
+}
+
+static void update_loss_alarm(quicly_conn_t *conn)
+{
+    quicly_loss_update_alarm(&conn->egress.loss, conn->egress.last_retransmittable_sent_at, conn->egress.acks.num_active != 0);
 }
 
 static int send_stream_frames(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
@@ -2506,7 +2516,7 @@ Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
     if (ret == 0) {
-        quicly_loss_update_alarm(&conn->egress.loss, s.now, conn->egress.acks.num_active != 0);
+        update_loss_alarm(conn);
         *num_packets = s.num_packets;
         if (s.current.first_byte == QUICLY_PACKET_TYPE_RETRY)
             ret = QUICLY_ERROR_CONNECTION_CLOSED;
@@ -2657,7 +2667,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 
     /* loss-detection  */
     quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
-    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.acks.head != NULL);
+    update_loss_alarm(conn);
 
     return 0;
 }
