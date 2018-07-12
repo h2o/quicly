@@ -1778,8 +1778,11 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     s->target.packet->data.len = s->dst - s->target.packet->data.base;
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
+fprintf(stderr, "%" PRId64 " send pn:%" PRIu64 "\n", s->now, conn->egress.packet_number);
+
     ++conn->egress.packet_number;
     ++conn->super.num_packets.sent;
+    conn->super.num_bytes_sent += s->target.packet->data.len;
 
     if (!coalesced) {
         s->packets[s->num_packets++] = s->target.packet;
@@ -2178,6 +2181,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = ack->packet_number;
                 DEBUG_CONN(conn, "RTO; packet-number: %" PRIu64, largest_newly_lost_pn);
+fprintf(stderr, "%" PRId64 " lost pn:%" PRIu64 ", delay=%" PRId64 "\n", now, largest_newly_lost_pn, now - ack->sent_at);
             }
             if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
                 return ret;
@@ -2189,7 +2193,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
     if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0) {
-fprintf(stderr, "loss\n");
+fprintf(stderr, "%" PRId64 " loss\n", now);
         cc_cong_signal(&conn->egress.cc.ccv, CC_NDUPACK, (uint32_t)conn->egress.cc.bytes_in_flight);
     }
 
@@ -2407,8 +2411,8 @@ fprintf(stderr, "loss-alarm: send %zu additional packets\n", min_packets_to_send
             /* better way to notify the app that we want to send some packets outside the congestion window? */
             assert(min_packets_to_send <= s.max_packets);
             s.max_packets = min_packets_to_send;
-            if ((ret = retire_acks_by_count(conn, min_packets_to_send)) != 0)
-                goto Exit;
+//            if ((ret = retire_acks_by_count(conn, min_packets_to_send)) != 0)
+//                goto Exit;
             if (s.send_window < min_packets_to_send * conn->super.ctx->max_packet_size)
                 s.send_window = min_packets_to_send * conn->super.ctx->max_packet_size;
         }
@@ -2656,15 +2660,16 @@ fprintf(stderr, "\n");
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
 
     /* OnPacketAcked */
-    uint32_t latest_rtt = UINT32_MAX;
+    uint32_t latest_rtt = UINT32_MAX, ack_delay = 0;
     if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
-        uint64_t ack_delay = ((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000;
-        int64_t t = now - largest_newly_acked.sent_at - ack_delay;
-fprintf(stderr, "latest-rtt: %" PRId64 ", ack-delay: %" PRIu64 "\n", t, ack_delay);
+        ack_delay = (uint32_t)(((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000);
+        int64_t t = now - largest_newly_acked.sent_at;
+fprintf(stderr, "latest-rtt: %" PRId64 ", ack-delay: %" PRIu32 ", ", t, ack_delay);
         if (0 <= t && t < 100000) /* ignore RTT above 100 seconds */
             latest_rtt = (uint32_t)t;
     }
-    quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt);
+    quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay, 0 /* this relies on the fact that we do not (yet) retransmit ACKs */);
+fprintf(stderr, "srtt: %" PRIu32 ", rttvar: %" PRIu32 "\n", conn->egress.loss.rtt.smoothed, conn->egress.loss.rtt.variance);
     /* OnPacketAckedCC */
     if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
 fprintf(stderr, "rto verified\n");
