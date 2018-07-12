@@ -187,6 +187,10 @@ struct st_quicly_conn_t {
          */
         quicly_acks_t acks;
         /**
+         * all packets where pn < max_lost_pn are deemed lost
+         */
+        uint64_t max_lost_pn;
+        /**
          * loss recovery
          */
         quicly_loss_t loss;
@@ -2099,7 +2103,7 @@ int retire_acks_by_epoch(quicly_conn_t *conn, size_t epoch)
         }
         do {
             if (!skip) {
-                if (conn->egress.acks.max_lost_pn <= pn) {
+                if (conn->egress.max_lost_pn <= pn) {
                     if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
                         return ret;
                 }
@@ -2126,7 +2130,7 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
 
     quicly_acks_init_iter(&conn->egress.acks, &iter);
 
-    while ((pn = (ack = quicly_acks_get(&iter))->packet_number) < conn->egress.acks.max_lost_pn)
+    while ((pn = (ack = quicly_acks_get(&iter))->packet_number) < conn->egress.max_lost_pn)
         quicly_acks_next(&iter);
 
     conn->egress.cc.this_ack.nsegs = 0;
@@ -2140,7 +2144,7 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
                 return ret;
             quicly_acks_next(&iter);
         } while ((ack = quicly_acks_get(&iter))->packet_number == pn);
-        conn->egress.acks.max_lost_pn = pn + 1;
+        conn->egress.max_lost_pn = pn + 1;
     } while (--count != 0);
 
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
@@ -2164,7 +2168,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
     while ((ack = quicly_acks_get(&iter))->sent_at <= sent_before) {
-        if (conn->egress.acks.max_lost_pn <= ack->packet_number) {
+        if (conn->egress.max_lost_pn <= ack->packet_number) {
             if (ack->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = ack->packet_number;
@@ -2176,7 +2180,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
         quicly_acks_next(&iter);
     }
     if (largest_newly_lost_pn != UINT64_MAX)
-        conn->egress.acks.max_lost_pn = largest_newly_lost_pn + 1;
+        conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
     if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0) {

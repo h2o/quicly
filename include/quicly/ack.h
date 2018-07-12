@@ -74,13 +74,9 @@ typedef struct st_quicly_acks_t {
      */
     struct st_quicly_ack_block_t *head, *tail;
     /**
-     *
+     * number of active entries
      */
     size_t num_active;
-    /**
-     * all packets where pn < max_lost_pn are deemed lost
-     */
-    uint64_t max_lost_pn;
 } quicly_acks_t;
 
 typedef struct st_quicly_acks_iter_t {
