@@ -54,6 +54,11 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI 2
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI 8
 
+/**
+ * do not try to send stream data if the send window is below this value
+ */
+#define MIN_WINDOW_TO_SEND_STREAM 64
+
 #define STATELESS_RESET_TOKEN_SIZE 16
 
 #define STREAM_IS_CLIENT_INITIATED(stream_id) (((stream_id)&1) == 0)
@@ -1663,12 +1668,24 @@ static int on_ack_cc(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
     return 0;
 }
 
+static ssize_t round_send_window(ssize_t window)
+{
+    if (window < MIN_WINDOW_TO_SEND_STREAM * 2) {
+        if (window < MIN_WINDOW_TO_SEND_STREAM) {
+            return 0;
+        } else {
+            return MIN_WINDOW_TO_SEND_STREAM * 2;
+        }
+    }
+    return window;
+}
+
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
     if (conn->super.state == QUICLY_STATE_DRAINING)
         return INT64_MAX;
 
-    if (conn->egress.cc.bytes_in_flight + 64 <= cc_get_cwnd(&conn->egress.cc.ccv)) {
+    if (round_send_window((ssize_t)cc_get_cwnd(&conn->egress.cc.ccv) - (ssize_t)conn->egress.cc.bytes_in_flight) > 0) {
         if (conn->crypto.pending_flows != 0 || conn->egress.send_handshake_done ||
             quicly_linklist_is_linked(&conn->pending_link.control) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_fin_only) ||
@@ -1818,8 +1835,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
     } else {
         if (s->num_packets >= s->max_packets)
             return QUICLY_ERROR_SENDBUF_FULL;
-        if (s->send_window < 128)
-            s->send_window = s->send_window < 64 ? 0 : 128;
+        s->send_window = round_send_window(s->send_window);
         if (to_be_acked && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
         if ((s->target.packet =
