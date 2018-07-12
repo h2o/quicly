@@ -2510,13 +2510,12 @@ fprintf(stderr, "loss-alarm: send %zu additional packets\n", min_packets_to_send
     if (s.target.packet != NULL)
         commit_send_packet(conn, &s, 0);
 
-    quicly_loss_update_alarm(&conn->egress.loss, s.now, conn->egress.acks.num_active != 0);
-
     ret = 0;
 Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
     if (ret == 0) {
+        quicly_loss_update_alarm(&conn->egress.loss, s.now, conn->egress.acks.num_active != 0);
         *num_packets = s.num_packets;
         if (s.current.first_byte == QUICLY_PACKET_TYPE_RETRY)
             ret = QUICLY_ERROR_CONNECTION_CLOSED;
