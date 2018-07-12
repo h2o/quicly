@@ -2644,14 +2644,17 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
 
     /* OnPacketAcked */
-    uint32_t latest_rtt = UINT32_MAX;
+    uint32_t latest_rtt = UINT32_MAX, ack_delay = 0;
     if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
-        uint64_t ack_delay = ((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000;
-        int64_t t = now - largest_newly_acked.sent_at - ack_delay;
-        if (0 <= t && t < 100000) /* ignore RTT above 100 seconds */
+        int64_t t = now - largest_newly_acked.sent_at;
+        if (0 <= t && t < 100000) { /* ignore RTT above 100 seconds */
             latest_rtt = (uint32_t)t;
+            ack_delay = (uint32_t)(((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000);
+        }
     }
-    quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt);
+    quicly_loss_on_ack_received(
+        &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay,
+        0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
     /* OnPacketAckedCC */
     if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
         cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
