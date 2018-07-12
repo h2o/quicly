@@ -55,9 +55,9 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI 8
 
 /**
- * do not try to send stream data if the send window is below this value
+ * do not try to send frames that require ACK if the send window is below this value
  */
-#define MIN_WINDOW_TO_SEND_STREAM 64
+#define MIN_SEND_WINDOW 64
 
 #define STATELESS_RESET_TOKEN_SIZE 16
 
@@ -1670,11 +1670,11 @@ static int on_ack_cc(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
 
 static ssize_t round_send_window(ssize_t window)
 {
-    if (window < MIN_WINDOW_TO_SEND_STREAM * 2) {
-        if (window < MIN_WINDOW_TO_SEND_STREAM) {
+    if (window < MIN_SEND_WINDOW * 2) {
+        if (window < MIN_SEND_WINDOW) {
             return 0;
         } else {
-            return MIN_WINDOW_TO_SEND_STREAM * 2;
+            return MIN_SEND_WINDOW * 2;
         }
     }
     return window;
