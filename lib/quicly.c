@@ -1780,6 +1780,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
 
     ++conn->egress.packet_number;
     ++conn->super.num_packets.sent;
+    conn->super.num_bytes_sent += s->target.packet->data.len;
 
     if (!coalesced) {
         s->packets[s->num_packets++] = s->target.packet;
