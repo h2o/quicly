@@ -59,6 +59,7 @@ struct st_quicly_ack_t {
             size_t bytes_in_flight;
         } cc;
     } data;
+    unsigned is_active : 1;
 };
 
 struct st_quicly_ack_block_t {
@@ -68,7 +69,14 @@ struct st_quicly_ack_block_t {
 };
 
 typedef struct st_quicly_acks_t {
+    /**
+     * the linked list includes entries that are deemed lost (up to 3*SRTT) as well
+     */
     struct st_quicly_ack_block_t *head, *tail;
+    /**
+     * number of active entries
+     */
+    size_t num_active;
 } quicly_acks_t;
 
 typedef struct st_quicly_acks_iter_t {
@@ -85,6 +93,7 @@ static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_n
 static int quicly_acks_is_empty(quicly_acks_t *acks);
 static quicly_ack_t *quicly_acks_get_tail(quicly_acks_t *acks);
 struct st_quicly_ack_block_t *quicly_acks__new_block(quicly_acks_t *acks);
+static int quicly_acks_on_ack(quicly_acks_t *acks, int is_acked, quicly_ack_t *ack, struct st_quicly_conn_t *conn);
 static void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter);
 static quicly_ack_t *quicly_acks_get(quicly_acks_iter_t *iter);
 static void quicly_acks_next(quicly_acks_iter_t *iter);
@@ -110,9 +119,12 @@ inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_n
 
     quicly_ack_t *ack = block->entries + block->total++;
     ++block->active;
+
     ack->packet_number = packet_number;
     ack->sent_at = now;
     ack->acked = acked;
+    ack->is_active = 1;
+    ++acks->num_active;
 
     return ack;
 }
@@ -125,6 +137,22 @@ inline int quicly_acks_is_empty(quicly_acks_t *acks)
 inline quicly_ack_t *quicly_acks_get_tail(quicly_acks_t *acks)
 {
     return acks->tail->entries + acks->tail->total - 1;
+}
+
+inline int quicly_acks_on_ack(quicly_acks_t *acks, int is_acked, quicly_ack_t *ack, struct st_quicly_conn_t *conn)
+{
+    int ret;
+
+    assert(ack->is_active || is_acked);
+
+    if ((ret = ack->acked(conn, is_acked, ack)) != 0)
+        return ret;
+
+    if (ack->is_active) {
+        ack->is_active = 0;
+        --acks->num_active;
+    }
+    return 0;
 }
 
 inline void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter)
@@ -166,6 +194,7 @@ inline void quicly_acks_next(quicly_acks_iter_t *iter)
 inline void quicly_acks_release(quicly_acks_t *acks, quicly_acks_iter_t *iter)
 {
     assert(iter->p->acked != NULL);
+    assert(!iter->p->is_active);
     iter->p->acked = NULL;
 
     struct st_quicly_ack_block_t *block = *iter->ref;

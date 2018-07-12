@@ -101,7 +101,7 @@ static void test_ack_encode(void)
     quicly_ack_frame_t decoded;
 
     quicly_ranges_init(&ranges);
-    quicly_ranges_update(&ranges, 0x12, 0x13);
+    quicly_ranges_add(&ranges, 0x12, 0x13);
 
     range_index = 0;
     end = quicly_encode_ack_frame(buf, buf + sizeof(buf), ranges.ranges[ranges.num_ranges - 1].end - 1, 63, &ranges, &range_index);

@@ -41,6 +41,7 @@ static size_t num_blocks(quicly_acks_t *acks)
 void test_ack(void)
 {
     quicly_acks_t acks;
+    quicly_ack_t *ack;
     uint64_t at;
     size_t i, j;
 
@@ -76,7 +77,8 @@ void test_ack(void)
         quicly_acks_next(&iter);
         ok(quicly_acks_get(&iter)->packet_number != UINT64_MAX);
     }
-    while (quicly_acks_get(&iter)->packet_number <= 40) {
+    while ((ack = quicly_acks_get(&iter))->packet_number <= 40) {
+        quicly_acks_on_ack(&acks, 0, ack, NULL);
         quicly_acks_release(&acks, &iter);
         quicly_acks_next(&iter);
         ok(quicly_acks_get(&iter)->packet_number != UINT64_MAX);
