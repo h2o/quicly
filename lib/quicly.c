@@ -2078,6 +2078,21 @@ ShrinkRanges:
     return ret;
 }
 
+static void init_acks_iter(quicly_conn_t *conn, quicly_acks_iter_t *iter, int64_t now)
+{
+    /* TODO find a better threshold */
+    int64_t retire_before = now - ((conn->egress.loss.rtt.smoothed + conn->egress.loss.rtt.variance) * 4 +
+                                   conn->egress.loss.rtt.max_ack_delay + QUICLY_DELAYED_ACK_TIMEOUT);
+    quicly_ack_t *ack;
+
+    quicly_acks_init_iter(&conn->egress.acks, iter);
+
+    while ((ack = quicly_acks_get(iter))->sent_at < retire_before && !ack->is_active) {
+        quicly_acks_release(&conn->egress.acks, iter);
+        quicly_acks_next(iter);
+    }
+}
+
 static inline int ack_is_handshake_flow(quicly_ack_t *ack, size_t epoch)
 {
     return ack->acked == on_ack_stream && ack->data.stream.stream_id == -(1 + epoch);
@@ -2093,7 +2108,7 @@ int retire_acks_by_epoch(quicly_conn_t *conn, size_t epoch)
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
 
-    quicly_acks_init_iter(&conn->egress.acks, &iter);
+    init_acks_iter(conn, &iter, conn->super.ctx->now(conn->super.ctx));
     ack = quicly_acks_get(&iter);
 
     while ((pn = ack->packet_number) != UINT64_MAX) {
@@ -2124,7 +2139,7 @@ int retire_acks_by_epoch(quicly_conn_t *conn, size_t epoch)
     return ret;
 }
 
-static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
+static int retire_acks_by_count(quicly_conn_t *conn, size_t count, int64_t now)
 {
     quicly_acks_iter_t iter;
     quicly_ack_t *ack;
@@ -2133,7 +2148,7 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
 
     assert(count != 0);
 
-    quicly_acks_init_iter(&conn->egress.acks, &iter);
+    init_acks_iter(conn, &iter, now);
 
     while ((pn = (ack = quicly_acks_get(&iter))->packet_number) < conn->egress.max_lost_pn)
         quicly_acks_next(&iter);
@@ -2167,7 +2182,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
 
-    quicly_acks_init_iter(&conn->egress.acks, &iter);
+    init_acks_iter(conn, &iter, now);
 
     /* handle loss */
     conn->egress.cc.this_ack.nsegs = 0;
@@ -2402,7 +2417,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             /* better way to notify the app that we want to send some packets outside the congestion window? */
             assert(min_packets_to_send <= s.max_packets);
             s.max_packets = min_packets_to_send;
-            if ((ret = retire_acks_by_count(conn, min_packets_to_send)) != 0)
+            if ((ret = retire_acks_by_count(conn, min_packets_to_send, s.now)) != 0)
                 goto Exit;
             if (s.send_window < min_packets_to_send * conn->super.ctx->max_packet_size)
                 s.send_window = min_packets_to_send * conn->super.ctx->max_packet_size;
@@ -2606,7 +2621,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
 
-    quicly_acks_init_iter(&conn->egress.acks, &iter);
+    init_acks_iter(conn, &iter, now);
 
     size_t gap_index = frame->num_gaps;
     while (1) {
