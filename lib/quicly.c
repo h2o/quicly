@@ -2395,7 +2395,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                                         &min_packets_to_send)) != 0)
             goto Exit;
         if (min_packets_to_send == 2 && !conn->egress.cc.in_first_rto) {
-            cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, conn->egress.cc.bytes_in_flight);
+            cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
             conn->egress.cc.in_first_rto = 1;
         }
         if (min_packets_to_send != 0) {
