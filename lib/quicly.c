@@ -2674,6 +2674,12 @@ static int handle_path_challenge_frame(quicly_conn_t *conn, quicly_path_challeng
     return schedule_path_challenge(conn, 1, frame->data);
 }
 
+static int handle_new_token_frame(quicly_conn_t *conn, quicly_new_token_frame_t *frame)
+{
+    /* TODO save the token along with the session ticket */
+    return 0;
+}
+
 static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_frame_t *frame)
 {
     quicly_stream_t *stream;
@@ -2860,6 +2866,13 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, int64_t now, const 
                     if ((ret = quicly_decode_path_challenge_frame(&src, end, &frame)) != 0)
                         goto Exit;
                     if ((ret = handle_path_challenge_frame(conn, &frame)) != 0)
+                        goto Exit;
+                } break;
+                case QUICLY_FRAME_TYPE_NEW_TOKEN: {
+                    quicly_new_token_frame_t frame;
+                    if ((ret = quicly_decode_new_token_frame(&src, end, &frame)) != 0)
+                        goto Exit;
+                    if ((ret = handle_new_token_frame(conn, &frame)) != 0)
                         goto Exit;
                 } break;
                 default:

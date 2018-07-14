@@ -28,6 +28,7 @@ extern "C" {
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include "picotls.h"
 #include "quicly/constants.h"
 #include "quicly/ranges.h"
@@ -48,6 +49,7 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_ACK 13
 #define QUICLY_FRAME_TYPE_PATH_CHALLENGE 14
 #define QUICLY_FRAME_TYPE_PATH_RESPONSE 15
+#define QUICLY_FRAME_TYPE_NEW_TOKEN 25
 
 #define QUICLY_FRAME_TYPE_STREAM_BASE 0x10
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
@@ -74,6 +76,7 @@ static uint8_t *quicly_encode16(uint8_t *p, uint16_t v);
 static uint8_t *quicly_encode32(uint8_t *p, uint32_t v);
 static uint8_t *quicly_encode64(uint8_t *p, uint64_t v);
 static uint8_t *quicly_encodev(uint8_t *p, uint64_t v);
+static size_t quicly_encodev_capacity(uint64_t v);
 static unsigned quicly_clz32(uint32_t v);
 static unsigned quicly_clz64(uint64_t v);
 
@@ -187,6 +190,15 @@ typedef struct st_quicly_ack_frame_t {
 
 int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame);
 
+static size_t quicly_new_token_frame_capacity(ptls_iovec_t token);
+static uint8_t *quicly_encode_new_token_frame(uint8_t *dst, const uint8_t *dst_end, ptls_iovec_t token);
+
+typedef struct st_quicly_new_token_frame_t {
+    ptls_iovec_t token;
+} quicly_new_token_frame_t;
+
+static int quicly_decode_new_token_frame(const uint8_t **src, const uint8_t *end, quicly_new_token_frame_t *frame);
+
 /* inline definitions */
 
 inline uint16_t quicly_decode16(const uint8_t **src)
@@ -281,6 +293,19 @@ inline uint8_t *quicly_encodev(uint8_t *p, uint64_t v)
     }
     *p++ = (uint8_t)v;
     return p;
+}
+
+inline size_t quicly_encodev_capacity(uint64_t v)
+{
+    if (v > 63) {
+        if (v > 16383) {
+            if (v > 1073741823)
+                return 8;
+            return 4;
+        }
+        return 2;
+    }
+    return 1;
 }
 
 inline unsigned quicly_clz32(uint32_t v)
@@ -570,6 +595,29 @@ inline int quicly_decode_stop_sending_frame(const uint8_t **src, const uint8_t *
     return 0;
 Error:
     return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_STOP_SENDING);
+}
+
+inline size_t quicly_new_token_frame_capacity(ptls_iovec_t token)
+{
+    return 1 + quicly_encodev_capacity(token.len) + token.len;
+}
+
+inline uint8_t *quicly_encode_new_token_frame(uint8_t *dst, const uint8_t *dst_end, ptls_iovec_t token)
+{
+    *dst++ = QUICLY_FRAME_TYPE_NEW_TOKEN;
+    dst = quicly_encodev(dst, token.len);
+    memcpy(dst, token.base, token.len);
+    dst += token.len;
+    return dst;
+}
+
+inline int quicly_decode_new_token_frame(const uint8_t **src, const uint8_t *end, quicly_new_token_frame_t *frame)
+{
+    if ((frame->token.len = quicly_decodev(src, end)) == UINT64_MAX)
+        return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_NEW_TOKEN);
+    frame->token.base = (void *)*src;
+    *src += frame->token.len;
+    return 0;
 }
 
 #ifdef __cplusplus
