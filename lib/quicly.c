@@ -59,6 +59,8 @@
  */
 #define MIN_SEND_WINDOW 64
 
+#define HKDF_BASE_LABEL "quic "
+
 #define STATELESS_RESET_TOKEN_SIZE 16
 
 #define STREAM_IS_CLIENT_INITIATED(stream_id) (((stream_id)&1) == 0)
@@ -763,12 +765,12 @@ static int setup_cipher(struct st_quicly_cipher_context_t *ctx, ptls_aead_algori
 
     *ctx = (struct st_quicly_cipher_context_t){NULL};
 
-    if ((ctx->aead = ptls_aead_new(aead, hash, is_enc, secret, NULL)) == NULL) {
+    if ((ctx->aead = ptls_aead_new(aead, hash, is_enc, secret, HKDF_BASE_LABEL)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
     if ((ret = ptls_hkdf_expand_label(hash, pnekey, aead->ctr_cipher->key_size, ptls_iovec_init(secret, hash->digest_size), "pn",
-                                      ptls_iovec_init(NULL, 0), NULL)) != 0)
+                                      ptls_iovec_init(NULL, 0), HKDF_BASE_LABEL)) != 0)
         goto Exit;
     if ((ctx->pne = ptls_cipher_new(aead->ctr_cipher, is_enc, pnekey)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
@@ -882,7 +884,7 @@ static int setup_initial_key(struct st_quicly_cipher_context_t *ctx, ptls_cipher
 
     if ((ret = ptls_hkdf_expand_label(cs->hash, aead_secret, cs->hash->digest_size,
                                       ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0),
-                                      NULL)) != 0)
+                                      HKDF_BASE_LABEL)) != 0)
         goto Exit;
     if ((ret = setup_cipher(ctx, cs->aead, cs->hash, is_enc, aead_secret)) != 0)
         goto Exit;
