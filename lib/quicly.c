@@ -230,10 +230,6 @@ struct st_quicly_conn_t {
         /**
          *
          */
-        unsigned send_handshake_done : 1;
-        /**
-         *
-         */
         int64_t send_ack_at;
         /**
          *
@@ -266,13 +262,6 @@ struct st_quicly_conn_t {
          * bit vector indicating if there's any pending handshake data at epoch 0,1,2
          */
         uint8_t pending_flows;
-        /**
-         * bit vector (indexed by epoch) of pending streams to be destroyed
-         */
-        struct {
-            uint8_t is_active : 1;
-            uint8_t bits : 7;
-        } pending_flows_to_destroy;
     } crypto;
     /**
      *
@@ -696,11 +685,6 @@ static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
 
 static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
 {
-    if (conn->crypto.pending_flows_to_destroy.is_active) {
-        conn->crypto.pending_flows_to_destroy.bits |= (uint8_t)(1 << epoch);
-        return;
-    }
-
     quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
     assert(stream != NULL);
     destroy_stream(stream);
@@ -1000,24 +984,8 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 static int apply_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_stream_frame_t *frame)
 {
     quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
-    int ret;
 
-    assert(stream != NULL);
-
-    conn->crypto.pending_flows_to_destroy.is_active = 1;
-    conn->crypto.pending_flows_to_destroy.bits = 0;
-
-    ret = apply_stream_frame(stream, frame);
-
-    conn->crypto.pending_flows_to_destroy.is_active = 0;
-    for (epoch = 0; conn->crypto.pending_flows_to_destroy.bits != 0; ++epoch) {
-        if ((conn->crypto.pending_flows_to_destroy.bits & (uint8_t)(1 << epoch)) != 0) {
-            destroy_handshake_flow(conn, epoch);
-            conn->crypto.pending_flows_to_destroy.bits &= ~(uint8_t)(1 << epoch);
-        }
-    }
-
-    return ret;
+    return apply_stream_frame(stream, frame);
 }
 
 #define PUSH_TRANSPORT_PARAMETER(buf, id, block)                                                                                   \
@@ -1544,13 +1512,6 @@ Exit:
     return ret;
 }
 
-static int on_ack_handshake_done(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
-{
-    if (!acked)
-        conn->egress.send_handshake_done = 1;
-    return 0;
-}
-
 static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
 {
     quicly_stream_t *stream;
@@ -1694,8 +1655,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         return INT64_MAX;
 
     if (round_send_window((ssize_t)cc_get_cwnd(&conn->egress.cc.ccv) - (ssize_t)conn->egress.cc.bytes_in_flight) > 0) {
-        if (conn->crypto.pending_flows != 0 || conn->egress.send_handshake_done ||
-            quicly_linklist_is_linked(&conn->pending_link.control) ||
+        if (conn->crypto.pending_flows != 0 || quicly_linklist_is_linked(&conn->pending_link.control) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_fin_only) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_with_payload))
             return 0;
@@ -2354,20 +2314,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
         cipher_slot = is_enc ? &conn->handshake->cipher.egress : &conn->handshake->cipher.ingress;
         break;
     case 3: /* 1-RTT */
-        if (is_enc) {
+        if (is_enc)
             apply_peer_transport_params(conn);
-        } else {
-            assert(conn->initial == NULL);
-            if (quicly_is_client(conn)) {
-                assert(conn->handshake != NULL && conn->handshake->cipher.ingress.aead != NULL);
-                dispose_cipher(&conn->handshake->cipher.ingress);
-                conn->handshake->cipher.ingress = (struct st_quicly_cipher_context_t){NULL};
-            } else {
-                free_handshake_space(&conn->handshake);
-                destroy_handshake_flow(conn, 2);
-                conn->egress.send_handshake_done = 1;
-            }
-        }
         if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 0)) != 0)
             return ret;
         cipher_slot = is_enc ? &conn->application->cipher.egress_1rtt : &conn->application->cipher.ingress[1];
@@ -2439,14 +2387,6 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             if (conn->application->super.send_ack_at <= s.now) {
                 if ((ret = send_ack(conn, &conn->application->super, &s)) != 0)
                     goto Exit;
-            }
-            /* handshake_done */
-            if (conn->egress.send_handshake_done) {
-                quicly_ack_t *ack;
-                if ((ret = prepare_acked_packet(conn, &s, 1, &ack, on_ack_handshake_done)) != 0)
-                    goto Exit;
-                *s.dst++ = QUICLY_FRAME_TYPE_HANDSHAKE_DONE;
-                conn->egress.send_handshake_done = 0;
             }
             /* respond to all pending received PATH_CHALLENGE frames */
             if (conn->egress.path_challenge.head != NULL) {
@@ -2922,23 +2862,6 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, int64_t now, const 
                     if ((ret = handle_path_challenge_frame(conn, &frame)) != 0)
                         goto Exit;
                 } break;
-                case QUICLY_FRAME_TYPE_HANDSHAKE_DONE:
-                    if (!(epoch == 3 && quicly_is_client(conn))) {
-                        ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
-                        goto Exit;
-                    }
-                    assert(conn->initial == NULL);
-                    if (conn->application->cipher.egress_0rtt.aead != NULL) {
-                        destroy_handshake_flow(conn, 1);
-                        dispose_cipher(&conn->application->cipher.egress_0rtt);
-                        conn->application->cipher.egress_0rtt = (struct st_quicly_cipher_context_t){NULL};
-                    }
-                    if (conn->handshake != NULL) {
-                        free_handshake_space(&conn->handshake);
-                        destroy_handshake_flow(conn, 2);
-                    }
-                    DEBUG_CONN(conn, "got handshake_done");
-                    break;
                 default:
                     fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)type_flags);
                     ret = QUICLY_ERROR_TBD;
@@ -3031,16 +2954,6 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     if ((payload = decrypt_packet(cipher, &(*space)->next_expected_packet_number, packet, &pn)).base == NULL) {
         ret = QUICLY_ERROR_TBD;
         goto Exit;
-    }
-
-    if (epoch == 2 && conn->initial != NULL) {
-        free_handshake_space(&conn->initial);
-        destroy_handshake_flow(conn, 0);
-        if (!quicly_is_client(conn) && conn->application != NULL && conn->application->cipher.egress_0rtt.aead != NULL) {
-            destroy_handshake_flow(conn, 1);
-            dispose_cipher(&conn->application->cipher.egress_0rtt);
-            conn->application->cipher.egress_0rtt = (struct st_quicly_cipher_context_t){NULL};
-        }
     }
 
     if (payload.len == 0) {

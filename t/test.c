@@ -177,7 +177,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
         size_t num_packets = decode_packets(decoded, datagrams, num_datagrams, quicly_is_client(dst) ? 0 : 8);
         for (i = 0; i != num_packets; ++i) {
             ret = quicly_receive(dst, decoded + i);
-            ok(ret == 0);
+            ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
         }
         free_packets(datagrams, num_datagrams);
     }
