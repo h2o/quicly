@@ -1402,7 +1402,7 @@ static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, uint6
     if ((ptlen = ptls_aead_decrypt(ctx->aead, packet->octets.base + aead_off, packet->octets.base + aead_off,
                                    packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
         if (QUICLY_DEBUG)
-            fprintf(stderr, "%s: aead decryption failure\n", __FUNCTION__);
+            fprintf(stderr, "%s: aead decryption failure (pn: %" PRIu64 ")\n", __FUNCTION__, *pn);
         goto Error;
     }
 
