@@ -9,7 +9,8 @@ How to build
 ---
 
 ```
-% cmake
+% git submodule update --init --recursive
+% cmake .
 % make
 % make check
 ```
@@ -18,7 +19,7 @@ Building the software requires OpenSSL 1.0.2 or above.
 If you have OpenSSL installed in a non-standard directory, you can pass the location using the `PKG_CONFIG_PATH` environment variable.
 
 ```
-% PKG_CONFIG_PATH=/path/to/openssl/lib/pkgconfig cmake
+% PKG_CONFIG_PATH=/path/to/openssl/lib/pkgconfig cmake .
 ```
 
 Running quicly
