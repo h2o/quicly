@@ -19,10 +19,6 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef _XOPEN_SOURCE
-#define _XOPEN_SOURCE 700 /* required for glibc to use getaddrinfo, etc. */
-#endif
-
 #include <getopt.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -30,6 +26,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
 #include "quicly.h"
 #include "../deps/picotls/t/util.h"
 
@@ -175,8 +172,14 @@ static int on_resp_receive(quicly_stream_t *stream)
     if (quicly_recvbuf_is_shutdown(&stream->recvbuf)) {
         static size_t num_resp_received;
         ++num_resp_received;
-        if (req_paths[num_resp_received] == NULL)
+        if (req_paths[num_resp_received] == NULL) {
+            uint64_t num_received, num_sent, num_lost, num_ack_received, num_bytes_sent;
+            quicly_get_packet_stats(stream->conn, &num_received, &num_sent, &num_lost, &num_ack_received, &num_bytes_sent);
+            fprintf(stderr, "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
+                            ", bytes-sent: %" PRIu64 "\n",
+                    num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
             exit(0);
+        }
     }
 
     return 0;
@@ -358,11 +361,32 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
     }
 }
 
+static quicly_conn_t **conns;
+static size_t num_conns = 0;
+
+static void on_signal(int signo)
+{
+    size_t i;
+    for (i = 0; i != num_conns; ++i) {
+        const quicly_cid_t *host_cid = quicly_get_host_cid(conns[i]);
+        char *host_cid_hex = quicly_hexdump(host_cid->cid, host_cid->len, SIZE_MAX);
+        uint64_t num_received, num_sent, num_lost, num_ack_received, num_bytes_sent;
+        quicly_get_packet_stats(conns[i], &num_received, &num_sent, &num_lost, &num_ack_received, &num_bytes_sent);
+        fprintf(stderr, "conn:%s: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
+                        ", bytes-sent: %" PRIu64 "\n",
+                host_cid_hex, num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
+        free(host_cid_hex);
+    }
+    if (signo == SIGINT)
+        _exit(0);
+}
+
 static int run_server(struct sockaddr *sa, socklen_t salen)
 {
-    static quicly_conn_t **conns;
-    size_t num_conns = 0;
     int fd;
+
+    signal(SIGINT, on_signal);
+    signal(SIGHUP, on_signal);
 
     if ((fd = socket(sa->sa_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         perror("socket(2) failed");

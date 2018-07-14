@@ -31,18 +31,23 @@ uint8_t *quicly_encode_path_challenge_frame(uint8_t *dst, int is_response, const
     return dst;
 }
 
-uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t *ranges, size_t *range_index)
+uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t largest_pn, uint64_t ack_delay, quicly_ranges_t *ranges,
+                                 size_t *range_index)
 {
     uint8_t num_blocks = 0, *num_blocks_at;
 
     *dst++ = QUICLY_FRAME_TYPE_ACK;
-    dst = quicly_encodev(dst, ranges->ranges[*range_index].end - 1);                                      /* largest acknowledged */
-    *dst++ = 0;                                                                                           /* TODO ack delay */
-    num_blocks_at = dst++;                                                                                /* slot for num_blocks */
-    dst = quicly_encodev(dst, ranges->ranges[*range_index].end - ranges->ranges[*range_index].start - 1); /* first ack block */
-    --*range_index;
+    dst = quicly_encodev(dst, largest_pn);                    /* largest acknowledged */
+    dst = quicly_encodev(dst, ack_delay);                     /* ack delay */
+    num_blocks_at = dst++;                                    /* slot for num_blocks */
+    if (largest_pn == ranges->ranges[*range_index].end - 1) { /* first ack block */
+        dst = quicly_encodev(dst, ranges->ranges[*range_index].end - ranges->ranges[*range_index].start - 1);
+        --*range_index;
+    } else {
+        dst = quicly_encodev(dst, 0);
+    }
 
-    while (*range_index != SIZE_MAX && dst_end - dst >= 16) {
+    while (*range_index != SIZE_MAX && dst_end - dst >= 16 && num_blocks < 63) {
         dst = quicly_encodev(dst, ranges->ranges[*range_index + 1].start - ranges->ranges[*range_index].end - 1); /* gap */
         dst = quicly_encodev(dst, ranges->ranges[*range_index].end - ranges->ranges[*range_index].start - 1);     /* ack block */
         --*range_index;
@@ -55,11 +60,11 @@ uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t
 
 int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame)
 {
-    uint64_t ack_delay, i, tmp;
+    uint64_t i, tmp;
 
     if ((frame->largest_acknowledged = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if ((ack_delay = quicly_decodev(src, end)) == UINT64_MAX)
+    if ((frame->ack_delay = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
     if ((frame->num_gaps = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;

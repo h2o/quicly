@@ -28,7 +28,7 @@
 void quicly_sendbuf_init(quicly_sendbuf_t *buf, quicly_sendbuf_change_cb on_change)
 {
     quicly_ranges_init(&buf->acked);
-    quicly_ranges_update(&buf->acked, 0, 0);
+    quicly_ranges_add(&buf->acked, 0, 0);
     quicly_ranges_init(&buf->pending);
     quicly_buffer_init(&buf->data);
     buf->eos = UINT64_MAX;
@@ -52,7 +52,7 @@ int quicly_sendbuf_write(quicly_sendbuf_t *buf, const void *p, size_t len, quicl
     if ((ret = quicly_buffer_push(&buf->data, p, len, free_cb)) != 0)
         goto Exit;
     end_off = buf->acked.ranges[0].end + buf->data.len;
-    if ((ret = quicly_ranges_update(&buf->pending, end_off - len, end_off)) != 0)
+    if ((ret = quicly_ranges_add(&buf->pending, end_off - len, end_off)) != 0)
         goto Exit;
 
     buf->on_change(buf);
@@ -67,7 +67,7 @@ int quicly_sendbuf_shutdown(quicly_sendbuf_t *buf)
     assert(buf->eos == UINT64_MAX);
 
     buf->eos = buf->acked.ranges[0].end + buf->data.len;
-    if ((ret = quicly_ranges_update(&buf->pending, buf->eos, buf->eos + 1)) != 0)
+    if ((ret = quicly_ranges_add(&buf->pending, buf->eos, buf->eos + 1)) != 0)
         goto Exit;
 
     buf->on_change(buf);
@@ -95,17 +95,44 @@ void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter,
     ackargs->end = iter->stream_off;
 }
 
-int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args)
+int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args, int is_active)
 {
     uint64_t prev_base_off = buf->acked.ranges[0].end;
     int ret;
 
-    if ((ret = quicly_ranges_update(&buf->acked, args->start, args->end)) != 0)
+    if ((ret = quicly_ranges_add(&buf->acked, args->start, args->end)) != 0)
         return ret;
+    if (!is_active) {
+        if ((ret = quicly_ranges_subtract(&buf->pending, args->start, args->end)) != 0)
+            return ret;
+    }
+    assert(buf->pending.num_ranges == 0 || buf->acked.ranges[0].end <= buf->pending.ranges[0].start);
 
     size_t delta = buf->acked.ranges[0].end - prev_base_off;
     if (delta != 0)
         quicly_buffer_shift(&buf->data, delta);
 
+    return 0;
+}
+
+int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args)
+{
+    uint64_t start = args->start, end = args->end;
+    size_t acked_slot = 0;
+    int ret;
+
+    while (start < end) {
+        if (start < buf->acked.ranges[acked_slot].end)
+            start = buf->acked.ranges[acked_slot].end;
+        ++acked_slot;
+        if (acked_slot == buf->acked.num_ranges || end <= buf->acked.ranges[acked_slot].start)
+            return quicly_ranges_add(&buf->pending, start, end);
+        if (start < buf->acked.ranges[acked_slot].start) {
+            if ((ret = quicly_ranges_add(&buf->pending, start, buf->acked.ranges[acked_slot].start)) != 0)
+                return ret;
+        }
+    }
+
+    assert(buf->acked.ranges[0].end <= buf->pending.ranges[0].start);
     return 0;
 }

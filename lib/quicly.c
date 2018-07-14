@@ -21,6 +21,7 @@
  */
 #include <assert.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include "khash.h"
+#include "cc.h"
 #include "quicly.h"
 #include "quicly/ack.h"
 #include "quicly/frame.h"
@@ -47,9 +49,15 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA 0
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA 1
 #define QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT 3
+#define QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT 7
 #define QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN 6
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI 2
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI 8
+
+/**
+ * do not try to send frames that require ACK if the send window is below this value
+ */
+#define MIN_SEND_WINDOW 64
 
 #define STATELESS_RESET_TOKEN_SIZE 16
 
@@ -91,6 +99,10 @@ struct st_quicly_pn_space_t {
      * acks to be sent to peer
      */
     quicly_ranges_t ack_queue;
+    /**
+     * time at when the largest pn in the ack_queue has been received (or INT64_MAX if none)
+     */
+    int64_t largest_pn_received_at;
     /**
      *
      */
@@ -175,6 +187,10 @@ struct st_quicly_conn_t {
          */
         quicly_acks_t acks;
         /**
+         * all packets where pn < max_lost_pn are deemed lost
+         */
+        uint64_t max_lost_pn;
+        /**
          * loss recovery
          */
         quicly_loss_t loss;
@@ -210,7 +226,31 @@ struct st_quicly_conn_t {
         /**
          *
          */
+        int64_t last_retransmittable_sent_at;
+        /**
+         *
+         */
         unsigned send_handshake_done : 1;
+        /**
+         *
+         */
+        int64_t send_ack_at;
+        /**
+         *
+         */
+        struct {
+            struct cc_var ccv;
+            size_t bytes_in_flight;
+            uint64_t end_of_recovery;
+            unsigned in_first_rto : 1;
+            /**
+             * collected by on_ack_cc, number of packets / octets that have been newly acknowledged or declared lost
+             */
+            struct {
+                size_t nsegs;
+                size_t nbytes;
+            } this_ack;
+        } cc;
     } egress;
     /**
      * crypto data
@@ -245,7 +285,7 @@ struct st_quicly_conn_t {
 };
 
 static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, int is_enc, size_t epoch, const void *secret);
-static int retire_acks(quicly_conn_t *conn, size_t count, size_t epoch);
+static int retire_acks_by_epoch(quicly_conn_t *conn, size_t epoch);
 
 static ptls_update_traffic_key_t update_traffic_key = {update_traffic_key_cb};
 
@@ -254,8 +294,8 @@ const quicly_context_t quicly_default_context = {
      NULL, &update_traffic_key}, /* tls */
     1280,                        /* max_packet_size */
     &quicly_loss_default_conf,   /* loss */
-    16384,                       /* initial_max_stream_data */
-    65536,                       /* initial_max_data */
+    16 * 1024 * 1024,            /* initial_max_stream_data */
+    16 * 1024 * 1024,            /* initial_max_data */
     600,                         /* idle_timeout */
     100,                         /* max_concurrent_streams_bidi */
     0,                           /* max_concurrent_streams_uni */
@@ -272,6 +312,29 @@ const quicly_context_t quicly_default_context = {
 };
 
 static const quicly_transport_parameters_t transport_params_before_handshake = {16384, 16384, 10, 60, 0};
+
+static void update_cc_ticks(quicly_context_t *ctx)
+{
+    /* TODO we might need to consider making cc_hz and cc_ticks a thread-local variable, otherwise the logic below would break if
+     * user tries to use different implementations of `ctx->now` within the process.
+     */
+    int64_t now = ctx->now(ctx);
+
+    assert(cc_hz == 100);
+
+    static int64_t base;
+    if (base == 0) {
+        static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+        pthread_mutex_lock(&m);
+        if (base == 0)
+            base = now;
+        pthread_mutex_unlock(&m);
+    }
+
+    int new_ticks = (int)((now - base) / 10);
+    if (cc_ticks != new_ticks)
+        cc_ticks = new_ticks;
+}
 
 static void dispose_cipher(struct st_quicly_cipher_context_t *ctx)
 {
@@ -641,7 +704,7 @@ static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
     quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
     assert(stream != NULL);
     destroy_stream(stream);
-    retire_acks(conn, SIZE_MAX, epoch);
+    retire_acks_by_epoch(conn, epoch);
 }
 
 static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
@@ -652,6 +715,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
         return NULL;
 
     quicly_ranges_init(&space->ack_queue);
+    space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->send_ack_at = INT64_MAX;
     if (sz != sizeof(*space))
@@ -664,6 +728,26 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
 {
     quicly_ranges_dispose(&space->ack_queue);
     free(space);
+}
+
+static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, int64_t now)
+{
+    int ret;
+
+    if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
+        goto Exit;
+    if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1) {
+        /* FIXME implement deduplication at an earlier moment? */
+        space->largest_pn_received_at = now;
+    }
+    if (!is_ack_only && space->send_ack_at == INT64_MAX) {
+        /* FIXME use 1/4 minRTT */
+        space->send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
+    }
+
+    ret = 0;
+Exit:
+    return ret;
 }
 
 static void free_handshake_space(struct st_quicly_handshake_space_t **space)
@@ -780,6 +864,7 @@ void quicly_free(quicly_conn_t *conn)
         conn->egress.path_challenge.head = pending->next;
         free(pending);
     }
+    cc_destroy(&conn->egress.cc.ccv);
 
     kh_foreach_value(conn->streams, stream, { destroy_stream(stream); });
     kh_destroy(quicly_stream_t, conn->streams);
@@ -988,6 +1073,7 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
     /* set optional parameters to their default values */
     params->initial_max_streams_bidi = 0;
     params->initial_max_streams_uni = 0;
+    params->ack_delay_exponent = 3;
 
     /* decode the parameters block */
     ptls_decode_block(src, end, 2, {
@@ -1032,6 +1118,13 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI:
                     if ((ret = ptls_decode16(&params->initial_max_streams_uni, &src, end)) != 0)
                         goto Exit;
+                    break;
+                case QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT:
+                    if (src == end) {
+                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
+                        goto Exit;
+                    }
+                    params->ack_delay_exponent = *src++;
                     break;
                 default:
                     src = end;
@@ -1115,6 +1208,10 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_loss_init(&conn->egress.loss, conn->super.ctx->loss,
                      conn->super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
     conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
+    conn->egress.send_ack_at = INT64_MAX;
+    update_cc_ticks(conn->super.ctx);
+    cc_init(&conn->egress.cc.ccv, &newreno_cc_algo, 1280 * 8, 1280);
+    conn->egress.cc.ccv.ccvc.ccv.snd_scale = 14; /* FIXME */
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -1281,8 +1378,8 @@ Exit:
     return ret;
 }
 
-static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, quicly_decoded_packet_t *packet,
-                                   uint64_t *next_expected_pn)
+static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, uint64_t *next_expected_pn,
+                                   quicly_decoded_packet_t *packet, uint64_t *pn)
 {
     size_t encrypted_len = packet->octets.len - packet->encrypted_off, iv_offset;
     uint8_t pnbuf[4];
@@ -1321,10 +1418,10 @@ static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, quicl
     memcpy(packet->octets.base + packet->encrypted_off, pnbuf, pnlen);
 
     /* AEAD */
-    uint64_t pn = quicly_determine_packet_number(pnbits, pnmask, *next_expected_pn);
+    *pn = quicly_determine_packet_number(pnbits, pnmask, *next_expected_pn);
     size_t aead_off = packet->encrypted_off + pnlen, ptlen;
     if ((ptlen = ptls_aead_decrypt(ctx->aead, packet->octets.base + aead_off, packet->octets.base + aead_off,
-                                   packet->octets.len - aead_off, pn, packet->octets.base, aead_off)) == SIZE_MAX) {
+                                   packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
         if (QUICLY_DEBUG)
             fprintf(stderr, "%s: aead decryption failure\n", __FUNCTION__);
         goto Error;
@@ -1336,8 +1433,8 @@ static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, quicl
         free(payload_hex);
     }
 
-    if (*next_expected_pn <= pn)
-        *next_expected_pn = pn + 1;
+    if (*next_expected_pn <= *pn)
+        *next_expected_pn = *pn + 1;
     return ptls_iovec_init(packet->octets.base + aead_off, ptlen);
 
 Error:
@@ -1350,7 +1447,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     quicly_conn_t *conn = NULL;
     struct st_quicly_cipher_context_t ingress_cipher = {NULL}, egress_cipher = {NULL};
     ptls_iovec_t payload;
-    uint64_t next_expected_pn;
+    uint64_t next_expected_pn, pn;
     quicly_stream_frame_t frame;
     int ret;
 
@@ -1370,7 +1467,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     if ((ret = setup_initial_encryption(&ingress_cipher, &egress_cipher, ctx->tls.cipher_suites, packet->cid.dest, 0)) != 0)
         goto Exit;
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
-    if ((payload = decrypt_packet(&ingress_cipher, packet, &next_expected_pn)).base == NULL) {
+    if ((payload = decrypt_packet(&ingress_cipher, &next_expected_pn, packet, &pn)).base == NULL) {
         ret = QUICLY_ERROR_TBD;
         goto Exit;
     }
@@ -1423,10 +1520,10 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     }
     conn->crypto.handshake_properties.server.cookie.key = ctx->stateless_retry.key;
 
-    if ((ret = quicly_ranges_update(&conn->initial->super.ack_queue, next_expected_pn - 1, next_expected_pn)) != 0)
-        goto Exit;
+    ++conn->super.num_packets.received;
     assert(conn->initial->super.send_ack_at == INT64_MAX);
-    conn->initial->super.send_ack_at = conn->super.ctx->now(conn->super.ctx) + QUICLY_DELAYED_ACK_TIMEOUT;
+    if ((ret = record_receipt(&conn->initial->super, pn, 0, conn->super.ctx->now(conn->super.ctx))) != 0)
+        goto Exit;
     conn->initial->super.next_expected_packet_number = next_expected_pn;
 
     if ((ret = apply_handshake_flow(conn, 0, &frame)) != 0)
@@ -1467,7 +1564,7 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
         return 0;
 
     if (acked) {
-        if ((ret = quicly_sendbuf_acked(&stream->sendbuf, &ack->data.stream.args)) != 0)
+        if ((ret = quicly_sendbuf_acked(&stream->sendbuf, &ack->data.stream.args, ack->is_active)) != 0)
             return ret;
         if (quicly_stream_is_closable(stream) && (ret = stream->on_update(stream)) != 0)
             return ret;
@@ -1570,12 +1667,33 @@ static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t
     return 0;
 }
 
+static int on_ack_cc(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+{
+    if (ack->is_active) {
+        conn->egress.cc.this_ack.nsegs += 1;
+        conn->egress.cc.this_ack.nbytes += ack->data.cc.bytes_in_flight;
+    }
+    return 0;
+}
+
+static ssize_t round_send_window(ssize_t window)
+{
+    if (window < MIN_SEND_WINDOW * 2) {
+        if (window < MIN_SEND_WINDOW) {
+            return 0;
+        } else {
+            return MIN_SEND_WINDOW * 2;
+        }
+    }
+    return window;
+}
+
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
     if (conn->super.state == QUICLY_STATE_DRAINING)
         return INT64_MAX;
 
-    if (1 /* CWND is not full (TODO) */) {
+    if (round_send_window((ssize_t)cc_get_cwnd(&conn->egress.cc.ccv) - (ssize_t)conn->egress.cc.bytes_in_flight) > 0) {
         if (conn->crypto.pending_flows != 0 || conn->egress.send_handshake_done ||
             quicly_linklist_is_linked(&conn->pending_link.control) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_fin_only) ||
@@ -1610,6 +1728,7 @@ struct st_quicly_send_context_t {
     quicly_datagram_t **packets;
     size_t max_packets;
     size_t num_packets;
+    ssize_t send_window;
     uint8_t *dst;
     uint8_t *dst_end;
     uint8_t *dst_encrypt_from;
@@ -1618,6 +1737,8 @@ struct st_quicly_send_context_t {
 static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, int coalesced)
 {
     assert(s->target.cipher->aead != NULL);
+
+    assert(s->dst != s->dst_encrypt_from);
 
     if (!coalesced && s->target.packet->data.base[0] == QUICLY_PACKET_TYPE_INITIAL &&
         conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
@@ -1642,10 +1763,24 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     ptls_cipher_init(s->target.cipher->pne, s->dst_encrypt_from);
     ptls_cipher_encrypt(s->target.cipher->pne, s->dst_encrypt_from - 4, s->dst_encrypt_from - 4, 4);
 
+    /* register CC callback if the packet is carrying any acknowledgible data */
+    if (!quicly_acks_is_empty(&conn->egress.acks) &&
+        quicly_acks_get_tail(&conn->egress.acks)->packet_number == conn->egress.packet_number) {
+        size_t packet_size = s->dst - s->target.first_byte_at;
+        quicly_ack_t *ack;
+        if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, on_ack_cc)) == NULL)
+            return PTLS_ERROR_NO_MEMORY;
+        ack->data.cc.bytes_in_flight = packet_size;
+        conn->egress.cc.bytes_in_flight += packet_size;
+        s->send_window -= packet_size;
+    }
+
     s->target.packet->data.len = s->dst - s->target.packet->data.base;
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
     ++conn->egress.packet_number;
+    ++conn->super.num_packets.sent;
+    conn->super.num_bytes_sent += s->target.packet->data.len;
 
     if (!coalesced) {
         s->packets[s->num_packets++] = s->target.packet;
@@ -1666,7 +1801,7 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
-static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
+static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, int to_be_acked)
 {
     int coalescible, ret;
 
@@ -1709,6 +1844,9 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
     } else {
         if (s->num_packets >= s->max_packets)
             return QUICLY_ERROR_SENDBUF_FULL;
+        s->send_window = round_send_window(s->send_window);
+        if (to_be_acked && s->send_window < (ssize_t)min_space)
+            return QUICLY_ERROR_SENDBUF_FULL;
         if ((s->target.packet =
                  conn->super.ctx->alloc_packet(conn->super.ctx, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
@@ -1742,35 +1880,52 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
     return 0;
 }
 
+static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
+{
+    return _do_prepare_packet(conn, s, min_space, 0);
+}
+
 static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, quicly_ack_t **ack,
                                 quicly_ack_cb ack_cb)
 {
     int ret;
 
-    if ((ret = prepare_packet(conn, s, min_space)) != 0)
+    if ((ret = _do_prepare_packet(conn, s, min_space, 1)) != 0)
         return ret;
     if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, ack_cb)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
+    conn->egress.last_retransmittable_sent_at = s->now;
+    /* TODO return the remaining window that the sender can use */
     return ret;
 }
 
 static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, struct st_quicly_send_context_t *s)
 {
     size_t range_index;
+    uint64_t largest_pn;
+    uint64_t ack_delay;
     int ret;
 
     if (space->ack_queue.num_ranges == 0)
         return 0;
 
     range_index = space->ack_queue.num_ranges - 1;
+    largest_pn = space->ack_queue.ranges[range_index].end - 1;
+    if (space->largest_pn_received_at < s->now) {
+        /* FIXME use a bigger exponent considering that our timer is in milliseconds? */
+        ack_delay = ((s->now - space->largest_pn_received_at) * 1000) >> 3;
+    } else {
+        ack_delay = 0;
+    }
     do {
         if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
             break;
-        s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, &range_index);
+        s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, largest_pn, ack_delay, &space->ack_queue, &range_index);
     } while (range_index != SIZE_MAX);
 
     quicly_ranges_clear(&space->ack_queue);
+    space->largest_pn_received_at = INT64_MAX;
     space->send_ack_at = INT64_MAX;
     return ret;
 }
@@ -1923,12 +2078,68 @@ ShrinkRanges:
     return ret;
 }
 
+static void init_acks_iter(quicly_conn_t *conn, quicly_acks_iter_t *iter, int64_t now)
+{
+    /* TODO find a better threshold */
+    int64_t retire_before = now - ((conn->egress.loss.rtt.smoothed + conn->egress.loss.rtt.variance) * 4 +
+                                   conn->egress.loss.rtt.max_ack_delay + QUICLY_DELAYED_ACK_TIMEOUT);
+    quicly_ack_t *ack;
+
+    quicly_acks_init_iter(&conn->egress.acks, iter);
+
+    while ((ack = quicly_acks_get(iter))->sent_at < retire_before && !ack->is_active) {
+        quicly_acks_release(&conn->egress.acks, iter);
+        quicly_acks_next(iter);
+    }
+}
+
 static inline int ack_is_handshake_flow(quicly_ack_t *ack, size_t epoch)
 {
     return ack->acked == on_ack_stream && ack->data.stream.stream_id == -(1 + epoch);
 }
 
-int retire_acks(quicly_conn_t *conn, size_t count, size_t epoch)
+int retire_acks_by_epoch(quicly_conn_t *conn, size_t epoch)
+{
+    quicly_acks_iter_t iter;
+    quicly_ack_t *ack;
+    uint64_t pn;
+    int ret = 0;
+
+    conn->egress.cc.this_ack.nsegs = 0;
+    conn->egress.cc.this_ack.nbytes = 0;
+
+    init_acks_iter(conn, &iter, conn->super.ctx->now(conn->super.ctx));
+    ack = quicly_acks_get(&iter);
+
+    while ((pn = ack->packet_number) != UINT64_MAX) {
+        int skip;
+        if (ack_is_handshake_flow(ack, epoch)) {
+            skip = 0;
+        } else if (epoch == 1 && (ack->acked == on_ack_stream && ack->data.stream.stream_id >= 0)) {
+            /* NACK all application data upon 0-RTT denial */
+            skip = 0;
+        } else {
+            skip = 1;
+        }
+        do {
+            if (!skip) {
+                if (conn->egress.max_lost_pn <= pn) {
+                    if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
+                        return ret;
+                }
+                quicly_acks_release(&conn->egress.acks, &iter);
+            }
+            quicly_acks_next(&iter);
+        } while ((ack = quicly_acks_get(&iter))->packet_number == pn);
+    }
+
+    assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
+    conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
+
+    return ret;
+}
+
+static int retire_acks_by_count(quicly_conn_t *conn, size_t count, int64_t now)
 {
     quicly_acks_iter_t iter;
     quicly_ack_t *ack;
@@ -1937,32 +2148,27 @@ int retire_acks(quicly_conn_t *conn, size_t count, size_t epoch)
 
     assert(count != 0);
 
-    quicly_acks_init_iter(&conn->egress.acks, &iter);
-    ack = quicly_acks_get(&iter);
+    init_acks_iter(conn, &iter, now);
+
+    while ((pn = (ack = quicly_acks_get(&iter))->packet_number) < conn->egress.max_lost_pn)
+        quicly_acks_next(&iter);
+
+    conn->egress.cc.this_ack.nsegs = 0;
+    conn->egress.cc.this_ack.nbytes = 0;
 
     do {
         if ((pn = ack->packet_number) == UINT64_MAX)
             break;
         do {
-            int skip = 0;
-            if (epoch != SIZE_MAX) {
-                if (ack_is_handshake_flow(ack, epoch)) {
-                    skip = 0;
-                } else if (epoch == 1 && (ack->acked == on_ack_stream && ack->data.stream.stream_id >= 0)) {
-                    /* NACK all application data upon 0-RTT denial */
-                    skip = 0;
-                } else {
-                    skip = 1;
-                }
-            }
-            if (!skip) {
-                if ((ret = ack->acked(conn, 0, ack)) != 0)
-                    return ret;
-                quicly_acks_release(&conn->egress.acks, &iter);
-            }
+            if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
+                return ret;
             quicly_acks_next(&iter);
         } while ((ack = quicly_acks_get(&iter))->packet_number == pn);
+        conn->egress.max_lost_pn = pn + 1;
     } while (--count != 0);
+
+    assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
+    conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
 
     return 0;
 }
@@ -1973,27 +2179,42 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     quicly_acks_iter_t iter;
     quicly_ack_t *ack;
     int64_t sent_before = now - delay_until_lost;
-    uint64_t logged_pn = UINT64_MAX;
+    uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
 
-    quicly_acks_init_iter(&conn->egress.acks, &iter);
+    init_acks_iter(conn, &iter, now);
 
     /* handle loss */
+    conn->egress.cc.this_ack.nsegs = 0;
+    conn->egress.cc.this_ack.nbytes = 0;
     while ((ack = quicly_acks_get(&iter))->sent_at <= sent_before) {
-        if (ack->packet_number != logged_pn) {
-            logged_pn = ack->packet_number;
-            DEBUG_CONN(conn, "RTO; packet-number: %" PRIu64, logged_pn);
+        if (conn->egress.max_lost_pn <= ack->packet_number) {
+            if (ack->packet_number != largest_newly_lost_pn) {
+                ++conn->super.num_packets.lost;
+                largest_newly_lost_pn = ack->packet_number;
+                DEBUG_CONN(conn, "RTO; packet-number: %" PRIu64, largest_newly_lost_pn);
+            }
+            if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
+                return ret;
         }
-        if ((ret = ack->acked(conn, 0, ack)) != 0)
-            return ret;
-        quicly_acks_release(&conn->egress.acks, &iter);
         quicly_acks_next(&iter);
     }
+    if (largest_newly_lost_pn != UINT64_MAX)
+        conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
+    assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
+    conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
+    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0)
+        cc_cong_signal(&conn->egress.cc.ccv, CC_NDUPACK, (uint32_t)conn->egress.cc.bytes_in_flight);
 
     /* schedule next alarm */
     *loss_time = ack->sent_at == INT64_MAX ? INT64_MAX : ack->sent_at + delay_until_lost;
 
     return 0;
+}
+
+static void update_loss_alarm(quicly_conn_t *conn)
+{
+    quicly_loss_update_alarm(&conn->egress.loss, conn->egress.last_retransmittable_sent_at, conn->egress.acks.num_active != 0);
 }
 
 static int send_stream_frames(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
@@ -2126,7 +2347,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
             assert(conn->application->cipher.egress_0rtt.aead != NULL);
             dispose_cipher(&conn->application->cipher.egress_0rtt);
             conn->application->cipher.egress_0rtt = (struct st_quicly_cipher_context_t){NULL};
-            retire_acks(conn, SIZE_MAX, 1);
+            retire_acks_by_epoch(conn, 1);
         }
         if (conn->handshake == NULL && (ret = setup_handshake_space_and_flow(conn, 2)) != 0)
             return ret;
@@ -2176,18 +2397,30 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         break;
     }
 
+    { /* calculate send window */
+        uint32_t cwnd = cc_get_cwnd(&conn->egress.cc.ccv);
+        if (conn->egress.cc.bytes_in_flight < cwnd)
+            s.send_window = cwnd - conn->egress.cc.bytes_in_flight;
+    }
+
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= s.now) {
         size_t min_packets_to_send;
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1, do_detect_loss,
                                         &min_packets_to_send)) != 0)
             goto Exit;
+        if (min_packets_to_send == 2 && !conn->egress.cc.in_first_rto) {
+            cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
+            conn->egress.cc.in_first_rto = 1;
+        }
         if (min_packets_to_send != 0) {
             /* better way to notify the app that we want to send some packets outside the congestion window? */
             assert(min_packets_to_send <= s.max_packets);
             s.max_packets = min_packets_to_send;
-            if ((ret = retire_acks(conn, min_packets_to_send, SIZE_MAX)) != 0)
+            if ((ret = retire_acks_by_count(conn, min_packets_to_send, s.now)) != 0)
                 goto Exit;
+            if (s.send_window < min_packets_to_send * conn->super.ctx->max_packet_size)
+                s.send_window = min_packets_to_send * conn->super.ctx->max_packet_size;
         }
     }
 
@@ -2294,13 +2527,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     if (s.target.packet != NULL)
         commit_send_packet(conn, &s, 0);
 
-    quicly_loss_update_alarm(&conn->egress.loss, s.now, conn->egress.acks.head != NULL);
-
     ret = 0;
 Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
     if (ret == 0) {
+        update_loss_alarm(conn);
         *num_packets = s.num_packets;
         if (s.current.first_byte == QUICLY_PACKET_TYPE_RETRY)
             ret = QUICLY_ERROR_CONNECTION_CLOSED;
@@ -2376,13 +2608,20 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 {
     quicly_acks_iter_t iter;
     uint64_t packet_number = frame->smallest_acknowledged;
-    int64_t last_packet_sent_at = INT64_MAX;
+    uint32_t bytes_in_pipe = (uint32_t)conn->egress.cc.bytes_in_flight;
+    struct {
+        uint64_t packet_number;
+        int64_t sent_at;
+    } largest_newly_acked = {UINT64_MAX, INT64_MAX};
     int ret;
 
     if (epoch == 1)
         return QUICLY_ERROR_PROTOCOL_VIOLATION;
 
-    quicly_acks_init_iter(&conn->egress.acks, &iter);
+    conn->egress.cc.this_ack.nsegs = 0;
+    conn->egress.cc.this_ack.nbytes = 0;
+
+    init_acks_iter(conn, &iter, now);
 
     size_t gap_index = frame->num_gaps;
     while (1) {
@@ -2392,17 +2631,21 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                 quicly_acks_next(&iter);
             do {
                 quicly_ack_t *ack;
-                while ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
-                    if (epoch == 3 || ack_is_handshake_flow(ack, epoch)) {
-                        last_packet_sent_at = ack->sent_at;
-                        if ((ret = ack->acked(conn, 1, ack)) != 0)
-                            return ret;
-                        quicly_acks_release(&conn->egress.acks, &iter);
+                if ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
+                    ++conn->super.num_packets.ack_received;
+                    int apply = epoch == 3 || ack_is_handshake_flow(ack, epoch);
+                    if (apply) {
+                        largest_newly_acked.packet_number = packet_number;
+                        largest_newly_acked.sent_at = ack->sent_at;
                     }
-                    quicly_acks_next(&iter);
-                }
-                if (quicly_loss_on_packet_acked(&conn->egress.loss, packet_number)) {
-                    /* FIXME notify CC that RTO has been verified */
+                    do {
+                        if (apply) {
+                            if ((ret = quicly_acks_on_ack(&conn->egress.acks, 1, ack, conn)) != 0)
+                                return ret;
+                            quicly_acks_release(&conn->egress.acks, &iter);
+                        }
+                        quicly_acks_next(&iter);
+                    } while ((ack = quicly_acks_get(&iter))->packet_number == packet_number);
                 }
                 ++packet_number;
             } while (--block_length != 0);
@@ -2412,12 +2655,38 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         packet_number += frame->gaps[gap_index];
     }
 
-    quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged,
-                                last_packet_sent_at <= now && packet_number >= frame->largest_acknowledged
-                                    ? (uint32_t)(now - last_packet_sent_at)
-                                    : UINT32_MAX);
+    /* update bytes in pipe */
+    assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
+    conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
+
+    /* OnPacketAcked */
+    uint32_t latest_rtt = UINT32_MAX, ack_delay = 0;
+    if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
+        int64_t t = now - largest_newly_acked.sent_at;
+        if (0 <= t && t < 100000) { /* ignore RTT above 100 seconds */
+            latest_rtt = (uint32_t)t;
+            ack_delay = (uint32_t)(((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000);
+        }
+    }
+    quicly_loss_on_ack_received(
+        &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay,
+        0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
+    /* OnPacketAckedCC */
+    if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
+        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
+        conn->egress.cc.in_first_rto = 0;
+    } else if (conn->egress.cc.in_first_rto) {
+        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
+        conn->egress.cc.in_first_rto = 0;
+    }
+    cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_pipe, (uint16_t)conn->egress.cc.this_ack.nsegs,
+                    (uint32_t)conn->egress.cc.this_ack.nbytes,
+                    conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */,
+                    frame->largest_acknowledged >= conn->egress.cc.end_of_recovery);
+
+    /* loss-detection  */
     quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
-    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.acks.head != NULL);
+    update_loss_alarm(conn);
 
     return 0;
 }
@@ -2498,7 +2767,7 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
         quicly_acks_iter_t iter;
         quicly_acks_init_iter(acks, &iter);
         quicly_ack_t *ack = quicly_acks_get(&iter);
-        int ret = ack->acked(conn, 0, ack);
+        int ret = quicly_acks_on_ack(acks, 0, ack, conn);
         assert(ret == 0);
         quicly_acks_release(acks, &iter);
     }
@@ -2690,6 +2959,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     size_t epoch;
     struct st_quicly_cipher_context_t *cipher;
     ptls_iovec_t payload;
+    uint64_t pn;
     int is_ack_only, ret;
 
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
@@ -2758,7 +3028,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
     }
 
-    if ((payload = decrypt_packet(cipher, packet, &(*space)->next_expected_packet_number)).base == NULL) {
+    if ((payload = decrypt_packet(cipher, &(*space)->next_expected_packet_number, packet, &pn)).base == NULL) {
         ret = QUICLY_ERROR_TBD;
         goto Exit;
     }
@@ -2785,13 +3055,11 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 
     if ((ret = handle_payload(conn, epoch, now, payload.base, payload.len, &is_ack_only)) != 0)
         goto Exit;
+    ++conn->super.num_packets.received;
 
     if (*space != NULL) {
-        if ((ret = quicly_ranges_update(&(*space)->ack_queue, (*space)->next_expected_packet_number - 1,
-                                        (*space)->next_expected_packet_number)) != 0)
+        if ((ret = record_receipt(*space, pn, is_ack_only, now)) != 0)
             goto Exit;
-        if (!is_ack_only && (*space)->send_ack_at == INT64_MAX)
-            (*space)->send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
 Exit:
@@ -2823,7 +3091,7 @@ void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint32_t r
             assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
             quicly_sendbuf_shutdown(&stream->sendbuf);
             quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
-            quicly_sendbuf_acked(&stream->sendbuf, &ackargs);
+            quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
             /* setup RST_STREAM */
             stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
             stream->_send_aux.rst.reason = reason;

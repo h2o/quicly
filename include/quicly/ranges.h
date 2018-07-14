@@ -40,7 +40,8 @@ typedef struct st_quicly_ranges_t {
 static void quicly_ranges_init(quicly_ranges_t *ranges);
 static void quicly_ranges_dispose(quicly_ranges_t *ranges);
 static void quicly_ranges_clear(quicly_ranges_t *ranges);
-int quicly_ranges_update(quicly_ranges_t *ranges, uint64_t start, uint64_t end);
+int quicly_ranges_add(quicly_ranges_t *ranges, uint64_t start, uint64_t end);
+int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end);
 void quicly_ranges_shrink(quicly_ranges_t *ranges, size_t start, size_t end);
 
 /* inline functions */

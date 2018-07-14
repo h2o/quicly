@@ -84,6 +84,10 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint16_t initial_max_streams_uni;
+    /**
+     *
+     */
+    uint8_t ack_delay_exponent;
 } quicly_transport_parameters_t;
 
 typedef struct st_quicly_cid_t {
@@ -213,6 +217,10 @@ struct _st_quicly_conn_public_t {
         socklen_t salen;
         quicly_transport_parameters_t transport_params;
     } peer;
+    struct {
+        uint64_t received, sent, lost, ack_received;
+    } num_packets;
+    uint64_t num_bytes_sent;
     uint32_t version;
 };
 
@@ -368,6 +376,11 @@ static void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
 /**
  *
  */
+static void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received, uint64_t *num_sent, uint64_t *num_lost,
+                                    uint64_t *num_ack_received, uint64_t *num_bytes_sent);
+/**
+ *
+ */
 void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed);
 /**
  *
@@ -513,6 +526,17 @@ inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     *sa = c->peer.sa;
     *salen = c->peer.salen;
+}
+
+inline void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received, uint64_t *num_sent, uint64_t *num_lost,
+                                    uint64_t *num_ack_received, uint64_t *num_bytes_sent)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    *num_received = c->num_packets.received;
+    *num_sent = c->num_packets.sent;
+    *num_lost = c->num_packets.lost;
+    *num_ack_received = c->num_packets.ack_received;
+    *num_bytes_sent = c->num_bytes_sent;
 }
 
 inline int quicly_stream_is_closable(quicly_stream_t *stream)

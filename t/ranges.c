@@ -22,11 +22,6 @@
 #include "quicly/ranges.h"
 #include "test.h"
 
-void test_ranges(void)
-{
-    quicly_ranges_t ranges;
-    int ret;
-
 #define CHECK(...)                                                                                                                 \
     do {                                                                                                                           \
         static const struct st_quicly_range_t expected[] = {__VA_ARGS__};                                                          \
@@ -38,58 +33,176 @@ void test_ranges(void)
         }                                                                                                                          \
     } while (0)
 
+static void test_add(void)
+{
+    quicly_ranges_t ranges;
+    int ret;
+
     quicly_ranges_init(&ranges);
     ok(ranges.num_ranges == 0);
 
-    ret = quicly_ranges_update(&ranges, 40, 100);
+    ret = quicly_ranges_add(&ranges, 40, 100);
     ok(ret == 0);
     CHECK({40, 100});
 
-    ret = quicly_ranges_update(&ranges, 30, 40);
+    ret = quicly_ranges_add(&ranges, 30, 40);
     ok(ret == 0);
     CHECK({30, 100});
 
-    ret = quicly_ranges_update(&ranges, 0, 10);
+    ret = quicly_ranges_add(&ranges, 0, 10);
     ok(ret == 0);
     CHECK({0, 10}, {30, 100});
 
-    ret = quicly_ranges_update(&ranges, 10, 30);
+    ret = quicly_ranges_add(&ranges, 10, 30);
     ok(ret == 0);
     CHECK({0, 100});
 
-    ret = quicly_ranges_update(&ranges, 200, 300);
+    ret = quicly_ranges_add(&ranges, 200, 300);
     ok(ret == 0);
     CHECK({0, 100}, {200, 300});
 
-    ret = quicly_ranges_update(&ranges, 100, 110);
+    ret = quicly_ranges_add(&ranges, 100, 110);
     ok(ret == 0);
     CHECK({0, 110}, {200, 300});
 
-    ret = quicly_ranges_update(&ranges, 190, 200);
+    ret = quicly_ranges_add(&ranges, 190, 200);
     ok(ret == 0);
     CHECK({0, 110}, {190, 300});
 
-    ret = quicly_ranges_update(&ranges, 100, 120);
+    ret = quicly_ranges_add(&ranges, 100, 120);
     ok(ret == 0);
     CHECK({0, 120}, {190, 300});
 
-    ret = quicly_ranges_update(&ranges, 180, 200);
+    ret = quicly_ranges_add(&ranges, 180, 200);
     ok(ret == 0);
     CHECK({0, 120}, {180, 300});
 
-    ret = quicly_ranges_update(&ranges, 130, 150);
+    ret = quicly_ranges_add(&ranges, 130, 150);
     ok(ret == 0);
     CHECK({0, 120}, {130, 150}, {180, 300});
 
-    ret = quicly_ranges_update(&ranges, 160, 170);
+    ret = quicly_ranges_add(&ranges, 160, 170);
     ok(ret == 0);
     CHECK({0, 120}, {130, 150}, {160, 170}, {180, 300});
 
-    ret = quicly_ranges_update(&ranges, 170, 180);
+    ret = quicly_ranges_add(&ranges, 170, 180);
     ok(ret == 0);
     CHECK({0, 120}, {130, 150}, {160, 300});
 
-    ret = quicly_ranges_update(&ranges, 110, 180);
+    ret = quicly_ranges_add(&ranges, 110, 180);
     ok(ret == 0);
     CHECK({0, 300});
+}
+
+static void test_subtract(void)
+{
+    quicly_ranges_t ranges;
+    int ret;
+
+    quicly_ranges_init(&ranges);
+
+    ret = quicly_ranges_add(&ranges, 100, 200);
+    ok(ret == 0);
+
+    ret = quicly_ranges_subtract(&ranges, 0, 50);
+    ok(ret == 0);
+    CHECK({100, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 0, 100);
+    ok(ret == 0);
+    CHECK({100, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 250, 300);
+    ok(ret == 0);
+    CHECK({100, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 200, 300);
+    ok(ret == 0);
+    CHECK({100, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 100, 110);
+    ok(ret == 0);
+    CHECK({110, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 120, 130);
+    ok(ret == 0);
+    CHECK({110, 120}, {130, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 120, 130);
+    ok(ret == 0);
+    CHECK({110, 120}, {130, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 121, 129);
+    ok(ret == 0);
+    CHECK({110, 120}, {130, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 119, 120);
+    ok(ret == 0);
+    CHECK({110, 119}, {130, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 118, 120);
+    ok(ret == 0);
+    CHECK({110, 118}, {130, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 130, 132);
+    ok(ret == 0);
+    CHECK({110, 118}, {132, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 130, 133);
+    ok(ret == 0);
+    CHECK({110, 118}, {133, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 118, 134);
+    ok(ret == 0);
+    CHECK({110, 118}, {134, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 117, 134);
+    ok(ret == 0);
+    CHECK({110, 117}, {134, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 116, 135);
+    ok(ret == 0);
+    CHECK({110, 116}, {135, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 110, 140);
+    ok(ret == 0);
+    CHECK({140, 200});
+
+    ret = quicly_ranges_add(&ranges, 100, 120);
+    ok(ret == 0);
+    CHECK({100, 120}, {140, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 80, 150);
+    ok(ret == 0);
+    CHECK({150, 200});
+
+    ret = quicly_ranges_add(&ranges, 100, 120);
+    ok(ret == 0);
+    CHECK({100, 120}, {150, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 118, 200);
+    ok(ret == 0);
+    CHECK({100, 118});
+
+    ret = quicly_ranges_add(&ranges, 140, 200);
+    ok(ret == 0);
+    CHECK({100, 118}, {140, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 118, 240);
+    ok(ret == 0);
+    CHECK({100, 118});
+
+    ret = quicly_ranges_add(&ranges, 140, 200);
+    ok(ret == 0);
+    CHECK({100, 118}, {140, 200});
+
+    ret = quicly_ranges_subtract(&ranges, 117, 240);
+    ok(ret == 0);
+    CHECK({100, 117});
+}
+
+void test_ranges(void)
+{
+    subtest("add", test_add);
+    subtest("subtract", test_subtract);
 }
