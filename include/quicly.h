@@ -311,6 +311,7 @@ typedef struct st_quicly_decoded_packet_t {
         ptls_iovec_t dest, src;
     } cid;
     uint32_t version;
+    ptls_iovec_t token;
     size_t encrypted_off;
     size_t datagram_size;
 } quicly_decoded_packet_t;

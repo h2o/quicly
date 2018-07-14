@@ -371,6 +371,15 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
             /* version negotiation packet does not have the length field nor is ever coalesced */
             packet->encrypted_off = src - packet->octets.base;
         } else {
+            if (packet->octets.base[0] == QUICLY_PACKET_TYPE_INITIAL) {
+                uint64_t token_len;
+                if ((token_len = quicly_decodev(&src, src_end)) == UINT64_MAX)
+                    goto Error;
+                if (src_end - src < token_len)
+                    goto Error;
+                packet->token = ptls_iovec_init(src, token_len);
+                src += token_len;
+            }
             if ((rest_length = quicly_decodev(&src, src_end)) == UINT64_MAX)
                 goto Error;
             if (rest_length < 1)
@@ -1825,6 +1834,9 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
         *s->dst++ = (encode_cid_length(conn->super.peer.cid.len) << 4) | encode_cid_length(conn->super.host.cid.len);
         s->dst = emit_cid(s->dst, &conn->super.peer.cid);
         s->dst = emit_cid(s->dst, &conn->super.host.cid);
+        /* token */
+        if (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL)
+            *s->dst++ = 0;
         /* payload length is filled laterwards */
         *s->dst++ = 0;
         *s->dst++ = 0;
