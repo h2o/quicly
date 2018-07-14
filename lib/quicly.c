@@ -557,7 +557,7 @@ static void write_tlsbuf(quicly_conn_t *conn, ptls_buffer_t *tlsbuf, size_t epoc
     }
 }
 
-static int crypto_hs_on_update(quicly_stream_t *flow)
+static int crypto_on_update(quicly_stream_t *flow)
 {
     quicly_conn_t *conn = flow->conn;
     ptls_buffer_t buf;
@@ -690,7 +690,7 @@ static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
     if ((stream = open_stream(conn, -(1 + epoch))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
-    stream->on_update = crypto_hs_on_update;
+    stream->on_update = crypto_on_update;
     return 0;
 }
 
@@ -1478,11 +1478,11 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
             if (*src != QUICLY_FRAME_TYPE_PADDING)
                 break;
         }
-        if (src == end || *src++ != QUICLY_FRAME_TYPE_CRYPTO_HS) {
+        if (src == end || *src++ != QUICLY_FRAME_TYPE_CRYPTO) {
             ret = QUICLY_ERROR_TBD;
             goto Exit;
         }
-        if ((ret = quicly_decode_crypto_hs_frame(&src, end, &frame)) != 0)
+        if ((ret = quicly_decode_crypto_frame(&src, end, &frame)) != 0)
             goto Exit;
         if (frame.offset != 0) {
             ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
@@ -1994,7 +1994,7 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
 
     copysize = max_bytes - (iter->stream_off + max_bytes > stream->sendbuf.eos);
     if (stream->stream_id < 0) {
-        s->dst = quicly_encode_crypto_hs_frame_header(s->dst, s->dst_end, iter->stream_off, &copysize);
+        s->dst = quicly_encode_crypto_frame_header(s->dst, s->dst_end, iter->stream_off, &copysize);
     } else {
         s->dst = quicly_encode_stream_frame_header(s->dst, s->dst_end, stream->stream_id,
                                                    iter->stream_off + copysize >= stream->sendbuf.eos, iter->stream_off, &copysize);
@@ -2833,9 +2833,9 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, int64_t now, const 
             if ((ret = handle_ack_frame(conn, epoch, &frame, now)) != 0)
                 goto Exit;
         } break;
-        case QUICLY_FRAME_TYPE_CRYPTO_HS: {
+        case QUICLY_FRAME_TYPE_CRYPTO: {
             quicly_stream_frame_t frame;
-            if ((ret = quicly_decode_crypto_hs_frame(&src, end, &frame)) != 0)
+            if ((ret = quicly_decode_crypto_frame(&src, end, &frame)) != 0)
                 goto Exit;
             if ((ret = apply_handshake_flow(conn, epoch, &frame)) != 0)
                 goto Exit;

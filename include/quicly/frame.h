@@ -52,7 +52,7 @@ extern "C" {
 
 #define QUICLY_FRAME_TYPE_STREAM_BASE 0x10
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
-#define QUICLY_FRAME_TYPE_CRYPTO_HS 0x18
+#define QUICLY_FRAME_TYPE_CRYPTO 0x18
 #define QUICLY_FRAME_TYPE_STREAM_BIT_OFF 0x4
 #define QUICLY_FRAME_TYPE_STREAM_BIT_LEN 0x2
 #define QUICLY_FRAME_TYPE_STREAM_BIT_FIN 0x1
@@ -89,8 +89,8 @@ typedef struct st_quicly_stream_frame_t {
 } quicly_stream_frame_t;
 
 static int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame);
-static uint8_t *quicly_encode_crypto_hs_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t offset, size_t *data_len);
-static int quicly_decode_crypto_hs_frame(const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame);
+static uint8_t *quicly_encode_crypto_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t offset, size_t *data_len);
+static int quicly_decode_crypto_frame(const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame);
 
 static uint8_t *quicly_encode_rst_stream_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code, uint64_t final_offset);
 
@@ -374,11 +374,11 @@ Error:
     return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_STREAM_BASE);
 }
 
-inline uint8_t *quicly_encode_crypto_hs_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t offset, size_t *data_len)
+inline uint8_t *quicly_encode_crypto_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t offset, size_t *data_len)
 {
     size_t sizeleft, len_length;
 
-    *dst++ = QUICLY_FRAME_TYPE_CRYPTO_HS;
+    *dst++ = QUICLY_FRAME_TYPE_CRYPTO;
     dst = quicly_encodev(dst, offset);
 
     sizeleft = dst_end - dst;
@@ -398,7 +398,7 @@ inline uint8_t *quicly_encode_crypto_hs_frame_header(uint8_t *dst, uint8_t *dst_
     return dst;
 }
 
-inline int quicly_decode_crypto_hs_frame(const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame)
+inline int quicly_decode_crypto_frame(const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame)
 {
     uint64_t len;
 
@@ -416,7 +416,7 @@ inline int quicly_decode_crypto_hs_frame(const uint8_t **src, const uint8_t *end
 
     return 0;
 Error:
-    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_CRYPTO_HS);
+    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_CRYPTO);
 }
 
 inline uint8_t *quicly_encode_rst_stream_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code, uint64_t final_offset)
