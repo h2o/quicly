@@ -533,11 +533,11 @@ int main(int argc, char **argv)
     ctx.tls.random_bytes = ptls_openssl_random_bytes;
     ctx.tls.key_exchanges = ptls_openssl_key_exchanges;
     ctx.tls.cipher_suites = ptls_openssl_cipher_suites;
-    ctx.tls.max_early_data_size = UINT32_MAX;
     ctx.on_stream_open = on_stream_open;
     ctx.on_conn_close = on_conn_close;
 
     setup_session_cache(&ctx.tls);
+    ctx.tls.max_early_data_size = UINT32_MAX; /* we need to set this after calling setup_session_cache */
 
     while ((ch = getopt(argc, argv, "a:c:k:l:np:r:S:s:Vvh")) != -1) {
         switch (ch) {
