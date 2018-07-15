@@ -281,7 +281,7 @@ static int retire_acks_by_epoch(quicly_conn_t *conn, size_t epoch);
 static ptls_update_traffic_key_t update_traffic_key = {update_traffic_key_cb};
 
 const quicly_context_t quicly_default_context = {
-    {NULL, &ptls_get_time,     NULL, NULL, {NULL}, NULL, NULL, NULL, NULL, 0, 0, 1, 0, 0, 0, NULL, NULL, NULL,
+    {NULL, &ptls_get_time,     NULL, NULL, {NULL}, NULL, NULL, NULL, NULL, 0, 0, HKDF_BASE_LABEL, 1, 0, 0, 0, NULL, NULL, NULL,
      NULL, &update_traffic_key}, /* tls */
     1280,                        /* max_packet_size */
     &quicly_loss_default_conf,   /* loss */
