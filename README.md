@@ -8,6 +8,13 @@ The software is licensed under the MIT License.
 How to build
 ---
 
+Gather dependancies:
+
+```
+% git submodule init
+% git submodule update
+```
+
 ```
 % git submodule update --init --recursive
 % cmake .
