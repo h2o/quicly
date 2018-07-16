@@ -424,6 +424,16 @@ uint64_t quicly_determine_packet_number(uint32_t bits, uint32_t mask, uint64_t n
     return actual;
 }
 
+static void assert_consistency(quicly_conn_t *conn, int64_t now)
+{
+    if (conn->egress.acks.num_active != 0) {
+        assert(conn->egress.loss.alarm_at != INT64_MAX);
+    } else {
+        assert(conn->egress.loss.loss_time == INT64_MAX);
+    }
+    assert(now < conn->egress.loss.alarm_at);
+}
+
 int quicly_connection_is_ready(quicly_conn_t *conn)
 {
     return conn->application != NULL;
@@ -2491,6 +2501,8 @@ Exit:
         if (s.current.first_byte == QUICLY_PACKET_TYPE_RETRY)
             ret = QUICLY_ERROR_CONNECTION_CLOSED;
     }
+    if (ret == 0)
+        assert_consistency(conn, s.now);
     return ret;
 }
 
@@ -3003,6 +3015,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
 Exit:
+    if (ret == 0)
+        assert_consistency(conn, INT64_MIN);
     return ret;
 }
 
