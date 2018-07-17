@@ -2157,7 +2157,7 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count, int64_t now)
     return 0;
 }
 
-static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time)
+static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_pn, uint32_t delay_until_lost, int64_t *loss_time)
 {
     quicly_conn_t *conn = (void *)((char *)ld - offsetof(quicly_conn_t, egress.loss));
     quicly_acks_iter_t iter;
@@ -2166,13 +2166,15 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
 
+    *loss_time = INT64_MAX;
+
     init_acks_iter(conn, &iter, now);
 
     /* handle loss */
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
-    while ((ack = quicly_acks_get(&iter))->sent_at <= sent_before) {
-        if (conn->egress.max_lost_pn <= ack->packet_number) {
+    while ((ack = quicly_acks_get(&iter))->packet_number < largest_pn && ack->sent_at <= sent_before) {
+        if (ack->is_active && conn->egress.max_lost_pn <= ack->packet_number) {
             if (ack->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = ack->packet_number;
@@ -2191,7 +2193,8 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
         cc_cong_signal(&conn->egress.cc.ccv, CC_NDUPACK, (uint32_t)conn->egress.cc.bytes_in_flight);
 
     /* schedule next alarm */
-    *loss_time = ack->sent_at == INT64_MAX ? INT64_MAX : ack->sent_at + delay_until_lost;
+    if (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX && ack->is_active)
+        *loss_time = ack->sent_at + delay_until_lost;
 
     return 0;
 }
@@ -2378,8 +2381,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= s.now) {
         size_t min_packets_to_send;
-        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1, do_detect_loss,
-                                        &min_packets_to_send)) != 0)
+        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1,
+                                        conn->egress.loss.largest_acked_packet, do_detect_loss, &min_packets_to_send)) != 0)
             goto Exit;
         if (min_packets_to_send == 2 && !conn->egress.cc.in_first_rto) {
             cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
@@ -2651,7 +2654,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                     frame->largest_acknowledged >= conn->egress.cc.end_of_recovery);
 
     /* loss-detection  */
-    quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
+    quicly_loss_detect_loss(&conn->egress.loss, now, frame->largest_acknowledged, do_detect_loss);
     update_loss_alarm(conn);
 
     return 0;

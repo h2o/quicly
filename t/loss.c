@@ -205,6 +205,8 @@ quicly_get_first_timeout(client);
         if (quic_now < min_timeout)
             quic_now = min_timeout;
         transmit_cond(server, client, &num_sent_down, &num_received, cond_rand, 10);
+        server_timeout = quicly_get_first_timeout(server);
+        assert(server_timeout > quic_now - 20);
         if (quicly_get_state(client) == QUICLY_STATE_CONNECTED && quicly_connection_is_ready(client)) {
             if (client_stream == NULL) {
                 ret = quicly_open_stream(client, &client_stream);
@@ -219,6 +221,8 @@ quicly_get_first_timeout(client);
             }
         }
         transmit_cond(client, server, &num_sent_up, &num_received, downstream_only ? cond_true : cond_rand, 10);
+        client_timeout = quicly_get_first_timeout(client);
+        assert(client_timeout > quic_now - 20);
         if (client_stream != NULL && (server_stream = quicly_get_stream(server, client_stream->stream_id)) != NULL) {
             if (fully_received(&server_stream->recvbuf) && server_stream->recvbuf.data_off == 0) {
                 ok(recvbuf_is(&server_stream->recvbuf, req));
