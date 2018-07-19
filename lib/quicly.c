@@ -1201,6 +1201,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     update_cc_ticks(conn->super.ctx);
     cc_init(&conn->egress.cc.ccv, &newreno_cc_algo, 1280 * 8, 1280);
     conn->egress.cc.ccv.ccvc.ccv.snd_scale = 14; /* FIXME */
+    conn->egress.cc.end_of_recovery = UINT64_MAX;
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -2185,12 +2186,14 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_pn, u
         }
         quicly_acks_next(&iter);
     }
-    if (largest_newly_lost_pn != UINT64_MAX)
-        conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
-    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0)
-        cc_cong_signal(&conn->egress.cc.ccv, CC_NDUPACK, (uint32_t)conn->egress.cc.bytes_in_flight);
+    if (largest_newly_lost_pn != UINT64_MAX) {
+        conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
+        conn->egress.cc.end_of_recovery = conn->egress.packet_number - 1;
+        if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0)
+            cc_cong_signal(&conn->egress.cc.ccv, CC_ECN, (uint32_t)conn->egress.cc.bytes_in_flight);
+    }
 
     /* schedule next alarm */
     if (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX && ack->is_active)
@@ -2648,10 +2651,13 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
         conn->egress.cc.in_first_rto = 0;
     }
+    int end_of_recovery = frame->largest_acknowledged >= conn->egress.cc.end_of_recovery;
     cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_pipe, (uint16_t)conn->egress.cc.this_ack.nsegs,
                     (uint32_t)conn->egress.cc.this_ack.nbytes,
                     conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */,
-                    frame->largest_acknowledged >= conn->egress.cc.end_of_recovery);
+                    end_of_recovery);
+    if (end_of_recovery)
+        conn->egress.cc.end_of_recovery = UINT64_MAX;
 
     /* loss-detection  */
     quicly_loss_detect_loss(&conn->egress.loss, now, frame->largest_acknowledged, do_detect_loss);
