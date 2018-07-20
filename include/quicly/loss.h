@@ -129,10 +129,8 @@ inline void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, u
 {
     rtt->minimum = UINT32_MAX;
     rtt->latest = initial_rtt;
-    if (rtt->latest * 2 < conf->min_tlp_timeout)
-        rtt->latest = conf->min_tlp_timeout / 2;
-    rtt->smoothed = rtt->latest;
-    rtt->variance = rtt->latest / 2;
+    rtt->smoothed = 0;
+    rtt->variance = 0;
     rtt->max_ack_delay = 0;
 }
 
@@ -158,7 +156,6 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t _latest_rtt, uint32_t 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt)
 {
     *r = (quicly_loss_t){.conf = conf,
-                         .tlp_count = conf->max_tlps, /* start from max_tlps to disable TLP until seeing the first ack */
                          .loss_time = INT64_MAX,
                          .alarm_at = INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
@@ -171,9 +168,15 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_out
         if (r->loss_time != INT64_MAX) {
             /* Time loss detection */
             alarm_duration = r->loss_time - now;
+        } else if (r->rtt.smoothed == 0) {
+            /* handshake timer */
+            alarm_duration = 2 * r->rtt.latest /* should contain intial rtt */;
+            if (alarm_duration < r->conf->min_tlp_timeout)
+                alarm_duration = r->conf->min_tlp_timeout;
+            alarm_duration <<= r->tlp_count;
         } else {
             /* RTO or TLP alarm (FIXME observe and use max_ack_delay) */
-            alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance * 4 + r->rtt.max_ack_delay;
+            alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance + r->rtt.max_ack_delay;
             if (alarm_duration < r->conf->min_rto_timeout)
                 alarm_duration = r->conf->min_rto_timeout;
             alarm_duration <<= r->rto_count;
