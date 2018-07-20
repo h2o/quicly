@@ -125,8 +125,11 @@ int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args)
         if (start < buf->acked.ranges[acked_slot].end)
             start = buf->acked.ranges[acked_slot].end;
         ++acked_slot;
-        if (acked_slot == buf->acked.num_ranges || end <= buf->acked.ranges[acked_slot].start)
+        if (acked_slot == buf->acked.num_ranges || end <= buf->acked.ranges[acked_slot].start) {
+            if (start == end)
+                return 0;
             return quicly_ranges_add(&buf->pending, start, end);
+        }
         if (start < buf->acked.ranges[acked_slot].start) {
             if ((ret = quicly_ranges_add(&buf->pending, start, buf->acked.ranges[acked_slot].start)) != 0)
                 return ret;
