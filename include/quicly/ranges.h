@@ -38,6 +38,7 @@ typedef struct st_quicly_ranges_t {
 } quicly_ranges_t;
 
 static void quicly_ranges_init(quicly_ranges_t *ranges);
+int quicly_ranges_init_with_empty_range(quicly_ranges_t *ranges);
 static void quicly_ranges_dispose(quicly_ranges_t *ranges);
 static void quicly_ranges_clear(quicly_ranges_t *ranges);
 int quicly_ranges_add(quicly_ranges_t *ranges, uint64_t start, uint64_t end);

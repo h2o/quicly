@@ -27,8 +27,7 @@
 
 void quicly_sendbuf_init(quicly_sendbuf_t *buf, quicly_sendbuf_change_cb on_change)
 {
-    quicly_ranges_init(&buf->acked);
-    quicly_ranges_add(&buf->acked, 0, 0);
+    quicly_ranges_init_with_empty_range(&buf->acked);
     quicly_ranges_init(&buf->pending);
     quicly_buffer_init(&buf->data);
     buf->eos = UINT64_MAX;
@@ -126,7 +125,7 @@ int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args)
             start = buf->acked.ranges[acked_slot].end;
         ++acked_slot;
         if (acked_slot == buf->acked.num_ranges || end <= buf->acked.ranges[acked_slot].start) {
-            if (start == end)
+            if (!(start < end))
                 return 0;
             return quicly_ranges_add(&buf->pending, start, end);
         }

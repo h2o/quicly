@@ -70,9 +70,17 @@ static inline int merge_update(quicly_ranges_t *ranges, uint64_t start, uint64_t
     return 0;
 }
 
+int quicly_ranges_init_with_empty_range(quicly_ranges_t *ranges)
+{
+    quicly_ranges_init(ranges);
+    return insert_at(ranges, 0, 0, 0);
+}
+
 int quicly_ranges_add(quicly_ranges_t *ranges, uint64_t start, uint64_t end)
 {
     size_t slot, end_slot;
+
+    assert(start < end);
 
     if (ranges->num_ranges == 0) {
         return insert_at(ranges, start, end, 0);
@@ -108,6 +116,8 @@ int quicly_ranges_add(quicly_ranges_t *ranges, uint64_t start, uint64_t end)
 int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end)
 {
     size_t shrink_from, slot;
+
+    assert(start < end);
 
     if (ranges->num_ranges == 0) {
         return 0;
@@ -161,23 +171,24 @@ int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end
     }
 
     /* remove shrink_from..slot */
-    quicly_ranges_shrink(ranges, shrink_from, slot);
+    if (shrink_from != slot)
+        quicly_ranges_shrink(ranges, shrink_from, slot);
 
     return 0;
 }
 
 void quicly_ranges_shrink(quicly_ranges_t *ranges, size_t start, size_t end)
 {
-    if (start != end) {
-        MOVE(ranges->ranges + start, ranges->ranges + end, ranges->num_ranges - end);
-        ranges->num_ranges -= end - start;
-        if (ranges->capacity > 4 && ranges->num_ranges * 3 <= ranges->capacity) {
-            size_t new_capacity = ranges->capacity / 2;
-            struct st_quicly_range_t *new_ranges = realloc(ranges->ranges, new_capacity * sizeof(*new_ranges));
-            if (new_ranges != NULL) {
-                ranges->ranges = new_ranges;
-                ranges->capacity = new_capacity;
-            }
+    assert(start < end);
+
+    MOVE(ranges->ranges + start, ranges->ranges + end, ranges->num_ranges - end);
+    ranges->num_ranges -= end - start;
+    if (ranges->capacity > 4 && ranges->num_ranges * 3 <= ranges->capacity) {
+        size_t new_capacity = ranges->capacity / 2;
+        struct st_quicly_range_t *new_ranges = realloc(ranges->ranges, new_capacity * sizeof(*new_ranges));
+        if (new_ranges != NULL) {
+            ranges->ranges = new_ranges;
+            ranges->capacity = new_capacity;
         }
     }
 }

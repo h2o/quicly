@@ -2059,7 +2059,8 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
 ShrinkToIter:
     stream->sendbuf.pending.ranges[i].start = iter.stream_off;
 ShrinkRanges:
-    quicly_ranges_shrink(&stream->sendbuf.pending, 0, i);
+    if (i != 0)
+        quicly_ranges_shrink(&stream->sendbuf.pending, 0, i);
     return ret;
 }
 
@@ -3053,8 +3054,10 @@ void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint32_t r
             /* close the sender and mark the eos as the only byte that's not confirmed */
             assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
             quicly_sendbuf_shutdown(&stream->sendbuf);
-            quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
-            quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
+            if (stream->sendbuf.eos != 0) {
+                quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
+                quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
+            }
             /* setup RST_STREAM */
             stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
             stream->_send_aux.rst.reason = reason;
