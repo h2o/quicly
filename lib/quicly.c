@@ -2025,7 +2025,7 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
     return 0;
 }
 
-static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_context_t *s)
+static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_context_t *s, quicly_ranges_t *ranges)
 {
     quicly_sendbuf_dataiter_t iter;
     uint64_t max_stream_data;
@@ -2046,8 +2046,8 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
 
     /* emit packets in the pending ranges */
     quicly_sendbuf_init_dataiter(&stream->sendbuf, &iter);
-    for (i = 0; i != stream->sendbuf.pending.num_ranges; ++i) {
-        uint64_t start = stream->sendbuf.pending.ranges[i].start, end = stream->sendbuf.pending.ranges[i].end;
+    for (i = 0; i != ranges->num_ranges; ++i) {
+        uint64_t start = ranges->ranges[i].start, end = ranges->ranges[i].end;
         if (max_stream_data <= start)
             goto ShrinkRanges;
         if (max_stream_data < end)
@@ -2066,18 +2066,18 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
             }
         }
 
-        if (iter.stream_off < stream->sendbuf.pending.ranges[i].end)
+        if (iter.stream_off < ranges->ranges[i].end)
             goto ShrinkToIter;
     }
 
-    quicly_ranges_clear(&stream->sendbuf.pending);
+    quicly_ranges_clear(ranges);
     return 0;
 
 ShrinkToIter:
-    stream->sendbuf.pending.ranges[i].start = iter.stream_off;
+    ranges->ranges[i].start = iter.stream_off;
 ShrinkRanges:
     if (i != 0)
-        quicly_ranges_shrink(&stream->sendbuf.pending, 0, i);
+        quicly_ranges_shrink(ranges, 0, i);
     return ret;
 }
 
@@ -2233,7 +2233,7 @@ static int send_stream_frames(quicly_conn_t *conn, struct st_quicly_send_context
     while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending_link.stream_fin_only)) {
         quicly_stream_t *stream =
             (void *)((char *)conn->pending_link.stream_fin_only.next - offsetof(quicly_stream_t, _send_aux.pending_link.stream));
-        if ((ret = send_stream_data(stream, s)) != 0)
+        if ((ret = send_stream_data(stream, s, &stream->sendbuf.pending)) != 0)
             goto Exit;
         resched_stream_data(stream);
     }
@@ -2242,7 +2242,7 @@ static int send_stream_frames(quicly_conn_t *conn, struct st_quicly_send_context
            conn->egress.max_data.sent < conn->egress.max_data.permitted) {
         quicly_stream_t *stream = (void *)((char *)conn->pending_link.stream_with_payload.next -
                                            offsetof(quicly_stream_t, _send_aux.pending_link.stream));
-        if ((ret = send_stream_data(stream, s)) != 0)
+        if ((ret = send_stream_data(stream, s, &stream->sendbuf.pending)) != 0)
             goto Exit;
         resched_stream_data(stream);
     }
@@ -2324,7 +2324,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
     if ((conn->crypto.pending_flows & (uint8_t)(1 << epoch)) != 0) {
         quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
         assert(stream != NULL);
-        if ((ret = send_stream_data(stream, s)) != 0)
+        if ((ret = send_stream_data(stream, s, &stream->sendbuf.pending)) != 0)
             goto Exit;
         resched_stream_data(stream);
     }
