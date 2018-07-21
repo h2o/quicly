@@ -196,7 +196,7 @@ quicly_get_first_timeout(client);
 
     quicly_stream_t *client_stream = NULL, *server_stream = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
-    size_t i;
+    size_t i, stall_count = 0;
     for (i = 0; i < 1000; ++i) {
         int64_t client_timeout = quicly_get_first_timeout(client), server_timeout = quicly_get_first_timeout(server),
                 min_timeout = client_timeout < server_timeout ? client_timeout : server_timeout;
@@ -230,7 +230,12 @@ quicly_get_first_timeout(client);
                 quicly_sendbuf_shutdown(&server_stream->sendbuf);
             }
         }
-        ok(num_sent_up + num_sent_down != 0);
+        if (num_sent_up + num_sent_down == 0) {
+            ++stall_count;
+            ok(stall_count < 10);
+        } else {
+            stall_count = 0;
+        }
     }
     ok(0);
 }
