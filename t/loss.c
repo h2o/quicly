@@ -140,7 +140,7 @@ static void test_even(void)
 
     /* server resends the contents of all the packets (in cleartext) */
     transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
-    ok(num_sent == 1);
+    ok(num_sent == 2);
     ok(num_received == 1);
 
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);

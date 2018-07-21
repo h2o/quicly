@@ -1705,11 +1705,13 @@ struct st_quicly_send_context_t {
         quicly_datagram_t *packet;
         struct st_quicly_cipher_context_t *cipher;
         uint8_t *first_byte_at;
+        unsigned to_be_acked : 1;
     } target;
     int64_t now;
     quicly_datagram_t **packets;
     size_t max_packets;
     size_t num_packets;
+    size_t min_packets_to_send;
     ssize_t send_window;
     uint8_t *dst;
     uint8_t *dst_end;
@@ -1746,8 +1748,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     ptls_cipher_encrypt(s->target.cipher->pne, s->dst_encrypt_from - 4, s->dst_encrypt_from - 4, 4);
 
     /* register CC callback if the packet is carrying any acknowledgible data */
-    if (!quicly_acks_is_empty(&conn->egress.acks) &&
-        quicly_acks_get_tail(&conn->egress.acks)->packet_number == conn->egress.packet_number) {
+    if (s->target.to_be_acked) {
         size_t packet_size = s->dst - s->target.first_byte_at;
         quicly_ack_t *ack;
         if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, on_ack_cc)) == NULL)
@@ -1798,7 +1799,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
         coalescible = 0;
     } else {
         /* use the existing packet */
-        return 0;
+        goto TargetReady;
     }
 
     /* commit at the same time determining if we will coalesce the packets */
@@ -1838,6 +1839,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
         s->dst = s->target.packet->data.base;
         s->dst_end = s->target.packet->data.base + conn->super.ctx->max_packet_size;
     }
+    s->target.to_be_acked = 0;
 
     /* emit header */
     s->target.first_byte_at = s->dst;
@@ -1862,6 +1864,22 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
     assert(s->dst < s->dst_end);
 
+    /* add PING or empty CRYPTO for TLP, RTO packets so that last_retransmittable_sent_at changes */
+    if (s->num_packets < s->min_packets_to_send) {
+        if ((s->current.first_byte & 0x80) == 0) {
+            *s->dst++ = QUICLY_FRAME_TYPE_PING;
+        } else {
+            size_t payload_len = 0;
+            s->dst = quicly_encode_crypto_frame_header(s->dst, s->dst_end, 0, &payload_len);
+        }
+        to_be_acked = 1;
+    }
+
+TargetReady:
+    if (to_be_acked) {
+        s->target.to_be_acked = 1;
+        conn->egress.last_retransmittable_sent_at = s->now;
+    }
     return 0;
 }
 
@@ -1880,7 +1898,6 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
     if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, ack_cb)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
-    conn->egress.last_retransmittable_sent_at = s->now;
     /* TODO return the remaining window that the sender can use */
     return ret;
 }
@@ -2376,31 +2393,40 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         break;
     }
 
+    /* handle timeouts */
+    if (conn->egress.loss.alarm_at <= s.now) {
+        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1,
+                                        conn->egress.loss.largest_acked_packet, do_detect_loss, &s.min_packets_to_send)) != 0)
+            goto Exit;
+        switch (s.min_packets_to_send) {
+        case 1: /* TLP (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
+            if (!ptls_handshake_is_complete(conn->crypto.tls)) {
+                if ((ret = retire_acks_by_count(conn, s.min_packets_to_send, s.now)) != 0)
+                    goto Exit;
+            }
+            break;
+        case 2: /* RTO */
+            if (!conn->egress.cc.in_first_rto) {
+                cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
+                conn->egress.cc.in_first_rto = 1;
+            }
+            if ((ret = retire_acks_by_count(conn, s.min_packets_to_send, s.now)) != 0)
+                goto Exit;
+            break;
+        default:
+            break;
+        }
+    }
+
     { /* calculate send window */
         uint32_t cwnd = cc_get_cwnd(&conn->egress.cc.ccv);
         if (conn->egress.cc.bytes_in_flight < cwnd)
             s.send_window = cwnd - conn->egress.cc.bytes_in_flight;
     }
-
-    /* handle timeouts */
-    if (conn->egress.loss.alarm_at <= s.now) {
-        size_t min_packets_to_send;
-        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1,
-                                        conn->egress.loss.largest_acked_packet, do_detect_loss, &min_packets_to_send)) != 0)
-            goto Exit;
-        if (min_packets_to_send == 2 && !conn->egress.cc.in_first_rto) {
-            cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
-            conn->egress.cc.in_first_rto = 1;
-        }
-        if (min_packets_to_send != 0) {
-            /* better way to notify the app that we want to send some packets outside the congestion window? */
-            assert(min_packets_to_send <= s.max_packets);
-            s.max_packets = min_packets_to_send;
-            if ((ret = retire_acks_by_count(conn, min_packets_to_send, s.now)) != 0)
-                goto Exit;
-            if (s.send_window < min_packets_to_send * conn->super.ctx->max_packet_size)
-                s.send_window = min_packets_to_send * conn->super.ctx->max_packet_size;
-        }
+    if (s.min_packets_to_send != 0) {
+        assert(s.min_packets_to_send <= s.max_packets);
+        if (s.send_window < s.min_packets_to_send * conn->super.ctx->max_packet_size)
+            s.send_window = s.min_packets_to_send * conn->super.ctx->max_packet_size;
     }
 
     { /* send handshake flows */
@@ -2497,6 +2523,25 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     if (s.target.packet != NULL)
         commit_send_packet(conn, &s, 0);
+
+    /* TLP (TODO use these packets to retransmit data) */
+    if (s.min_packets_to_send != 0) {
+        if ((s.current.first_byte & 0x80) != 0) {
+            if (conn->handshake != NULL && (s.current.cipher = &conn->handshake->cipher.egress)->aead != NULL) {
+                s.current.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
+            } else {
+                s.current.cipher = &conn->initial->cipher.egress;
+                s.current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
+            }
+        }
+        while (s.num_packets < s.min_packets_to_send) {
+            if ((ret = prepare_packet(conn, &s, 1)) != 0)
+                goto Exit;
+            assert(s.target.to_be_acked);
+            commit_send_packet(conn, &s, 0);
+        }
+        assert(conn->egress.last_retransmittable_sent_at == s.now);
+    }
 
     ret = 0;
 Exit:
