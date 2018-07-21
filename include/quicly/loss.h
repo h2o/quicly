@@ -54,6 +54,7 @@ typedef struct quicly_loss_conf_t {
 #define QUICLY_LOSS_DEFAULT_MIN_TLP_TIMEOUT 10
 #define QUICLY_LOSS_DEFAULT_MIN_RTO_TIMEOUT 200
 #define QUICLY_LOSS_DEFAULT_INITIAL_RTT 100
+#define QUICLY_LOSS_MAX_RTO_COUNT 16 /* 65 seconds under 1ms granurality */
 
 extern quicly_loss_conf_t quicly_loss_default_conf;
 
@@ -179,7 +180,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_out
             alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance + r->rtt.max_ack_delay;
             if (alarm_duration < r->conf->min_rto_timeout)
                 alarm_duration = r->conf->min_rto_timeout;
-            alarm_duration <<= r->rto_count;
+            alarm_duration <<= r->rto_count < QUICLY_LOSS_MAX_RTO_COUNT ? r->rto_count : QUICLY_LOSS_MAX_RTO_COUNT;
             if (r->tlp_count < r->conf->max_tlps) {
                 /* Tail Loss Probe */
                 int64_t tlp_alarm_duration = r->rtt.smoothed * 3 / 2 + r->rtt.max_ack_delay;
