@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include <string.h>
+#include "picotls/openssl.h"
 #include "test.h"
 
 static quicly_conn_t *client, *server;
@@ -153,10 +154,15 @@ static unsigned rand_ratio;
 
 static int cond_rand(void)
 {
-    static uint32_t seed = 1;
-    seed = seed * 1103515245 + 12345;
+    static ptls_cipher_context_t *c;
 
-    uint32_t v = (seed >> 10) & 1023;
+    if (c == NULL)
+        c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, "0000000000000000");
+
+    uint16_t v;
+    ptls_cipher_encrypt(c, &v, "0000", 2);
+    v &= 1023;
+
     return v < rand_ratio;
 }
 
