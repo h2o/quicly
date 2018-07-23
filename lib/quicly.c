@@ -1201,6 +1201,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     update_cc_ticks(conn->super.ctx);
     cc_init(&conn->egress.cc.ccv, &newreno_cc_algo, 1280 * 8, 1280);
     conn->egress.cc.ccv.ccvc.ccv.snd_scale = 14; /* FIXME */
+    conn->egress.cc.end_of_recovery = UINT64_MAX;
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -1704,11 +1705,13 @@ struct st_quicly_send_context_t {
         quicly_datagram_t *packet;
         struct st_quicly_cipher_context_t *cipher;
         uint8_t *first_byte_at;
+        unsigned to_be_acked : 1;
     } target;
     int64_t now;
     quicly_datagram_t **packets;
     size_t max_packets;
     size_t num_packets;
+    size_t min_packets_to_send;
     ssize_t send_window;
     uint8_t *dst;
     uint8_t *dst_end;
@@ -1745,8 +1748,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     ptls_cipher_encrypt(s->target.cipher->pne, s->dst_encrypt_from - 4, s->dst_encrypt_from - 4, 4);
 
     /* register CC callback if the packet is carrying any acknowledgible data */
-    if (!quicly_acks_is_empty(&conn->egress.acks) &&
-        quicly_acks_get_tail(&conn->egress.acks)->packet_number == conn->egress.packet_number) {
+    if (s->target.to_be_acked) {
         size_t packet_size = s->dst - s->target.first_byte_at;
         quicly_ack_t *ack;
         if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, on_ack_cc)) == NULL)
@@ -1797,7 +1799,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
         coalescible = 0;
     } else {
         /* use the existing packet */
-        return 0;
+        goto TargetReady;
     }
 
     /* commit at the same time determining if we will coalesce the packets */
@@ -1837,6 +1839,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
         s->dst = s->target.packet->data.base;
         s->dst_end = s->target.packet->data.base + conn->super.ctx->max_packet_size;
     }
+    s->target.to_be_acked = 0;
 
     /* emit header */
     s->target.first_byte_at = s->dst;
@@ -1861,6 +1864,22 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
     assert(s->dst < s->dst_end);
 
+    /* add PING or empty CRYPTO for TLP, RTO packets so that last_retransmittable_sent_at changes */
+    if (s->num_packets < s->min_packets_to_send) {
+        if ((s->current.first_byte & 0x80) == 0) {
+            *s->dst++ = QUICLY_FRAME_TYPE_PING;
+        } else {
+            size_t payload_len = 0;
+            s->dst = quicly_encode_crypto_frame_header(s->dst, s->dst_end, 0, &payload_len);
+        }
+        to_be_acked = 1;
+    }
+
+TargetReady:
+    if (to_be_acked) {
+        s->target.to_be_acked = 1;
+        conn->egress.last_retransmittable_sent_at = s->now;
+    }
     return 0;
 }
 
@@ -1879,7 +1898,6 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
     if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, s->now, ack_cb)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
-    conn->egress.last_retransmittable_sent_at = s->now;
     /* TODO return the remaining window that the sender can use */
     return ret;
 }
@@ -2058,7 +2076,8 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
 ShrinkToIter:
     stream->sendbuf.pending.ranges[i].start = iter.stream_off;
 ShrinkRanges:
-    quicly_ranges_shrink(&stream->sendbuf.pending, 0, i);
+    if (i != 0)
+        quicly_ranges_shrink(&stream->sendbuf.pending, 0, i);
     return ret;
 }
 
@@ -2157,7 +2176,7 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count, int64_t now)
     return 0;
 }
 
-static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time)
+static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_pn, uint32_t delay_until_lost, int64_t *loss_time)
 {
     quicly_conn_t *conn = (void *)((char *)ld - offsetof(quicly_conn_t, egress.loss));
     quicly_acks_iter_t iter;
@@ -2166,13 +2185,15 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
     uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
 
+    *loss_time = INT64_MAX;
+
     init_acks_iter(conn, &iter, now);
 
     /* handle loss */
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
-    while ((ack = quicly_acks_get(&iter))->sent_at <= sent_before) {
-        if (conn->egress.max_lost_pn <= ack->packet_number) {
+    while ((ack = quicly_acks_get(&iter))->packet_number < largest_pn && ack->sent_at <= sent_before) {
+        if (ack->is_active && conn->egress.max_lost_pn <= ack->packet_number) {
             if (ack->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = ack->packet_number;
@@ -2183,15 +2204,18 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_acked
         }
         quicly_acks_next(&iter);
     }
-    if (largest_newly_lost_pn != UINT64_MAX)
-        conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
-    if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0)
-        cc_cong_signal(&conn->egress.cc.ccv, CC_NDUPACK, (uint32_t)conn->egress.cc.bytes_in_flight);
+    if (largest_newly_lost_pn != UINT64_MAX) {
+        conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
+        conn->egress.cc.end_of_recovery = conn->egress.packet_number - 1;
+        if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0)
+            cc_cong_signal(&conn->egress.cc.ccv, CC_ECN, (uint32_t)conn->egress.cc.bytes_in_flight);
+    }
 
     /* schedule next alarm */
-    *loss_time = ack->sent_at == INT64_MAX ? INT64_MAX : ack->sent_at + delay_until_lost;
+    if (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX && ack->is_active)
+        *loss_time = ack->sent_at + delay_until_lost;
 
     return 0;
 }
@@ -2369,31 +2393,40 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         break;
     }
 
+    /* handle timeouts */
+    if (conn->egress.loss.alarm_at <= s.now) {
+        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1,
+                                        conn->egress.loss.largest_acked_packet, do_detect_loss, &s.min_packets_to_send)) != 0)
+            goto Exit;
+        switch (s.min_packets_to_send) {
+        case 1: /* TLP (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
+            if (!ptls_handshake_is_complete(conn->crypto.tls)) {
+                if ((ret = retire_acks_by_count(conn, s.min_packets_to_send, s.now)) != 0)
+                    goto Exit;
+            }
+            break;
+        case 2: /* RTO */
+            if (!conn->egress.cc.in_first_rto) {
+                cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
+                conn->egress.cc.in_first_rto = 1;
+            }
+            if ((ret = retire_acks_by_count(conn, s.min_packets_to_send, s.now)) != 0)
+                goto Exit;
+            break;
+        default:
+            break;
+        }
+    }
+
     { /* calculate send window */
         uint32_t cwnd = cc_get_cwnd(&conn->egress.cc.ccv);
         if (conn->egress.cc.bytes_in_flight < cwnd)
             s.send_window = cwnd - conn->egress.cc.bytes_in_flight;
     }
-
-    /* handle timeouts */
-    if (conn->egress.loss.alarm_at <= s.now) {
-        size_t min_packets_to_send;
-        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, s.now, conn->egress.packet_number - 1, do_detect_loss,
-                                        &min_packets_to_send)) != 0)
-            goto Exit;
-        if (min_packets_to_send == 2 && !conn->egress.cc.in_first_rto) {
-            cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
-            conn->egress.cc.in_first_rto = 1;
-        }
-        if (min_packets_to_send != 0) {
-            /* better way to notify the app that we want to send some packets outside the congestion window? */
-            assert(min_packets_to_send <= s.max_packets);
-            s.max_packets = min_packets_to_send;
-            if ((ret = retire_acks_by_count(conn, min_packets_to_send, s.now)) != 0)
-                goto Exit;
-            if (s.send_window < min_packets_to_send * conn->super.ctx->max_packet_size)
-                s.send_window = min_packets_to_send * conn->super.ctx->max_packet_size;
-        }
+    if (s.min_packets_to_send != 0) {
+        assert(s.min_packets_to_send <= s.max_packets);
+        if (s.send_window < s.min_packets_to_send * conn->super.ctx->max_packet_size)
+            s.send_window = s.min_packets_to_send * conn->super.ctx->max_packet_size;
     }
 
     { /* send handshake flows */
@@ -2490,6 +2523,25 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     if (s.target.packet != NULL)
         commit_send_packet(conn, &s, 0);
+
+    /* TLP (TODO use these packets to retransmit data) */
+    if (s.min_packets_to_send != 0) {
+        if ((s.current.first_byte & 0x80) != 0) {
+            if (conn->handshake != NULL && (s.current.cipher = &conn->handshake->cipher.egress)->aead != NULL) {
+                s.current.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
+            } else {
+                s.current.cipher = &conn->initial->cipher.egress;
+                s.current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
+            }
+        }
+        while (s.num_packets < s.min_packets_to_send) {
+            if ((ret = prepare_packet(conn, &s, 1)) != 0)
+                goto Exit;
+            assert(s.target.to_be_acked);
+            commit_send_packet(conn, &s, 0);
+        }
+        assert(conn->egress.last_retransmittable_sent_at == s.now);
+    }
 
     ret = 0;
 Exit:
@@ -2645,13 +2697,16 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
         conn->egress.cc.in_first_rto = 0;
     }
+    int end_of_recovery = frame->largest_acknowledged >= conn->egress.cc.end_of_recovery;
     cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_pipe, (uint16_t)conn->egress.cc.this_ack.nsegs,
                     (uint32_t)conn->egress.cc.this_ack.nbytes,
                     conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */,
-                    frame->largest_acknowledged >= conn->egress.cc.end_of_recovery);
+                    end_of_recovery);
+    if (end_of_recovery)
+        conn->egress.cc.end_of_recovery = UINT64_MAX;
 
     /* loss-detection  */
-    quicly_loss_detect_loss(&conn->egress.loss, now, conn->egress.packet_number - 1, frame->largest_acknowledged, do_detect_loss);
+    quicly_loss_detect_loss(&conn->egress.loss, now, frame->largest_acknowledged, do_detect_loss);
     update_loss_alarm(conn);
 
     return 0;
@@ -3044,8 +3099,10 @@ void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint32_t r
             /* close the sender and mark the eos as the only byte that's not confirmed */
             assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
             quicly_sendbuf_shutdown(&stream->sendbuf);
-            quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
-            quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
+            if (stream->sendbuf.eos != 0) {
+                quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
+                quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
+            }
             /* setup RST_STREAM */
             stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
             stream->_send_aux.rst.reason = reason;
