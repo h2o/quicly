@@ -25,15 +25,17 @@
 
 static quicly_conn_t *client, *server;
 
-static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, int (*cond)(void),
-                          int64_t latency)
+static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, int (*cond)(void),
+                         int64_t latency)
 {
     quicly_datagram_t *packets[32];
     int ret;
 
     *num_sent = sizeof(packets) / sizeof(packets[0]);
-    ret = quicly_send(src, packets, num_sent);
-    ok(ret == 0);
+    if ((ret = quicly_send(src, packets, num_sent)) != 0) {
+        fprintf(stderr, "%s: quicly_send: ret=%d\n", __FUNCTION__, ret);
+        return ret;
+    }
     quic_now += latency;
 
     *num_received = 0;
@@ -47,7 +49,10 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
                 assert(num_decoded != 0);
                 for (j = 0; j != num_decoded; ++j) {
                     ret = quicly_receive(dst, decoded + j);
-                    ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+                    if (!(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED)) {
+                        fprintf(stderr, "%s: quicly_receive: i=%zu, j=%zu, ret=%d\n", __FUNCTION__, i, j, ret);
+                        return ret;
+                    }
                 }
                 ++*num_received;
             }
@@ -55,6 +60,8 @@ static void transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_se
         free_packets(packets, *num_sent);
     }
     quic_now += latency;
+
+    return 0;
 }
 
 static int cond_true(void)
@@ -105,7 +112,8 @@ static void test_even(void)
     }
 
     /* drop 2nd packet from server */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ok(ret == 0);
     ok(num_sent == 2);
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
@@ -114,7 +122,8 @@ static void test_even(void)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
     /* client sends delayed-ack that gets dropped */
-    transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 0);
 
@@ -124,7 +133,8 @@ static void test_even(void)
     quic_now += 1000;
 
     /* server resends the contents of all the packets (in cleartext) */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ok(ret == 0);
     ok(num_sent == 2);
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
@@ -133,14 +143,16 @@ static void test_even(void)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
     /* client sends delayed-ack that gets accepted */
-    transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 1);
 
     quic_now += 1000;
 
     /* server resends the contents of all the packets (in cleartext) */
-    transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ok(ret == 0);
     ok(num_sent == 2);
     ok(num_received == 1);
 
@@ -210,13 +222,16 @@ quicly_get_first_timeout(client);
         assert(min_timeout == 0 || quic_now < min_timeout + 40); /* we might have spent two RTTs in the loop below */
         if (quic_now < min_timeout)
             quic_now = min_timeout;
-        transmit_cond(server, client, &num_sent_down, &num_received, cond_rand, 10);
+        if ((ret = transmit_cond(server, client, &num_sent_down, &num_received, cond_rand, 10)) != 0)
+            goto Fail;
         server_timeout = quicly_get_first_timeout(server);
         assert(server_timeout > quic_now - 20);
         if (quicly_get_state(client) == QUICLY_STATE_CONNECTED && quicly_connection_is_ready(client)) {
             if (client_stream == NULL) {
-                ret = quicly_open_stream(client, &client_stream);
-                ok(ret == 0);
+                if ((ret = quicly_open_stream(client, &client_stream)) != 0) {
+                    fprintf(stderr, "%s: quicly_open_stream: ret=%d\n", __FUNCTION__, ret);
+                    goto Fail;
+                }
                 client_stream->on_update = on_update_noop;
                 quicly_sendbuf_write(&client_stream->sendbuf, req, strlen(req), NULL);
                 quicly_sendbuf_shutdown(&client_stream->sendbuf);
@@ -226,7 +241,8 @@ quicly_get_first_timeout(client);
                 return;
             }
         }
-        transmit_cond(client, server, &num_sent_up, &num_received, downstream_only ? cond_true : cond_rand, 10);
+        if ((ret = transmit_cond(client, server, &num_sent_up, &num_received, downstream_only ? cond_true : cond_rand, 10)) != 0)
+            goto Fail;
         client_timeout = quicly_get_first_timeout(client);
         assert(client_timeout > quic_now - 20);
         if (client_stream != NULL && (server_stream = quicly_get_stream(server, client_stream->stream_id)) != NULL) {
@@ -238,11 +254,17 @@ quicly_get_first_timeout(client);
         }
         if (num_sent_up + num_sent_down == 0) {
             ++stall_count;
-            ok(stall_count < 10);
+            if (stall_count >= 10) {
+                fprintf(stderr, "%s: stall_count exceeds max\n", __FUNCTION__);
+                goto Fail;
+            }
         } else {
             stall_count = 0;
         }
     }
+
+Fail:
+    fprintf(stderr, "%s: i=%zu\n", __FUNCTION__, i);
     ok(0);
 }
 
