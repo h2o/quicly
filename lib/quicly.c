@@ -870,6 +870,7 @@ void quicly_free(quicly_conn_t *conn)
         free(pending);
     }
     cc_destroy(&conn->egress.cc.ccv);
+    quicly_acks_dispose(&conn->egress.acks);
 
     kh_foreach_value(conn->streams, stream, { destroy_stream(stream); });
     kh_destroy(quicly_stream_t, conn->streams);
@@ -1194,6 +1195,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
                           conn->super.ctx->max_streams_bidi * 4 + conn->super.peer.next_stream_id_bidi);
     quicly_maxsender_init(&conn->ingress.max_stream_id_uni,
                           conn->super.ctx->max_streams_uni * 4 + conn->super.peer.next_stream_id_uni);
+    quicly_acks_init(&conn->egress.acks);
     quicly_loss_init(&conn->egress.loss, conn->super.ctx->loss,
                      conn->super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
     conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
