@@ -101,6 +101,10 @@ struct st_quicly_context_t {
      */
     ptls_context_t tls;
     /**
+     *
+     */
+    uint64_t next_master_id;
+    /**
      * MTU
      */
     uint16_t max_packet_size;
@@ -198,6 +202,7 @@ typedef enum {
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
+    uint64_t master_id;
     struct {
         quicly_cid_t cid;
         /**
@@ -338,6 +343,10 @@ static int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec);
  *
  */
 static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
+/**
+ *
+ */
+static uint64_t quicly_get_master_id(quicly_conn_t *conn);
 /**
  *
  */
@@ -490,6 +499,12 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->ctx;
+}
+
+inline uint64_t quicly_get_master_id(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return c->master_id;
 }
 
 inline const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn)

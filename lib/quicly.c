@@ -1168,6 +1168,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
 
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
+    conn->super.master_id = ctx->next_master_id++;
     conn->super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
         ctx->tls.random_bytes(conn->super.peer.cid.cid, 8);
