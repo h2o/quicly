@@ -49,6 +49,51 @@ typedef struct st_quicly_datagram_t {
     struct sockaddr sa;
 } quicly_datagram_t;
 
+typedef enum en_quicly_event_type_t {
+    QUICLY_EVENT_TYPE_PACKET_PREPARE,
+    QUICLY_EVENT_TYPE_PACKET_COMMIT,
+    QUICLY_EVENT_TYPE_PACKET_ACCEPT,
+    QUICLY_EVENT_TYPE_PACKET_RECEIVE,
+    QUICLY_EVENT_TYPE_PACKET_DECRYPT,
+    QUICLY_EVENT_TYPE_CRYPTO_HANDSHAKE,
+    QUICLY_EVENT_TYPE_CRYPTO_UPDATE_SECRET,
+    QUICLY_EVENT_TYPE_CC_RTO,
+    QUICLY_EVENT_TYPE_STREAM_SEND,
+    QUICLY_EVENT_TYPE_STREAM_RECEIVE,
+    QUICLY_EVENT_TYPE_STREAM_ACKED,
+    QUICLY_EVENT_TYPE_STREAM_LOST,
+    QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH
+} quicly_event_type_t;
+
+/**
+ * an array of event names corresponding to quicly_event_type_t
+ */
+extern const char *quicly_event_type_names[];
+
+typedef enum en_quicly_event_attribute_type_t {
+    QUICLY_EVENT_ATTRIBUTE_EPOCH,
+    QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER,
+    QUICLY_EVENT_ATTRIBUTE_CONNECTION,
+    QUICLY_EVENT_ATTRIBUTE_TLS_ERROR,
+    QUICLY_EVENT_ATTRIBUTE_OFFSET,
+    QUICLY_EVENT_ATTRIBUTE_LENGTH,
+    QUICLY_EVENT_ATTRIBUTE_STREAM_ID,
+    QUICLY_EVENT_ATTRIBUTE_FIN,
+    QUICLY_EVENT_ATTRIBUTE_IS_ENC,
+    QUICLY_EVENT_ATTRIBUTE_QUIC_VERSION,
+    QUICLY_EVENT_ATTRIBUTE_ACK_ONLY
+} quicly_event_attribute_type_t;
+
+/**
+ * an array of attribute names corresponding to quicly_event_attribute_type_t
+ */
+extern const char *quicly_event_attribute_names[];
+
+typedef struct st_quicly_event_attribute_t {
+    quicly_event_attribute_type_t type;
+    int64_t value;
+} quicly_event_attribute_t;
+
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
@@ -61,7 +106,8 @@ typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
 typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint8_t type, uint16_t code, const char *reason, size_t reason_len);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
-typedef void (*quicly_debug_log_cb)(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
+                                    size_t num_attributes, const char *desc);
 
 typedef struct st_quicly_transport_parameters_t {
     /**
@@ -174,7 +220,10 @@ struct st_quicly_context_t {
     /**
      * optional callback for debug logging
      */
-    quicly_debug_log_cb debug_log;
+    struct {
+        uint64_t mask;
+        quicly_event_log_cb cb;
+    } event_log;
 };
 
 /**
@@ -470,7 +519,8 @@ int64_t quicly_default_now(quicly_context_t *ctx);
 /**
  *
  */
-void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
+                              size_t num_attributes, const char *desc);
 /**
  *
  */

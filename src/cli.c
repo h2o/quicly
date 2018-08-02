@@ -598,8 +598,10 @@ int main(int argc, char **argv)
     if (req_paths[0] == NULL)
         req_paths[0] = "/";
 
-    if (verbosity != 0)
-        ctx.debug_log = quicly_default_debug_log;
+    if (verbosity != 0) {
+        ctx.event_log.mask = UINT64_MAX;
+        ctx.event_log.cb = quicly_default_event_log;
+    }
 
     if (ctx.tls.certificates.count != 0 || ctx.tls.sign_certificate != NULL) {
         /* server */

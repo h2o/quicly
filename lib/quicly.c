@@ -68,22 +68,36 @@
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
-#define DEBUG__LOG(conn, stream_id_pat, stream_id_val, ...)                                                                        \
+#define LOG_IS_REQUIRED(ctx, type) (((ctx)->event_log.mask & ((uint64_t)1 << (type))) != 0)
+#define LOG_GLOBAL_EVENT(ctx, type, desc, ...)                                                                                     \
     do {                                                                                                                           \
-        quicly_conn_t *_conn = (conn);                                                                                             \
-        if (_conn->super.ctx->debug_log != NULL) {                                                                                 \
-            char buf[1024];                                                                                                        \
-            int is_client = quicly_is_client(_conn);                                                                               \
-            const quicly_cid_t *cid = is_client ? &conn->super.peer.cid : &conn->super.host.cid;                                   \
-            char *cidhex = quicly_hexdump(cid->cid, cid->len, SIZE_MAX);                                                           \
-            snprintf(buf, sizeof(buf), __VA_ARGS__);                                                                               \
-            _conn->super.ctx->debug_log(_conn->super.ctx, "%s:%s," stream_id_pat ": %s\n", is_client ? "client" : "server",        \
-                                        cidhex, stream_id_val, buf);                                                               \
-            free(cidhex);                                                                                                          \
+        quicly_context_t *_ctx = (ctx);                                                                                            \
+        quicly_event_type_t _type = (type);                                                                                        \
+        if (LOG_IS_REQUIRED(_ctx, _type)) {                                                                                        \
+            quicly_event_attribute_t attributes[] = {__VA_ARGS__};                                                                 \
+            _ctx->event_log.cb(_ctx, _type, attributes, sizeof(attributes) / sizeof(attributes[0]), (desc));                       \
         }                                                                                                                          \
     } while (0)
-#define DEBUG_CONN(conn, ...) DEBUG__LOG(conn, "%c", '-', __VA_ARGS__)
-#define DEBUG_STREAM(conn, stream_id, ...) DEBUG__LOG(conn, "%" PRId64, ((int64_t)stream_id), __VA_ARGS__)
+
+#define LOG_CONN_EVENT(conn, type, desc, ...)                                                                                      \
+    do {                                                                                                                           \
+        quicly_conn_t *_c1 = (conn);                                                                                               \
+        LOG_GLOBAL_EVENT(_c1->super.ctx, (type), (desc), {QUICLY_EVENT_ATTRIBUTE_CONNECTION, quicly_get_master_id(_c1)},           \
+                         __VA_ARGS__);                                                                                             \
+    } while (0)
+
+#define LOG_CID(conn, type, cid)                                                                                                   \
+    do {                                                                                                                           \
+        quicly_conn_t *_c2 = (conn);                                                                                               \
+        if (LOG_IS_REQUIRED(__c2->super.ctx, type)) {                                                                              \
+            const quicly_cid_t *_cid = (cid);                                                                                      \
+            char *cidhex = quicly_hexdump(_cid->cid, _cid->len, SIZE_MAX);                                                         \
+            LOG_CONN_EVENT(__c2, type, cidhex);                                                                                    \
+        }                                                                                                                          \
+    } while (0)
+
+#define LOG_STREAM_EVENT(conn, stream_id, type, desc, ...)                                                                         \
+    LOG_CONN_EVENT(conn, type, desc, {QUICLY_EVENT_ATTRIBUTE_STREAM_ID, stream_id}, __VA_ARGS__)
 
 struct st_quicly_cipher_context_t {
     ptls_aead_context_t *aead;
@@ -283,6 +297,7 @@ static ptls_update_traffic_key_t update_traffic_key = {update_traffic_key_cb};
 const quicly_context_t quicly_default_context = {
     {NULL, &ptls_get_time,     NULL, NULL, {NULL}, NULL, NULL, NULL, NULL, 0, 0, HKDF_BASE_LABEL, 1, 0, 0, 0, NULL, NULL, NULL,
      NULL, &update_traffic_key}, /* tls */
+    0,                           /* next_master_id */
     1280,                        /* max_packet_size */
     &quicly_loss_default_conf,   /* loss */
     16 * 1024 * 1024,            /* initial_max_stream_data */
@@ -299,7 +314,7 @@ const quicly_context_t quicly_default_context = {
     NULL, /* on_stream_open */
     NULL, /* on_conn_close */
     quicly_default_now,
-    NULL, /* debug_log */
+    {0, NULL}, /* event_log */
 };
 
 static const quicly_transport_parameters_t transport_params_before_handshake = {16384, 16384, 10, 60, 0};
@@ -582,15 +597,14 @@ static int crypto_on_update(quicly_stream_t *flow)
         ret = ptls_handle_message(conn->crypto.tls, &buf, epoch_offsets, in_epoch, input.base, input.len,
                                   &conn->crypto.handshake_properties);
         quicly_recvbuf_shift(&flow->recvbuf, input.len);
+        LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_CRYPTO_HANDSHAKE, "", {QUICLY_EVENT_ATTRIBUTE_TLS_ERROR, ret});
         switch (ret) {
         case 0:
-            DEBUG_CONN(conn, "handshake complete");
             break;
         case PTLS_ERROR_IN_PROGRESS:
             ret = 0;
             break;
         default:
-            DEBUG_CONN(conn, "handshake error %d", ret);
             goto Exit;
         }
     }
@@ -991,7 +1005,8 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 {
     int ret;
 
-    DEBUG_STREAM(stream->conn, stream->stream_id, "received; off=%" PRIu64 ",len=%zu", frame->offset, frame->data.len);
+    LOG_STREAM_EVENT(stream->conn, stream->stream_id, QUICLY_EVENT_TYPE_STREAM_RECEIVE, "",
+                     {QUICLY_EVENT_ATTRIBUTE_OFFSET, frame->offset}, {QUICLY_EVENT_ATTRIBUTE_LENGTH, frame->data.len});
 
     if (frame->is_fin && (ret = quicly_recvbuf_mark_eos(&stream->recvbuf, frame->offset + frame->data.len)) != 0)
         return ret;
@@ -1515,6 +1530,13 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
 
     ++conn->super.num_packets.received;
     assert(conn->initial->super.send_ack_at == INT64_MAX);
+
+    LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_ACCEPT, "");
+    LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_DECRYPT, "", {QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER, pn},
+                   {QUICLY_EVENT_ATTRIBUTE_LENGTH, payload.len});
+
+    /* TODO log cid */
+
     if ((ret = record_receipt(&conn->initial->super, pn, 0, conn->super.ctx->now(conn->super.ctx))) != 0)
         goto Exit;
     conn->initial->super.next_expected_packet_number = next_expected_pn;
@@ -1542,8 +1564,9 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
     quicly_stream_t *stream;
     int ret;
 
-    DEBUG_STREAM(conn, ack->data.stream.stream_id, "%s; off=%" PRIu64 ",len=%zu", acked ? "acked" : "lost",
-                 ack->data.stream.args.start, (size_t)(ack->data.stream.args.end - ack->data.stream.args.start));
+    LOG_STREAM_EVENT(conn, ack->data.stream.stream_id, acked ? QUICLY_EVENT_TYPE_STREAM_ACKED : QUICLY_EVENT_TYPE_STREAM_LOST, "",
+                     {QUICLY_EVENT_ATTRIBUTE_OFFSET, ack->data.stream.args.start},
+                     {QUICLY_EVENT_ATTRIBUTE_LENGTH, ack->data.stream.args.end - ack->data.stream.args.start});
 
     /* TODO cache pointer to stream (using a generation counter?) */
     if ((stream = quicly_get_stream(conn, ack->data.stream.stream_id)) == NULL)
@@ -1764,6 +1787,10 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     s->target.packet->data.len = s->dst - s->target.packet->data.base;
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
+    LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_COMMIT, "", {QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER, conn->egress.packet_number},
+                   {QUICLY_EVENT_ATTRIBUTE_LENGTH, s->target.packet->data.len},
+                   {QUICLY_EVENT_ATTRIBUTE_ACK_ONLY, !s->target.to_be_acked});
+
     ++conn->egress.packet_number;
     ++conn->super.num_packets.sent;
     conn->super.num_bytes_sent += s->target.packet->data.len;
@@ -1843,6 +1870,8 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
         s->dst_end = s->target.packet->data.base + conn->super.ctx->max_packet_size;
     }
     s->target.to_be_acked = 0;
+
+    LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_PREPARE, "");
 
     /* emit header */
     s->target.first_byte_at = s->dst;
@@ -1992,7 +2021,7 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
 {
     quicly_ack_t *ack;
     size_t copysize;
-    int ret;
+    int is_fin = 0, ret;
 
     if ((ret = prepare_acked_packet(stream->conn, s, QUICLY_STREAM_FRAME_CAPACITY, &ack, on_ack_stream)) != 0)
         return ret;
@@ -2001,11 +2030,13 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
     if (stream->stream_id < 0) {
         s->dst = quicly_encode_crypto_frame_header(s->dst, s->dst_end, iter->stream_off, &copysize);
     } else {
-        s->dst = quicly_encode_stream_frame_header(s->dst, s->dst_end, stream->stream_id,
-                                                   iter->stream_off + copysize >= stream->sendbuf.eos, iter->stream_off, &copysize);
+        is_fin = iter->stream_off + copysize >= stream->sendbuf.eos;
+        s->dst = quicly_encode_stream_frame_header(s->dst, s->dst_end, stream->stream_id, is_fin, iter->stream_off, &copysize);
     }
 
-    DEBUG_STREAM(stream->conn, stream->stream_id, "sending; off=%" PRIu64 ",len=%zu", iter->stream_off, copysize);
+    LOG_STREAM_EVENT(stream->conn, stream->stream_id, QUICLY_EVENT_TYPE_STREAM_SEND, "",
+                     {QUICLY_EVENT_ATTRIBUTE_OFFSET, iter->stream_off}, {QUICLY_EVENT_ATTRIBUTE_LENGTH, copysize},
+                     {QUICLY_EVENT_ATTRIBUTE_FIN, is_fin});
 
     /* adjust remaining send window */
     if (stream->_send_aux.max_sent < iter->stream_off + copysize) {
@@ -2200,7 +2231,7 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_pn, u
             if (ack->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = ack->packet_number;
-                DEBUG_CONN(conn, "RTO; packet-number: %" PRIu64, largest_newly_lost_pn);
+                LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, "", {QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER, largest_newly_lost_pn});
             }
             if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
                 return ret;
@@ -2343,7 +2374,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
     struct st_quicly_cipher_context_t *cipher_slot;
     int ret;
 
-    DEBUG_CONN(conn, "%s: is_enc=%d,epoch=%zu", __FUNCTION__, is_enc, epoch);
+    LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_CRYPTO_UPDATE_SECRET, "", {QUICLY_EVENT_ATTRIBUTE_IS_ENC, is_enc},
+                   {QUICLY_EVENT_ATTRIBUTE_EPOCH, epoch});
 
     switch (epoch) {
     case 1: /* 0-RTT */
@@ -2703,8 +2735,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     int end_of_recovery = frame->largest_acknowledged >= conn->egress.cc.end_of_recovery;
     cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_pipe, (uint16_t)conn->egress.cc.this_ack.nsegs,
                     (uint32_t)conn->egress.cc.this_ack.nbytes,
-                    conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */,
-                    end_of_recovery);
+                    conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */, end_of_recovery);
     if (end_of_recovery)
         conn->egress.cc.end_of_recovery = UINT64_MAX;
 
@@ -2790,7 +2821,7 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
 {
     /* set selected version */
     conn->super.version = version;
-    DEBUG_CONN(conn, "switching version to %" PRIx32, version);
+    LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH, "", {QUICLY_EVENT_ATTRIBUTE_QUIC_VERSION, version});
 
     { /* reschedule the Initial packet for immediate resend */
         quicly_acks_t *acks = &conn->egress.acks;
@@ -2982,6 +3013,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     uint64_t pn;
     int is_ack_only, ret;
 
+    LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_RECEIVE, "", {QUICLY_EVENT_ATTRIBUTE_LENGTH, packet->octets.len});
+
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
         assert(quicly_is_client(conn));
         if (QUICLY_PACKET_TYPE_IS_1RTT(packet->octets.base[0])) {
@@ -3057,6 +3090,9 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
         goto Exit;
     }
+
+    LOG_CONN_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_DECRYPT, "", {QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER, pn},
+                   {QUICLY_EVENT_ATTRIBUTE_LENGTH, payload.len});
 
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
@@ -3163,13 +3199,20 @@ int64_t quicly_default_now(quicly_context_t *ctx)
     return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...)
+void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
+                              size_t num_attributes, const char *desc)
 {
-    va_list args;
+    char buf[1024];
+    size_t off = 0, i;
 
-    va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
-    va_end(args);
+    off = sprintf(buf + off, "{\"type\":\"%s\"", quicly_event_type_names[type]);
+    for (i = 0; i != num_attributes; ++i)
+        off += sprintf(buf + off, ", \"%s\":%" PRId64, quicly_event_attribute_names[attributes[i].type], attributes[i].value);
+    if (desc[0] != '\0')
+        off += sprintf(buf + off, ", \"desc\":\"%s\"", desc);
+    off += sprintf(buf + off, "}\n");
+
+    fputs(buf, stderr);
 }
 
 static void tohex(char *dst, uint8_t v)
@@ -3229,3 +3272,14 @@ char *quicly_hexdump(const uint8_t *bytes, size_t len, size_t indent)
 
     return buf;
 }
+
+/**
+ * an array of event names corresponding to quicly_event_type_t
+ */
+const char *quicly_event_type_names[] = {"packet-prepare",     "packet-commit",    "packet-accept",        "packet-receive",
+                                         "packet-decrypt",     "crypto-handshake", "crypto-update-secret", "cc-rto",
+                                         "stream-send",        "stream-receive",   "stream-acked",         "stream-lost",
+                                         "quic-version-switch"};
+
+const char *quicly_event_attribute_names[] = {"epoch",     "pn",  "conn",   "tls-error",    "off",     "len",
+                                              "stream-id", "fin", "is-enc", "quic-version", "ack-only"};
