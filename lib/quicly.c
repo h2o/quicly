@@ -2251,7 +2251,8 @@ static int do_detect_loss(quicly_loss_t *ld, int64_t now, uint64_t largest_pn, u
         conn->egress.cc.end_of_recovery = conn->egress.packet_number - 1;
         if (conn->egress.cc.this_ack.nbytes != 0 && conn->egress.loss.rto_count == 0) {
             cc_cong_signal(&conn->egress.cc.ccv, CC_ECN, (uint32_t)conn->egress.cc.bytes_in_flight);
-            LOG_EVENT(conn->super.ctx, QUICLY_EVENT_TYPE_CC_RTO, {QUICLY_EVENT_ATTRIBUTE_MAX_LOST_PN, conn->egress.max_lost_pn},
+            LOG_EVENT(conn->super.ctx, QUICLY_EVENT_TYPE_CC_CONGESTION,
+                      {QUICLY_EVENT_ATTRIBUTE_MAX_LOST_PN, conn->egress.max_lost_pn},
                       {QUICLY_EVENT_ATTRIBUTE_END_OF_RECOVERY, conn->egress.cc.end_of_recovery},
                       {QUICLY_EVENT_ATTRIBUTE_BYTES_IN_FLIGHT, conn->egress.cc.bytes_in_flight},
                       {QUICLY_EVENT_ATTRIBUTE_CWND, cc_get_cwnd(&conn->egress.cc.ccv)});
@@ -2449,19 +2450,27 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             goto Exit;
         switch (s.min_packets_to_send) {
         case 1: /* TLP (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
+            LOG_EVENT(conn->super.ctx, QUICLY_EVENT_TYPE_CC_TLP,
+                      {QUICLY_EVENT_ATTRIBUTE_BYTES_IN_FLIGHT, conn->egress.cc.bytes_in_flight},
+                      {QUICLY_EVENT_ATTRIBUTE_CWND, cc_get_cwnd(&conn->egress.cc.ccv)});
             if (!ptls_handshake_is_complete(conn->crypto.tls)) {
                 if ((ret = retire_acks_by_count(conn, s.min_packets_to_send, s.now)) != 0)
                     goto Exit;
             }
             break;
-        case 2: /* RTO */
+        case 2: /* RTO */ {
+            uint32_t cc_type = 0;
             if (!conn->egress.cc.in_first_rto) {
-                cc_cong_signal(&conn->egress.cc.ccv, CC_FIRST_RTO, (uint32_t)conn->egress.cc.bytes_in_flight);
+                cc_type = CC_FIRST_RTO;
+                cc_cong_signal(&conn->egress.cc.ccv, cc_type, (uint32_t)conn->egress.cc.bytes_in_flight);
                 conn->egress.cc.in_first_rto = 1;
             }
+            LOG_EVENT(conn->super.ctx, QUICLY_EVENT_TYPE_CC_RTO, {QUICLY_EVENT_ATTRIBUTE_CC_TYPE, cc_type},
+                      {QUICLY_EVENT_ATTRIBUTE_BYTES_IN_FLIGHT, conn->egress.cc.bytes_in_flight},
+                      {QUICLY_EVENT_ATTRIBUTE_CWND, cc_get_cwnd(&conn->egress.cc.ccv)});
             if ((ret = retire_acks_by_count(conn, s.min_packets_to_send, s.now)) != 0)
                 goto Exit;
-            break;
+        } break;
         default:
             break;
         }
@@ -2675,7 +2684,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 {
     quicly_acks_iter_t iter;
     uint64_t packet_number = frame->smallest_acknowledged;
-    uint32_t bytes_in_pipe = (uint32_t)conn->egress.cc.bytes_in_flight;
+    uint32_t bytes_in_flight = (uint32_t)conn->egress.cc.bytes_in_flight;
     struct {
         uint64_t packet_number;
         int64_t sent_at;
@@ -2741,17 +2750,27 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay,
         0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
     /* OnPacketAckedCC */
+    uint32_t cc_type = 0;
     if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
-        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO, bytes_in_pipe);
+        cc_type = CC_RTO;
         conn->egress.cc.in_first_rto = 0;
     } else if (conn->egress.cc.in_first_rto) {
-        cc_cong_signal(&conn->egress.cc.ccv, CC_RTO_ERR, bytes_in_pipe);
+        cc_type = CC_RTO_ERR;
         conn->egress.cc.in_first_rto = 0;
     }
+    if (cc_type != 0)
+        cc_cong_signal(&conn->egress.cc.ccv, cc_type, bytes_in_flight);
     int end_of_recovery = frame->largest_acknowledged >= conn->egress.cc.end_of_recovery;
-    cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_pipe, (uint16_t)conn->egress.cc.this_ack.nsegs,
+    cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_flight, (uint16_t)conn->egress.cc.this_ack.nsegs,
                     (uint32_t)conn->egress.cc.this_ack.nbytes,
                     conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */, end_of_recovery);
+    LOG_EVENT(conn->super.ctx, QUICLY_EVENT_TYPE_CC_ACK_RECEIVED,
+              {QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER, frame->largest_acknowledged},
+              {QUICLY_EVENT_ATTRIBUTE_ACKED_PACKETS, conn->egress.cc.this_ack.nsegs},
+              {QUICLY_EVENT_ATTRIBUTE_ACKED_BYTES, conn->egress.cc.this_ack.nbytes}, {QUICLY_EVENT_ATTRIBUTE_CC_TYPE, cc_type},
+              {QUICLY_EVENT_ATTRIBUTE_CC_END_OF_RECOVERY, end_of_recovery},
+              {QUICLY_EVENT_ATTRIBUTE_CWND, cc_get_cwnd(&conn->egress.cc.ccv)},
+              {QUICLY_EVENT_ATTRIBUTE_BYTES_IN_FLIGHT, bytes_in_flight});
     if (end_of_recovery)
         conn->egress.cc.end_of_recovery = UINT64_MAX;
 
@@ -3293,14 +3312,46 @@ char *quicly_hexdump(const uint8_t *bytes, size_t len, size_t indent)
 /**
  * an array of event names corresponding to quicly_event_type_t
  */
-const char *quicly_event_type_names[] = {
-    "connect",      "accept",         "send",           "receive",          "packet-prepare",       "packet-commit",
-    "packet-acked", "packet-lost",    "crypto-decrypt", "crypto-handshake", "crypto-update-secret", "cc-rto",
-    "stream-send",  "stream-receive", "stream-acked",   "stream-lost",      "quic-version-switch"};
+const char *quicly_event_type_names[] = {"connect",
+                                         "accept",
+                                         "send",
+                                         "receive",
+                                         "packet-prepare",
+                                         "packet-commit",
+                                         "packet-acked",
+                                         "packet-lost",
+                                         "crypto-decrypt",
+                                         "crypto-handshake",
+                                         "crypto-update-secret",
+                                         "cc-tlp",
+                                         "cc-rto",
+                                         "cc-ack-received",
+                                         "cc-congestion",
+                                         "stream-send",
+                                         "stream-receive",
+                                         "stream-acked",
+                                         "stream-lost",
+                                         "quic-version-switch"};
 
-const char *quicly_event_attribute_names[] = {"time",        "epoch",           "pn",
-                                              "conn",        "tls-error",       "off",
-                                              "len",         "stream-id",       "fin",
-                                              "is-enc",      "quic-version",    "ack-only",
-                                              "max-lost-pn", "end-of-recovery", "bytes-in-flight",
-                                              "cwnd",        "newly-acked",     "first-octet"};
+const char *quicly_event_attribute_names[] = {"time",
+                                              "epoch",
+                                              "pn",
+                                              "conn",
+                                              "tls-error",
+                                              "off",
+                                              "len",
+                                              "stream-id",
+                                              "fin",
+                                              "is-enc",
+                                              "quic-version",
+                                              "ack-only",
+                                              "max-lost-pn",
+                                              "end-of-recovery",
+                                              "bytes-in-flight",
+                                              "cwnd",
+                                              "newly-acked",
+                                              "first-octet",
+                                              "cc-type",
+                                              "cc-end-of-recovery",
+                                              "acked-packets",
+                                              "acked-bytes"};
