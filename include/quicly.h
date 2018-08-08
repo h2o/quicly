@@ -49,6 +49,15 @@ typedef struct st_quicly_datagram_t {
     struct sockaddr sa;
 } quicly_datagram_t;
 
+/**
+ * Event types used for logging.
+ *
+ * CONNECT, ACCEPT, SEND, RECEIVE are major events that correspond to the external functions of quicly (e.g. quicly_connect).
+ * Timestamp, CID, first-octet, etc. are included as attributes.
+ *
+ * The rest are minor (i.e. in-detail) events. They are categorized by prefix (e.g., "PACKET", "CC"). They do not contain timestamp
+ * or CID. The time and the connection can be determined by the major event that precedes the minor event.
+ */
 typedef enum en_quicly_event_type_t {
     QUICLY_EVENT_TYPE_CONNECT,
     QUICLY_EVENT_TYPE_ACCEPT,
@@ -239,7 +248,14 @@ struct st_quicly_context_t {
      * optional callback for debug logging
      */
     struct {
+        /**
+         * Bitmask of event types to be logged. The field is a union of (1 << event_type).
+         */
         uint64_t mask;
+        /**
+         * The callback. The value MUST be non-NULL when mask is set to non-zero. quicly_default_event_log is a function provided
+         * by quicly that logs the events in JSON streaming format.
+         */
         quicly_event_log_cb cb;
     } event_log;
 };
