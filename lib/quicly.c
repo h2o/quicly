@@ -1742,6 +1742,12 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     }
     quicly_encode32(s->dst_encrypt_from - 4, (uint32_t)conn->egress.packet_number | 0xc0000000);
 
+    if (QUICLY_DEBUG) {
+        char *payload_hex = quicly_hexdump(s->dst_encrypt_from, s->dst - s->dst_encrypt_from, 4);
+        fprintf(stderr, "%s: AEAD payload:\n%s", __FUNCTION__, payload_hex);
+        free(payload_hex);
+    }
+
     s->dst = s->dst_encrypt_from + ptls_aead_encrypt(s->target.cipher->aead, s->dst_encrypt_from, s->dst_encrypt_from,
                                                      s->dst - s->dst_encrypt_from, conn->egress.packet_number,
                                                      s->target.first_byte_at, s->dst_encrypt_from - s->target.first_byte_at);
