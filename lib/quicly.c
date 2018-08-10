@@ -2760,18 +2760,17 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     }
     if (cc_type != 0)
         cc_cong_signal(&conn->egress.cc.ccv, cc_type, bytes_in_flight);
-    int end_of_recovery = frame->largest_acknowledged >= conn->egress.cc.end_of_recovery;
+    int exit_recovery = frame->largest_acknowledged >= conn->egress.cc.end_of_recovery;
     cc_ack_received(&conn->egress.cc.ccv, CC_ACK, bytes_in_flight, (uint16_t)conn->egress.cc.this_ack.nsegs,
                     (uint32_t)conn->egress.cc.this_ack.nbytes,
-                    conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */, end_of_recovery);
-    LOG_EVENT(conn->super.ctx, QUICLY_EVENT_TYPE_CC_ACK_RECEIVED,
-              {QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER, frame->largest_acknowledged},
-              {QUICLY_EVENT_ATTRIBUTE_ACKED_PACKETS, conn->egress.cc.this_ack.nsegs},
-              {QUICLY_EVENT_ATTRIBUTE_ACKED_BYTES, conn->egress.cc.this_ack.nbytes}, {QUICLY_EVENT_ATTRIBUTE_CC_TYPE, cc_type},
-              {QUICLY_EVENT_ATTRIBUTE_CC_END_OF_RECOVERY, end_of_recovery},
-              {QUICLY_EVENT_ATTRIBUTE_CWND, cc_get_cwnd(&conn->egress.cc.ccv)},
-              {QUICLY_EVENT_ATTRIBUTE_BYTES_IN_FLIGHT, bytes_in_flight});
-    if (end_of_recovery)
+                    conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */, exit_recovery);
+    LOG_EVENT(
+        conn->super.ctx, QUICLY_EVENT_TYPE_CC_ACK_RECEIVED, {QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER, frame->largest_acknowledged},
+        {QUICLY_EVENT_ATTRIBUTE_ACKED_PACKETS, conn->egress.cc.this_ack.nsegs},
+        {QUICLY_EVENT_ATTRIBUTE_ACKED_BYTES, conn->egress.cc.this_ack.nbytes}, {QUICLY_EVENT_ATTRIBUTE_CC_TYPE, cc_type},
+        {QUICLY_EVENT_ATTRIBUTE_CC_EXIT_RECOVERY, exit_recovery}, {QUICLY_EVENT_ATTRIBUTE_CWND, cc_get_cwnd(&conn->egress.cc.ccv)},
+        {QUICLY_EVENT_ATTRIBUTE_BYTES_IN_FLIGHT, bytes_in_flight});
+    if (exit_recovery)
         conn->egress.cc.end_of_recovery = UINT64_MAX;
 
     /* loss-detection  */
@@ -3353,5 +3352,6 @@ const char *quicly_event_attribute_names[] = {"time",
                                               "first-octet",
                                               "cc-type",
                                               "cc-end-of-recovery",
+                                              "cc-exit-recovery",
                                               "acked-packets",
                                               "acked-bytes"};
