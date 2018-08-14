@@ -49,6 +49,89 @@ typedef struct st_quicly_datagram_t {
     struct sockaddr sa;
 } quicly_datagram_t;
 
+/**
+ * Event types used for logging.
+ *
+ * CONNECT, ACCEPT, SEND, RECEIVE are major events that correspond to the external functions of quicly (e.g. quicly_connect).
+ * Timestamp, CID, first-octet, etc. are included as attributes.
+ *
+ * The rest are minor (i.e. in-detail) events. They are categorized by prefix (e.g., "PACKET", "CC"). They do not contain timestamp
+ * or CID. The time and the connection can be determined by the major event that precedes the minor event.
+ */
+typedef enum en_quicly_event_type_t {
+    QUICLY_EVENT_TYPE_CONNECT,
+    QUICLY_EVENT_TYPE_ACCEPT,
+    QUICLY_EVENT_TYPE_SEND,
+    QUICLY_EVENT_TYPE_RECEIVE,
+    QUICLY_EVENT_TYPE_PACKET_PREPARE,
+    QUICLY_EVENT_TYPE_PACKET_COMMIT,
+    QUICLY_EVENT_TYPE_PACKET_ACKED,
+    QUICLY_EVENT_TYPE_PACKET_LOST,
+    QUICLY_EVENT_TYPE_CRYPTO_DECRYPT,
+    QUICLY_EVENT_TYPE_CRYPTO_HANDSHAKE,
+    QUICLY_EVENT_TYPE_CRYPTO_UPDATE_SECRET,
+    QUICLY_EVENT_TYPE_CC_TLP,
+    QUICLY_EVENT_TYPE_CC_RTO,
+    QUICLY_EVENT_TYPE_CC_ACK_RECEIVED,
+    QUICLY_EVENT_TYPE_CC_CONGESTION,
+    QUICLY_EVENT_TYPE_STREAM_SEND,
+    QUICLY_EVENT_TYPE_STREAM_RECEIVE,
+    QUICLY_EVENT_TYPE_STREAM_ACKED,
+    QUICLY_EVENT_TYPE_STREAM_LOST,
+    QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH
+} quicly_event_type_t;
+
+/**
+ * an array of event names corresponding to quicly_event_type_t
+ */
+extern const char *quicly_event_type_names[];
+
+typedef enum en_quicly_event_attribute_type_t {
+    QUICLY_EVENT_ATTRIBUTE_NULL,
+    QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MIN,
+    QUICLY_EVENT_ATTRIBUTE_TIME = QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MIN,
+    QUICLY_EVENT_ATTRIBUTE_EPOCH,
+    QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER,
+    QUICLY_EVENT_ATTRIBUTE_CONNECTION,
+    QUICLY_EVENT_ATTRIBUTE_TLS_ERROR,
+    QUICLY_EVENT_ATTRIBUTE_OFFSET,
+    QUICLY_EVENT_ATTRIBUTE_LENGTH,
+    QUICLY_EVENT_ATTRIBUTE_STREAM_ID,
+    QUICLY_EVENT_ATTRIBUTE_FIN,
+    QUICLY_EVENT_ATTRIBUTE_IS_ENC,
+    QUICLY_EVENT_ATTRIBUTE_QUIC_VERSION,
+    QUICLY_EVENT_ATTRIBUTE_ACK_ONLY,
+    QUICLY_EVENT_ATTRIBUTE_MAX_LOST_PN,
+    QUICLY_EVENT_ATTRIBUTE_END_OF_RECOVERY,
+    QUICLY_EVENT_ATTRIBUTE_BYTES_IN_FLIGHT,
+    QUICLY_EVENT_ATTRIBUTE_CWND,
+    QUICLY_EVENT_ATTRIBUTE_NEWLY_ACKED,
+    QUICLY_EVENT_ATTRIBUTE_FIRST_OCTET,
+    QUICLY_EVENT_ATTRIBUTE_CC_TYPE,
+    QUICLY_EVENT_ATTRIBUTE_CC_END_OF_RECOVERY,
+    QUICLY_EVENT_ATTRIBUTE_CC_EXIT_RECOVERY,
+    QUICLY_EVENT_ATTRIBUTE_ACKED_PACKETS,
+    QUICLY_EVENT_ATTRIBUTE_ACKED_BYTES,
+    QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX,
+    QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MIN = QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX,
+    QUICLY_EVENT_ATTRIBUTE_DCID = QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MIN,
+    QUICLY_EVENT_ATTRIBUTE_SCID,
+    QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MAX
+} quicly_event_attribute_type_t;
+
+/**
+ * an array of attribute names corresponding to quicly_event_attribute_type_t
+ */
+extern const char *quicly_event_attribute_names[];
+
+typedef struct st_quicly_event_attribute_t {
+    quicly_event_attribute_type_t type;
+    union {
+        ptls_iovec_t v;
+        int64_t i;
+    } value;
+} quicly_event_attribute_t;
+
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
@@ -61,7 +144,8 @@ typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
 typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint8_t type, uint16_t code, const char *reason, size_t reason_len);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
-typedef void (*quicly_debug_log_cb)(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
+                                    size_t num_attributes);
 
 typedef struct st_quicly_transport_parameters_t {
     /**
@@ -100,6 +184,10 @@ struct st_quicly_context_t {
      * tls context to use
      */
     ptls_context_t tls;
+    /**
+     *
+     */
+    uint64_t next_master_id;
     /**
      * MTU
      */
@@ -170,7 +258,17 @@ struct st_quicly_context_t {
     /**
      * optional callback for debug logging
      */
-    quicly_debug_log_cb debug_log;
+    struct {
+        /**
+         * Bitmask of event types to be logged. The field is a union of (1 << event_type).
+         */
+        uint64_t mask;
+        /**
+         * The callback. The value MUST be non-NULL when mask is set to non-zero. quicly_default_event_log is a function provided
+         * by quicly that logs the events in JSON streaming format.
+         */
+        quicly_event_log_cb cb;
+    } event_log;
 };
 
 /**
@@ -198,6 +296,7 @@ typedef enum {
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
+    uint64_t master_id;
     struct {
         quicly_cid_t cid;
         /**
@@ -341,6 +440,10 @@ static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
 /**
  *
  */
+static uint64_t quicly_get_master_id(quicly_conn_t *conn);
+/**
+ *
+ */
 static const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn);
 /**
  *
@@ -461,7 +564,8 @@ int64_t quicly_default_now(quicly_context_t *ctx);
 /**
  *
  */
-void quicly_default_debug_log(quicly_context_t *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
+                              size_t num_attributes);
 /**
  *
  */
@@ -490,6 +594,12 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->ctx;
+}
+
+inline uint64_t quicly_get_master_id(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return c->master_id;
 }
 
 inline const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn)
