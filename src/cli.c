@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include <getopt.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <sys/select.h>
@@ -598,7 +599,7 @@ int main(int argc, char **argv)
     if (req_paths[0] == NULL)
         req_paths[0] = "/";
 
-    if (verbosity != 0) {
+    if (fcntl(5, F_GETFD) != -1) {
         ctx.event_log.mask = UINT64_MAX;
         ctx.event_log.cb = quicly_default_event_log;
     }
