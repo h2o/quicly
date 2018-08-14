@@ -87,7 +87,9 @@ typedef enum en_quicly_event_type_t {
 extern const char *quicly_event_type_names[];
 
 typedef enum en_quicly_event_attribute_type_t {
-    QUICLY_EVENT_ATTRIBUTE_TIME,
+    QUICLY_EVENT_ATTRIBUTE_NULL,
+    QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MIN,
+    QUICLY_EVENT_ATTRIBUTE_TIME = QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MIN,
     QUICLY_EVENT_ATTRIBUTE_EPOCH,
     QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER,
     QUICLY_EVENT_ATTRIBUTE_CONNECTION,
@@ -110,6 +112,11 @@ typedef enum en_quicly_event_attribute_type_t {
     QUICLY_EVENT_ATTRIBUTE_CC_EXIT_RECOVERY,
     QUICLY_EVENT_ATTRIBUTE_ACKED_PACKETS,
     QUICLY_EVENT_ATTRIBUTE_ACKED_BYTES,
+    QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX,
+    QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MIN = QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX,
+    QUICLY_EVENT_ATTRIBUTE_DCID = QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MIN,
+    QUICLY_EVENT_ATTRIBUTE_SCID,
+    QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MAX
 } quicly_event_attribute_type_t;
 
 /**
@@ -119,7 +126,10 @@ extern const char *quicly_event_attribute_names[];
 
 typedef struct st_quicly_event_attribute_t {
     quicly_event_attribute_type_t type;
-    int64_t value;
+    union {
+        ptls_iovec_t v;
+        int64_t i;
+    } value;
 } quicly_event_attribute_t;
 
 typedef struct st_quicly_context_t quicly_context_t;
@@ -135,7 +145,7 @@ typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
 typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint8_t type, uint16_t code, const char *reason, size_t reason_len);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
 typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
-                                    size_t num_attributes, const char *desc);
+                                    size_t num_attributes);
 
 typedef struct st_quicly_transport_parameters_t {
     /**
@@ -555,7 +565,7 @@ int64_t quicly_default_now(quicly_context_t *ctx);
  *
  */
 void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
-                              size_t num_attributes, const char *desc);
+                              size_t num_attributes);
 /**
  *
  */
