@@ -378,11 +378,8 @@ static void on_signal(int signo)
                 host_cid_hex, num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
         free(host_cid_hex);
     }
-    if (signo == SIGINT) {
-        if (quicly_default_event_log_fp != NULL)
-            fflush(quicly_default_event_log_fp);
+    if (signo == SIGINT)
         _exit(0);
-    }
 }
 
 static int run_server(struct sockaddr *sa, socklen_t salen)
