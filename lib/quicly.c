@@ -3243,6 +3243,8 @@ static void tohex(char *dst, uint8_t v)
     dst[1] = "0123456789abcdef"[v & 0xf];
 }
 
+FILE *quicly_default_event_log_fp;
+
 void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
                               size_t num_attributes)
 {
@@ -3292,7 +3294,7 @@ void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, c
 
 #undef EMIT
 
-    fwrite(buf.base, 1, buf.off, stderr);
+    fwrite(buf.base, 1, buf.off, quicly_default_event_log_fp != NULL ? quicly_default_event_log_fp : stderr);
 
 Exit:
     ptls_buffer_dispose(&buf);

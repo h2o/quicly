@@ -27,6 +27,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -420,6 +421,7 @@ typedef struct st_quicly_decoded_packet_t {
 #define QUICLY_RESET_STREAM_BOTH_DIRECTIONS (QUICLY_RESET_STREAM_INGRESS | QUICLY_RESET_STREAM_EGRESS)
 
 extern const quicly_context_t quicly_default_context;
+extern FILE *quicly_default_event_log_fp;
 
 /**
  *
