@@ -604,6 +604,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "failed to open stdio for fd 5:%s\n", strerror(errno));
             exit(1);
         }
+        setvbuf(quicly_default_event_log_fp, NULL, _IONBF, 0);
         ctx.event_log.mask = UINT64_MAX;
         ctx.event_log.cb = quicly_default_event_log;
     }
