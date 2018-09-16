@@ -556,6 +556,14 @@ void quicly_close_stream(quicly_stream_t *stream);
 /**
  *
  */
+static int quicly_stream_is_client_initiated(quicly_stream_id_t stream_id);
+/**
+ *
+ */
+static int quicly_stream_is_unidirectional(quicly_stream_id_t stream_id);
+/**
+ *
+ */
 quicly_datagram_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
 /**
  *
@@ -655,6 +663,16 @@ inline void **quicly_get_data(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->data;
+}
+
+inline int quicly_stream_is_client_initiated(quicly_stream_id_t stream_id)
+{
+    return (stream_id & 1) == 0;
+}
+
+inline int quicly_stream_is_unidirectional(quicly_stream_id_t stream_id)
+{
+    return (stream_id & 2) != 0;
 }
 
 inline void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received, uint64_t *num_sent, uint64_t *num_lost,
