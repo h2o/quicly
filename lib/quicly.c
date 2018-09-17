@@ -1042,15 +1042,20 @@ static int encode_transport_parameter_list(quicly_context_t *ctx, ptls_buffer_t 
     int ret;
 
     ptls_buffer_push_block(buf, 2, {
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL,
-                                 { ptls_buffer_push32(buf, ctx->initial_max_stream_data.bidi_local); });
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE,
-                                 { ptls_buffer_push32(buf, ctx->initial_max_stream_data.bidi_remote); });
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI,
-                                 { ptls_buffer_push32(buf, ctx->initial_max_stream_data.uni); });
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA,
-                                 { ptls_buffer_push32(buf, ctx->initial_max_data); });
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT, { ptls_buffer_push16(buf, ctx->idle_timeout); });
+        if (ctx->initial_max_stream_data.bidi_local != 0)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL,
+                                     { ptls_buffer_push32(buf, ctx->initial_max_stream_data.bidi_local); });
+        if (ctx->initial_max_stream_data.bidi_remote != 0)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE,
+                                     { ptls_buffer_push32(buf, ctx->initial_max_stream_data.bidi_remote); });
+        if (ctx->initial_max_stream_data.uni != 0)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI,
+                                     { ptls_buffer_push32(buf, ctx->initial_max_stream_data.uni); });
+        if (ctx->initial_max_data != 0)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA,
+                                     { ptls_buffer_push32(buf, ctx->initial_max_data); });
+        if (ctx->idle_timeout != 0)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT, { ptls_buffer_push16(buf, ctx->idle_timeout); });
         if (!is_client) {
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN, {
                 /* FIXME implement stateless reset */
