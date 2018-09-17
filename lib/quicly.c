@@ -2900,6 +2900,13 @@ int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid)
     return 0;
 }
 
+static void handle_close(quicly_conn_t *conn, uint16_t error_code, uint64_t *frame_type, ptls_iovec_t reason_phrase)
+{
+    conn->super.state = QUICLY_STATE_DRAINING;
+    if (conn->super.ctx->on_conn_close != NULL)
+        conn->super.ctx->on_conn_close(conn, error_code, frame_type, (const char *)reason_phrase.base, reason_phrase.len);
+}
+
 static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src, size_t _len, int *is_ack_only)
 {
     const uint8_t *end = src + _len;
@@ -2912,15 +2919,17 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
         switch (type_flags) {
         case QUICLY_FRAME_TYPE_PADDING:
             break;
-        case QUICLY_FRAME_TYPE_CONNECTION_CLOSE:
-        case QUICLY_FRAME_TYPE_APPLICATION_CLOSE: {
-            quicly_close_frame_t frame;
-            if ((ret = quicly_decode_close_frame(&src, end, &frame)) != 0)
+        case QUICLY_FRAME_TYPE_CONNECTION_CLOSE: {
+            quicly_connection_close_frame_t frame;
+            if ((ret = quicly_decode_connection_close_frame(&src, end, &frame)) != 0)
                 goto Exit;
-            conn->super.state = QUICLY_STATE_DRAINING;
-            if (conn->super.ctx->on_conn_close != NULL)
-                conn->super.ctx->on_conn_close(conn, type_flags, frame.error_code, (const char *)frame.reason_phrase.base,
-                                               frame.reason_phrase.len);
+            handle_close(conn, frame.error_code, &frame.frame_type, frame.reason_phrase);
+        } break;
+        case QUICLY_FRAME_TYPE_APPLICATION_CLOSE: {
+            quicly_application_close_frame_t frame;
+            if ((ret = quicly_decode_application_close_frame(&src, end, &frame)) != 0)
+                goto Exit;
+            handle_close(conn, frame.error_code, NULL, frame.reason_phrase);
         } break;
         case QUICLY_FRAME_TYPE_ACK: {
             quicly_ack_frame_t frame;

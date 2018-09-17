@@ -143,7 +143,8 @@ typedef quicly_stream_t *(*quicly_alloc_stream_cb)(quicly_context_t *ctx);
 typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
-typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint8_t type, uint16_t code, const char *reason, size_t reason_len);
+typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint16_t code, uint64_t *frame_type, const char *reason,
+                                     size_t reason_len);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
 typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
                                     size_t num_attributes);

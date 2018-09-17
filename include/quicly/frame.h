@@ -105,12 +105,20 @@ typedef struct st_quicly_rst_stream_frame_t {
 
 static int quicly_decode_rst_stream_frame(const uint8_t **src, const uint8_t *end, quicly_rst_stream_frame_t *frame);
 
-typedef struct st_quicly_close_frame_t {
+typedef struct st_quicly_connection_close_frame_t {
+    uint16_t error_code;
+    uint64_t frame_type;
+    ptls_iovec_t reason_phrase;
+} quicly_connection_close_frame_t;
+
+static int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_connection_close_frame_t *frame);
+
+typedef struct st_quicly_application_close_frame_t {
     uint16_t error_code;
     ptls_iovec_t reason_phrase;
-} quicly_close_frame_t;
+} quicly_application_close_frame_t;
 
-static int quicly_decode_close_frame(const uint8_t **src, const uint8_t *end, quicly_close_frame_t *frame);
+static int quicly_decode_application_close_frame(const uint8_t **src, const uint8_t *end, quicly_application_close_frame_t *frame);
 
 static uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data);
 
@@ -466,13 +474,33 @@ Error:
     return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_RST_STREAM);
 }
 
-inline int quicly_decode_close_frame(const uint8_t **src, const uint8_t *end, quicly_close_frame_t *frame)
+inline int quicly_decode_application_close_frame(const uint8_t **src, const uint8_t *end, quicly_application_close_frame_t *frame)
 {
     uint64_t reason_len;
 
     if (end - *src < 2)
         goto Error;
     frame->error_code = quicly_decode16(src);
+    if ((reason_len = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
+    if (end - *src < reason_len)
+        goto Error;
+    frame->reason_phrase = ptls_iovec_init(*src, reason_len);
+    *src += reason_len;
+    return 0;
+Error:
+    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_CONNECTION_CLOSE);
+}
+
+inline int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_connection_close_frame_t *frame)
+{
+    uint64_t reason_len;
+
+    if (end - *src < 2)
+        goto Error;
+    frame->error_code = quicly_decode16(src);
+    if ((frame->frame_type = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
     if ((reason_len = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
     if (end - *src < reason_len)
