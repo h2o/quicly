@@ -143,17 +143,21 @@ typedef quicly_stream_t *(*quicly_alloc_stream_cb)(quicly_context_t *ctx);
 typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
-typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint16_t code, uint64_t *frame_type, const char *reason,
+typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint16_t code, const uint64_t *frame_type, const char *reason,
                                      size_t reason_len);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
 typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
                                     size_t num_attributes);
 
+typedef struct st_quicly_initial_max_stream_data_t {
+    uint32_t bidi_local, bidi_remote, uni;
+} quicly_initial_max_stream_data_t;
+
 typedef struct st_quicly_transport_parameters_t {
     /**
      * in octets
      */
-    uint32_t initial_max_stream_data;
+    quicly_initial_max_stream_data_t initial_max_stream_data;
     /**
      * in octets
      */
@@ -201,7 +205,7 @@ struct st_quicly_context_t {
     /**
      * transport parameters
      */
-    uint32_t initial_max_stream_data;
+    quicly_initial_max_stream_data_t initial_max_stream_data;
     /**
      *
      */
