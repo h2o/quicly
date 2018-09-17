@@ -192,10 +192,10 @@ static int on_stream_open(quicly_stream_t *stream)
     return 0;
 }
 
-static void on_conn_close(quicly_conn_t *conn, uint8_t type, uint16_t code, const char *reason, size_t reason_len)
+static void on_conn_close(quicly_conn_t *conn, uint16_t code, const uint64_t *frame_type, const char *reason, size_t reason_len)
 {
-    fprintf(stderr, "%s close:%" PRIx16 ":%.*s\n", type == QUICLY_FRAME_TYPE_CONNECTION_CLOSE ? "connection" : "application", code,
-            (int)reason_len, reason);
+    fprintf(stderr, "%s close:%" PRIx16 ":%.*s\n", frame_type != NULL ? "connection" : "application", code, (int)reason_len,
+            reason);
 }
 
 static int send_one(int fd, quicly_datagram_t *p)
