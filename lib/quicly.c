@@ -3045,6 +3045,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 } break;
                 default:
                     fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)type_flags);
+                    *is_ack_only = 0;
                     ret = QUICLY_ERROR_TBD;
                     goto Exit;
                 }
