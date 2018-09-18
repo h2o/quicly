@@ -2867,7 +2867,7 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
     conn->super.version = version;
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH, INT_EVENT_ATTR(QUIC_VERSION, version));
 
-    { /* reschedule the Initial packet for immediate resend */
+    { /* reschedule the Initial packet for immediate resend (FIXME logic below fails if the first packet was already deemed lost) */
         quicly_acks_t *acks = &conn->egress.acks;
         quicly_acks_iter_t iter;
         quicly_acks_init_iter(acks, &iter);
