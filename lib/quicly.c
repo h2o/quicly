@@ -3022,6 +3022,12 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                         STREAM_IS_UNI(frame.stream_id) ? &conn->ingress.max_stream_id_uni : &conn->ingress.max_stream_id_bidi, 0);
                     ret = 0;
                 } break;
+                case QUICLY_FRAME_TYPE_NEW_CONNECTION_ID: {
+                    quicly_new_connection_id_frame_t frame;
+                    if ((ret = quicly_decode_new_connection_id_frame(&src, end, &frame)) != 0)
+                        goto Exit;
+                    /* TODO */
+                } break;
                 case QUICLY_FRAME_TYPE_STOP_SENDING: {
                     quicly_stop_sending_frame_t frame;
                     if ((ret = quicly_decode_stop_sending_frame(&src, end, &frame)) != 0)
