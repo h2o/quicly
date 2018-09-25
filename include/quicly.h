@@ -403,10 +403,6 @@ struct st_quicly_stream_t {
          * size of the receive window
          */
         uint32_t window;
-        /**
-         *
-         */
-        uint16_t rst_reason;
     } _recv_aux;
 };
 

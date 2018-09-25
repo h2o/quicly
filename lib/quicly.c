@@ -639,7 +639,6 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     quicly_linklist_init(&stream->_send_aux.pending_link.stream);
 
     stream->_recv_aux.window = initial_max_stream_data_local;
-    stream->_recv_aux.rst_reason = QUICLY_ERROR_FIN_CLOSED;
 }
 
 static void dispose_stream_properties(quicly_stream_t *stream)
@@ -2681,9 +2680,8 @@ static int handle_rst_stream_frame(quicly_conn_t *conn, quicly_rst_stream_frame_
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    if ((ret = quicly_recvbuf_reset(&stream->recvbuf, frame->final_offset, &bytes_missing)) != 0)
+    if ((ret = quicly_recvbuf_reset(&stream->recvbuf, frame->app_error_code, frame->final_offset, &bytes_missing)) != 0)
         return ret;
-    stream->_recv_aux.rst_reason = frame->app_error_code;
     conn->ingress.max_data.bytes_consumed += bytes_missing;
 
     if (quicly_stream_is_closable(stream))

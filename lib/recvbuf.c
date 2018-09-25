@@ -28,6 +28,7 @@ void quicly_recvbuf_init(quicly_recvbuf_t *buf, quicly_recvbuf_change_cb on_chan
     quicly_buffer_init(&buf->data);
     buf->data_off = 0;
     buf->eos = UINT64_MAX;
+    buf->rst_reason = QUICLY_ERROR_FIN_CLOSED;
     buf->on_change = on_change;
 }
 
@@ -61,7 +62,7 @@ int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at)
     return buf->eos == eos_at ? 0 : QUICLY_ERROR_TBD;
 }
 
-int quicly_recvbuf_reset(quicly_recvbuf_t *buf, uint64_t eos_at, uint64_t *bytes_missing)
+int quicly_recvbuf_reset(quicly_recvbuf_t *buf, uint16_t reason, uint64_t eos_at, uint64_t *bytes_missing)
 {
     int ret;
 
@@ -78,6 +79,7 @@ int quicly_recvbuf_reset(quicly_recvbuf_t *buf, uint64_t eos_at, uint64_t *bytes
         goto Exit;
     quicly_buffer_init(&buf->data);
     buf->data_off = eos_at;
+    buf->rst_reason = reason;
 
 Exit:
     return ret;
