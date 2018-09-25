@@ -69,6 +69,8 @@ extern "C" {
 #define QUICLY_PATH_CHALLENGE_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STREAM_FRAME_CAPACITY (1 + 8 + 8 + 1)
 
+#define QUICLY_STATELESS_RESET_TOKEN_LEN 16
+
 static uint16_t quicly_decode16(const uint8_t **src);
 static uint32_t quicly_decode32(const uint8_t **src);
 static uint64_t quicly_decode64(const uint8_t **src);
@@ -105,12 +107,20 @@ typedef struct st_quicly_rst_stream_frame_t {
 
 static int quicly_decode_rst_stream_frame(const uint8_t **src, const uint8_t *end, quicly_rst_stream_frame_t *frame);
 
-typedef struct st_quicly_close_frame_t {
+typedef struct st_quicly_connection_close_frame_t {
+    uint16_t error_code;
+    uint64_t frame_type;
+    ptls_iovec_t reason_phrase;
+} quicly_connection_close_frame_t;
+
+static int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_connection_close_frame_t *frame);
+
+typedef struct st_quicly_application_close_frame_t {
     uint16_t error_code;
     ptls_iovec_t reason_phrase;
-} quicly_close_frame_t;
+} quicly_application_close_frame_t;
 
-static int quicly_decode_close_frame(const uint8_t **src, const uint8_t *end, quicly_close_frame_t *frame);
+static int quicly_decode_application_close_frame(const uint8_t **src, const uint8_t *end, quicly_application_close_frame_t *frame);
 
 static uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data);
 
@@ -167,6 +177,14 @@ typedef struct st_quicly_stream_id_blocked_frame_t {
 } quicly_stream_id_blocked_frame_t;
 
 static int quicly_decode_stream_id_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_stream_id_blocked_frame_t *frame);
+
+typedef struct st_quicly_new_connection_id_frame_t {
+    uint64_t sequence;
+    ptls_iovec_t cid;
+    const uint8_t *stateless_reset_token;
+} quicly_new_connection_id_frame_t;
+
+static int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint8_t *end, quicly_new_connection_id_frame_t *frame);
 
 static uint8_t *quicly_encode_stop_sending_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code);
 
@@ -466,13 +484,33 @@ Error:
     return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_RST_STREAM);
 }
 
-inline int quicly_decode_close_frame(const uint8_t **src, const uint8_t *end, quicly_close_frame_t *frame)
+inline int quicly_decode_application_close_frame(const uint8_t **src, const uint8_t *end, quicly_application_close_frame_t *frame)
 {
     uint64_t reason_len;
 
     if (end - *src < 2)
         goto Error;
     frame->error_code = quicly_decode16(src);
+    if ((reason_len = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
+    if (end - *src < reason_len)
+        goto Error;
+    frame->reason_phrase = ptls_iovec_init(*src, reason_len);
+    *src += reason_len;
+    return 0;
+Error:
+    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_CONNECTION_CLOSE);
+}
+
+inline int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_connection_close_frame_t *frame)
+{
+    uint64_t reason_len;
+
+    if (end - *src < 2)
+        goto Error;
+    frame->error_code = quicly_decode16(src);
+    if ((frame->frame_type = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
     if ((reason_len = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
     if (end - *src < reason_len)
@@ -576,6 +614,31 @@ inline int quicly_decode_stream_id_blocked_frame(const uint8_t **src, const uint
     if ((frame->stream_id = quicly_decodev(src, end)) == UINT64_MAX)
         return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_STREAM_ID_BLOCKED);
     return 0;
+}
+
+inline int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint8_t *end, quicly_new_connection_id_frame_t *frame)
+{
+    uint8_t len;
+    if ((frame->sequence = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Fail;
+    if (end - *src < 1)
+        goto Fail;
+    len = *(*src)++;
+    if (len == 0) {
+        frame->cid = ptls_iovec_init(NULL, 0);
+    } else if (4 <= len && len <= 18) {
+        frame->cid = ptls_iovec_init(src, len);
+        *src += len;
+    } else {
+        goto Fail;
+    }
+    if (len != QUICLY_STATELESS_RESET_TOKEN_LEN)
+        goto Fail;
+    frame->stateless_reset_token = *src;
+    *src += QUICLY_STATELESS_RESET_TOKEN_LEN;
+    return 0;
+Fail:
+    return QUICLY_ERROR_FRAME_ERROR(QUICLY_FRAME_TYPE_NEW_CONNECTION_ID);
 }
 
 inline uint8_t *quicly_encode_stop_sending_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code)

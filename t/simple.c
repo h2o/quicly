@@ -146,11 +146,11 @@ static void test_rst_then_close(void)
 
 static void tiny_stream_window(void)
 {
-    uint32_t initial_max_stream_data_orig = quic_ctx.initial_max_stream_data;
+    quicly_initial_max_stream_data_t initial_max_stream_data_orig = quic_ctx.initial_max_stream_data;
     quicly_stream_t *client_stream, *server_stream;
     int ret;
 
-    quic_ctx.initial_max_stream_data = 4;
+    quic_ctx.initial_max_stream_data = (quicly_initial_max_stream_data_t){4, 4, 4};
 
     ok(max_data_is_equal(client, server));
 
@@ -214,13 +214,13 @@ static void tiny_stream_window(void)
 
 static void test_rst_during_loss(void)
 {
-    uint32_t initial_max_stream_data_orig = quic_ctx.initial_max_stream_data;
+    quicly_initial_max_stream_data_t initial_max_stream_data_orig = quic_ctx.initial_max_stream_data;
     quicly_stream_t *client_stream, *server_stream;
     quicly_datagram_t *reordered_packet;
     int ret;
     uint64_t max_data_at_start, tmp;
 
-    quic_ctx.initial_max_stream_data = 4;
+    quic_ctx.initial_max_stream_data = (quicly_initial_max_stream_data_t){4, 4, 4};
 
     ok(max_data_is_equal(client, server));
     quicly_get_max_data(client, NULL, &max_data_at_start, NULL);
