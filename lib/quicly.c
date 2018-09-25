@@ -2002,6 +2002,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
 
     /* send STOP_SENDING if necessray */
     if (stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_SEND) {
+        /* FIXME also send an empty STREAM frame */
         if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.stop_sending.sender_state, s,
                                                QUICLY_STOP_SENDING_FRAME_CAPACITY, on_ack_stop_sending)) != 0)
             return ret;
@@ -2844,6 +2845,8 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
     quicly_stream_t *stream;
     int ret;
 
+    /* FIXME draft-14 section 7.15; "Receiving a STOP_SENDING frame for a send stream that is “Ready” or non-existent MUST be
+     * treated as a connection error of type PROTOCOL_VIOLATION." */
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
