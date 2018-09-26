@@ -2848,6 +2848,8 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
+    if (stream->sendbuf.stop_reason == QUICLY_ERROR_FIN_CLOSED)
+        stream->sendbuf.stop_reason = frame->app_error_code;
     quicly_reset_stream(stream, QUICLY_APPLICATION_ERROR_STOPPING);
     return 0;
 }
