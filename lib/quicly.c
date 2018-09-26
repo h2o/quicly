@@ -1272,7 +1272,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
         goto Exit;
     if (negotiated_version != QUICLY_PROTOCOL_VERSION) {
         fprintf(stderr, "unexpected negotiated version\n");
-        ret = QUICLY_ERROR_TBD;
+        ret = QUICLY_ERROR_VERSION_NEGOTIATION;
         goto Exit;
     }
 
@@ -1493,7 +1493,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         goto Exit;
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
     if ((payload = decrypt_packet(&ingress_cipher, &next_expected_pn, packet, &pn)).base == NULL) {
-        ret = QUICLY_ERROR_TBD;
+        ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
 
@@ -1504,7 +1504,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
                 break;
         }
         if (src == end || *src++ != QUICLY_FRAME_TYPE_CRYPTO) {
-            ret = QUICLY_ERROR_TBD;
+            ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
             goto Exit;
         }
         if ((ret = quicly_decode_crypto_frame(&src, end, &frame)) != 0)
@@ -1516,7 +1516,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         /* FIXME check packet size */
         for (; src < end; ++src) {
             if (*src != QUICLY_FRAME_TYPE_PADDING) {
-                ret = QUICLY_ERROR_TBD;
+                ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
         }
@@ -2848,7 +2848,7 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    quicly_reset_stream(stream, QUICLY_ERROR_TBD);
+    quicly_reset_stream(stream, QUICLY_APPLICATION_ERROR_STOPPING);
     return 0;
 }
 
@@ -2894,7 +2894,7 @@ static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded
         if (CAN_SELECT(supported_version))
             return negotiate_using_version(conn, supported_version);
     }
-    return QUICLY_ERROR_VERSION_NEGOTIATION_FAILURE;
+    return QUICLY_ERROR_VERSION_NEGOTIATION;
 
 #undef CAN_SELECT
 }
@@ -3053,7 +3053,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 default:
                     fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)type_flags);
                     *is_ack_only = 0;
-                    ret = QUICLY_ERROR_TBD;
+                    ret = QUICLY_ERROR_FRAME_ENCODING;
                     goto Exit;
                 }
             }
@@ -3148,7 +3148,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
     if ((payload = decrypt_packet(cipher, &(*space)->next_expected_packet_number, packet, &pn)).base == NULL) {
-        ret = QUICLY_ERROR_TBD;
+        ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
 

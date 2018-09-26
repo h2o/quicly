@@ -54,12 +54,12 @@ int quicly_recvbuf_write(quicly_recvbuf_t *buf, uint64_t offset, const void *p, 
 int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at)
 {
     if (eos_at < buf->received.ranges[buf->received.num_ranges - 1].end)
-        return QUICLY_ERROR_TBD;
+        return QUICLY_ERROR_FINAL_OFFSET;
     if (buf->eos == UINT64_MAX) {
         buf->eos = eos_at;
         return 0;
     }
-    return buf->eos == eos_at ? 0 : QUICLY_ERROR_TBD;
+    return buf->eos == eos_at ? 0 : QUICLY_ERROR_FINAL_OFFSET;
 }
 
 int quicly_recvbuf_reset(quicly_recvbuf_t *buf, uint16_t reason, uint64_t eos_at, uint64_t *bytes_missing)
