@@ -374,14 +374,14 @@ struct st_quicly_stream_t {
          */
         struct {
             quicly_sender_state_t sender_state;
-            uint16_t reason;
+            uint16_t error_code;
         } stop_sending;
         /**
          * rst_stream
          */
         struct {
             quicly_sender_state_t sender_state;
-            uint16_t reason;
+            uint16_t error_code;
         } rst;
         /**
          * sends receive window updates to peer
@@ -535,11 +535,11 @@ static int quicly_stream_is_closable(quicly_stream_t *stream);
 /**
  *
  */
-void quicly_reset_stream(quicly_stream_t *stream, uint16_t reason);
+void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code);
 /**
  *
  */
-void quicly_request_stop(quicly_stream_t *stream, uint16_t reason);
+void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code);
 /**
  *
  */

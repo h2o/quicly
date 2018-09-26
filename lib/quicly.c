@@ -631,9 +631,9 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     stream->_send_aux.max_stream_data = initial_max_stream_data_remote;
     stream->_send_aux.max_sent = 0;
     stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_NONE;
-    stream->_send_aux.stop_sending.reason = 0;
+    stream->_send_aux.stop_sending.error_code = 0;
     stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_NONE;
-    stream->_send_aux.rst.reason = 0;
+    stream->_send_aux.rst.error_code = 0;
     quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender, initial_max_stream_data_local);
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
     quicly_linklist_init(&stream->_send_aux.pending_link.stream);
@@ -2005,7 +2005,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
         if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.stop_sending.sender_state, s,
                                                QUICLY_STOP_SENDING_FRAME_CAPACITY, on_ack_stop_sending)) != 0)
             return ret;
-        s->dst = quicly_encode_stop_sending_frame(s->dst, stream->stream_id, stream->_send_aux.stop_sending.reason);
+        s->dst = quicly_encode_stop_sending_frame(s->dst, stream->stream_id, stream->_send_aux.stop_sending.error_code);
     }
 
     /* send MAX_STREAM_DATA if necessary */
@@ -2028,7 +2028,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
                                                on_ack_rst_stream)) != 0)
             return ret;
         s->dst =
-            quicly_encode_rst_stream_frame(s->dst, stream->stream_id, stream->_send_aux.rst.reason, stream->_send_aux.max_sent);
+            quicly_encode_rst_stream_frame(s->dst, stream->stream_id, stream->_send_aux.rst.error_code, stream->_send_aux.max_sent);
     }
 
     return 0;
@@ -3197,7 +3197,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
     return 0;
 }
 
-void quicly_reset_stream(quicly_stream_t *stream, uint16_t reason)
+void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
 {
     assert(!(STREAM_IS_UNI(stream->stream_id) && STREAM_IS_CLIENT_INITIATED(stream->stream_id) != quicly_is_client(stream->conn)));
 
@@ -3215,20 +3215,20 @@ void quicly_reset_stream(quicly_stream_t *stream, uint16_t reason)
 
     /* setup RST_STREAM */
     stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
-    stream->_send_aux.rst.reason = reason;
+    stream->_send_aux.rst.error_code = error_code;
 
     /* schedule for delivery */
     sched_stream_control(stream);
 }
 
-void quicly_request_stop(quicly_stream_t *stream, uint16_t reason)
+void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code)
 {
     assert(!(STREAM_IS_UNI(stream->stream_id) && STREAM_IS_CLIENT_INITIATED(stream->stream_id) == quicly_is_client(stream->conn)));
 
     /* send STOP_SENDING if the incoming side of the stream is still open */
     if (stream->recvbuf.eos == UINT64_MAX && stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {
         stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_SEND;
-        stream->_send_aux.stop_sending.reason = reason;
+        stream->_send_aux.stop_sending.error_code = error_code;
         sched_stream_control(stream);
     }
 }
