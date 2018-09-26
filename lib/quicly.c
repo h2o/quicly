@@ -2848,7 +2848,7 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    quicly_reset_stream(stream, QUICLY_RESET_STREAM_EGRESS, QUICLY_ERROR_TBD);
+    quicly_reset_stream(stream, QUICLY_ERROR_TBD);
     return 0;
 }
 
@@ -3195,32 +3195,39 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
     return 0;
 }
 
-void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint16_t reason)
+void quicly_reset_stream(quicly_stream_t *stream, uint16_t reason)
 {
-    if ((direction & QUICLY_RESET_STREAM_EGRESS) != 0) {
-        /* if we have not yet sent FIN, then... */
-        if (stream->_send_aux.max_sent <= stream->sendbuf.eos) {
-            /* close the sender and mark the eos as the only byte that's not confirmed */
-            assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
-            quicly_sendbuf_shutdown(&stream->sendbuf);
-            if (stream->sendbuf.eos != 0) {
-                quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
-                quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
-            }
-            /* setup RST_STREAM */
-            stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
-            stream->_send_aux.rst.reason = reason;
-            /* schedule for delivery */
-            sched_stream_control(stream);
-        }
+    assert(!(STREAM_IS_UNI(stream->stream_id) && STREAM_IS_CLIENT_INITIATED(stream->stream_id) != quicly_is_client(stream->conn)));
+
+    /* do nothing if FIN has been sent */
+    if (stream->_send_aux.max_sent > stream->sendbuf.eos)
+        return;
+
+    /* close the sender and mark the eos as the only byte that's not confirmed */
+    assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
+    quicly_sendbuf_shutdown(&stream->sendbuf);
+    if (stream->sendbuf.eos != 0) {
+        quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
+        quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
     }
 
-    if ((direction & QUICLY_RESET_STREAM_INGRESS) != 0) {
-        /* send STOP_SENDING if the incoming side of the stream is still open */
-        if (stream->recvbuf.eos == UINT64_MAX && stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {
-            stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_SEND;
-            sched_stream_control(stream);
-        }
+    /* setup RST_STREAM */
+    stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
+    stream->_send_aux.rst.reason = reason;
+
+    /* schedule for delivery */
+    sched_stream_control(stream);
+}
+
+void quicly_request_stop(quicly_stream_t *stream, uint16_t reason)
+{
+    assert(!(STREAM_IS_UNI(stream->stream_id) && STREAM_IS_CLIENT_INITIATED(stream->stream_id) == quicly_is_client(stream->conn)));
+
+    /* send STOP_SENDING if the incoming side of the stream is still open */
+    if (stream->recvbuf.eos == UINT64_MAX && stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {
+        stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_SEND;
+        stream->_send_aux.stop_sending.reason = reason;
+        sched_stream_control(stream);
     }
 }
 

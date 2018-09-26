@@ -417,10 +417,6 @@ typedef struct st_quicly_decoded_packet_t {
     size_t datagram_size;
 } quicly_decoded_packet_t;
 
-#define QUICLY_RESET_STREAM_EGRESS 1
-#define QUICLY_RESET_STREAM_INGRESS 2
-#define QUICLY_RESET_STREAM_BOTH_DIRECTIONS (QUICLY_RESET_STREAM_INGRESS | QUICLY_RESET_STREAM_EGRESS)
-
 extern const quicly_context_t quicly_default_context;
 extern FILE *quicly_default_event_log_fp;
 
@@ -539,7 +535,11 @@ static int quicly_stream_is_closable(quicly_stream_t *stream);
 /**
  *
  */
-void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint16_t reason);
+void quicly_reset_stream(quicly_stream_t *stream, uint16_t reason);
+/**
+ *
+ */
+void quicly_request_stop(quicly_stream_t *stream, uint16_t reason);
 /**
  *
  */
