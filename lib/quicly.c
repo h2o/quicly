@@ -3195,7 +3195,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
     return 0;
 }
 
-void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint32_t reason)
+void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint16_t reason)
 {
     if ((direction & QUICLY_RESET_STREAM_EGRESS) != 0) {
         /* if we have not yet sent FIN, then... */
