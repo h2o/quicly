@@ -201,19 +201,14 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
     conn->packet_num++;
 
     /* check if packet should be dropped */
-    if (q->num_drops > 0) {
-        int drop = 0;
-        if (conn->packet_num > q->drops[q->num_drops-1])
-            q->num_drops = 0;
-        else {
-          for (int i = 0; i < q->num_drops; i++) {
-            if (conn->packet_num == q->drops[i]) drop = 1;
-            if (conn->packet_num < q->drops[i]) break;
-          }
-        }
-        if (drop) {
-            fprintf(stderr, "%" PRId64 ":%zu:%c:droplist\n", now, q->ring.elements[q->ring.tail].conn->cid, downstream ? 'd' : 'u');
-            return 1;
+    if (q->num_drops > 0 && conn->packet_num >= q->drops[0] && conn->packet_num <= q->drops[q->num_drops]) {
+        int i = 0;
+        while (i < q->num_drops) {
+            if (conn->packet_num == q->drops[i]) {
+                fprintf(stderr, "%" PRId64 ":%zu:%c:droplist\n", now, q->ring.elements[q->ring.tail].conn->cid, downstream ? 'd' : 'u');
+                return 1;
+            }
+            i++;
         }
     }
 
