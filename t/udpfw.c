@@ -45,7 +45,8 @@ struct connection_t {
         struct sockaddr_storage ss;
         socklen_t len;
     } down_addr;
-    uint64_t packet_num;
+    uint64_t packet_num_up;
+    uint64_t packet_num_down;
 };
 
 struct queue_t {
@@ -198,13 +199,13 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
     }
 
     assert(conn != NULL);
-    conn->packet_num++;
+    uint64_t packet_num =  downstream ? ++conn->packet_num_down : ++conn->packet_num_up;
 
     /* check if packet should be dropped */
-    if (q->num_drops > 0 && conn->packet_num >= q->drops[0] && conn->packet_num <= q->drops[q->num_drops]) {
+    if (q->num_drops > 0 && packet_num >= q->drops[0] && packet_num <= q->drops[q->num_drops]) {
         int i = 0;
         while (i < q->num_drops) {
-            if (conn->packet_num == q->drops[i]) {
+            if (packet_num == q->drops[i]) {
                 fprintf(stderr, "%" PRId64 ":%zu:%c:droplist\n", now, q->ring.elements[q->ring.tail].conn->cid, downstream ? 'd' : 'u');
                 return 1;
             }
