@@ -2244,6 +2244,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     /* handle loss */
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
+
+    /* mark packets as lost if they are smaller than the largest_pn and outside the early retransmit window */
     while ((ack = quicly_acks_get(&iter))->packet_number < largest_pn && ack->sent_at <= sent_before) {
         if (ack->is_active && conn->egress.max_lost_pn <= ack->packet_number) {
             if (ack->packet_number != largest_newly_lost_pn) {
@@ -2270,7 +2272,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
         }
     }
 
-    /* schedule next alarm */
+    /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
     if (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX && ack->is_active)
         *loss_time = ack->sent_at + delay_until_lost;
 
@@ -2763,6 +2765,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
     /* OnPacketAckedCC */
     uint32_t cc_type = 0;
+    /* TODO (jri): this function should be called for every packet newly acked. */
     if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
         cc_type = CC_RTO;
         conn->egress.cc.in_first_rto = 0;
