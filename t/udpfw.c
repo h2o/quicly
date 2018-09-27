@@ -163,7 +163,6 @@ static void init_queue(struct queue_t *q)
     q->ring.tail = 0;
     q->ring.elements = malloc(sizeof(q->ring.elements[0]) * q->ring.depth);
     assert(q->ring.elements != NULL);
-    q->num_drops = 0;
 }
 
 static void emit_queue(struct queue_t *q, int up, int64_t now)
@@ -250,9 +249,6 @@ int main(int argc, char **argv)
 
     signal(SIGINT, on_signal);
     signal(SIGHUP, on_signal);
-
-    init_queue(&up);
-    init_queue(&down);
 
     while ((ch = getopt(argc, argv, "b:B:i:I:l:d:D:h")) != -1) {
         switch (ch) {
@@ -345,6 +341,9 @@ int main(int argc, char **argv)
             exit(1);
         }
     }
+
+    init_queue(&up);
+    init_queue(&down);
 
     while (1) {
         struct connection_t *c;
