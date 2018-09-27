@@ -60,12 +60,12 @@ struct queue_t {
         } * elements;
     } ring;
     int64_t delay_usec; /* TODO: add propagation delay */
-    uint16_t drops[MAXDROPS];
-    uint16_t num_drops;
     int64_t interval_usec;
     int64_t congested_until; /* in usec */
     uint64_t num_forwarded;
     uint64_t num_dropped;
+    uint16_t drops[MAXDROPS];
+    uint16_t num_drops;
 } up = {{16}, 10}, down = {{16}, 10};
 
 static int listen_fd = -1;
@@ -183,22 +183,27 @@ static void emit_queue(struct queue_t *q, int up, int64_t now)
 
 static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
 {
-    static uint64_t packet_num = 0;
     ssize_t readlen;
     struct sockaddr_storage ss;
     socklen_t sslen = sizeof(ss);
+    int downstream = (conn != NULL);
 
-    if ((readlen = recvfrom(conn != NULL ? conn->up_fd : listen_fd, q->ring.elements[q->ring.tail].data,
-                            sizeof(q->ring.elements[q->ring.tail].data), 0, conn != NULL ? NULL : (void *)&ss,
-                            conn != NULL ? NULL : &sslen)) <= 0)
+    if ((readlen = recvfrom(downstream ? conn->up_fd : listen_fd, q->ring.elements[q->ring.tail].data,
+                            sizeof(q->ring.elements[q->ring.tail].data), 0, downstream ? NULL : (void *)&ss,
+                            downstream ? NULL : &sslen)) <= 0)
         return 0;
 
+    if (!downstream) {
+        conn = find_or_create_connection((void *)&ss, sslen);
+    }
+
+    assert(conn != NULL);
     conn->packet_num++;
 
     /* check if packet should be dropped */
     if (q->num_drops > 0) {
         int drop = 0;
-        if (conn->packet_num > q->drops[q->num_drops])
+        if (conn->packet_num > q->drops[q->num_drops-1])
             q->num_drops = 0;
         else {
           for (int i = 0; i < q->num_drops; i++) {
@@ -207,15 +212,16 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
           }
         }
         if (drop) {
-            fprintf(stderr, "drop as instructed\n");
+            fprintf(stderr, "%" PRId64 ":%zu:%c:droplist\n", now, q->ring.elements[q->ring.tail].conn->cid, downstream ? 'd' : 'u');
             return 1;
         }
     }
 
     q->ring.elements[q->ring.tail].len = readlen;
-    q->ring.elements[q->ring.tail].conn = conn != NULL ? conn : find_or_create_connection((void *)&ss, sslen);
+    q->ring.elements[q->ring.tail].conn = conn;
     size_t next_tail = (q->ring.tail + 1) % q->ring.depth;
-    fprintf(stderr, "%" PRId64 ":%zu:%c:", now, q->ring.elements[q->ring.tail].conn->cid, conn != NULL ? 'd' : 'u');
+    fprintf(stderr, "%" PRId64 ":%zu:%c:", now, q->ring.elements[q->ring.tail].conn->cid, downstream ? 'd' : 'u');
+    
     if (next_tail != q->ring.head) {
         q->ring.tail = next_tail;
         ++q->num_forwarded;
