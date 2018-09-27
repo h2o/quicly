@@ -35,6 +35,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#define MAXDROPS 64
+
 struct connection_t {
     struct connection_t *prev, *next;
     size_t cid;
@@ -56,6 +58,9 @@ struct queue_t {
             size_t len;
         } * elements;
     } ring;
+    int64_t delay_usec; /* TODO: add propagation delay */
+    uint16_t drops[MAXDROPS];
+    uint16_t num_drops;
     int64_t interval_usec;
     int64_t congested_until; /* in usec */
     uint64_t num_forwarded;
@@ -152,6 +157,7 @@ static void init_queue(struct queue_t *q)
     q->ring.tail = 0;
     q->ring.elements = malloc(sizeof(q->ring.elements[0]) * q->ring.depth);
     assert(q->ring.elements != NULL);
+    q->num_drops = 0;
 }
 
 static void emit_queue(struct queue_t *q, int up, int64_t now)
@@ -174,6 +180,7 @@ static void emit_queue(struct queue_t *q, int up, int64_t now)
 
 static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
 {
+    static uint64_t packet_num = 0;
     ssize_t readlen;
     struct sockaddr_storage ss;
     socklen_t sslen = sizeof(ss);
@@ -182,6 +189,25 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
                             sizeof(q->ring.elements[q->ring.tail].data), 0, conn != NULL ? NULL : (void *)&ss,
                             conn != NULL ? NULL : &sslen)) <= 0)
         return 0;
+
+    packet_num++;
+
+    /* check if packet should be dropped */
+    if (q->num_drops > 0) {
+        int drop = 0;
+        if (packet_num > q->drops[q->num_drops])
+            q->num_drops = 0;
+        else {
+          for (int i = 0; i < q->num_drops; i++) {
+            if (packet_num == q->drops[i]) drop = 1;
+            if (packet_num < q->drops[i]) break;
+          }
+        }
+        if (drop) {
+            fprintf(stderr, "drop as instructed\n");
+            return 1;
+        }
+    }
 
     q->ring.elements[q->ring.tail].len = readlen;
     q->ring.elements[q->ring.tail].conn = conn != NULL ? conn : find_or_create_connection((void *)&ss, sslen);
@@ -219,15 +245,15 @@ int main(int argc, char **argv)
     signal(SIGINT, on_signal);
     signal(SIGHUP, on_signal);
 
-    while ((ch = getopt(argc, argv, "d:D:i:I:l:h")) != -1) {
+    while ((ch = getopt(argc, argv, "b:B:i:I:l:d:D:h")) != -1) {
         switch (ch) {
-        case 'd': /* depth of the upstream buffer */
+        case 'b': /* depth of the upstream buffer */
             if (sscanf(optarg, "%zu", &up.ring.depth) != 1 || up.ring.depth == 0) {
-                fprintf(stderr, "argument to `-d` must be a positive number\n");
+                fprintf(stderr, "argument to `-b` must be a positive number\n");
                 exit(1);
             }
             break;
-        case 'D': /* depth of the upstream buffer */
+        case 'B': /* depth of the upstream buffer */
             if (sscanf(optarg, "%zu", &down.ring.depth) != 1 || down.ring.depth == 0) {
                 fprintf(stderr, "argument to `-D` must be a positive number\n");
                 exit(1);
@@ -260,6 +286,24 @@ int main(int argc, char **argv)
                 fprintf(stderr, "failed to bind to 0.0.0.0:%" PRIu16 ": %s\n", port, strerror(errno));
                 exit(1);
             }
+        } break;
+	case 'd': { /* packet to drop */
+            uint16_t pnum;
+            if (down.num_drops >= MAXDROPS) break;
+            if (sscanf(optarg, "%" SCNu16, &pnum) != 1) {
+                fprintf(stderr, "argument to `-d` must be an unsigned number\n");
+                exit(1);
+            }
+            down.drops[down.num_drops++] = pnum;
+        } break;
+	case 'D': { /* packet to drop */
+            uint16_t pnum;
+            if (up.num_drops >= MAXDROPS) break;
+            if (sscanf(optarg, "%" SCNu16, &pnum) != 1) {
+                fprintf(stderr, "argument to `-D` must be an unsigned number\n");
+                exit(1);
+            }
+            up.drops[down.num_drops++] = pnum;
         } break;
         case 'h':
             usage(argv[0], 0);
