@@ -45,6 +45,7 @@ struct connection_t {
         struct sockaddr_storage ss;
         socklen_t len;
     } down_addr;
+    uint64_t packet_num;
 };
 
 struct queue_t {
@@ -76,14 +77,16 @@ static void usage(const char *cmd, int exit_status)
     printf("Usage: %s [options] <upstream-host> <upstream-port>\n"
            "\n"
            "Options:\n"
-           "  -d <depth>     depth of the buffer for packets upstream (default: 16)\n"
-           "  -D <depth>     depth of the buffer for packets downstream (default: 16)\n"
-           "  -i <interval>  delay (in microseconds) to insert after sending one packet\n"
-           "                 upstream (default: 10)\n"
-           "  -I <interval>  delay (in microseconds) to insert after sending one packet\n"
-           "                 downstream (default: 10)\n"
-           "  -l <port>      port number to which the command binds\n"
-           "  -h             prints this help\n"
+           "  -b <buffersize> size of the buffer for packets upstream (default: 16)\n"
+           "  -B <buffersize> size of the buffer for packets downstream (default: 16)\n"
+           "  -i <interval>   delay (in microseconds) to insert after sending one packet\n"
+           "                  upstream (default: 10)\n"
+           "  -I <interval>   delay (in microseconds) to insert after sending one packet\n"
+           "                  downstream (default: 10)\n"
+           "  -l <port>       port number to which the command binds\n"
+           "  -d <packetnum>  packet number in connection to drop upstream\n"
+           "  -D <packetnum>  packet number in connection to drop downstream\n"
+           "  -h              prints this help\n"
            "\n",
            cmd);
     exit(exit_status);
@@ -190,17 +193,17 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
                             conn != NULL ? NULL : &sslen)) <= 0)
         return 0;
 
-    packet_num++;
+    conn->packet_num++;
 
     /* check if packet should be dropped */
     if (q->num_drops > 0) {
         int drop = 0;
-        if (packet_num > q->drops[q->num_drops])
+        if (conn->packet_num > q->drops[q->num_drops])
             q->num_drops = 0;
         else {
           for (int i = 0; i < q->num_drops; i++) {
-            if (packet_num == q->drops[i]) drop = 1;
-            if (packet_num < q->drops[i]) break;
+            if (conn->packet_num == q->drops[i]) drop = 1;
+            if (conn->packet_num < q->drops[i]) break;
           }
         }
         if (drop) {
@@ -247,13 +250,13 @@ int main(int argc, char **argv)
 
     while ((ch = getopt(argc, argv, "b:B:i:I:l:d:D:h")) != -1) {
         switch (ch) {
-        case 'b': /* depth of the upstream buffer */
+        case 'b': /* size of the upstream buffer */
             if (sscanf(optarg, "%zu", &up.ring.depth) != 1 || up.ring.depth == 0) {
                 fprintf(stderr, "argument to `-b` must be a positive number\n");
                 exit(1);
             }
             break;
-        case 'B': /* depth of the upstream buffer */
+        case 'B': /* size of the downstream buffer */
             if (sscanf(optarg, "%zu", &down.ring.depth) != 1 || down.ring.depth == 0) {
                 fprintf(stderr, "argument to `-D` must be a positive number\n");
                 exit(1);
@@ -287,23 +290,23 @@ int main(int argc, char **argv)
                 exit(1);
             }
         } break;
-	case 'd': { /* packet to drop */
+	case 'd': { /* packet to drop upstream*/
             uint16_t pnum;
-            if (down.num_drops >= MAXDROPS) break;
+            if (up.num_drops >= MAXDROPS) break;
             if (sscanf(optarg, "%" SCNu16, &pnum) != 1) {
                 fprintf(stderr, "argument to `-d` must be an unsigned number\n");
                 exit(1);
             }
-            down.drops[down.num_drops++] = pnum;
+            up.drops[down.num_drops++] = pnum;
         } break;
-	case 'D': { /* packet to drop */
+	case 'D': { /* packet to drop downstream */
             uint16_t pnum;
-            if (up.num_drops >= MAXDROPS) break;
+            if (down.num_drops >= MAXDROPS) break;
             if (sscanf(optarg, "%" SCNu16, &pnum) != 1) {
                 fprintf(stderr, "argument to `-D` must be an unsigned number\n");
                 exit(1);
             }
-            up.drops[down.num_drops++] = pnum;
+            down.drops[down.num_drops++] = pnum;
         } break;
         case 'h':
             usage(argv[0], 0);
