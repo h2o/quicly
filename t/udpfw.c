@@ -200,9 +200,9 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
     }
 
     assert(conn != NULL);
-    uint64_t packet_num =  downstream ? ++(conn->packet_num_down) : ++(conn->packet_num_up);
+    uint64_t packet_num = downstream ? ++(conn->packet_num_down) : ++(conn->packet_num_up);
     /* check if packet should be dropped */
-    if (q->num_drops > 0 && packet_num >= q->drops[0] && packet_num <= q->drops[q->num_drops-1]) {
+    if (q->num_drops > 0 && packet_num >= q->drops[0] && packet_num <= q->drops[q->num_drops - 1]) {
         int i = 0;
         while (i < q->num_drops) {
             if (packet_num == q->drops[i]) {
@@ -217,7 +217,7 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
     q->ring.elements[q->ring.tail].conn = conn;
     size_t next_tail = (q->ring.tail + 1) % q->ring.depth;
     fprintf(stderr, "%" PRId64 ":%zu:%c:", now, q->ring.elements[q->ring.tail].conn->cid, downstream ? 'd' : 'u');
-    
+
     if (next_tail != q->ring.head) {
         q->ring.tail = next_tail;
         ++q->num_forwarded;
@@ -292,18 +292,20 @@ int main(int argc, char **argv)
                 exit(1);
             }
         } break;
-	case 'd': { /* packet to drop upstream*/
+        case 'd': { /* packet to drop upstream*/
             uint16_t pnum;
-            if (up.num_drops >= MAXDROPS) break;
+            if (up.num_drops >= MAXDROPS)
+                break;
             if (sscanf(optarg, "%" SCNu16, &pnum) != 1) {
                 fprintf(stderr, "argument to `-d` must be an unsigned number\n");
                 exit(1);
             }
             up.drops[up.num_drops++] = pnum;
         } break;
-	case 'D': { /* packet to drop downstream */
+        case 'D': { /* packet to drop downstream */
             uint16_t pnum;
-            if (down.num_drops >= MAXDROPS) break;
+            if (down.num_drops >= MAXDROPS)
+                break;
             if (sscanf(optarg, "%" SCNu16, &pnum) != 1) {
                 fprintf(stderr, "argument to `-D` must be an unsigned number\n");
                 exit(1);
