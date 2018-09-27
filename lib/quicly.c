@@ -631,15 +631,14 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     stream->_send_aux.max_stream_data = initial_max_stream_data_remote;
     stream->_send_aux.max_sent = 0;
     stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_NONE;
-    stream->_send_aux.stop_sending.reason = 0;
+    stream->_send_aux.stop_sending.error_code = 0;
     stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_NONE;
-    stream->_send_aux.rst.reason = 0;
+    stream->_send_aux.rst.error_code = 0;
     quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender, initial_max_stream_data_local);
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
     quicly_linklist_init(&stream->_send_aux.pending_link.stream);
 
     stream->_recv_aux.window = initial_max_stream_data_local;
-    stream->_recv_aux.rst_reason = QUICLY_ERROR_FIN_CLOSED;
 }
 
 static void dispose_stream_properties(quicly_stream_t *stream)
@@ -1273,7 +1272,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
         goto Exit;
     if (negotiated_version != QUICLY_PROTOCOL_VERSION) {
         fprintf(stderr, "unexpected negotiated version\n");
-        ret = QUICLY_ERROR_TBD;
+        ret = QUICLY_ERROR_VERSION_NEGOTIATION;
         goto Exit;
     }
 
@@ -1494,7 +1493,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         goto Exit;
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
     if ((payload = decrypt_packet(&ingress_cipher, &next_expected_pn, packet, &pn)).base == NULL) {
-        ret = QUICLY_ERROR_TBD;
+        ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
 
@@ -1505,7 +1504,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
                 break;
         }
         if (src == end || *src++ != QUICLY_FRAME_TYPE_CRYPTO) {
-            ret = QUICLY_ERROR_TBD;
+            ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
             goto Exit;
         }
         if ((ret = quicly_decode_crypto_frame(&src, end, &frame)) != 0)
@@ -1517,7 +1516,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         /* FIXME check packet size */
         for (; src < end; ++src) {
             if (*src != QUICLY_FRAME_TYPE_PADDING) {
-                ret = QUICLY_ERROR_TBD;
+                ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
         }
@@ -2006,7 +2005,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
         if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.stop_sending.sender_state, s,
                                                QUICLY_STOP_SENDING_FRAME_CAPACITY, on_ack_stop_sending)) != 0)
             return ret;
-        s->dst = quicly_encode_stop_sending_frame(s->dst, stream->stream_id, stream->_send_aux.stop_sending.reason);
+        s->dst = quicly_encode_stop_sending_frame(s->dst, stream->stream_id, stream->_send_aux.stop_sending.error_code);
     }
 
     /* send MAX_STREAM_DATA if necessary */
@@ -2029,7 +2028,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
                                                on_ack_rst_stream)) != 0)
             return ret;
         s->dst =
-            quicly_encode_rst_stream_frame(s->dst, stream->stream_id, stream->_send_aux.rst.reason, stream->_send_aux.max_sent);
+            quicly_encode_rst_stream_frame(s->dst, stream->stream_id, stream->_send_aux.rst.error_code, stream->_send_aux.max_sent);
     }
 
     return 0;
@@ -2683,9 +2682,8 @@ static int handle_rst_stream_frame(quicly_conn_t *conn, quicly_rst_stream_frame_
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    if ((ret = quicly_recvbuf_reset(&stream->recvbuf, frame->final_offset, &bytes_missing)) != 0)
+    if ((ret = quicly_recvbuf_reset(&stream->recvbuf, frame->app_error_code, frame->final_offset, &bytes_missing)) != 0)
         return ret;
-    stream->_recv_aux.rst_reason = frame->app_error_code;
     conn->ingress.max_data.bytes_consumed += bytes_missing;
 
     if (quicly_stream_is_closable(stream))
@@ -2853,7 +2851,9 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
     if ((ret = get_stream_or_open_if_new(conn, frame->stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    quicly_reset_stream(stream, QUICLY_RESET_STREAM_EGRESS, QUICLY_ERROR_TBD);
+    if (stream->sendbuf.stop_reason == QUICLY_ERROR_FIN_CLOSED)
+        stream->sendbuf.stop_reason = frame->app_error_code;
+    quicly_reset_stream(stream, QUICLY_APPLICATION_ERROR_STOPPING);
     return 0;
 }
 
@@ -2899,7 +2899,7 @@ static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded
         if (CAN_SELECT(supported_version))
             return negotiate_using_version(conn, supported_version);
     }
-    return QUICLY_ERROR_VERSION_NEGOTIATION_FAILURE;
+    return QUICLY_ERROR_VERSION_NEGOTIATION;
 
 #undef CAN_SELECT
 }
@@ -3058,7 +3058,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 default:
                     fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)type_flags);
                     *is_ack_only = 0;
-                    ret = QUICLY_ERROR_TBD;
+                    ret = QUICLY_ERROR_FRAME_ENCODING;
                     goto Exit;
                 }
             }
@@ -3153,7 +3153,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
     if ((payload = decrypt_packet(cipher, &(*space)->next_expected_packet_number, packet, &pn)).base == NULL) {
-        ret = QUICLY_ERROR_TBD;
+        ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
 
@@ -3200,32 +3200,39 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
     return 0;
 }
 
-void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint32_t reason)
+void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
 {
-    if ((direction & QUICLY_RESET_STREAM_EGRESS) != 0) {
-        /* if we have not yet sent FIN, then... */
-        if (stream->_send_aux.max_sent <= stream->sendbuf.eos) {
-            /* close the sender and mark the eos as the only byte that's not confirmed */
-            assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
-            quicly_sendbuf_shutdown(&stream->sendbuf);
-            if (stream->sendbuf.eos != 0) {
-                quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
-                quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
-            }
-            /* setup RST_STREAM */
-            stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
-            stream->_send_aux.rst.reason = reason;
-            /* schedule for delivery */
-            sched_stream_control(stream);
-        }
+    assert(!(STREAM_IS_UNI(stream->stream_id) && STREAM_IS_CLIENT_INITIATED(stream->stream_id) != quicly_is_client(stream->conn)));
+
+    /* do nothing if FIN has been sent */
+    if (stream->_send_aux.max_sent > stream->sendbuf.eos)
+        return;
+
+    /* close the sender and mark the eos as the only byte that's not confirmed */
+    assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
+    quicly_sendbuf_shutdown(&stream->sendbuf);
+    if (stream->sendbuf.eos != 0) {
+        quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
+        quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
     }
 
-    if ((direction & QUICLY_RESET_STREAM_INGRESS) != 0) {
-        /* send STOP_SENDING if the incoming side of the stream is still open */
-        if (stream->recvbuf.eos == UINT64_MAX && stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {
-            stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_SEND;
-            sched_stream_control(stream);
-        }
+    /* setup RST_STREAM */
+    stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
+    stream->_send_aux.rst.error_code = error_code;
+
+    /* schedule for delivery */
+    sched_stream_control(stream);
+}
+
+void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code)
+{
+    assert(!(STREAM_IS_UNI(stream->stream_id) && STREAM_IS_CLIENT_INITIATED(stream->stream_id) == quicly_is_client(stream->conn)));
+
+    /* send STOP_SENDING if the incoming side of the stream is still open */
+    if (stream->recvbuf.eos == UINT64_MAX && stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {
+        stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_SEND;
+        stream->_send_aux.stop_sending.error_code = error_code;
+        sched_stream_control(stream);
     }
 }
 

@@ -374,14 +374,14 @@ struct st_quicly_stream_t {
          */
         struct {
             quicly_sender_state_t sender_state;
-            uint32_t reason;
+            uint16_t error_code;
         } stop_sending;
         /**
          * rst_stream
          */
         struct {
             quicly_sender_state_t sender_state;
-            uint32_t reason;
+            uint16_t error_code;
         } rst;
         /**
          * sends receive window updates to peer
@@ -403,10 +403,6 @@ struct st_quicly_stream_t {
          * size of the receive window
          */
         uint32_t window;
-        /**
-         *
-         */
-        uint16_t rst_reason;
     } _recv_aux;
 };
 
@@ -420,10 +416,6 @@ typedef struct st_quicly_decoded_packet_t {
     size_t encrypted_off;
     size_t datagram_size;
 } quicly_decoded_packet_t;
-
-#define QUICLY_RESET_STREAM_EGRESS 1
-#define QUICLY_RESET_STREAM_INGRESS 2
-#define QUICLY_RESET_STREAM_BOTH_DIRECTIONS (QUICLY_RESET_STREAM_INGRESS | QUICLY_RESET_STREAM_EGRESS)
 
 extern const quicly_context_t quicly_default_context;
 extern FILE *quicly_default_event_log_fp;
@@ -543,7 +535,11 @@ static int quicly_stream_is_closable(quicly_stream_t *stream);
 /**
  *
  */
-void quicly_reset_stream(quicly_stream_t *stream, unsigned direction, uint32_t reason);
+void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code);
+/**
+ *
+ */
+void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code);
 /**
  *
  */

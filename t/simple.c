@@ -83,7 +83,7 @@ static void simple_http(void)
     server_stream = quicly_get_stream(server, client_stream->stream_id);
     ok(server_stream != NULL);
     ok(recvbuf_is(&server_stream->recvbuf, req));
-    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
+    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf, NULL));
     quicly_sendbuf_write(&server_stream->sendbuf, resp, strlen(resp), NULL);
     quicly_sendbuf_shutdown(&server_stream->sendbuf);
     ok(quicly_num_streams(server) == 2);
@@ -91,7 +91,7 @@ static void simple_http(void)
     transmit(server, client);
 
     ok(recvbuf_is(&client_stream->recvbuf, resp));
-    ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
+    ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf, NULL));
     quicly_close_stream(client_stream);
     ok(quicly_num_streams(client) == 1);
     assert(!quicly_stream_is_closable(server_stream));
@@ -115,7 +115,8 @@ static void test_rst_then_close(void)
     ok(ret == 0);
     client_stream->on_update = on_update_noop;
     stream_id = client_stream->stream_id;
-    quicly_reset_stream(client_stream, QUICLY_RESET_STREAM_BOTH_DIRECTIONS, 12345);
+    quicly_reset_stream(client_stream, 12345);
+    quicly_request_stop(client_stream, 12345);
 
     transmit(client, server);
 
@@ -182,9 +183,9 @@ static void tiny_stream_window(void)
 
     ok(recvbuf_is(&server_stream->recvbuf, "orld"));
     ok(server_stream->recvbuf.data.len == 0);
-    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
+    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf, NULL));
 
-    quicly_reset_stream(client_stream, QUICLY_RESET_STREAM_INGRESS, 12345);
+    quicly_request_stop(client_stream, 12345);
 
     transmit(client, server);
 
@@ -248,11 +249,11 @@ static void test_rst_during_loss(void)
     }
 
     /* transmit RST_STREAM */
-    quicly_reset_stream(client_stream, QUICLY_RESET_STREAM_EGRESS, 12345);
+    quicly_reset_stream(client_stream, 12345);
     transmit(client, server);
 
-    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf));
-    quicly_reset_stream(server_stream, QUICLY_RESET_STREAM_EGRESS, 12345);
+    ok(quicly_recvbuf_is_shutdown(&server_stream->recvbuf, NULL));
+    quicly_reset_stream(server_stream, 12345);
 
     quicly_get_max_data(client, NULL, &tmp, NULL);
     ok(tmp == max_data_at_start + 8);
@@ -271,7 +272,7 @@ static void test_rst_during_loss(void)
 
     /* RST_STREAM for downstream is sent */
     transmit(server, client);
-    ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf));
+    ok(quicly_recvbuf_is_shutdown(&client_stream->recvbuf, NULL));
     ok(quicly_stream_is_closable(client_stream));
     quicly_close_stream(client_stream);
     ok(quicly_num_streams(client) == 1);
