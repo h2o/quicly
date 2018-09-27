@@ -151,6 +151,8 @@ static struct connection_t *find_or_create_connection(struct sockaddr *sa, sockl
     c->next = &connections;
     connections.prev = c;
     c->prev->next = c;
+    c->packet_num_up = 0;
+    c->packet_num_down = 0;
     return c;
 }
 
@@ -200,7 +202,6 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
 
     assert(conn != NULL);
     uint64_t packet_num =  downstream ? ++(conn->packet_num_down) : ++(conn->packet_num_up);
-
     /* check if packet should be dropped */
     if (q->num_drops > 0 && packet_num >= q->drops[0] && packet_num <= q->drops[q->num_drops-1]) {
         int i = 0;
@@ -249,6 +250,9 @@ int main(int argc, char **argv)
 
     signal(SIGINT, on_signal);
     signal(SIGHUP, on_signal);
+
+    init_queue(&up);
+    init_queue(&down);
 
     while ((ch = getopt(argc, argv, "b:B:i:I:l:d:D:h")) != -1) {
         switch (ch) {
@@ -299,7 +303,7 @@ int main(int argc, char **argv)
                 fprintf(stderr, "argument to `-d` must be an unsigned number\n");
                 exit(1);
             }
-            up.drops[down.num_drops++] = pnum;
+            up.drops[up.num_drops++] = pnum;
         } break;
 	case 'D': { /* packet to drop downstream */
             uint16_t pnum;
@@ -341,8 +345,6 @@ int main(int argc, char **argv)
             exit(1);
         }
     }
-    init_queue(&up);
-    init_queue(&down);
 
     while (1) {
         struct connection_t *c;
