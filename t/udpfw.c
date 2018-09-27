@@ -199,7 +199,7 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
     }
 
     assert(conn != NULL);
-    uint64_t packet_num =  downstream ? ++conn->packet_num_down : ++conn->packet_num_up;
+    uint64_t packet_num =  downstream ? ++(conn->packet_num_down) : ++(conn->packet_num_up);
 
     /* check if packet should be dropped */
     if (q->num_drops > 0 && packet_num >= q->drops[0] && packet_num <= q->drops[q->num_drops]) {
