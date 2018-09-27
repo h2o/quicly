@@ -206,7 +206,7 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
         int i = 0;
         while (i < q->num_drops) {
             if (packet_num == q->drops[i]) {
-                fprintf(stderr, "%" PRId64 ":%zu:%c:droplist\n", now, q->ring.elements[q->ring.tail].conn->cid, downstream ? 'd' : 'u');
+                fprintf(stderr, "%" PRId64 ":%zu:%c:droplist\n", now, conn->cid, downstream ? 'd' : 'u');
                 return 1;
             }
             i++;
