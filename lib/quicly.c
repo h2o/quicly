@@ -981,7 +981,7 @@ static int do_apply_stream_frame(quicly_stream_t *stream, uint64_t off, ptls_iov
 
     /* try the fast (copyless) path */
     if (stream->recvbuf.data_off == off && stream->recvbuf.data.len == 0) {
-        struct st_quicly_buffer_vec_t vec = {NULL};
+        quicly_buffer_vec_t vec = {NULL};
         assert(stream->recvbuf.received.num_ranges == 1);
         assert(stream->recvbuf.received.ranges[0].end == stream->recvbuf.data_off);
 
