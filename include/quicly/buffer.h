@@ -24,9 +24,10 @@
 
 #include <stddef.h>
 
+typedef struct st_quicly_buffer_t quicly_buffer_t;
 typedef struct st_quicly_buffer_vec_t quicly_buffer_vec_t;
 
-typedef void (*quicly_buffer_free_cb)(quicly_buffer_vec_t *vec);
+typedef void (*quicly_buffer_free_cb)(quicly_buffer_t *buf, quicly_buffer_vec_t *vec);
 
 struct st_quicly_buffer_vec_t {
     /**
@@ -51,7 +52,7 @@ struct st_quicly_buffer_vec_t {
     uint8_t _buf[1];
 };
 
-typedef struct st_quicly_buffer_t {
+struct st_quicly_buffer_t {
     /**
      * references to the linked list of vec
      */
@@ -68,7 +69,7 @@ typedef struct st_quicly_buffer_t {
      * capacity of the last vec
      */
     size_t capacity;
-} quicly_buffer_t;
+};
 
 typedef struct st_quicly_buffer_iter_t {
     quicly_buffer_vec_t *vec;

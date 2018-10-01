@@ -59,11 +59,11 @@ static quicly_buffer_vec_t *new_vec(quicly_buffer_t *buf, size_t internal_capaci
     return vec;
 }
 
-static void free_noop(quicly_buffer_vec_t *vec)
+static void free_noop(quicly_buffer_t *buf, quicly_buffer_vec_t *vec)
 {
 }
 
-static void free_internal(quicly_buffer_vec_t *vec)
+static void free_internal(quicly_buffer_t *buf, quicly_buffer_vec_t *vec)
 {
     free(vec);
 }
@@ -75,7 +75,7 @@ void quicly_buffer_dispose(quicly_buffer_t *buf)
     while ((vec = buf->first) != NULL) {
         buf->first = vec->next;
         vec->len = 0; /* fast path of apply_stream_frame relies on the field reset on disposal */
-        vec->free_cb(vec);
+        vec->free_cb(buf, vec);
     }
 }
 
@@ -218,7 +218,7 @@ size_t quicly_buffer_shift(quicly_buffer_t *buf, size_t delta)
         delta -= avail_in_vec;
         buf->first = vec->next;
         buf->skip = 0;
-        vec->free_cb(vec);
+        vec->free_cb(buf, vec);
     }
     assert(buf->len == 0);
     buf->tail_ref = &buf->first;
