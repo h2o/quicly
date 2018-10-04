@@ -299,6 +299,11 @@ typedef enum {
     QUICLY_STATE_DRAINING
 } quicly_state_t;
 
+struct st_quicly_conn_streamgroup_state_t {
+    uint32_t num_streams;
+    quicly_stream_id_t next_stream_id;
+};
+
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
@@ -309,15 +314,11 @@ struct _st_quicly_conn_public_t {
          * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
          */
         quicly_cid_t offered_cid;
-        uint32_t num_streams;
-        quicly_stream_id_t next_stream_id_bidi;
-        quicly_stream_id_t next_stream_id_uni;
+        struct st_quicly_conn_streamgroup_state_t bidi, uni;
     } host;
     struct {
         quicly_cid_t cid;
-        uint32_t num_streams;
-        quicly_stream_id_t next_stream_id_bidi;
-        quicly_stream_id_t next_stream_id_uni;
+        struct st_quicly_conn_streamgroup_state_t bidi, uni;
         struct sockaddr *sa;
         socklen_t salen;
         quicly_transport_parameters_t transport_params;
@@ -327,6 +328,7 @@ struct _st_quicly_conn_public_t {
     } num_packets;
     uint64_t num_bytes_sent;
     uint32_t version;
+    void *data;
 };
 
 typedef enum {
@@ -353,6 +355,10 @@ struct st_quicly_stream_t {
      * receive buffer
      */
     quicly_recvbuf_t recvbuf;
+    /**
+     *
+     */
+    void *data;
     /**
      * the receive callback
      */
@@ -488,6 +494,10 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
 /**
  *
  */
+static void **quicly_get_data(quicly_conn_t *conn);
+/**
+ *
+ */
 void quicly_free(quicly_conn_t *conn);
 /**
  *
@@ -527,7 +537,7 @@ quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, quicly_stream_id_t strea
 /**
  *
  */
-int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream);
+int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream, int unidirectional);
 /**
  *
  */
@@ -544,6 +554,14 @@ void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code);
  *
  */
 void quicly_close_stream(quicly_stream_t *stream);
+/**
+ *
+ */
+static int quicly_stream_is_client_initiated(quicly_stream_id_t stream_id);
+/**
+ *
+ */
+static int quicly_stream_is_unidirectional(quicly_stream_id_t stream_id);
 /**
  *
  */
@@ -589,7 +607,7 @@ inline quicly_state_t quicly_get_state(quicly_conn_t *conn)
 inline uint32_t quicly_num_streams(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return 1 + c->host.num_streams + c->peer.num_streams;
+    return 1 + c->host.bidi.num_streams + c->host.uni.num_streams + c->peer.bidi.num_streams + c->peer.uni.num_streams;
 }
 
 inline int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec)
@@ -630,13 +648,13 @@ inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
 inline int quicly_is_client(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return (c->host.next_stream_id_bidi & 2) == 0;
+    return (c->host.bidi.next_stream_id & 2) == 0;
 }
 
 inline quicly_stream_id_t quicly_get_next_stream_id(quicly_conn_t *conn, int uni)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return uni ? c->host.next_stream_id_uni : c->host.next_stream_id_bidi;
+    return uni ? c->host.uni.next_stream_id : c->host.bidi.next_stream_id;
 }
 
 inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen)
@@ -644,6 +662,22 @@ inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     *sa = c->peer.sa;
     *salen = c->peer.salen;
+}
+
+inline void **quicly_get_data(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return &c->data;
+}
+
+inline int quicly_stream_is_client_initiated(quicly_stream_id_t stream_id)
+{
+    return (stream_id & 1) == 0;
+}
+
+inline int quicly_stream_is_unidirectional(quicly_stream_id_t stream_id)
+{
+    return (stream_id & 2) != 0;
 }
 
 inline void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received, uint64_t *num_sent, uint64_t *num_lost,

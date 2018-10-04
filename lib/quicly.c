@@ -65,9 +65,6 @@
 
 #define STATELESS_RESET_TOKEN_SIZE 16
 
-#define STREAM_IS_CLIENT_INITIATED(stream_id) (((stream_id)&1) == 0)
-#define STREAM_IS_UNI(stream_id) (((stream_id)&2) != 0)
-
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
 #define INT_EVENT_ATTR(label, value) _int_event_attr(QUICLY_EVENT_ATTRIBUTE_##label, value)
@@ -522,7 +519,7 @@ static void resched_stream_data(quicly_stream_t *stream)
 
 static int stream_id_blocked(quicly_conn_t *conn, int uni)
 {
-    quicly_stream_id_t *next_id = uni ? &conn->super.host.next_stream_id_uni : &conn->super.host.next_stream_id_bidi,
+    quicly_stream_id_t *next_id = uni ? &conn->super.host.uni.next_stream_id : &conn->super.host.bidi.next_stream_id,
                        *max_id = uni ? &conn->egress.max_stream_id_uni : &conn->egress.max_stream_id_bidi;
     return *next_id > *max_id;
 }
@@ -667,6 +664,15 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint64_t stream_id, uin
     return stream;
 }
 
+static struct st_quicly_conn_streamgroup_state_t *get_streamgroup_state(quicly_conn_t *conn, quicly_stream_id_t stream_id)
+{
+    if (quicly_is_client(conn) == quicly_stream_is_client_initiated(stream_id)) {
+        return quicly_stream_is_unidirectional(stream_id) ? &conn->super.host.uni : &conn->super.host.bidi;
+    } else {
+        return quicly_stream_is_unidirectional(stream_id) ? &conn->super.peer.uni : &conn->super.peer.bidi;
+    }
+}
+
 static void destroy_stream(quicly_stream_t *stream)
 {
     quicly_conn_t *conn = stream->conn;
@@ -680,11 +686,8 @@ static void destroy_stream(quicly_stream_t *stream)
             stream->conn->crypto.pending_flows &= ~(uint8_t)(1 << epoch);
     } else {
         conn->ingress.max_data.bytes_consumed += stream->recvbuf.data.len;
-        if (quicly_is_client(conn) == STREAM_IS_CLIENT_INITIATED(stream->stream_id)) {
-            --conn->super.host.num_streams;
-        } else {
-            --conn->super.peer.num_streams;
-        }
+        struct st_quicly_conn_streamgroup_state_t *group = get_streamgroup_state(conn, stream->stream_id);
+        --group->num_streams;
     }
 
     dispose_stream_properties(stream);
@@ -1196,15 +1199,15 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     if (server_name != NULL) {
         ctx->tls->random_bytes(conn->super.peer.cid.cid, 8);
         conn->super.peer.cid.len = 8;
-        conn->super.host.next_stream_id_bidi = 0;
-        conn->super.host.next_stream_id_uni = 1;
-        conn->super.peer.next_stream_id_bidi = 2;
-        conn->super.peer.next_stream_id_uni = 3;
+        conn->super.host.bidi.next_stream_id = 0;
+        conn->super.host.uni.next_stream_id = 1;
+        conn->super.peer.bidi.next_stream_id = 2;
+        conn->super.peer.uni.next_stream_id = 3;
     } else {
-        conn->super.host.next_stream_id_bidi = 2;
-        conn->super.host.next_stream_id_uni = 3;
-        conn->super.peer.next_stream_id_bidi = 0;
-        conn->super.peer.next_stream_id_uni = 1;
+        conn->super.host.bidi.next_stream_id = 2;
+        conn->super.host.uni.next_stream_id = 3;
+        conn->super.peer.bidi.next_stream_id = 0;
+        conn->super.peer.uni.next_stream_id = 1;
     }
     conn->super.peer.transport_params = transport_params_before_handshake;
     if (server_name != NULL && ctx->enforce_version_negotiation) {
@@ -1216,9 +1219,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->streams = kh_init(quicly_stream_t);
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->initial_max_data);
     quicly_maxsender_init(&conn->ingress.max_stream_id_bidi,
-                          conn->super.ctx->max_streams_bidi * 4 + conn->super.peer.next_stream_id_bidi);
+                          conn->super.ctx->max_streams_bidi * 4 + conn->super.peer.bidi.next_stream_id);
     quicly_maxsender_init(&conn->ingress.max_stream_id_uni,
-                          conn->super.ctx->max_streams_uni * 4 + conn->super.peer.next_stream_id_uni);
+                          conn->super.ctx->max_streams_uni * 4 + conn->super.peer.uni.next_stream_id);
     quicly_acks_init(&conn->egress.acks);
     quicly_loss_init(&conn->egress.loss, conn->super.ctx->loss,
                      conn->super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
@@ -2527,7 +2530,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             /* send max_stream_id frame (TODO uni) */
             uint64_t max_stream_id;
             if ((max_stream_id = quicly_maxsender_should_update_stream_id(
-                     &conn->ingress.max_stream_id_bidi, conn->super.peer.next_stream_id_bidi, conn->super.peer.num_streams,
+                     &conn->ingress.max_stream_id_bidi, conn->super.peer.bidi.next_stream_id, conn->super.peer.bidi.num_streams,
                      conn->super.ctx->max_streams_bidi, 768)) != 0) {
                 quicly_ack_t *ack;
                 if ((ret = prepare_acked_packet(conn, &s, QUICLY_MAX_STREAM_ID_FRAME_CAPACITY, &ack, on_ack_max_stream_id_bidi)) !=
@@ -2633,28 +2636,37 @@ static int get_stream_or_open_if_new(quicly_conn_t *conn, uint64_t stream_id, qu
         goto Exit;
 
     /* TODO implement */
-    if (STREAM_IS_UNI(stream_id)) {
+    if (quicly_stream_is_unidirectional(stream_id)) {
         ret = QUICLY_ERROR_INTERNAL;
         goto Exit;
     }
 
-    if (STREAM_IS_CLIENT_INITIATED(stream_id) != quicly_is_client(conn) && conn->super.peer.next_stream_id_bidi <= stream_id) {
+    if (quicly_stream_is_client_initiated(stream_id) != quicly_is_client(conn)) {
         /* open new streams upto given id */
-        do {
-            if ((*stream =
-                     open_stream(conn, conn->super.peer.next_stream_id_bidi, conn->super.ctx->initial_max_stream_data.bidi_remote,
-                                 conn->super.peer.transport_params.initial_max_stream_data.bidi_local)) == NULL) {
-                ret = PTLS_ERROR_NO_MEMORY;
-                goto Exit;
+        struct st_quicly_conn_streamgroup_state_t *group = get_streamgroup_state(conn, stream_id);
+        if (group->next_stream_id <= stream_id) {
+            uint32_t max_stream_data_local, max_stream_data_remote;
+            if (quicly_stream_is_unidirectional(stream_id)) {
+                max_stream_data_local = conn->super.ctx->initial_max_stream_data.uni;
+                max_stream_data_remote = 0;
+            } else {
+                max_stream_data_local = conn->super.ctx->initial_max_stream_data.bidi_remote;
+                max_stream_data_remote = conn->super.peer.transport_params.initial_max_stream_data.bidi_local;
             }
-            if ((ret = conn->super.ctx->on_stream_open(*stream)) != 0) {
-                destroy_stream(*stream);
-                *stream = NULL;
-                goto Exit;
-            }
-            ++conn->super.peer.num_streams;
-            conn->super.peer.next_stream_id_bidi += 4;
-        } while (stream_id != (*stream)->stream_id);
+            do {
+                if ((*stream = open_stream(conn, group->next_stream_id, max_stream_data_local, max_stream_data_remote)) == NULL) {
+                    ret = PTLS_ERROR_NO_MEMORY;
+                    goto Exit;
+                }
+                if ((ret = conn->super.ctx->on_stream_open(*stream)) != 0) {
+                    destroy_stream(*stream);
+                    *stream = NULL;
+                    goto Exit;
+                }
+                ++group->num_streams;
+                group->next_stream_id += 4;
+            } while (stream_id != (*stream)->stream_id);
+        }
     }
 
 Exit:
@@ -2820,7 +2832,7 @@ static int handle_stream_blocked_frame(quicly_conn_t *conn, quicly_stream_blocke
 static int handle_max_stream_id_frame(quicly_conn_t *conn, quicly_max_stream_id_frame_t *frame)
 {
     quicly_stream_id_t *slot =
-        STREAM_IS_UNI(frame->max_stream_id) ? &conn->egress.max_stream_id_uni : &conn->egress.max_stream_id_bidi;
+        quicly_stream_is_unidirectional(frame->max_stream_id) ? &conn->egress.max_stream_id_uni : &conn->egress.max_stream_id_bidi;
     if (frame->max_stream_id < *slot)
         return 0;
     *slot = frame->max_stream_id;
@@ -3022,8 +3034,9 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                     quicly_stream_id_blocked_frame_t frame;
                     if ((ret = quicly_decode_stream_id_blocked_frame(&src, end, &frame)) != 0)
                         goto Exit;
-                    quicly_maxsender_reset(
-                        STREAM_IS_UNI(frame.stream_id) ? &conn->ingress.max_stream_id_uni : &conn->ingress.max_stream_id_bidi, 0);
+                    quicly_maxsender_reset(quicly_stream_is_unidirectional(frame.stream_id) ? &conn->ingress.max_stream_id_uni
+                                                                                            : &conn->ingress.max_stream_id_bidi,
+                                           0);
                     ret = 0;
                 } break;
                 case QUICLY_FRAME_TYPE_NEW_CONNECTION_ID: {
@@ -3181,26 +3194,36 @@ Exit:
     return ret;
 }
 
-int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream)
+int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream, int uni)
 {
-    if (stream_id_blocked(conn, 0)) {
+    if (stream_id_blocked(conn, uni)) {
         conn->egress.stream_id_blocked_state = QUICLY_SENDER_STATE_SEND;
         return QUICLY_ERROR_TOO_MANY_OPEN_STREAMS;
     }
 
-    if ((*stream = open_stream(conn, conn->super.host.next_stream_id_bidi, conn->super.ctx->initial_max_stream_data.bidi_local,
-                               conn->super.peer.transport_params.initial_max_stream_data.bidi_remote)) == NULL)
+    struct st_quicly_conn_streamgroup_state_t *group;
+    uint32_t max_stream_data_local, max_stream_data_remote;
+    if (uni) {
+        group = &conn->super.host.uni;
+        max_stream_data_local = 0;
+        max_stream_data_remote = conn->super.peer.transport_params.initial_max_stream_data.uni;
+    } else {
+        group = &conn->super.host.bidi;
+        max_stream_data_local = conn->super.ctx->initial_max_stream_data.bidi_local;
+        max_stream_data_remote = conn->super.peer.transport_params.initial_max_stream_data.bidi_remote;
+    }
+    if ((*stream = open_stream(conn, group->next_stream_id, max_stream_data_local, max_stream_data_remote)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-
-    ++conn->super.host.num_streams;
-    conn->super.host.next_stream_id_bidi += 4;
+    ++group->num_streams;
+    group->next_stream_id += 4;
 
     return 0;
 }
 
 void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
 {
-    assert(!(STREAM_IS_UNI(stream->stream_id) && STREAM_IS_CLIENT_INITIATED(stream->stream_id) != quicly_is_client(stream->conn)));
+    assert(!(quicly_stream_is_unidirectional(stream->stream_id) &&
+             quicly_stream_is_client_initiated(stream->stream_id) != quicly_is_client(stream->conn)));
 
     /* do nothing if FIN has been sent */
     if (stream->_send_aux.max_sent > stream->sendbuf.eos)
@@ -3224,7 +3247,8 @@ void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
 
 void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code)
 {
-    assert(!(STREAM_IS_UNI(stream->stream_id) && STREAM_IS_CLIENT_INITIATED(stream->stream_id) == quicly_is_client(stream->conn)));
+    assert(!(quicly_stream_is_unidirectional(stream->stream_id) &&
+             quicly_stream_is_client_initiated(stream->stream_id) == quicly_is_client(stream->conn)));
 
     /* send STOP_SENDING if the incoming side of the stream is still open */
     if (stream->recvbuf.eos == UINT64_MAX && stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {

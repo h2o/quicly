@@ -291,7 +291,7 @@ static void send_if_possible(quicly_conn_t *conn)
         for (i = 0; req_paths[i] != NULL; ++i) {
             char req[1024];
             quicly_stream_t *stream;
-            ret = quicly_open_stream(conn, &stream);
+            ret = quicly_open_stream(conn, &stream, 0);
             assert(ret == 0);
             stream->on_update = on_resp_receive;
             sprintf(req, "GET %s\r\n", req_paths[i]);
