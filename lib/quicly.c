@@ -502,6 +502,10 @@ static void resched_stream_data(quicly_stream_t *stream)
         return;
     }
 
+    /* do nothing if blocked */
+    if (stream->stream_id_blocked)
+        return;
+
     /* unlink so that we would round-robin the streams */
     if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.stream))
         quicly_linklist_unlink(&stream->_send_aux.pending_link.stream);
@@ -1236,6 +1240,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_acks_init(&conn->_.egress.acks);
     quicly_loss_init(&conn->_.egress.loss, conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
+    conn->_.egress.max_stream_id_uni = -1;
+    conn->_.egress.max_stream_id_bidi = -1;
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
     conn->_.egress.send_ack_at = INT64_MAX;
     cc_init(&conn->_.egress.cc.ccv, &newreno_cc_algo, 1280 * 8, 1280);
@@ -2337,9 +2343,9 @@ static void open_id_blocked_streams(quicly_conn_t *conn, quicly_stream_id_t max_
         assert(stream->stream_id_blocked);
         quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
         stream->stream_id_blocked = 0;
-        quicly_linklist_insert(
-            &conn->pending_link.control,
-            &stream->_send_aux.pending_link.control); /* TODO retain a separate flag so that we can see if this is necessary? */
+        /* TODO retain separate flags for stream states so that we do not always need to sched for both control and data */
+        sched_stream_control(stream);
+        resched_stream_data(stream);
     }
 }
 
