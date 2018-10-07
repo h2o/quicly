@@ -2604,10 +2604,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 /* send max_stream_id frames */
 #define SEND_MAX_STREAM_ID(label)                                                                                                  \
     if (conn->ingress.max_stream_id.label != NULL) {                                                                               \
-        uint64_t max_stream_id;                                                                                                    \
+        quicly_stream_id_t max_stream_id;                                                                                          \
         if ((max_stream_id = quicly_maxsender_should_update_stream_id(                                                             \
                  conn->ingress.max_stream_id.label, conn->super.peer.label.next_stream_id, conn->super.peer.label.num_streams,     \
-                 conn->super.ctx->max_streams_##label, 768)) != 0) {                                                               \
+                 conn->super.ctx->max_streams_##label, 768)) >= 0) {                                                               \
             quicly_ack_t *ack;                                                                                                     \
             if ((ret = prepare_acked_packet(conn, &s, QUICLY_MAX_STREAM_ID_FRAME_CAPACITY, &ack, on_ack_max_stream_id)) != 0)      \
                 goto Exit;                                                                                                         \
