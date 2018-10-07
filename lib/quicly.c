@@ -267,6 +267,9 @@ struct st_quicly_conn_t {
      *
      */
     struct {
+        /**
+         * contains list of blocked streams (sorted in ascending order of stream_ids)
+         */
         struct {
             quicly_linklist_t uni;
             quicly_linklist_t bidi;
@@ -3307,7 +3310,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream, int uni)
     /* adjust blocked */
     if ((*stream)->stream_id > *max_stream_id) {
         (*stream)->stream_id_blocked = 1;
-        quicly_linklist_insert(uni ? &conn->pending_link.stream_id_blocked.uni : &conn->pending_link.stream_id_blocked.bidi,
+        quicly_linklist_insert((uni ? &conn->pending_link.stream_id_blocked.uni : &conn->pending_link.stream_id_blocked.bidi)->prev,
                                &(*stream)->_send_aux.pending_link.control);
     }
 
