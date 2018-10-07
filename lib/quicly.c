@@ -870,7 +870,7 @@ static void apply_peer_transport_params(quicly_conn_t *conn)
     conn->egress.max_stream_id_bidi =
         conn->super.peer.transport_params.initial_max_streams_bidi * 4 - (quicly_is_client(conn) ? 4 : 3);
     conn->egress.max_stream_id_uni =
-        conn->super.peer.transport_params.initial_max_streams_uni * 4 + (quicly_is_client(conn) ? 2 : 1);
+        conn->super.peer.transport_params.initial_max_streams_uni * 4 - (quicly_is_client(conn) ? 2 : 1);
 }
 
 void quicly_free(quicly_conn_t *conn)
