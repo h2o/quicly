@@ -1230,12 +1230,12 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     if (conn->_.super.ctx->max_streams_uni != 0) {
         conn->_.ingress.max_stream_id.uni = &conn->max_stream_id_uni;
         quicly_maxsender_init(conn->_.ingress.max_stream_id.uni,
-                              conn->_.super.ctx->max_streams_uni * 4 + conn->_.super.peer.uni.next_stream_id);
+                              conn->_.super.ctx->max_streams_uni * 4 - 4 + conn->_.super.peer.uni.next_stream_id);
     }
     if (conn->_.super.ctx->max_streams_bidi != 0) {
         conn->_.ingress.max_stream_id.bidi = &conn->max_stream_id_bidi;
         quicly_maxsender_init(conn->_.ingress.max_stream_id.bidi,
-                              conn->_.super.ctx->max_streams_bidi * 4 + conn->_.super.peer.bidi.next_stream_id);
+                              conn->_.super.ctx->max_streams_bidi * 4 - 4 + conn->_.super.peer.bidi.next_stream_id);
     }
     quicly_acks_init(&conn->_.egress.acks);
     quicly_loss_init(&conn->_.egress.loss, conn->_.super.ctx->loss,
