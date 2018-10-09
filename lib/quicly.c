@@ -2891,9 +2891,13 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 
 static int handle_max_stream_data_frame(quicly_conn_t *conn, quicly_max_stream_data_frame_t *frame)
 {
-    quicly_stream_t *stream = quicly_get_stream(conn, frame->stream_id);
+    quicly_stream_t *stream;
 
-    if (stream == NULL)
+    if (quicly_stream_is_unidirectional(frame->stream_id) &&
+        quicly_stream_is_client_initiated(frame->stream_id) == quicly_is_client(conn))
+        return QUICLY_ERROR_FRAME_ENCODING;
+
+    if ((stream = quicly_get_stream(conn, frame->stream_id)) == NULL)
         return 0;
 
     if (frame->max_stream_data < stream->_send_aux.max_stream_data)
@@ -2909,6 +2913,10 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, quicly_max_stream_d
 static int handle_stream_blocked_frame(quicly_conn_t *conn, quicly_stream_blocked_frame_t *frame)
 {
     quicly_stream_t *stream;
+
+    if (quicly_stream_is_unidirectional(frame->stream_id) &&
+        quicly_stream_is_client_initiated(frame->stream_id) != quicly_is_client(conn))
+        return QUICLY_ERROR_FRAME_ENCODING;
 
     if ((stream = quicly_get_stream(conn, frame->stream_id)) != NULL)
         quicly_maxsender_reset(&stream->_send_aux.max_stream_data_sender, 0);
