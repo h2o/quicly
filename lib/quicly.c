@@ -2020,7 +2020,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
         ack_delay = 0;
     }
     do {
-       if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
+        if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
             break;
         s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, largest_pn, ack_delay, &space->ack_queue, &range_index);
     } while (range_index != SIZE_MAX);
