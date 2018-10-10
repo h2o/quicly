@@ -3185,6 +3185,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 }
             }
             *is_ack_only = 0;
+            break;
         }
     } while (src != end);
 
