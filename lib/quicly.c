@@ -1787,15 +1787,16 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     int64_t at = conn->egress.loss.alarm_at;
 
 #define CHECK_SPACE(label, egress_label)                                                                                           \
-    do {
-        if (conn->label != NULL && conn->label->super.send_ack_at < at && conn->label->cipher.egress_label.aead != NULL) \
-            at = conn->label->super.send_ack_at;
+    do {                                                                                                                           \
+        if (conn->label != NULL && conn->label->super.send_ack_at < at && conn->label->cipher.egress_label.aead != NULL)           \
+            at = conn->label->super.send_ack_at;                                                                                   \
     } while (0)
 
     /* use macro defined above to check initial, handshake, and 0/1RTT ack spaces. */
     CHECK_SPACE(initial, egress);
     CHECK_SPACE(handshake, egress);
     CHECK_SPACE(application, egress_1rtt);
+
 #undef CHECK_SPACE
 
     return at;
