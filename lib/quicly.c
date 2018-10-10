@@ -792,6 +792,9 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
         /* FIXME implement deduplication at an earlier moment? */
         space->largest_pn_received_at = now;
     }
+    /* TODO (jri): If not ack-only packet, then maintain count of such packets that are received.
+     * Set send_ack_at to 0 when this number exceeds 2 (or some threshold).
+     */
     if (!is_ack_only && space->send_ack_at == INT64_MAX) {
         /* FIXME use 1/4 minRTT */
         space->send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
@@ -1784,8 +1787,12 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     int64_t at = conn->egress.loss.alarm_at;
 
 #define CHECK_SPACE(label, egress_label)                                                                                           \
-    if (conn->label != NULL && conn->label->super.send_ack_at < at && conn->label->cipher.egress_label.aead != NULL)               \
-    at = conn->label->super.send_ack_at
+    do {
+        if (conn->label != NULL && conn->label->super.send_ack_at < at && conn->label->cipher.egress_label.aead != NULL) \
+            at = conn->label->super.send_ack_at;
+    } while (0)
+
+    /* use macro defined above to check initial, handshake, and 0/1RTT ack spaces. */
     CHECK_SPACE(initial, egress);
     CHECK_SPACE(handshake, egress);
     CHECK_SPACE(application, egress_1rtt);
@@ -1915,6 +1922,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
             if (overhead + min_space > s->dst_end - s->dst)
                 coalescible = 0;
         }
+        /* close out packet under construction */
         if ((ret = commit_send_packet(conn, s, coalescible)) != 0)
             return ret;
     } else {
