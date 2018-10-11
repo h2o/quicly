@@ -25,6 +25,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define QUICLY_NUM_PACKETS_BEFORE_ACK 2
 #define QUICLY_DELAYED_ACK_TIMEOUT 25 /* milliseconds */
 
 /* transport error codes */
