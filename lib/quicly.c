@@ -119,7 +119,7 @@ struct st_quicly_pn_space_t {
     /**
      * packet count before ack is sent
      */
-    uint8_t unacked_count;
+    uint32_t unacked_count;
 };
 
 struct st_quicly_handshake_space_t {
