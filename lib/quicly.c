@@ -116,6 +116,10 @@ struct st_quicly_pn_space_t {
      *
      */
     int64_t send_ack_at;
+    /**
+     * packet count before ack is sent
+     */
+    uint8_t unacked_count;
 };
 
 struct st_quicly_handshake_space_t {
@@ -770,6 +774,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
     space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->send_ack_at = INT64_MAX;
+    space->unacked_count = 0;
     if (sz != sizeof(*space))
         memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
 
@@ -795,9 +800,15 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
     /* TODO (jri): If not ack-only packet, then maintain count of such packets that are received.
      * Set send_ack_at to 0 when this number exceeds 2 (or some threshold).
      */
-    if (!is_ack_only && space->send_ack_at == INT64_MAX) {
-        /* FIXME use 1/4 minRTT */
-        space->send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
+    if (!is_ack_only) {
+        space->unacked_count++;
+        /* Ack every other packet or after the delayed ack timeout */
+        if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK) {
+            space->send_ack_at = now;
+        } else if (space->send_ack_at == INT64_MAX) {
+            /* FIXME use 1/4 minRTT */
+            space->send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
+        }
     }
 
     ret = 0;
@@ -2064,6 +2075,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
     quicly_ranges_clear(&space->ack_queue);
     space->largest_pn_received_at = INT64_MAX;
     space->send_ack_at = INT64_MAX;
+    space->unacked_count = 0;
     return ret;
 }
 
