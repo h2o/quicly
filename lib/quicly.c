@@ -798,11 +798,11 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
         space->largest_pn_received_at = now;
     }
     /* TODO (jri): If not ack-only packet, then maintain count of such packets that are received.
-     * Set send_ack_at to 0 when this number exceeds 2 (or some threshold).
+     * Send ack immediately when this number exceeds the threshold.
      */
     if (!is_ack_only) {
         space->unacked_count++;
-        /* Ack every other packet or after the delayed ack timeout */
+        /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
         if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK) {
             space->send_ack_at = now;
         } else if (space->send_ack_at == INT64_MAX) {
