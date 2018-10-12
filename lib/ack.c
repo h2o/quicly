@@ -44,7 +44,7 @@ struct st_quicly_ack_block_t *quicly_acks__new_block(quicly_acks_t *acks)
 
     block->next = NULL;
     block->total = 0;
-    block->active = 0;
+    block->alive = 0;
     if (acks->tail != NULL) {
         acks->tail->next = block;
         acks->tail = block;
@@ -63,7 +63,7 @@ struct st_quicly_ack_block_t **quicly_acks__release_block(quicly_acks_t *acks, s
 
     if (block->next != NULL) {
         *ref = block->next;
-        assert((*ref)->active != 0);
+        assert((*ref)->alive != 0);
     } else {
         assert(block == acks->tail);
         if (ref == &acks->head) {
