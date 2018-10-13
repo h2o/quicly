@@ -446,7 +446,7 @@ uint64_t quicly_determine_packet_number(uint32_t bits, uint32_t mask, uint64_t n
 
 static void assert_consistency(quicly_conn_t *conn, int run_timers)
 {
-    if (conn->egress.acks.num_active != 0) {
+    if (conn->egress.acks.num_in_flight != 0) {
         assert(conn->egress.loss.alarm_at != INT64_MAX);
     } else {
         assert(conn->egress.loss.loss_time == INT64_MAX);
@@ -1650,7 +1650,7 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
         return 0;
 
     if (acked) {
-        if ((ret = quicly_sendbuf_acked(&stream->sendbuf, &ack->data.stream.args, ack->is_active)) != 0)
+        if ((ret = quicly_sendbuf_acked(&stream->sendbuf, &ack->data.stream.args, ack->is_alive)) != 0)
             return ret;
         if (quicly_stream_is_closable(stream) && (ret = stream->on_update(stream)) != 0)
             return ret;
@@ -1764,7 +1764,7 @@ static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t
 
 static int on_ack_cc(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
 {
-    if (ack->is_active) {
+    if (ack->is_alive) {
         conn->egress.cc.this_ack.nsegs += 1;
         conn->egress.cc.this_ack.nbytes += ack->data.cc.bytes_in_flight;
     }
@@ -2216,7 +2216,7 @@ static void init_acks_iter(quicly_conn_t *conn, quicly_acks_iter_t *iter)
 
     quicly_acks_init_iter(&conn->egress.acks, iter);
 
-    while ((ack = quicly_acks_get(iter))->sent_at < retire_before && !ack->is_active) {
+    while ((ack = quicly_acks_get(iter))->sent_at < retire_before && !ack->is_alive) {
         quicly_acks_release(&conn->egress.acks, iter);
         quicly_acks_next(iter);
     }
@@ -2321,7 +2321,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
 
     /* mark packets as lost if they are smaller than the largest_pn and outside the early retransmit window */
     while ((ack = quicly_acks_get(&iter))->packet_number < largest_pn && ack->sent_at <= sent_before) {
-        if (ack->is_active && conn->egress.max_lost_pn <= ack->packet_number) {
+        if (ack->is_alive && conn->egress.max_lost_pn <= ack->packet_number) {
             if (ack->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = ack->packet_number;
@@ -2347,7 +2347,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     }
 
     /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
-    if (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX && ack->is_active)
+    if (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX && ack->is_alive)
         *loss_time = ack->sent_at + delay_until_lost;
 
     return 0;
@@ -2355,7 +2355,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
 
 static void update_loss_alarm(quicly_conn_t *conn)
 {
-    quicly_loss_update_alarm(&conn->egress.loss, conn->egress.last_retransmittable_sent_at, conn->egress.acks.num_active != 0);
+    quicly_loss_update_alarm(&conn->egress.loss, conn->egress.last_retransmittable_sent_at, conn->egress.acks.num_in_flight != 0);
 }
 
 static void open_id_blocked_streams(quicly_conn_t *conn, int uni)
