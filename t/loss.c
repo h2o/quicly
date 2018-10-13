@@ -304,7 +304,15 @@ static void test_bidirectional(void)
 
     for (i = 0; i != 100; ++i) {
         rand_ratio = 256;
+        if (i == 96) {
+            quic_ctx.event_log.cb = quicly_default_event_log;
+            quic_ctx.event_log.mask = UINT64_MAX;
+            quicly_default_event_log_fp = stderr;
+        }
         subtest("75%", test_bidirectional_core);
+        if (i == 96) {
+            memset(&quic_ctx.event_log, 0, sizeof(quic_ctx.event_log));
+        }
         rand_ratio = 512;
         subtest("50%", test_bidirectional_core);
         rand_ratio = 768;
