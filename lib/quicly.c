@@ -281,7 +281,7 @@ struct st_quicly_conn_t {
 };
 
 static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, int is_enc, size_t epoch, const void *secret);
-static int retire_acks_by_epoch(quicly_conn_t *conn, size_t epoch);
+static int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch);
 
 const quicly_context_t quicly_default_context = {
     NULL,                                                /* tls */
@@ -756,7 +756,7 @@ static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
     quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
     assert(stream != NULL);
     destroy_stream(stream);
-    retire_acks_by_epoch(conn, epoch);
+    retire_acks_by_ack_epoch(conn, epoch);
 }
 
 static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
@@ -1811,7 +1811,8 @@ struct st_quicly_send_context_t {
         quicly_datagram_t *packet;
         struct st_quicly_cipher_context_t *cipher;
         uint8_t *first_byte_at;
-        unsigned to_be_acked : 1;
+        const uint8_t *ack_epoch;
+        uint8_t to_be_acked : 1;
     } target;
     quicly_datagram_t **packets;
     size_t max_packets;
@@ -1856,7 +1857,8 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     if (s->target.to_be_acked) {
         size_t packet_size = s->dst - s->target.first_byte_at;
         quicly_ack_t *ack;
-        if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_cc)) == NULL)
+        if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_cc, *s->target.ack_epoch)) ==
+            NULL)
             return PTLS_ERROR_NO_MEMORY;
         ack->data.cc.bytes_in_flight = packet_size;
         conn->egress.cc.bytes_in_flight += packet_size;
@@ -1976,6 +1978,27 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
     assert(s->dst < s->dst_end);
 
+    /* determine ack_epoch */
+    switch (s->current.first_byte) {
+        static const uint8_t epoch0 = 0, epoch2 = 2, epoch3 = 3;
+    case QUICLY_PACKET_TYPE_INITIAL:
+        s->target.ack_epoch = &epoch0;
+        break;
+    case QUICLY_PACKET_TYPE_HANDSHAKE:
+        s->target.ack_epoch = &epoch2;
+        break;
+    case QUICLY_PACKET_TYPE_0RTT_PROTECTED:
+        s->target.ack_epoch = &epoch3;
+        break;
+    default:
+        if ((s->current.first_byte & 0x80) != 0) {
+            s->target.ack_epoch = NULL;
+        } else {
+            s->target.ack_epoch = &epoch3;
+        }
+        break;
+    }
+
     /* add PING or empty CRYPTO for TLP, RTO packets so that last_retransmittable_sent_at changes */
     if (s->num_packets < s->min_packets_to_send) {
         if ((s->current.first_byte & 0x80) == 0) {
@@ -2007,7 +2030,7 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
 
     if ((ret = _do_prepare_packet(conn, s, min_space, 1)) != 0)
         return ret;
-    if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, ack_cb)) == NULL)
+    if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, ack_cb, *s->target.ack_epoch)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     /* TODO return the remaining window that the sender can use */
@@ -2210,44 +2233,23 @@ static void init_acks_iter(quicly_conn_t *conn, quicly_acks_iter_t *iter)
     }
 }
 
-static inline int ack_is_handshake_flow(quicly_ack_t *ack, size_t epoch)
-{
-    return ack->acked == on_ack_stream && ack->data.stream.stream_id == -(1 + epoch);
-}
-
-int retire_acks_by_epoch(quicly_conn_t *conn, size_t epoch)
+int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch)
 {
     quicly_acks_iter_t iter;
     quicly_ack_t *ack;
-    uint64_t pn;
     int ret = 0;
 
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
 
-    init_acks_iter(conn, &iter);
-    ack = quicly_acks_get(&iter);
-
-    while ((pn = ack->packet_number) != UINT64_MAX) {
-        int skip;
-        if (ack_is_handshake_flow(ack, epoch)) {
-            skip = 0;
-        } else if (epoch == 1 && (ack->acked == on_ack_stream && ack->data.stream.stream_id >= 0)) {
-            /* NACK all application data upon 0-RTT denial */
-            skip = 0;
-        } else {
-            skip = 1;
-        }
-        do {
-            if (!skip) {
-                if (conn->egress.max_lost_pn <= pn) {
-                    if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
-                        return ret;
-                }
-                quicly_acks_release(&conn->egress.acks, &iter);
+    for (init_acks_iter(conn, &iter); (ack = quicly_acks_get(&iter))->packet_number != UINT64_MAX; quicly_acks_next(&iter)) {
+        if (ack->ack_epoch == ack_epoch) {
+            if (conn->egress.max_lost_pn <= ack->packet_number) {
+                if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
+                    return ret;
             }
-            quicly_acks_next(&iter);
-        } while ((ack = quicly_acks_get(&iter))->packet_number == pn);
+            quicly_acks_release(&conn->egress.acks, &iter);
+        }
     }
 
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
@@ -2500,10 +2502,11 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
     case 2: /* handshake */
         if (is_enc && conn->application != NULL && quicly_is_client(conn) &&
             !conn->crypto.handshake_properties.client.early_data_accepted_by_peer) {
+            /* 0-RTT is rejected */
             assert(conn->application->cipher.egress_0rtt.aead != NULL);
             dispose_cipher(&conn->application->cipher.egress_0rtt);
             conn->application->cipher.egress_0rtt = (struct st_quicly_cipher_context_t){NULL};
-            retire_acks_by_epoch(conn, 1);
+            retire_acks_by_ack_epoch(conn, 3); /* retire all packets with ack_epoch == 3; they are all 0-RTT packets */
         }
         if (conn->handshake == NULL && (ret = setup_handshake_space_and_flow(conn, 2)) != 0)
             return ret;
@@ -2833,7 +2836,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                 quicly_ack_t *ack;
                 if ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
                     ++conn->super.num_packets.ack_received;
-                    int apply = epoch == 3 || ack_is_handshake_flow(ack, epoch);
+                    int apply = epoch == ack->ack_epoch;
                     if (apply) {
                         largest_newly_acked.packet_number = packet_number;
                         largest_newly_acked.sent_at = ack->sent_at;
