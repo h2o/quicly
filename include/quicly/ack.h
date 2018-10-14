@@ -37,6 +37,8 @@ struct st_quicly_ack_t {
     uint64_t packet_number;
     int64_t sent_at;
     quicly_ack_cb acked;
+    uint8_t ack_epoch; /* epoch to be acked in */
+    uint8_t is_alive : 1;
     union {
         struct {
             quicly_stream_id_t stream_id;
@@ -62,7 +64,6 @@ struct st_quicly_ack_t {
             size_t bytes_in_flight;
         } cc;
     } data;
-    unsigned is_alive : 1;
 };
 
 struct st_quicly_ack_block_t {
@@ -92,7 +93,8 @@ extern const quicly_ack_t quicly_acks__end_iter;
 
 static void quicly_acks_init(quicly_acks_t *acks);
 void quicly_acks_dispose(quicly_acks_t *acks);
-static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked);
+static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked,
+                                          uint8_t ack_epoch);
 static int quicly_acks_is_empty(quicly_acks_t *acks);
 static quicly_ack_t *quicly_acks_get_tail(quicly_acks_t *acks);
 struct st_quicly_ack_block_t *quicly_acks__new_block(quicly_acks_t *acks);
@@ -111,7 +113,8 @@ inline void quicly_acks_init(quicly_acks_t *acks)
     acks->tail = NULL;
 }
 
-inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked)
+inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked,
+                                          uint8_t ack_epoch)
 {
     struct st_quicly_ack_block_t *block;
 
@@ -126,6 +129,7 @@ inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_n
     ack->packet_number = packet_number;
     ack->sent_at = now;
     ack->acked = acked;
+    ack->ack_epoch = ack_epoch;
     ack->is_alive = 1;
     ++acks->num_in_flight;
 
