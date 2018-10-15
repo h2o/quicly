@@ -33,5 +33,5 @@ matrix:
         - cd ..
         - cmake -DOPENSSL_ROOT_DIR=$HOME/openssl-build .
         - make && make check
-    - os: macosx
+    - os: osx
       script: *s
