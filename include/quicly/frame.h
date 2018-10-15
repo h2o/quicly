@@ -676,11 +676,16 @@ inline uint8_t *quicly_encode_new_token_frame(uint8_t *dst, const uint8_t *dst_e
 
 inline int quicly_decode_new_token_frame(const uint8_t **src, const uint8_t *end, quicly_new_token_frame_t *frame)
 {
-    if ((frame->token.len = quicly_decodev(src, end)) == UINT64_MAX)
-        return QUICLY_ERROR_FRAME_ENCODING;
-    frame->token.base = (void *)*src;
+    uint64_t token_len;
+    if ((token_len = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
+    if (end - *src < token_len)
+        goto Error;
+    frame->token = ptls_iovec_init(*src, (size_t)token_len);
     *src += frame->token.len;
     return 0;
+Error:
+    return QUICLY_ERROR_FRAME_ENCODING;
 }
 
 #ifdef __cplusplus
