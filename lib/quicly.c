@@ -592,7 +592,7 @@ static void write_tlsbuf(quicly_conn_t *conn, ptls_buffer_t *tlsbuf, size_t epoc
         size_t len = epoch_offsets[epoch + 1] - epoch_offsets[epoch];
         if (len == 0)
             continue;
-        quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
+        quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
         assert(stream != NULL);
         quicly_sendbuf_write(&stream->sendbuf, tlsbuf->base + epoch_offsets[epoch], len, NULL);
     }
@@ -744,7 +744,7 @@ static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
 {
     quicly_stream_t *stream;
 
-    if ((stream = open_stream(conn, -(1 + epoch), 65536, 65536)) == NULL)
+    if ((stream = open_stream(conn, -(quicly_stream_id_t)(1 + epoch), 65536, 65536)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     stream->on_update = crypto_on_update;
@@ -753,7 +753,7 @@ static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
 
 static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
 {
-    quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
+    quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
     assert(stream != NULL);
     destroy_stream(stream);
     retire_acks_by_ack_epoch(conn, epoch);
@@ -1058,7 +1058,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 
 static int apply_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_stream_frame_t *frame)
 {
-    quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
+    quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
 
     return apply_stream_frame(stream, frame);
 }
@@ -2471,7 +2471,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
 
     /* send data */
     if ((conn->crypto.pending_flows & (uint8_t)(1 << epoch)) != 0) {
-        quicly_stream_t *stream = quicly_get_stream(conn, -(1 + epoch));
+        quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
         assert(stream != NULL);
         if ((ret = send_stream_data(stream, s)) != 0)
             goto Exit;
