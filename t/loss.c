@@ -215,7 +215,7 @@ quicly_get_first_timeout(client);
     quicly_stream_t *client_stream = NULL, *server_stream = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
     size_t i, stall_count = 0;
-    for (i = 0; i < 1000; ++i) {
+    for (i = 0; i < 2000; ++i) {
         int64_t client_timeout = quicly_get_first_timeout(client), server_timeout = quicly_get_first_timeout(server),
                 min_timeout = client_timeout < server_timeout ? client_timeout : server_timeout;
         assert(min_timeout != INT64_MAX);

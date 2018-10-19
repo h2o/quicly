@@ -116,6 +116,10 @@ struct st_quicly_pn_space_t {
      *
      */
     int64_t send_ack_at;
+    /**
+     * packet count before ack is sent
+     */
+    uint32_t unacked_count;
 };
 
 struct st_quicly_handshake_space_t {
@@ -770,6 +774,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
     space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->send_ack_at = INT64_MAX;
+    space->unacked_count = 0;
     if (sz != sizeof(*space))
         memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
 
@@ -793,11 +798,17 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
         space->largest_pn_received_at = now;
     }
     /* TODO (jri): If not ack-only packet, then maintain count of such packets that are received.
-     * Set send_ack_at to 0 when this number exceeds 2 (or some threshold).
+     * Send ack immediately when this number exceeds the threshold.
      */
-    if (!is_ack_only && space->send_ack_at == INT64_MAX) {
-        /* FIXME use 1/4 minRTT */
-        space->send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
+    if (!is_ack_only) {
+        space->unacked_count++;
+        /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
+        if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK) {
+            space->send_ack_at = now;
+        } else if (space->send_ack_at == INT64_MAX) {
+            /* FIXME use 1/4 minRTT */
+            space->send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
+        }
     }
 
     ret = 0;
@@ -2064,6 +2075,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
     quicly_ranges_clear(&space->ack_queue);
     space->largest_pn_received_at = INT64_MAX;
     space->send_ack_at = INT64_MAX;
+    space->unacked_count = 0;
     return ret;
 }
 
@@ -2292,6 +2304,10 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
     return 0;
 }
 
+/* this function ensures that the value returned in loss_time is when the next
+ * application timer should be set for loss detection. if no timer is required,
+ * loss_time is set to INT64_MAX.
+ */
 static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay_until_lost, int64_t *loss_time)
 {
     quicly_conn_t *conn = (void *)((char *)ld - offsetof(quicly_conn_t, egress.loss));
@@ -2309,7 +2325,10 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
 
-    /* mark packets as lost if they are smaller than the largest_pn and outside the early retransmit window */
+    /* mark packets as lost if they are smaller than the largest_pn and outside
+     * the early retransmit window. in other words, packets that are not ready
+     * to be marked as lost according to the early retransmit timer.
+     */
     while ((ack = quicly_acks_get(&iter))->packet_number < largest_pn && ack->sent_at <= sent_before) {
         if (ack->is_alive && conn->egress.max_lost_pn <= ack->packet_number) {
             if (ack->packet_number != largest_newly_lost_pn) {
@@ -2593,6 +2612,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if (conn->egress.cc.bytes_in_flight < cwnd)
             s.send_window = cwnd - conn->egress.cc.bytes_in_flight;
     }
+
+    /* If TLP or RTO, ensure there's enough send_window to send */
     if (s.min_packets_to_send != 0) {
         assert(s.min_packets_to_send <= s.max_packets);
         if (s.send_window < s.min_packets_to_send * conn->super.ctx->max_packet_size)
