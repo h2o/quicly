@@ -2325,8 +2325,10 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
 
-    /* mark packets as lost if they are smaller than the largest_pn and outside the early retransmit window. in
-     * other words, packets that are not ready to be marked as lost according to the early retransmit timer. */
+    /* mark packets as lost if they are smaller than the largest_pn and outside
+     * the early retransmit window. in other words, packets that are not ready
+     * to be marked as lost according to the early retransmit timer.
+     */
     while ((ack = quicly_acks_get(&iter))->packet_number < largest_pn && ack->sent_at <= sent_before) {
         if (ack->is_alive && conn->egress.max_lost_pn <= ack->packet_number) {
             if (ack->packet_number != largest_newly_lost_pn) {
