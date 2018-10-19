@@ -2304,6 +2304,10 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
     return 0;
 }
 
+/* this function ensures that the value returned in loss_time is when the next
+ * application timer should be set for loss detection. if no timer is required,
+ * loss_time is set to INT64_MAX.
+ */
 static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay_until_lost, int64_t *loss_time)
 {
     quicly_conn_t *conn = (void *)((char *)ld - offsetof(quicly_conn_t, egress.loss));
@@ -2321,7 +2325,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
 
-    /* mark packets as lost if they are smaller than the largest_pn and outside the early retransmit window */
+    /* mark packets as lost if they are smaller than the largest_pn and outside the early retransmit window. in
+     * other words, packets that are not ready to be marked as lost according to the early retransmit timer. */
     while ((ack = quicly_acks_get(&iter))->packet_number < largest_pn && ack->sent_at <= sent_before) {
         if (ack->is_alive && conn->egress.max_lost_pn <= ack->packet_number) {
             if (ack->packet_number != largest_newly_lost_pn) {
@@ -2605,6 +2610,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if (conn->egress.cc.bytes_in_flight < cwnd)
             s.send_window = cwnd - conn->egress.cc.bytes_in_flight;
     }
+
+    /* If TLP or RTO, ensure there's enough send_window to send */
     if (s.min_packets_to_send != 0) {
         assert(s.min_packets_to_send <= s.max_packets);
         if (s.send_window < s.min_packets_to_send * conn->super.ctx->max_packet_size)
