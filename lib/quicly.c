@@ -1128,10 +1128,8 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
     uint64_t found_id_bits = 0;
     int ret;
 
-    /* set optional parameters to their default values */
-    params->initial_max_streams_bidi = 0;
-    params->initial_max_streams_uni = 0;
-    params->ack_delay_exponent = 3;
+    /* set parameters to their default values */
+    *params = (quicly_transport_parameters_t){{0}, 0, 0, 0, 0, 3};
 
     /* decode the parameters block */
     ptls_decode_block(src, end, 2, {
