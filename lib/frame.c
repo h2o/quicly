@@ -58,7 +58,7 @@ uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t larges
     return dst;
 }
 
-int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame)
+int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame, int is_ack_ecn)
 {
     uint64_t i, tmp;
 
@@ -92,6 +92,12 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
         frame->smallest_acknowledged -= tmp;
     }
 
+    if (is_ack_ecn) {
+        /* just skip ECT(0), ECT(1), ECT-CE counters for the time being */
+        for (i = 0; i != 3; ++i)
+            if (quicly_decodev(src, end) == UINT64_MAX)
+                goto Error;
+    }
     return 0;
 Error:
     return QUICLY_ERROR_FRAME_ENCODING;

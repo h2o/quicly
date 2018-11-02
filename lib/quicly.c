@@ -3104,9 +3104,10 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 goto Exit;
             handle_close(conn, frame.error_code, NULL, frame.reason_phrase);
         } break;
-        case QUICLY_FRAME_TYPE_ACK: {
+        case QUICLY_FRAME_TYPE_ACK:
+        case QUICLY_FRAME_TYPE_ACK_ECN: {
             quicly_ack_frame_t frame;
-            if ((ret = quicly_decode_ack_frame(&src, end, &frame)) != 0)
+            if ((ret = quicly_decode_ack_frame(&src, end, &frame, type_flags == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
                 goto Exit;
             if ((ret = handle_ack_frame(conn, epoch, &frame)) != 0)
                 goto Exit;

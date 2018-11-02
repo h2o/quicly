@@ -46,10 +46,11 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_STREAM_ID_BLOCKED 10
 #define QUICLY_FRAME_TYPE_NEW_CONNECTION_ID 11
 #define QUICLY_FRAME_TYPE_STOP_SENDING 12
-#define QUICLY_FRAME_TYPE_ACK 13
 #define QUICLY_FRAME_TYPE_PATH_CHALLENGE 14
 #define QUICLY_FRAME_TYPE_PATH_RESPONSE 15
 #define QUICLY_FRAME_TYPE_NEW_TOKEN 25
+#define QUICLY_FRAME_TYPE_ACK 26
+#define QUICLY_FRAME_TYPE_ACK_ECN 27
 
 #define QUICLY_FRAME_TYPE_STREAM_BASE 0x10
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
@@ -207,7 +208,7 @@ typedef struct st_quicly_ack_frame_t {
     uint64_t gaps[256];
 } quicly_ack_frame_t;
 
-int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame);
+int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame, int is_ack_ecn);
 
 static size_t quicly_new_token_frame_capacity(ptls_iovec_t token);
 static uint8_t *quicly_encode_new_token_frame(uint8_t *dst, const uint8_t *dst_end, ptls_iovec_t token);
