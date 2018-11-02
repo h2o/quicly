@@ -67,7 +67,7 @@ struct queue_t {
     uint64_t num_dropped;
     uint16_t drops[MAXDROPS];
     uint16_t num_drops;
-} up = {{16}, 10}, down = {{16}, 10};
+} up = {{16}, 10000}, down = {{16}, 10000};
 
 static int listen_fd = -1;
 static struct addrinfo *server_addr = NULL;
@@ -81,9 +81,9 @@ static void usage(const char *cmd, int exit_status)
            "  -b <buffersize> size of the buffer for packets upstream (default: 16)\n"
            "  -B <buffersize> size of the buffer for packets downstream (default: 16)\n"
            "  -i <interval>   delay (in microseconds) to insert after sending one packet\n"
-           "                  upstream (default: 10)\n"
+           "                  upstream (default: 10000)\n"
            "  -I <interval>   delay (in microseconds) to insert after sending one packet\n"
-           "                  downstream (default: 10)\n"
+           "                  downstream (default: 10000)\n"
            "  -l <port>       port number to which the command binds\n"
            "  -d <packetnum>  packet number in connection to drop upstream\n"
            "  -D <packetnum>  packet number in connection to drop downstream\n"
