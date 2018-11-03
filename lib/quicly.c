@@ -3577,6 +3577,7 @@ void quicly_amend_ptls_context(ptls_context_t *ptls)
 {
     static ptls_update_traffic_key_t update_traffic_key = {update_traffic_key_cb};
 
+    ptls->omit_end_of_early_data = 1;
     ptls->max_early_data_size = UINT32_MAX;
     ptls->hkdf_label_prefix = HKDF_BASE_LABEL;
     ptls->update_traffic_key = &update_traffic_key;
