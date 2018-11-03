@@ -207,7 +207,7 @@ static int on_stream_open(quicly_stream_t *stream)
 
 static void on_conn_close(quicly_conn_t *conn, uint16_t code, const uint64_t *frame_type, const char *reason, size_t reason_len)
 {
-    fprintf(stderr, "%s close:%" PRIx16 ":%.*s\n", frame_type != NULL ? "connection" : "application", code, (int)reason_len,
+    fprintf(stderr, "%s close:0x%" PRIx16 ":%.*s\n", frame_type != NULL ? "connection" : "application", code, (int)reason_len,
             reason);
 }
 
