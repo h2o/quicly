@@ -34,7 +34,7 @@
 #include "quicly/ack.h"
 #include "quicly/frame.h"
 
-#define QUICLY_PROTOCOL_VERSION 0xff00000e
+#define QUICLY_PROTOCOL_VERSION 0xff00000f
 
 #define QUICLY_PACKET_TYPE_INITIAL 0xff
 #define QUICLY_PACKET_TYPE_RETRY 0xfe
@@ -1133,10 +1133,8 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
     uint64_t found_id_bits = 0;
     int ret;
 
-    /* set optional parameters to their default values */
-    params->initial_max_streams_bidi = 0;
-    params->initial_max_streams_uni = 0;
-    params->ack_delay_exponent = 3;
+    /* set parameters to their default values */
+    *params = (quicly_transport_parameters_t){{0}, 0, 0, 0, 0, 3};
 
     /* decode the parameters block */
     ptls_decode_block(src, end, 2, {
@@ -3109,9 +3107,10 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 goto Exit;
             handle_close(conn, frame.error_code, NULL, frame.reason_phrase);
         } break;
-        case QUICLY_FRAME_TYPE_ACK: {
+        case QUICLY_FRAME_TYPE_ACK:
+        case QUICLY_FRAME_TYPE_ACK_ECN: {
             quicly_ack_frame_t frame;
-            if ((ret = quicly_decode_ack_frame(&src, end, &frame)) != 0)
+            if ((ret = quicly_decode_ack_frame(&src, end, &frame, type_flags == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
                 goto Exit;
             if ((ret = handle_ack_frame(conn, epoch, &frame)) != 0)
                 goto Exit;
@@ -3583,6 +3582,7 @@ void quicly_amend_ptls_context(ptls_context_t *ptls)
 {
     static ptls_update_traffic_key_t update_traffic_key = {update_traffic_key_cb};
 
+    ptls->omit_end_of_early_data = 1;
     ptls->max_early_data_size = UINT32_MAX;
     ptls->hkdf_label_prefix = HKDF_BASE_LABEL;
     ptls->update_traffic_key = &update_traffic_key;
