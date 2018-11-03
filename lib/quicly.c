@@ -1813,25 +1813,40 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     return at;
 }
 
+
+/* data structure that is used during one call through quicly_send()
+ */
 struct st_quicly_send_context_t {
+    /* current encryption context */
     struct {
         struct st_quicly_cipher_context_t *cipher;
-        int first_byte;
+        int first_byte; /* first byte of packet == epoch */
     } current;
+
+    /* packet under construction */
     struct {
         quicly_datagram_t *packet;
         struct st_quicly_cipher_context_t *cipher;
         uint8_t *first_byte_at;
-        const uint8_t *ack_epoch;
-        uint8_t to_be_acked : 1;
+        const uint8_t *ack_epoch;  /* expected epoch of ACK for this packet */
+        uint8_t to_be_acked : 1;  /* retransmittable packet (consumes congestion window) */
     } target;
+
+    /* output buffer into which list of datagrams is written */
     quicly_datagram_t **packets;
+    /* max number of datagrams that can be stored in |packets| */
     size_t max_packets;
+    /* number of datagrams currently stored in |packets| */
     size_t num_packets;
+    /* minimum packets that need to be sent */
     size_t min_packets_to_send;
+    /* the currently available window for sending (in bytes) */
     ssize_t send_window;
+    /* location where next frame should be written */
     uint8_t *dst;
+    /* end of the payload area, beyond which frames cannot be written */
     uint8_t *dst_end;
+    /* address at which payload starts */
     uint8_t *dst_encrypt_from;
 };
 
@@ -1989,7 +2004,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
     assert(s->dst < s->dst_end);
 
-    /* determine ack_epoch */
+    /* determine ack_epoch, the expected epoch of the ACKs for the current packet */
     switch (s->current.first_byte) {
         static const uint8_t epoch0 = 0, epoch2 = 2, epoch3 = 3;
     case QUICLY_PACKET_TYPE_INITIAL:
