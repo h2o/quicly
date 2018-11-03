@@ -435,7 +435,7 @@ inline uint8_t *quicly_encode_crypto_frame_header(uint8_t *dst, uint8_t *dst_end
         len_length = 2;
     }
 
-    if (*data_len >= sizeleft)
+    if (*data_len > sizeleft - len_length)
         *data_len = sizeleft - len_length;
     dst = quicly_encodev(dst, *data_len);
     return dst;
