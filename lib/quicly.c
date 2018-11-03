@@ -56,6 +56,11 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE 10
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI 11
 
+#define QUICLY_EPOCH_INITIAL 0
+#define QUICLY_EPOCH_0RTT 1
+#define QUICLY_EPOCH_HANDSHAKE 2
+#define QUICLY_EPOCH_1RTT 3
+
 /**
  * do not try to send frames that require ACK if the send window is below this value
  */
@@ -787,7 +792,7 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
-static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only)
+static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
 {
     int ret;
 
@@ -803,7 +808,7 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
     if (!is_ack_only) {
         space->unacked_count++;
         /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
-        if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK) {
+        if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK || epoch == QUICLY_EPOCH_INITIAL || epoch == QUICLY_EPOCH_HANDSHAKE) {
             space->send_ack_at = now;
         } else if (space->send_ack_at == INT64_MAX) {
             /* FIXME use 1/4 minRTT */
@@ -1614,7 +1619,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
 
     /* TODO log cid */
 
-    if ((ret = record_receipt(&conn->initial->super, pn, 0)) != 0)
+    if ((ret = record_receipt(&conn->initial->super, pn, 0, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
     conn->initial->super.next_expected_packet_number = next_expected_pn;
 
@@ -2006,21 +2011,21 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
 
     /* determine ack_epoch, the expected epoch of the ACKs for the current packet */
     switch (s->current.first_byte) {
-        static const uint8_t epoch0 = 0, epoch2 = 2, epoch3 = 3;
+        static const uint8_t epoch_initial = QUICLY_EPOCH_INITIAL, epoch_handshake = QUICLY_EPOCH_HANDSHAKE, epoch_1rtt = QUICLY_EPOCH_1RTT;
     case QUICLY_PACKET_TYPE_INITIAL:
-        s->target.ack_epoch = &epoch0;
+        s->target.ack_epoch = &epoch_initial;
         break;
     case QUICLY_PACKET_TYPE_HANDSHAKE:
-        s->target.ack_epoch = &epoch2;
+        s->target.ack_epoch = &epoch_handshake;
         break;
     case QUICLY_PACKET_TYPE_0RTT_PROTECTED:
-        s->target.ack_epoch = &epoch3;
+        s->target.ack_epoch = &epoch_1rtt;
         break;
     default:
         if ((s->current.first_byte & 0x80) != 0) {
             s->target.ack_epoch = NULL;
         } else {
-            s->target.ack_epoch = &epoch3;
+            s->target.ack_epoch = &epoch_1rtt;
         }
         break;
     }
@@ -2476,18 +2481,18 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
     int ret = 0;
 
     switch (epoch) {
-    case 0:
+    case QUICLY_EPOCH_INITIAL:
         if (conn->initial == NULL || (s->current.cipher = &conn->initial->cipher.egress)->aead == NULL)
             return 0;
         s->current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
         ack_space = &conn->initial->super;
         break;
-    case 1:
+    case QUICLY_EPOCH_0RTT:
         if (conn->application == NULL || (s->current.cipher = &conn->application->cipher.egress_0rtt)->aead == NULL)
             return 0;
         s->current.first_byte = QUICLY_PACKET_TYPE_0RTT_PROTECTED;
         break;
-    case 2:
+    case QUICLY_EPOCH_HANDSHAKE:
         if (conn->handshake == NULL || (s->current.cipher = &conn->handshake->cipher.egress)->aead == NULL)
             return 0;
         s->current.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
@@ -2527,13 +2532,13 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
                          INT_EVENT_ATTR(EPOCH, epoch));
 
     switch (epoch) {
-    case 1: /* 0-RTT */
+    case QUICLY_EPOCH_0RTT:
         assert(is_enc == quicly_is_client(conn));
         if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 1)) != 0)
             return ret;
         cipher_slot = is_enc ? &conn->application->cipher.egress_0rtt : &conn->application->cipher.ingress[0];
         break;
-    case 2: /* handshake */
+    case QUICLY_EPOCH_HANDSHAKE:
         if (is_enc && conn->application != NULL && quicly_is_client(conn) &&
             !conn->crypto.handshake_properties.client.early_data_accepted_by_peer) {
             /* 0-RTT is rejected */
@@ -2546,7 +2551,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
             return ret;
         cipher_slot = is_enc ? &conn->handshake->cipher.egress : &conn->handshake->cipher.ingress;
         break;
-    case 3: /* 1-RTT */
+    case QUICLY_EPOCH_1RTT:
         if (is_enc)
             apply_peer_transport_params(conn);
         if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 0)) != 0)
@@ -2561,7 +2566,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
     if ((ret = setup_cipher(cipher_slot, cipher->aead, cipher->hash, is_enc, secret)) != 0)
         return ret;
 
-    if (epoch == 3 && is_enc) {
+    if (epoch == QUICLY_EPOCH_1RTT && is_enc) {
         /* update states now that we have 1-RTT write key */
         open_id_blocked_streams(conn, 1);
         open_id_blocked_streams(conn, 0);
@@ -3335,7 +3340,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     ++conn->super.num_packets.received;
 
     if (*space != NULL) {
-        if ((ret = record_receipt(*space, pn, is_ack_only)) != 0)
+        if ((ret = record_receipt(*space, pn, is_ack_only, epoch)) != 0)
             goto Exit;
     }
 
