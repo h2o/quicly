@@ -371,6 +371,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
         if (conn != NULL && send_pending(fd, conn) != 0) {
             quicly_free(conn);
             conn = NULL;
+            break;
         }
     }
 }
