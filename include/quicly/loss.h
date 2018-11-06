@@ -22,6 +22,7 @@
 #ifndef quicly_loss_h
 #define quicly_loss_h
 
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "quicly/constants.h"
@@ -141,7 +142,7 @@ inline void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, u
 
 inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t _latest_rtt, uint32_t ack_delay, int is_ack_only)
 {
-    rtt->latest = _latest_rtt;
+    rtt->latest = _latest_rtt != 0 ? _latest_rtt : 1; /* set minimum to 1 to avoid special cases */
     if (rtt->latest < rtt->minimum)
         rtt->minimum = rtt->latest;
     if (rtt->latest > rtt->minimum && rtt->latest - rtt->minimum > ack_delay) {
@@ -156,6 +157,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t _latest_rtt, uint32_t 
         rtt->variance = (rtt->variance * 3 + absdiff) / 4;
         rtt->smoothed = (rtt->smoothed * 7 + rtt->latest) / 8;
     }
+    assert(rtt->smoothed != 0);
 }
 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt)
