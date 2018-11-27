@@ -2905,6 +2905,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         uint64_t packet_number;
         int64_t sent_at;
     } largest_newly_acked = {UINT64_MAX, INT64_MAX};
+    uint64_t smallest_newly_acked = UINT64_MAX;
     int ret;
 
     if (epoch == 1)
@@ -2929,6 +2930,8 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                     if (apply) {
                         largest_newly_acked.packet_number = packet_number;
                         largest_newly_acked.sent_at = ack->sent_at;
+                        if (smallest_newly_acked == UINT64_MAX)
+                            smallest_newly_acked = packet_number;
                     }
                     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_ACKED, INT_EVENT_ATTR(PACKET_NUMBER, packet_number),
                                          INT_EVENT_ATTR(NEWLY_ACKED, apply));
@@ -2967,13 +2970,16 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
     /* OnPacketAckedCC */
     uint32_t cc_type = 0;
-    /* TODO (jri): this function should be called for every packet newly acked. */
-    if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
-        cc_type = CC_RTO;
-        conn->egress.cc.in_first_rto = 0;
-    } else if (conn->egress.cc.in_first_rto) {
-        cc_type = CC_RTO_ERR;
-        conn->egress.cc.in_first_rto = 0;
+    /* TODO (jri): this function should be called for every packet newly acked. (kazuho) I do not think so;
+     * quicly_loss_on_packet_acked is NOT OnPacketAcked */
+    if (smallest_newly_acked != UINT64_MAX) {
+        if (quicly_loss_on_packet_acked(&conn->egress.loss, smallest_newly_acked)) {
+            cc_type = CC_RTO;
+            conn->egress.cc.in_first_rto = 0;
+        } else if (conn->egress.cc.in_first_rto) {
+            cc_type = CC_RTO_ERR;
+            conn->egress.cc.in_first_rto = 0;
+        }
     }
     if (cc_type != 0)
         cc_cong_signal(&conn->egress.cc.ccv, cc_type, bytes_in_flight);
