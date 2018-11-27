@@ -1639,6 +1639,39 @@ Exit:
     return ret;
 }
 
+static int on_ack_ack(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+{
+    /* TODO log */
+
+    if (acked) {
+        /* find the pn space */
+        struct st_quicly_pn_space_t *space;
+        switch (ack->ack_epoch) {
+        case QUICLY_EPOCH_INITIAL:
+            space = &conn->initial->super;
+            break;
+        case QUICLY_EPOCH_HANDSHAKE:
+            space = &conn->handshake->super;
+            break;
+        case QUICLY_EPOCH_1RTT:
+            space = &conn->application->super;
+            break;
+        default:
+            assert(!"FIXME");
+        }
+        if (space != NULL) {
+            quicly_ranges_subtract(&space->ack_queue, ack->data.ack.range.start, ack->data.ack.range.end);
+            if (space->ack_queue.num_ranges == 0) {
+                space->largest_pn_received_at = INT64_MAX;
+                space->send_ack_at = INT64_MAX;
+                space->unacked_count = 0;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
 {
     quicly_stream_t *stream;
@@ -1886,7 +1919,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     if (s->target.to_be_acked) {
         size_t packet_size = s->dst - s->target.first_byte_at;
         quicly_ack_t *ack;
-        if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_cc, *s->target.ack_epoch)) ==
+        if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_cc, *s->target.ack_epoch, 1)) ==
             NULL)
             return PTLS_ERROR_NO_MEMORY;
         ack->data.cc.bytes_in_flight = packet_size;
@@ -2059,7 +2092,7 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
 
     if ((ret = _do_prepare_packet(conn, s, min_space, 1)) != 0)
         return ret;
-    if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, ack_cb, *s->target.ack_epoch)) == NULL)
+    if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, ack_cb, *s->target.ack_epoch, 1)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     /* TODO return the remaining window that the sender can use */
@@ -2086,14 +2119,23 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
     }
     do {
         if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
-            break;
+            return ret;
+        size_t range = range_index;
+        /* emit ACK frame (for range [range..range_index]) */
         s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, largest_pn, ack_delay, &space->ack_queue, &range_index);
+        /* save what's inflight */
+        for (; range != range_index; --range) {
+            quicly_ack_t *ack;
+            if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_ack,
+                                            *s->target.ack_epoch, 0)) == NULL)
+                return PTLS_ERROR_NO_MEMORY;
+            ack->data.ack.range = space->ack_queue.ranges[range];
+        }
     } while (range_index != SIZE_MAX);
 
-    quicly_ranges_clear(&space->ack_queue);
-    space->largest_pn_received_at = INT64_MAX;
     space->send_ack_at = INT64_MAX;
     space->unacked_count = 0;
+
     return ret;
 }
 
@@ -2374,8 +2416,16 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     }
 
     /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
-    if (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX && ack->is_alive)
-        *loss_time = ack->sent_at + delay_until_lost;
+    while (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX) {
+        if (ack->is_alive) {
+            *loss_time = ack->sent_at + delay_until_lost;
+            break;
+        } else if (ack->acked != on_ack_ack) {
+            break;
+        }
+        quicly_acks_next(&iter);
+        ack = quicly_acks_get(&iter);
+    }
 
     return 0;
 }
