@@ -56,6 +56,8 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE 10
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI 11
 
+#define QUICLY_ACK_DELAY_EXPONENT 10
+
 #define QUICLY_EPOCH_INITIAL 0
 #define QUICLY_EPOCH_0RTT 1
 #define QUICLY_EPOCH_HANDSHAKE 2
@@ -1119,6 +1121,8 @@ static int encode_transport_parameter_list(quicly_context_t *ctx, ptls_buffer_t 
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
                                      { ptls_buffer_push16(buf, ctx->max_streams_uni); });
         }
+        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT,
+                                 { ptls_buffer_push(buf, QUICLY_ACK_DELAY_EXPONENT); });
     });
     ret = 0;
 Exit:
@@ -1193,7 +1197,10 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
                         ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
                         goto Exit;
                     }
-                    params->ack_delay_exponent = *src++;
+                    if ((params->ack_delay_exponent = *src++) > 20) {
+                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
+                        goto Exit;
+                    }
                     break;
                 default:
                     src = end;
@@ -2112,8 +2119,8 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
     range_index = space->ack_queue.num_ranges - 1;
     largest_pn = space->ack_queue.ranges[range_index].end - 1;
     if (space->largest_pn_received_at < now) {
-        /* FIXME use a bigger exponent considering that our timer is in milliseconds? */
-        ack_delay = ((now - space->largest_pn_received_at) * 1000) >> 3;
+        QUICLY_BUILD_ASSERT(QUICLY_ACK_DELAY_EXPONENT == 10); /* ack_delay in milliseconds! */
+        ack_delay = now - space->largest_pn_received_at;
     } else {
         ack_delay = 0;
     }
