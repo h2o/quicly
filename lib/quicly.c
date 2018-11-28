@@ -55,6 +55,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI 8
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE 10
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI 11
+#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY 12
 
 #define QUICLY_ACK_DELAY_EXPONENT 10
 
@@ -316,7 +317,8 @@ const quicly_context_t quicly_default_context = {
     {0, NULL}, /* event_log */
 };
 
-static const quicly_transport_parameters_t transport_params_before_handshake = {{0, 0, 0}, 0, 0, 0, 0, 3};
+static const quicly_transport_parameters_t transport_params_before_handshake = {
+    {0, 0, 0}, 0, 0, 0, 0, 3, QUICLY_DELAYED_ACK_TIMEOUT};
 
 static __thread int64_t now;
 
@@ -1202,6 +1204,13 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
                         goto Exit;
                     }
                     break;
+                case QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY:
+                    if (src == end) {
+                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
+                        goto Exit;
+                    }
+                    params->max_ack_delay = *src++;
+                    break;
                 default:
                     src = end;
                     break;
@@ -1288,7 +1297,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     }
     quicly_acks_init(&conn->_.egress.acks);
     quicly_loss_init(&conn->_.egress.loss, conn->_.super.ctx->loss,
-                     conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
+                     conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
+                     &conn->_.super.peer.transport_params.max_ack_delay);
     init_max_stream_id(&conn->_.egress.max_stream_id.uni);
     init_max_stream_id(&conn->_.egress.max_stream_id.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
@@ -2301,7 +2311,7 @@ static void init_acks_iter(quicly_conn_t *conn, quicly_acks_iter_t *iter)
 {
     /* TODO find a better threshold */
     int64_t retire_before = now - ((conn->egress.loss.rtt.smoothed + conn->egress.loss.rtt.variance) * 4 +
-                                   conn->egress.loss.rtt.max_ack_delay + QUICLY_DELAYED_ACK_TIMEOUT);
+                                   conn->super.peer.transport_params.max_ack_delay + QUICLY_DELAYED_ACK_TIMEOUT);
     quicly_ack_t *ack;
 
     quicly_acks_init_iter(&conn->egress.acks, iter);

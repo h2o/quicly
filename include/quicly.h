@@ -178,6 +178,10 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint8_t ack_delay_exponent;
+    /**
+     * in milliseconds
+     */
+    uint8_t max_ack_delay;
 } quicly_transport_parameters_t;
 
 typedef struct st_quicly_cid_t {
