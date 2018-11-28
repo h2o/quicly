@@ -314,7 +314,7 @@ const quicly_context_t quicly_default_context = {
     {0, NULL}, /* event_log */
 };
 
-static const quicly_transport_parameters_t transport_params_before_handshake = {{16384, 16384, 16384}, 16384, 10, 60};
+static const quicly_transport_parameters_t transport_params_before_handshake = {{0, 0, 0}, 0, 0, 0, 0, 3};
 
 static __thread int64_t now;
 
