@@ -808,7 +808,8 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
     if (!is_ack_only) {
         space->unacked_count++;
         /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
-        if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK || epoch == QUICLY_EPOCH_INITIAL || epoch == QUICLY_EPOCH_HANDSHAKE) {
+        if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK || epoch == QUICLY_EPOCH_INITIAL ||
+            epoch == QUICLY_EPOCH_HANDSHAKE) {
             space->send_ack_at = now;
         } else if (space->send_ack_at == INT64_MAX) {
             /* FIXME use 1/4 minRTT */
@@ -1816,7 +1817,6 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     return at;
 }
 
-
 /* data structure that is used during one call through quicly_send()
  */
 struct st_quicly_send_context_t {
@@ -1831,7 +1831,7 @@ struct st_quicly_send_context_t {
         quicly_datagram_t *packet;
         struct st_quicly_cipher_context_t *cipher;
         uint8_t *first_byte_at;
-        const uint8_t *ack_epoch;  /* expected epoch of ACK for this packet */
+        const uint8_t *ack_epoch; /* expected epoch of ACK for this packet */
         uint8_t to_be_acked : 1;  /* retransmittable packet (consumes congestion window) */
     } target;
 
@@ -2009,7 +2009,8 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
 
     /* determine ack_epoch, the expected epoch of the ACKs for the current packet */
     switch (s->current.first_byte) {
-        static const uint8_t epoch_initial = QUICLY_EPOCH_INITIAL, epoch_handshake = QUICLY_EPOCH_HANDSHAKE, epoch_1rtt = QUICLY_EPOCH_1RTT;
+        static const uint8_t epoch_initial = QUICLY_EPOCH_INITIAL, epoch_handshake = QUICLY_EPOCH_HANDSHAKE,
+                             epoch_1rtt = QUICLY_EPOCH_1RTT;
     case QUICLY_PACKET_TYPE_INITIAL:
         s->target.ack_epoch = &epoch_initial;
         break;

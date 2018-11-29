@@ -189,8 +189,9 @@ static int on_resp_receive(quicly_stream_t *stream)
         if (req_paths[num_resp_received] == NULL) {
             uint64_t num_received, num_sent, num_lost, num_ack_received, num_bytes_sent;
             quicly_get_packet_stats(stream->conn, &num_received, &num_sent, &num_lost, &num_ack_received, &num_bytes_sent);
-            fprintf(stderr, "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
-                            ", bytes-sent: %" PRIu64 "\n",
+            fprintf(stderr,
+                    "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
+                    ", bytes-sent: %" PRIu64 "\n",
                     num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
             exit(0);
         }
@@ -387,8 +388,9 @@ static void on_signal(int signo)
         char *host_cid_hex = quicly_hexdump(host_cid->cid, host_cid->len, SIZE_MAX);
         uint64_t num_received, num_sent, num_lost, num_ack_received, num_bytes_sent;
         quicly_get_packet_stats(conns[i], &num_received, &num_sent, &num_lost, &num_ack_received, &num_bytes_sent);
-        fprintf(stderr, "conn:%s: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
-                        ", bytes-sent: %" PRIu64 "\n",
+        fprintf(stderr,
+                "conn:%s: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
+                ", bytes-sent: %" PRIu64 "\n",
                 host_cid_hex, num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
         free(host_cid_hex);
     }
