@@ -119,7 +119,7 @@ typedef struct quicly_loss_t {
 typedef int (*quicly_loss_do_detect_cb)(quicly_loss_t *r, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time);
 
 static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint8_t *max_ack_delay);
-static void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_outstanding);
+static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding);
 
 /* called every time a is received for congestion control and loss recovery.
  * TODO (jri): Make this function be called on each packet newly acked, rather than every new ack received.
@@ -176,13 +176,13 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
 }
 
-inline void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_outstanding)
+inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding)
 {
     if (has_outstanding) {
         int64_t alarm_duration;
         if (r->loss_time != INT64_MAX) {
             /* Time loss detection */
-            alarm_duration = r->loss_time - now;
+            alarm_duration = r->loss_time - last_retransmittable_sent_at;
         } else if (r->rtt.smoothed == 0) {
             /* handshake timer */
             alarm_duration = 2 * r->rtt.latest /* should contain intial rtt */;
@@ -204,8 +204,11 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, uint64_t now, int has_out
                     alarm_duration = tlp_alarm_duration;
             }
         }
-        if (r->alarm_at > now + alarm_duration)
-            r->alarm_at = now + alarm_duration;
+        if (r->alarm_at > last_retransmittable_sent_at + alarm_duration) {
+            r->alarm_at = last_retransmittable_sent_at + alarm_duration;
+            if (r->alarm_at < now)
+                r->alarm_at = now;
+        }
     } else {
         r->alarm_at = INT64_MAX;
     }

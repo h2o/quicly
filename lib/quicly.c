@@ -2449,7 +2449,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
 
 static void update_loss_alarm(quicly_conn_t *conn)
 {
-    quicly_loss_update_alarm(&conn->egress.loss, conn->egress.last_retransmittable_sent_at, conn->egress.acks.num_in_flight != 0);
+    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
+                             conn->egress.acks.num_in_flight != 0);
 }
 
 static void open_id_blocked_streams(quicly_conn_t *conn, int uni)
