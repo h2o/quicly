@@ -145,11 +145,21 @@ inline void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, u
 inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t _latest_rtt, uint32_t ack_delay)
 {
     rtt->latest = _latest_rtt != 0 ? _latest_rtt : 1; /* set minimum to 1 to avoid special cases */
+
+    /* update minimum */
     if (rtt->latest < rtt->minimum)
         rtt->minimum = rtt->latest;
-    if (rtt->latest > rtt->minimum && rtt->latest - rtt->minimum > ack_delay) {
+
+    /* rtt->latest = max(rtt->minimum, rtt->latest - ack_delay) */
+    if (rtt->latest > ack_delay) {
         rtt->latest -= ack_delay;
+    } else {
+        rtt->latest = 0;
     }
+    if (rtt->latest < rtt->minimum)
+        rtt->latest = rtt->minimum;
+
+    /* smoothed and variance */
     if (rtt->smoothed == 0) {
         rtt->smoothed = rtt->latest;
     } else {
