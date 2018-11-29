@@ -69,8 +69,7 @@ inline void quicly_maxsender_reset(quicly_maxsender_t *m, int64_t initial_value)
     m->max_acked = initial_value;
 }
 
-inline int quicly_maxsender_should_update(quicly_maxsender_t *m, int64_t buffered_from, uint32_t window_size,
-                                          uint32_t update_ratio)
+inline int quicly_maxsender_should_update(quicly_maxsender_t *m, int64_t buffered_from, uint32_t window_size, uint32_t update_ratio)
 {
     /* ratio is permil (1/1024) */
     int64_t threshold = buffered_from + ((int64_t)window_size * update_ratio) / 1024;
