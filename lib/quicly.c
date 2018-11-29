@@ -2144,8 +2144,8 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
         /* save what's inflight */
         for (; range != range_index; --range) {
             quicly_ack_t *ack;
-            if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_ack,
-                                            *s->target.ack_epoch, 0)) == NULL)
+            if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_ack, *s->target.ack_epoch,
+                                            0)) == NULL)
                 return PTLS_ERROR_NO_MEMORY;
             ack->data.ack.range = space->ack_queue.ranges[range];
         }
