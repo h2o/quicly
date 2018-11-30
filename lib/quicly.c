@@ -2136,8 +2136,9 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
     range_index = space->ack_queue.num_ranges - 1;
     largest_pn = space->ack_queue.ranges[range_index].end - 1;
     if (space->largest_pn_received_at < now) {
-        QUICLY_BUILD_ASSERT(QUICLY_ACK_DELAY_EXPONENT == 10); /* ack_delay in milliseconds! */
-        ack_delay = now - space->largest_pn_received_at;
+        /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_ACK_DELAY_EXPONENT is 10. It's considered a non-issue
+         * because our time measurement is at millisecond granurality anyways. */
+        ack_delay = ((now - space->largest_pn_received_at) * 1000) >> QUICLY_ACK_DELAY_EXPONENT;
     } else {
         ack_delay = 0;
     }
