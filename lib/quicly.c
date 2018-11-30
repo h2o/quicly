@@ -64,6 +64,8 @@
 #define QUICLY_EPOCH_HANDSHAKE 2
 #define QUICLY_EPOCH_1RTT 3
 
+#define QUICLY_ACK_QUEUE_MAX_SIZE 100
+
 /**
  * do not try to send frames that require ACK if the send window is below this value
  */
@@ -802,6 +804,10 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
 
     if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
         goto Exit;
+    if (space->ack_queue.num_ranges > QUICLY_ACK_QUEUE_MAX_SIZE) {
+        assert(space->ack_queue.num_ranges == QUICLY_ACK_QUEUE_MAX_SIZE + 1);
+        quicly_ranges_shrink(&space->ack_queue, 0, 1);
+    }
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1) {
         /* FIXME implement deduplication at an earlier moment? */
         space->largest_pn_received_at = now;
