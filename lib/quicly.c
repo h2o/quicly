@@ -2809,7 +2809,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                 /* piggyback an ack if a packet is under construction.
                  * TODO: This may cause a second packet to be emitted. Check for packet size before piggybacking ack.
                  */
-                if (conn->application->cipher.egress_1rtt.aead != NULL &&
+                if (conn->application->cipher.egress_1rtt.aead != NULL && conn->application->super.unacked_count != 0 &&
                     (ret = send_ack(conn, &conn->application->super, &s)) != 0)
                     goto Exit;
             }
