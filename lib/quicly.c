@@ -64,8 +64,6 @@
 #define QUICLY_EPOCH_HANDSHAKE 2
 #define QUICLY_EPOCH_1RTT 3
 
-#define QUICLY_ACK_QUEUE_MAX_SIZE 100
-
 /**
  * do not try to send frames that require ACK if the send window is below this value
  */
@@ -804,8 +802,8 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
 
     if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
         goto Exit;
-    if (space->ack_queue.num_ranges > QUICLY_ACK_QUEUE_MAX_SIZE) {
-        assert(space->ack_queue.num_ranges == QUICLY_ACK_QUEUE_MAX_SIZE + 1);
+    if (space->ack_queue.num_ranges >= QUICLY_ENCODE_ACK_MAX_BLOCKS) {
+        assert(space->ack_queue.num_ranges == QUICLY_ENCODE_ACK_MAX_BLOCKS);
         quicly_ranges_shrink(&space->ack_queue, 0, 1);
     }
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1) {
@@ -2125,16 +2123,13 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
 
 static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, struct st_quicly_send_context_t *s)
 {
-    size_t range_index;
-    uint64_t largest_pn;
     uint64_t ack_delay;
     int ret;
 
     if (space->ack_queue.num_ranges == 0)
         return 0;
 
-    range_index = space->ack_queue.num_ranges - 1;
-    largest_pn = space->ack_queue.ranges[range_index].end - 1;
+    /* calc ack_delay */
     if (space->largest_pn_received_at < now) {
         /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_ACK_DELAY_EXPONENT is 10. It's considered a non-issue
          * because our time measurement is at millisecond granurality anyways. */
@@ -2142,21 +2137,31 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
     } else {
         ack_delay = 0;
     }
-    do {
-        if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
+
+    /* emit ack frame */
+Emit:
+    if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
+        return ret;
+    uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end - 1,
+                                               ack_delay, &space->ack_queue);
+    if (new_dst == NULL) {
+        /* no space, retry with new MTU-sized packet */
+        if ((ret = commit_send_packet(conn, s, 0)) != 0)
             return ret;
-        size_t range = range_index;
-        /* emit ACK frame (for range [range..range_index]) */
-        s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, largest_pn, ack_delay, &space->ack_queue, &range_index);
-        /* save what's inflight */
-        for (; range != range_index; --range) {
+        goto Emit;
+    }
+    s->dst = new_dst;
+
+    { /* save what's inflight */
+        size_t i;
+        for (i = 0; i != space->ack_queue.num_ranges; ++i) {
             quicly_ack_t *ack;
             if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_ack, *s->target.ack_epoch,
                                             0)) == NULL)
                 return PTLS_ERROR_NO_MEMORY;
-            ack->data.ack.range = space->ack_queue.ranges[range];
+            ack->data.ack.range = space->ack_queue.ranges[i];
         }
-    } while (range_index != SIZE_MAX);
+    }
 
     space->send_ack_at = INT64_MAX;
     space->unacked_count = 0;

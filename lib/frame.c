@@ -31,31 +31,67 @@ uint8_t *quicly_encode_path_challenge_frame(uint8_t *dst, int is_response, const
     return dst;
 }
 
-uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t largest_pn, uint64_t ack_delay, quicly_ranges_t *ranges,
-                                 size_t *range_index)
+uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t largest_pn, uint64_t ack_delay, quicly_ranges_t *ranges)
 {
-    uint8_t num_blocks = 0, *num_blocks_at;
+#define WRITE_BLOCK()                                                                                                              \
+    do {                                                                                                                           \
+        assert(start != end);                                                                                                      \
+        if (dst_end - dst < 8)                                                                                                     \
+            return NULL;                                                                                                           \
+        dst = quicly_encodev(dst, end - start - 1);                                                                                \
+    } while (0)
+
+    uint8_t num_gaps = 0, *num_gaps_at;
+    size_t range_index = ranges->num_ranges - 1;
+    uint64_t start, end;
+
+    assert(ranges->num_ranges != 0);
+    assert(ranges->num_ranges < 63 || !"too many ACK blocks to use one-byte block count");
 
     *dst++ = QUICLY_FRAME_TYPE_ACK;
-    dst = quicly_encodev(dst, largest_pn);                    /* largest acknowledged */
-    dst = quicly_encodev(dst, ack_delay);                     /* ack delay */
-    num_blocks_at = dst++;                                    /* slot for num_blocks */
-    if (largest_pn == ranges->ranges[*range_index].end - 1) { /* first ack block */
-        dst = quicly_encodev(dst, ranges->ranges[*range_index].end - ranges->ranges[*range_index].start - 1);
-        --*range_index;
+    dst = quicly_encodev(dst, largest_pn); /* largest acknowledged */
+    dst = quicly_encodev(dst, ack_delay);  /* ack delay */
+    num_gaps_at = dst++;                   /* slot for num_blocks */
+
+    /* determine the range to write first (as well as adjusting range_index) */
+    if (ranges->ranges[range_index].end - 1 != largest_pn) {
+        /* special case where largest_pn is greater than the cumulative ACK range we have now; this can happen when the endpoint
+         * receives packets out-of-order and when there's also ACK-loss. */
+        assert(ranges->ranges[range_index].end <= largest_pn);
+        if (ranges->ranges[range_index].end == largest_pn) {
+            start = ranges->ranges[range_index].start;
+            end = largest_pn + 1;
+        } else {
+            start = largest_pn;
+            end = largest_pn + 1;
+            ++range_index;
+        }
     } else {
-        dst = quicly_encodev(dst, 0);
+        start = ranges->ranges[range_index].start;
+        end = ranges->ranges[range_index].end;
     }
 
-    while (*range_index != SIZE_MAX && dst_end - dst >= 16 && num_blocks < 63) {
-        dst = quicly_encodev(dst, ranges->ranges[*range_index + 1].start - ranges->ranges[*range_index].end - 1); /* gap */
-        dst = quicly_encodev(dst, ranges->ranges[*range_index].end - ranges->ranges[*range_index].start - 1);     /* ack block */
-        --*range_index;
-        ++num_blocks;
+    /* first ACK block */
+    WRITE_BLOCK();
+
+    /* ack blocks */
+    while (range_index != 0) {
+        --range_index;
+        /* write gap */
+        end = start;
+        start = ranges->ranges[range_index].end;
+        WRITE_BLOCK();
+        ++num_gaps;
+        /* write ACK block */
+        end = start;
+        start = ranges->ranges[range_index].start;
+        WRITE_BLOCK();
     }
 
-    *num_blocks_at = num_blocks;
+    *num_gaps_at = num_gaps;
     return dst;
+
+#undef WRITE_BLOCK
 }
 
 int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame, int is_ack_ecn)
