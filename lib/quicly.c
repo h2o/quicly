@@ -2142,8 +2142,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
 Emit:
     if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
         return ret;
-    uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end - 1,
-                                               ack_delay, &space->ack_queue);
+    uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, ack_delay);
     if (new_dst == NULL) {
         /* no space, retry with new MTU-sized packet */
         if ((ret = commit_send_packet(conn, s, 0)) != 0)

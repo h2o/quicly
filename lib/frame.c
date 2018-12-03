@@ -31,64 +31,33 @@ uint8_t *quicly_encode_path_challenge_frame(uint8_t *dst, int is_response, const
     return dst;
 }
 
-uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t largest_pn, uint64_t ack_delay, quicly_ranges_t *ranges)
+uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t *ranges, uint64_t ack_delay)
 {
-#define WRITE_BLOCK()                                                                                                              \
+#define WRITE_BLOCK(start, end)                                                                                                    \
     do {                                                                                                                           \
-        assert(start != end);                                                                                                      \
+        uint64_t _start = (start), _end = (end);                                                                                   \
+        assert(_start < _end);                                                                                                     \
         if (dst_end - dst < 8)                                                                                                     \
             return NULL;                                                                                                           \
-        dst = quicly_encodev(dst, end - start - 1);                                                                                \
+        dst = quicly_encodev(dst, _end - _start - 1);                                                                              \
     } while (0)
 
-    uint8_t num_gaps = 0, *num_gaps_at;
     size_t range_index = ranges->num_ranges - 1;
-    uint64_t start, end;
 
     assert(ranges->num_ranges != 0);
-    assert(ranges->num_ranges < 63 || !"too many ACK blocks to use one-byte block count");
 
     *dst++ = QUICLY_FRAME_TYPE_ACK;
-    dst = quicly_encodev(dst, largest_pn); /* largest acknowledged */
-    dst = quicly_encodev(dst, ack_delay);  /* ack delay */
-    num_gaps_at = dst++;                   /* slot for num_blocks */
+    dst = quicly_encodev(dst, ranges->ranges[range_index].end - 1); /* largest acknowledged */
+    dst = quicly_encodev(dst, ack_delay);                           /* ack delay */
+    dst = quicly_encodev(dst, ranges->num_ranges - 1);              /* ack blocks */
 
-    /* determine the range to write first (as well as adjusting range_index) */
-    if (ranges->ranges[range_index].end - 1 != largest_pn) {
-        /* special case where largest_pn is greater than the cumulative ACK range we have now; this can happen when the endpoint
-         * receives packets out-of-order and when there's also ACK-loss. */
-        assert(ranges->ranges[range_index].end <= largest_pn);
-        if (ranges->ranges[range_index].end == largest_pn) {
-            start = ranges->ranges[range_index].start;
-            end = largest_pn + 1;
-        } else {
-            start = largest_pn;
-            end = largest_pn + 1;
-            ++range_index;
-        }
-    } else {
-        start = ranges->ranges[range_index].start;
-        end = ranges->ranges[range_index].end;
+    while (1) {
+        WRITE_BLOCK(ranges->ranges[range_index].start, ranges->ranges[range_index].end); /* ACK block count */
+        if (range_index-- == 0)
+            break;
+        WRITE_BLOCK(ranges->ranges[range_index].end, ranges->ranges[range_index + 1].start);
     }
 
-    /* first ACK block */
-    WRITE_BLOCK();
-
-    /* ack blocks */
-    while (range_index != 0) {
-        --range_index;
-        /* write gap */
-        end = start;
-        start = ranges->ranges[range_index].end;
-        WRITE_BLOCK();
-        ++num_gaps;
-        /* write ACK block */
-        end = start;
-        start = ranges->ranges[range_index].start;
-        WRITE_BLOCK();
-    }
-
-    *num_gaps_at = num_gaps;
     return dst;
 
 #undef WRITE_BLOCK
