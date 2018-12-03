@@ -2731,7 +2731,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if ((s.current.cipher = &conn->application->cipher.egress_1rtt)->aead != NULL) {
             s.current.first_byte = 0x30; /* short header, key-phase=0 */
             /* acks */
-            if (conn->application->super.send_ack_at <= now) {
+            if (conn->application->super.unacked_count != 0 || conn->application->super.send_ack_at <= now) {
                 if ((ret = send_ack(conn, &conn->application->super, &s)) != 0)
                     goto Exit;
             }
@@ -2810,15 +2810,6 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             /* send STREAM frames */
             if ((ret = send_stream_frames(conn, &s)) != 0)
                 goto Exit;
-            /* commit */
-            if (s.target.packet != NULL) {
-                /* piggyback an ack if a packet is under construction.
-                 * TODO: This may cause a second packet to be emitted. Check for packet size before piggybacking ack.
-                 */
-                if (conn->application->cipher.egress_1rtt.aead != NULL && conn->application->super.unacked_count != 0 &&
-                    (ret = send_ack(conn, &conn->application->super, &s)) != 0)
-                    goto Exit;
-            }
         }
     }
 
