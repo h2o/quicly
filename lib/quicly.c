@@ -115,10 +115,7 @@ struct st_quicly_pn_space_t {
     /**
      * time at when the largest pn in the ack_queue has been received (or INT64_MAX if none)
      */
-    struct {
-        uint64_t next_pn;
-        int64_t at;
-    } largest_pn_received;
+    int64_t largest_pn_received_at;
     /**
      *
      */
@@ -783,8 +780,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
         return NULL;
 
     quicly_ranges_init(&space->ack_queue);
-    space->largest_pn_received.next_pn = 0;
-    space->largest_pn_received.at = INT64_MAX;
+    space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->send_ack_at = INT64_MAX;
     space->unacked_count = 0;
@@ -810,9 +806,9 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
         assert(space->ack_queue.num_ranges == QUICLY_ENCODE_ACK_MAX_BLOCKS);
         quicly_ranges_shrink(&space->ack_queue, 0, 1);
     }
-    if (space->largest_pn_received.next_pn <= pn) {
-        space->largest_pn_received.next_pn = pn + 1;
-        space->largest_pn_received.at = now;
+    if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1) {
+        /* FIXME implement deduplication at an earlier moment? */
+        space->largest_pn_received_at = now;
     }
     /* TODO (jri): If not ack-only packet, then maintain count of such packets that are received.
      * Send ack immediately when this number exceeds the threshold.
@@ -1687,8 +1683,11 @@ static int on_ack_ack(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
         }
         if (space != NULL) {
             quicly_ranges_subtract(&space->ack_queue, ack->data.ack.range.start, ack->data.ack.range.end);
-            if (space->ack_queue.num_ranges == 0)
+            if (space->ack_queue.num_ranges == 0) {
+                space->largest_pn_received_at = INT64_MAX;
+                space->send_ack_at = INT64_MAX;
                 space->unacked_count = 0;
+            }
         }
     }
 
@@ -2131,10 +2130,10 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
         return 0;
 
     /* calc ack_delay */
-    if (space->largest_pn_received.at < now) {
+    if (space->largest_pn_received_at < now) {
         /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_ACK_DELAY_EXPONENT is 10. It's considered a non-issue
          * because our time measurement is at millisecond granurality anyways. */
-        ack_delay = ((now - space->largest_pn_received.at) * 1000) >> QUICLY_ACK_DELAY_EXPONENT;
+        ack_delay = ((now - space->largest_pn_received_at) * 1000) >> QUICLY_ACK_DELAY_EXPONENT;
     } else {
         ack_delay = 0;
     }
@@ -2143,8 +2142,8 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
 Emit:
     if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
         return ret;
-    uint8_t *new_dst =
-        quicly_encode_ack_frame(s->dst, s->dst_end, space->largest_pn_received.next_pn - 1, ack_delay, &space->ack_queue);
+    uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end - 1,
+                                               ack_delay, &space->ack_queue);
     if (new_dst == NULL) {
         /* no space, retry with new MTU-sized packet */
         if ((ret = commit_send_packet(conn, s, 0)) != 0)
