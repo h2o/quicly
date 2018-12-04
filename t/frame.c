@@ -95,29 +95,42 @@ static void test_ack_decode(void)
 static void test_ack_encode(void)
 {
     quicly_ranges_t ranges;
-    size_t range_index;
     uint8_t buf[256], *end;
     const uint8_t *src;
     quicly_ack_frame_t decoded;
 
     quicly_ranges_init(&ranges);
-    quicly_ranges_add(&ranges, 0x12, 0x13);
+    quicly_ranges_add(&ranges, 0x12, 0x14);
 
-    range_index = 0;
-    end = quicly_encode_ack_frame(buf, buf + sizeof(buf), ranges.ranges[ranges.num_ranges - 1].end - 1, 63, &ranges, &range_index);
+    /* encode */
+    end = quicly_encode_ack_frame(buf, buf + sizeof(buf), &ranges, 63);
     ok(end - buf == 5);
-
-    quicly_ranges_dispose(&ranges);
-
+    /* decode */
     src = buf + 1;
     ok(quicly_decode_ack_frame(&src, end, &decoded, 0) == 0);
     ok(src == end);
     ok(decoded.ack_delay == 63);
     ok(decoded.num_gaps == 0);
-    ok(decoded.largest_acknowledged == 0x12);
-    ok(decoded.ack_block_lengths[0] == 1);
+    ok(decoded.largest_acknowledged == 0x13);
+    ok(decoded.ack_block_lengths[0] == 2);
 
-    /* TODO add more */
+    quicly_ranges_add(&ranges, 0x10, 0x11);
+
+    /* encode */
+    end = quicly_encode_ack_frame(buf, buf + sizeof(buf), &ranges, 63);
+    ok(end - buf == 7);
+    /* decode */
+    src = buf + 1;
+    ok(quicly_decode_ack_frame(&src, end, &decoded, 0) == 0);
+    ok(src == end);
+    ok(decoded.ack_delay == 63);
+    ok(decoded.num_gaps == 1);
+    ok(decoded.largest_acknowledged == 0x13);
+    ok(decoded.ack_block_lengths[0] == 2);
+    ok(decoded.gaps[0] == 1);
+    ok(decoded.ack_block_lengths[1] == 1);
+
+    quicly_ranges_dispose(&ranges);
 }
 
 static void test_mozquic(void)

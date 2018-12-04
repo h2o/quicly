@@ -310,10 +310,6 @@ static void tiny_connection_window(void)
 
         ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL);
         ok(ret == 0);
-        ret = quicly_open_stream(client, &client_stream, 0);
-        ok(ret == 0);
-        for (i = 0; i < 16; ++i)
-            quicly_sendbuf_write(&client_stream->sendbuf, testdata, 1024, NULL);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);
         ok(ret == 0);
@@ -329,6 +325,11 @@ static void tiny_connection_window(void)
     transmit(server, client);
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
     ok(quicly_connection_is_ready(client));
+
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    for (i = 0; i < 16; ++i)
+        quicly_sendbuf_write(&client_stream->sendbuf, testdata, 1024, NULL);
 
     transmit(client, server);
 

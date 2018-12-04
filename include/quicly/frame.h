@@ -196,8 +196,8 @@ typedef struct st_quicly_stop_sending_frame_t {
 
 static int quicly_decode_stop_sending_frame(const uint8_t **src, const uint8_t *end, quicly_stop_sending_frame_t *frame);
 
-uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t largest_pn, uint64_t ack_delay, quicly_ranges_t *ranges,
-                                 size_t *range_index);
+#define QUICLY_ENCODE_ACK_MAX_BLOCKS 63 /* exclusive, see encode_ack_frame */
+uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t *ranges, uint64_t ack_delay);
 
 typedef struct st_quicly_ack_frame_t {
     uint64_t largest_acknowledged;

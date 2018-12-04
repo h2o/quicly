@@ -51,7 +51,7 @@ void test_ack(void)
     for (at = 0; at < 10; ++at)
         for (i = 1; i <= 5; ++i)
             for (j = 0; j < 3; ++j)
-                quicly_acks_allocate(&acks, at * 5 + i, at, on_acked, 0);
+                quicly_acks_allocate(&acks, at * 5 + i, at, on_acked, 0, 1);
 
     /* check all acks */
     quicly_acks_iter_t iter;

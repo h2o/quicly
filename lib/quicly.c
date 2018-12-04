@@ -55,6 +55,9 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI 8
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE 10
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI 11
+#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY 12
+
+#define QUICLY_ACK_DELAY_EXPONENT 10
 
 #define QUICLY_EPOCH_INITIAL 0
 #define QUICLY_EPOCH_0RTT 1
@@ -314,7 +317,8 @@ const quicly_context_t quicly_default_context = {
     {0, NULL}, /* event_log */
 };
 
-static const quicly_transport_parameters_t transport_params_before_handshake = {{16384, 16384, 16384}, 16384, 10, 60};
+static const quicly_transport_parameters_t transport_params_before_handshake = {
+    {0, 0, 0}, 0, 0, 0, 0, 3, QUICLY_DELAYED_ACK_TIMEOUT};
 
 static __thread int64_t now;
 
@@ -798,6 +802,10 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
 
     if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
         goto Exit;
+    if (space->ack_queue.num_ranges >= QUICLY_ENCODE_ACK_MAX_BLOCKS) {
+        assert(space->ack_queue.num_ranges == QUICLY_ENCODE_ACK_MAX_BLOCKS);
+        quicly_ranges_shrink(&space->ack_queue, 0, 1);
+    }
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1) {
         /* FIXME implement deduplication at an earlier moment? */
         space->largest_pn_received_at = now;
@@ -1120,6 +1128,8 @@ static int encode_transport_parameter_list(quicly_context_t *ctx, ptls_buffer_t 
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
                                      { ptls_buffer_push16(buf, ctx->max_streams_uni); });
         }
+        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT,
+                                 { ptls_buffer_push(buf, QUICLY_ACK_DELAY_EXPONENT); });
     });
     ret = 0;
 Exit:
@@ -1194,7 +1204,17 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
                         ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
                         goto Exit;
                     }
-                    params->ack_delay_exponent = *src++;
+                    if ((params->ack_delay_exponent = *src++) > 20) {
+                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
+                        goto Exit;
+                    }
+                    break;
+                case QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY:
+                    if (src == end) {
+                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
+                        goto Exit;
+                    }
+                    params->max_ack_delay = *src++;
                     break;
                 default:
                     src = end;
@@ -1282,7 +1302,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     }
     quicly_acks_init(&conn->_.egress.acks);
     quicly_loss_init(&conn->_.egress.loss, conn->_.super.ctx->loss,
-                     conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */);
+                     conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
+                     &conn->_.super.peer.transport_params.max_ack_delay);
     init_max_stream_id(&conn->_.egress.max_stream_id.uni);
     init_max_stream_id(&conn->_.egress.max_stream_id.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
@@ -1640,6 +1661,39 @@ Exit:
     return ret;
 }
 
+static int on_ack_ack(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+{
+    /* TODO log */
+
+    if (acked) {
+        /* find the pn space */
+        struct st_quicly_pn_space_t *space;
+        switch (ack->ack_epoch) {
+        case QUICLY_EPOCH_INITIAL:
+            space = &conn->initial->super;
+            break;
+        case QUICLY_EPOCH_HANDSHAKE:
+            space = &conn->handshake->super;
+            break;
+        case QUICLY_EPOCH_1RTT:
+            space = &conn->application->super;
+            break;
+        default:
+            assert(!"FIXME");
+        }
+        if (space != NULL) {
+            quicly_ranges_subtract(&space->ack_queue, ack->data.ack.range.start, ack->data.ack.range.end);
+            if (space->ack_queue.num_ranges == 0) {
+                space->largest_pn_received_at = INT64_MAX;
+                space->send_ack_at = INT64_MAX;
+                space->unacked_count = 0;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
 {
     quicly_stream_t *stream;
@@ -1886,7 +1940,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     if (s->target.to_be_acked) {
         size_t packet_size = s->dst - s->target.first_byte_at;
         quicly_ack_t *ack;
-        if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_cc, *s->target.ack_epoch)) ==
+        if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_cc, *s->target.ack_epoch, 1)) ==
             NULL)
             return PTLS_ERROR_NO_MEMORY;
         ack->data.cc.bytes_in_flight = packet_size;
@@ -2060,7 +2114,7 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
 
     if ((ret = _do_prepare_packet(conn, s, min_space, 1)) != 0)
         return ret;
-    if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, ack_cb, *s->target.ack_epoch)) == NULL)
+    if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, ack_cb, *s->target.ack_epoch, 1)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     /* TODO return the remaining window that the sender can use */
@@ -2069,32 +2123,48 @@ static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_conte
 
 static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, struct st_quicly_send_context_t *s)
 {
-    size_t range_index;
-    uint64_t largest_pn;
     uint64_t ack_delay;
     int ret;
 
     if (space->ack_queue.num_ranges == 0)
         return 0;
 
-    range_index = space->ack_queue.num_ranges - 1;
-    largest_pn = space->ack_queue.ranges[range_index].end - 1;
+    /* calc ack_delay */
     if (space->largest_pn_received_at < now) {
-        /* FIXME use a bigger exponent considering that our timer is in milliseconds? */
-        ack_delay = ((now - space->largest_pn_received_at) * 1000) >> 3;
+        /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_ACK_DELAY_EXPONENT is 10. It's considered a non-issue
+         * because our time measurement is at millisecond granurality anyways. */
+        ack_delay = ((now - space->largest_pn_received_at) * 1000) >> QUICLY_ACK_DELAY_EXPONENT;
     } else {
         ack_delay = 0;
     }
-    do {
-        if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
-            break;
-        s->dst = quicly_encode_ack_frame(s->dst, s->dst_end, largest_pn, ack_delay, &space->ack_queue, &range_index);
-    } while (range_index != SIZE_MAX);
 
-    quicly_ranges_clear(&space->ack_queue);
-    space->largest_pn_received_at = INT64_MAX;
+    /* emit ack frame */
+Emit:
+    if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
+        return ret;
+    uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, ack_delay);
+    if (new_dst == NULL) {
+        /* no space, retry with new MTU-sized packet */
+        if ((ret = commit_send_packet(conn, s, 0)) != 0)
+            return ret;
+        goto Emit;
+    }
+    s->dst = new_dst;
+
+    { /* save what's inflight */
+        size_t i;
+        for (i = 0; i != space->ack_queue.num_ranges; ++i) {
+            quicly_ack_t *ack;
+            if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_ack, *s->target.ack_epoch,
+                                            0)) == NULL)
+                return PTLS_ERROR_NO_MEMORY;
+            ack->data.ack.range = space->ack_queue.ranges[i];
+        }
+    }
+
     space->send_ack_at = INT64_MAX;
     space->unacked_count = 0;
+
     return ret;
 }
 
@@ -2253,7 +2323,7 @@ static void init_acks_iter(quicly_conn_t *conn, quicly_acks_iter_t *iter)
 {
     /* TODO find a better threshold */
     int64_t retire_before = now - ((conn->egress.loss.rtt.smoothed + conn->egress.loss.rtt.variance) * 4 +
-                                   conn->egress.loss.rtt.max_ack_delay + QUICLY_DELAYED_ACK_TIMEOUT);
+                                   conn->super.peer.transport_params.max_ack_delay + QUICLY_DELAYED_ACK_TIMEOUT);
     quicly_ack_t *ack;
 
     quicly_acks_init_iter(&conn->egress.acks, iter);
@@ -2375,15 +2445,24 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     }
 
     /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
-    if (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX && ack->is_alive)
-        *loss_time = ack->sent_at + delay_until_lost;
+    while (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX) {
+        if (ack->is_alive) {
+            *loss_time = ack->sent_at + delay_until_lost;
+            break;
+        } else if (ack->acked != on_ack_ack) {
+            break;
+        }
+        quicly_acks_next(&iter);
+        ack = quicly_acks_get(&iter);
+    }
 
     return 0;
 }
 
 static void update_loss_alarm(quicly_conn_t *conn)
 {
-    quicly_loss_update_alarm(&conn->egress.loss, conn->egress.last_retransmittable_sent_at, conn->egress.acks.num_in_flight != 0);
+    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
+                             conn->egress.acks.num_in_flight != 0);
 }
 
 static void open_id_blocked_streams(quicly_conn_t *conn, int uni)
@@ -2651,7 +2730,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if ((s.current.cipher = &conn->application->cipher.egress_1rtt)->aead != NULL) {
             s.current.first_byte = 0x30; /* short header, key-phase=0 */
             /* acks */
-            if (conn->application->super.send_ack_at <= now) {
+            if (conn->application->super.unacked_count != 0 || conn->application->super.send_ack_at <= now) {
                 if ((ret = send_ack(conn, &conn->application->super, &s)) != 0)
                     goto Exit;
             }
@@ -2730,15 +2809,6 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             /* send STREAM frames */
             if ((ret = send_stream_frames(conn, &s)) != 0)
                 goto Exit;
-            /* commit */
-            if (s.target.packet != NULL) {
-                /* piggyback an ack if a packet is under construction.
-                 * TODO: This may cause a second packet to be emitted. Check for packet size before piggybacking ack.
-                 */
-                if (conn->application->cipher.egress_1rtt.aead != NULL &&
-                    (ret = send_ack(conn, &conn->application->super, &s)) != 0)
-                    goto Exit;
-            }
         }
     }
 
@@ -2856,6 +2926,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         uint64_t packet_number;
         int64_t sent_at;
     } largest_newly_acked = {UINT64_MAX, INT64_MAX};
+    uint64_t smallest_newly_acked = UINT64_MAX;
     int ret;
 
     if (epoch == 1)
@@ -2880,6 +2951,8 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                     if (apply) {
                         largest_newly_acked.packet_number = packet_number;
                         largest_newly_acked.sent_at = ack->sent_at;
+                        if (smallest_newly_acked == UINT64_MAX)
+                            smallest_newly_acked = packet_number;
                     }
                     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_ACKED, INT_EVENT_ATTR(PACKET_NUMBER, packet_number),
                                          INT_EVENT_ATTR(NEWLY_ACKED, apply));
@@ -2918,13 +2991,16 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
     /* OnPacketAckedCC */
     uint32_t cc_type = 0;
-    /* TODO (jri): this function should be called for every packet newly acked. */
-    if (quicly_loss_on_packet_acked(&conn->egress.loss, frame->largest_acknowledged)) {
-        cc_type = CC_RTO;
-        conn->egress.cc.in_first_rto = 0;
-    } else if (conn->egress.cc.in_first_rto) {
-        cc_type = CC_RTO_ERR;
-        conn->egress.cc.in_first_rto = 0;
+    /* TODO (jri): this function should be called for every packet newly acked. (kazuho) I do not think so;
+     * quicly_loss_on_packet_acked is NOT OnPacketAcked */
+    if (smallest_newly_acked != UINT64_MAX) {
+        if (quicly_loss_on_packet_acked(&conn->egress.loss, smallest_newly_acked)) {
+            cc_type = CC_RTO;
+            conn->egress.cc.in_first_rto = 0;
+        } else if (conn->egress.cc.in_first_rto) {
+            cc_type = CC_RTO_ERR;
+            conn->egress.cc.in_first_rto = 0;
+        }
     }
     if (cc_type != 0)
         cc_cong_signal(&conn->egress.cc.ccv, cc_type, bytes_in_flight);

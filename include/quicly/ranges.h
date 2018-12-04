@@ -26,15 +26,15 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-struct st_quicly_range_t {
+typedef struct st_quicly_range_t {
     uint64_t start;
     uint64_t end; /* non-inclusive */
-};
+} quicly_range_t;
 
 typedef struct st_quicly_ranges_t {
-    struct st_quicly_range_t *ranges;
+    quicly_range_t *ranges;
     size_t num_ranges, capacity;
-    struct st_quicly_range_t _initial;
+    quicly_range_t _initial;
 } quicly_ranges_t;
 
 static void quicly_ranges_init(quicly_ranges_t *ranges);

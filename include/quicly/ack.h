@@ -41,6 +41,9 @@ struct st_quicly_ack_t {
     uint8_t is_alive : 1;
     union {
         struct {
+            quicly_range_t range;
+        } ack;
+        struct {
             quicly_stream_id_t stream_id;
             quicly_sendbuf_ackargs_t args;
         } stream;
@@ -94,7 +97,7 @@ extern const quicly_ack_t quicly_acks__end_iter;
 static void quicly_acks_init(quicly_acks_t *acks);
 void quicly_acks_dispose(quicly_acks_t *acks);
 static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked,
-                                          uint8_t ack_epoch);
+                                          uint8_t ack_epoch, int is_inflight);
 static int quicly_acks_is_empty(quicly_acks_t *acks);
 static quicly_ack_t *quicly_acks_get_tail(quicly_acks_t *acks);
 struct st_quicly_ack_block_t *quicly_acks__new_block(quicly_acks_t *acks);
@@ -114,7 +117,7 @@ inline void quicly_acks_init(quicly_acks_t *acks)
 }
 
 inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked,
-                                          uint8_t ack_epoch)
+                                          uint8_t ack_epoch, int is_inflight)
 {
     struct st_quicly_ack_block_t *block;
 
@@ -130,8 +133,12 @@ inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_n
     ack->sent_at = now;
     ack->acked = acked;
     ack->ack_epoch = ack_epoch;
-    ack->is_alive = 1;
-    ++acks->num_in_flight;
+    if (is_inflight) {
+        ack->is_alive = 1;
+        ++acks->num_in_flight;
+    } else {
+        ack->is_alive = 0;
+    }
 
     return ack;
 }
@@ -150,10 +157,10 @@ inline int quicly_acks_on_ack(quicly_acks_t *acks, int is_acked, quicly_ack_t *a
 {
     int ret;
 
-    assert(ack->is_alive || is_acked);
-
-    if ((ret = ack->acked(conn, is_acked, ack)) != 0)
-        return ret;
+    if (ack->is_alive || is_acked) {
+        if ((ret = ack->acked(conn, is_acked, ack)) != 0)
+            return ret;
+    }
 
     if (ack->is_alive) {
         ack->is_alive = 0;
