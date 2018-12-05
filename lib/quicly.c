@@ -2359,6 +2359,8 @@ int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch)
     return ret;
 }
 
+/* Determine frames to be retransmitted on TLP and RTO.
+ */
 static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
 {
     quicly_acks_iter_t iter;
