@@ -227,7 +227,7 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked
 {
     if (r->largest_acked_packet < largest_acked)
         r->largest_acked_packet = largest_acked;
-    if (latest_rtt != UINT32_MAX)
+    if (latest_rtt != UINT32_MAX && !is_ack_only)
         quicly_rtt_update(&r->rtt, latest_rtt, ack_delay);
 }
 

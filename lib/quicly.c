@@ -2945,25 +2945,32 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         if (block_length != 0) {
             while (quicly_acks_get(&iter)->packet_number < packet_number)
                 quicly_acks_next(&iter);
-            do {
+            do {  /* process all acks in ack block */
                 quicly_ack_t *ack;
                 if ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
                     ++conn->super.num_packets.ack_received;
-                    int apply = epoch == ack->ack_epoch;
-                    if (apply) {
-                        largest_newly_acked.packet_number = packet_number;
-                        largest_newly_acked.sent_at = ack->sent_at;
-                        if (smallest_newly_acked == UINT64_MAX)
-                            smallest_newly_acked = packet_number;
+                    /* If the epoch of the ACK frame does not match the epoch of
+                     * the acked packet, close the connection with error, with
+                     * one exception. If the ACK frame was encrypted with
+                     * Initial keys, this could have been injected. Ignore in
+                     * this case for now (See #47.)  */
+                    if (epoch != ack->ack_epoch) {
+                        LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_ACKED, INT_EVENT_ATTR(PACKET_NUMBER, packet_number),
+                                             INT_EVENT_ATTR(NEWLY_ACKED, 0));
+                        return (ack->ack_epoch == QUICLY_EPOCH_INITIAL) ? 0 : QUICLY_ERROR_PROTOCOL_VIOLATION;
                     }
+
+                    largest_newly_acked.packet_number = packet_number;
+                    largest_newly_acked.sent_at = ack->sent_at;
+                    if (smallest_newly_acked == UINT64_MAX)
+                        smallest_newly_acked = packet_number;
+
                     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_ACKED, INT_EVENT_ATTR(PACKET_NUMBER, packet_number),
-                                         INT_EVENT_ATTR(NEWLY_ACKED, apply));
-                    do {
-                        if (apply) {
-                            if ((ret = quicly_acks_on_ack(&conn->egress.acks, 1, ack, conn)) != 0)
-                                return ret;
-                            quicly_acks_release(&conn->egress.acks, &iter);
-                        }
+                                         INT_EVENT_ATTR(NEWLY_ACKED, 1));
+                    do {  /* process all frames in the acked packet */
+                        if ((ret = quicly_acks_on_ack(&conn->egress.acks, 1, ack, conn)) != 0)
+                            return ret;
+                        quicly_acks_release(&conn->egress.acks, &iter);
                         quicly_acks_next(&iter);
                     } while ((ack = quicly_acks_get(&iter))->packet_number == packet_number);
                 }
