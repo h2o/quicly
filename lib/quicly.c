@@ -2989,8 +2989,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         }
     }
     quicly_loss_on_ack_received(
-        &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay,
-        0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
+        &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay, conn->egress.cc.this_ack.nsegs == 0);
     /* OnPacketAckedCC */
     uint32_t cc_type = 0;
     /* TODO (jri): this function should be called for every packet newly acked. (kazuho) I do not think so;
