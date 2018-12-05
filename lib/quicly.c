@@ -2985,7 +2985,8 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         int64_t t = now - largest_newly_acked.sent_at;
         if (0 <= t && t < 100000) { /* ignore RTT above 100 seconds */
             latest_rtt = (uint32_t)t;
-            ack_delay = (uint32_t)(((frame->ack_delay << (conn->super.peer.transport_params.ack_delay_exponent + 1)) + 1) / 2000);
+            uint64_t ack_delay_microsecs = frame->ack_delay << conn->super.peer.transport_params.ack_delay_exponent;
+            ack_delay = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
         }
     }
     quicly_loss_on_ack_received(
