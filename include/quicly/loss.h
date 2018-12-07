@@ -172,7 +172,10 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t _latest_rtt, uint32_t 
 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint8_t *max_ack_delay)
 {
-    *r = (quicly_loss_t){.conf = conf, .max_ack_delay = max_ack_delay, .loss_time = INT64_MAX, .alarm_at = INT64_MAX};
+    *r = (quicly_loss_t){.conf = conf, .max_ack_delay = max_ack_delay,
+        .tlp_count = 0, .rto_count = 0, .largest_sent_before_rto = 0,
+        .time_of_last_packet_sent = 0, .largest_acked_packet = 0, .loss_time = INT64_MAX,
+        .alarm_at = INT64_MAX}; quicly_rtt_init(&r->rtt, conf, initial_rtt);
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
 }
 
