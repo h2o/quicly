@@ -352,6 +352,10 @@ struct st_quicly_stream_t {
      */
     quicly_stream_id_t stream_id;
     /**
+     * host cid
+     */
+    quicly_cid_t *host_cid;
+    /**
      * send buffer
      */
     quicly_sendbuf_t sendbuf;
