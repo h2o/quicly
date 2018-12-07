@@ -1614,7 +1614,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     /* TODO let the app set host cid after successful return from quicly_accept / quicly_connect */
     ctx->tls->random_bytes(conn->super.host.cid.cid, 8);
     conn->super.host.cid.len = 8;
-    set_cid(&conn->super.host.offered_cid, packet->cid.dest);
+    set_cid(&conn->super.host.cid, packet->cid.dest);
     if ((ret = setup_handshake_space_and_flow(conn, 0)) != 0)
         goto Exit;
     conn->initial->cipher.ingress = ingress_cipher;
