@@ -8,6 +8,8 @@ IF (OPENSSL_FOUND AND (OPENSSL_VERSION VERSION_LESS "1.0.2"))
     MESSAGE(FATAL "OpenSSL 1.0.2 or above is missing")
 ENDIF ()
 
+add_compile_options(-fPIC)
+
 SET(CMAKE_C_FLAGS "-std=c99 -Wall -O2 -g ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
 INCLUDE_DIRECTORIES(${OPENSSL_INCLUDE_DIR} deps/dcc deps/klib deps/picotls/include deps/picotest include)
 
