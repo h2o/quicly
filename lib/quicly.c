@@ -694,7 +694,7 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint64_t stream_id, uin
         return NULL;
     stream->conn = conn;
     stream->stream_id = stream_id;
-    stream->host_cid = &(conn->super.host.cid);
+    stream->host_cid = &conn->super.host.cid;
 
     int r;
     khiter_t iter = kh_put(quicly_stream_t, conn->streams, stream_id, &r);
