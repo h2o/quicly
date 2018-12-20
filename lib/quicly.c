@@ -3975,6 +3975,7 @@ void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, c
             continue;
         EMIT(", \"");
         EMIT(quicly_event_attribute_names[attr->type]);
+        /* Based on event type, interpret and emit correct things here. For quic trace (EVENT_QUICTRACE*). */
         if (QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MIN <= attr->type && attr->type < QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX) {
             char int64buf[sizeof("-9223372036854775808")];
             sprintf(int64buf, "\":%" PRId64, attr->value.i);
