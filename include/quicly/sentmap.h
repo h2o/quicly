@@ -37,8 +37,8 @@ struct st_quicly_sent_t {
     uint64_t packet_number;
     int64_t sent_at;
     quicly_sent_acked_cb acked;
-    uint8_t ack_epoch; /* epoch to be acked in */
-    uint8_t is_alive : 1;
+    uint8_t ack_epoch;        /* epoch to be acked in */
+    uint8_t is_in_flight : 1; /* if the entry is in-flight (ack-eliciting entry that has not yet been deemed lost) */
     union {
         struct {
             quicly_range_t range;
@@ -81,7 +81,7 @@ typedef struct st_quicly_sentmap_t {
      */
     struct st_quicly_sent_block_t *head, *tail;
     /**
-     * number of packets considered in flight
+     * number of entries with `quicly_sent_t::is_in_flight` flag set to true
      */
     size_t num_in_flight;
 } quicly_sentmap_t;
@@ -134,10 +134,10 @@ inline quicly_sent_t *quicly_sentmap_allocate(quicly_sentmap_t *map, uint64_t pa
     sent->acked = acked;
     sent->ack_epoch = ack_epoch;
     if (is_inflight) {
-        sent->is_alive = 1;
+        sent->is_in_flight = 1;
         ++map->num_in_flight;
     } else {
-        sent->is_alive = 0;
+        sent->is_in_flight = 0;
     }
 
     return sent;
@@ -157,13 +157,13 @@ inline int quicly_sentmap_on_ack(quicly_sentmap_t *map, int is_acked, quicly_sen
 {
     int ret;
 
-    if (sent->is_alive || is_acked) {
+    if (sent->is_in_flight || is_acked) {
         if ((ret = sent->acked(conn, is_acked, sent)) != 0)
             return ret;
     }
 
-    if (sent->is_alive) {
-        sent->is_alive = 0;
+    if (sent->is_in_flight) {
+        sent->is_in_flight = 0;
         --map->num_in_flight;
     }
     return 0;
@@ -208,7 +208,7 @@ inline void quicly_sentmap_next(quicly_sentmap_iter_t *iter)
 inline void quicly_sentmap_release(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter)
 {
     assert(iter->p->acked != NULL);
-    assert(!iter->p->is_alive);
+    assert(!iter->p->is_in_flight);
     iter->p->acked = NULL;
 
     struct st_quicly_sent_block_t *block = *iter->ref;

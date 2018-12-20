@@ -1708,7 +1708,7 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
         return 0;
 
     if (acked) {
-        if ((ret = quicly_sendbuf_acked(&stream->sendbuf, &sent->data.stream.args, sent->is_alive)) != 0)
+        if ((ret = quicly_sendbuf_acked(&stream->sendbuf, &sent->data.stream.args, sent->is_in_flight)) != 0)
             return ret;
         if (quicly_stream_is_closable(stream) && (ret = stream->on_update(stream)) != 0)
             return ret;
@@ -1822,7 +1822,7 @@ static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_sent_
 
 static int on_ack_cc(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
-    if (sent->is_alive) {
+    if (sent->is_in_flight) {
         conn->egress.cc.this_ack.nsegs += 1;
         conn->egress.cc.this_ack.nbytes += sent->data.cc.bytes_in_flight;
     }
@@ -2330,7 +2330,7 @@ static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
 
     quicly_sentmap_init_iter(&conn->egress.sentmap, iter);
 
-    while ((sent = quicly_sentmap_get(iter))->sent_at < retire_before && !sent->is_alive) {
+    while ((sent = quicly_sentmap_get(iter))->sent_at < retire_before && !sent->is_in_flight) {
         quicly_sentmap_release(&conn->egress.sentmap, iter);
         quicly_sentmap_next(iter);
     }
@@ -2423,7 +2423,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
      * to be marked as lost according to the early retransmit timer.
      */
     while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_pn && sent->sent_at <= sent_before) {
-        if (sent->is_alive && conn->egress.max_lost_pn <= sent->packet_number) {
+        if (sent->is_in_flight && conn->egress.max_lost_pn <= sent->packet_number) {
             if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = sent->packet_number;
@@ -2450,7 +2450,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
 
     /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
     while (sent->packet_number < largest_pn && sent->sent_at != INT64_MAX) {
-        if (sent->is_alive) {
+        if (sent->is_in_flight) {
             *loss_time = sent->sent_at + delay_until_lost;
             break;
         } else if (sent->acked != on_ack_ack) {
