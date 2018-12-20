@@ -178,7 +178,7 @@ inline void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter)
             ;
         iter->count = acks->head->alive;
     } else {
-        iter->p = (void *)&quicly_acks__end_iter;
+        iter->p = (quicly_ack_t *)&quicly_acks__end_iter;
         iter->count = 0;
     }
 }
@@ -193,7 +193,7 @@ inline void quicly_acks_next(quicly_acks_iter_t *iter)
     if (--iter->count != 0) {
         ++iter->p;
     } else if (*(iter->ref = &(*iter->ref)->next) == NULL) {
-        iter->p = (void *)&quicly_acks__end_iter;
+        iter->p = (quicly_ack_t *)&quicly_acks__end_iter;
         iter->count = 0;
         return;
     } else {
