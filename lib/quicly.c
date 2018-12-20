@@ -200,7 +200,7 @@ struct st_quicly_conn_t {
         /**
          * contains actions that needs to be performed when an ack is being received
          */
-        quicly_acks_t acks;
+        quicly_sentmap_t sentmap;
         /**
          * all packets where pn < max_lost_pn are deemed lost
          */
@@ -455,7 +455,7 @@ uint64_t quicly_determine_packet_number(uint32_t bits, uint32_t mask, uint64_t n
 
 static void assert_consistency(quicly_conn_t *conn, int run_timers)
 {
-    if (conn->egress.acks.num_in_flight != 0) {
+    if (conn->egress.sentmap.num_in_flight != 0) {
         assert(conn->egress.loss.alarm_at != INT64_MAX);
     } else {
         assert(conn->egress.loss.loss_time == INT64_MAX);
@@ -945,7 +945,7 @@ void quicly_free(quicly_conn_t *conn)
         free(pending);
     }
     cc_destroy(&conn->egress.cc.ccv);
-    quicly_acks_dispose(&conn->egress.acks);
+    quicly_sentmap_dispose(&conn->egress.sentmap);
 
     kh_foreach_value(conn->streams, stream, { destroy_stream(stream); });
     kh_destroy(quicly_stream_t, conn->streams);
@@ -1300,7 +1300,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         quicly_maxsender_init(conn->_.ingress.max_stream_id.bidi,
                               conn->_.super.ctx->max_streams_bidi * 4 - 4 + conn->_.super.peer.bidi.next_stream_id);
     }
-    quicly_acks_init(&conn->_.egress.acks);
+    quicly_sentmap_init(&conn->_.egress.sentmap);
     quicly_loss_init(&conn->_.egress.loss, conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay);
@@ -1661,14 +1661,14 @@ Exit:
     return ret;
 }
 
-static int on_ack_ack(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_ack(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
     /* TODO log */
 
     if (acked) {
         /* find the pn space */
         struct st_quicly_pn_space_t *space;
-        switch (ack->ack_epoch) {
+        switch (sent->ack_epoch) {
         case QUICLY_EPOCH_INITIAL:
             space = &conn->initial->super;
             break;
@@ -1682,7 +1682,7 @@ static int on_ack_ack(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
             assert(!"FIXME");
         }
         if (space != NULL) {
-            quicly_ranges_subtract(&space->ack_queue, ack->data.ack.range.start, ack->data.ack.range.end);
+            quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end);
             if (space->ack_queue.num_ranges == 0) {
                 space->largest_pn_received_at = INT64_MAX;
                 space->send_ack_at = INT64_MAX;
@@ -1694,27 +1694,27 @@ static int on_ack_ack(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
     return 0;
 }
 
-static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
     quicly_stream_t *stream;
     int ret;
 
-    LOG_STREAM_EVENT(conn, ack->data.stream.stream_id, acked ? QUICLY_EVENT_TYPE_STREAM_ACKED : QUICLY_EVENT_TYPE_STREAM_LOST,
-                     INT_EVENT_ATTR(OFFSET, ack->data.stream.args.start),
-                     INT_EVENT_ATTR(LENGTH, ack->data.stream.args.end - ack->data.stream.args.start));
+    LOG_STREAM_EVENT(conn, sent->data.stream.stream_id, acked ? QUICLY_EVENT_TYPE_STREAM_ACKED : QUICLY_EVENT_TYPE_STREAM_LOST,
+                     INT_EVENT_ATTR(OFFSET, sent->data.stream.args.start),
+                     INT_EVENT_ATTR(LENGTH, sent->data.stream.args.end - sent->data.stream.args.start));
 
     /* TODO cache pointer to stream (using a generation counter?) */
-    if ((stream = quicly_get_stream(conn, ack->data.stream.stream_id)) == NULL)
+    if ((stream = quicly_get_stream(conn, sent->data.stream.stream_id)) == NULL)
         return 0;
 
     if (acked) {
-        if ((ret = quicly_sendbuf_acked(&stream->sendbuf, &ack->data.stream.args, ack->is_alive)) != 0)
+        if ((ret = quicly_sendbuf_acked(&stream->sendbuf, &sent->data.stream.args, sent->is_alive)) != 0)
             return ret;
         if (quicly_stream_is_closable(stream) && (ret = stream->on_update(stream)) != 0)
             return ret;
     } else {
         /* FIXME handle rto error */
-        if ((ret = quicly_sendbuf_lost(&stream->sendbuf, &ack->data.stream.args)) != 0)
+        if ((ret = quicly_sendbuf_lost(&stream->sendbuf, &sent->data.stream.args)) != 0)
             return ret;
         if (stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE)
             resched_stream_data(stream);
@@ -1723,16 +1723,16 @@ static int on_ack_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
     return 0;
 }
 
-static int on_ack_max_stream_data(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_max_stream_data(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
     quicly_stream_t *stream;
 
     /* TODO cache pointer to stream (using a generation counter?) */
-    if ((stream = quicly_get_stream(conn, ack->data.stream.stream_id)) != NULL) {
+    if ((stream = quicly_get_stream(conn, sent->data.stream.stream_id)) != NULL) {
         if (acked) {
-            quicly_maxsender_acked(&stream->_send_aux.max_stream_data_sender, &ack->data.max_stream_data.args);
+            quicly_maxsender_acked(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
         } else {
-            quicly_maxsender_lost(&stream->_send_aux.max_stream_data_sender, &ack->data.max_stream_data.args);
+            quicly_maxsender_lost(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
             if (should_update_max_stream_data(stream))
                 sched_stream_control(stream);
         }
@@ -1741,28 +1741,28 @@ static int on_ack_max_stream_data(quicly_conn_t *conn, int acked, quicly_ack_t *
     return 0;
 }
 
-static int on_ack_max_data(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_max_data(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
     if (acked) {
-        quicly_maxsender_acked(&conn->ingress.max_data.sender, &ack->data.max_data.args);
+        quicly_maxsender_acked(&conn->ingress.max_data.sender, &sent->data.max_data.args);
     } else {
-        quicly_maxsender_lost(&conn->ingress.max_data.sender, &ack->data.max_data.args);
+        quicly_maxsender_lost(&conn->ingress.max_data.sender, &sent->data.max_data.args);
     }
 
     return 0;
 }
 
-static int on_ack_max_stream_id(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_max_stream_id(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
-    quicly_maxsender_t *maxsender = quicly_stream_is_unidirectional(ack->data.max_stream_id.args.value)
+    quicly_maxsender_t *maxsender = quicly_stream_is_unidirectional(sent->data.max_stream_id.args.value)
                                         ? conn->ingress.max_stream_id.uni
                                         : conn->ingress.max_stream_id.bidi;
     assert(maxsender != NULL); /* we would only receive an ACK if we have sent the frame */
 
     if (acked) {
-        quicly_maxsender_acked(maxsender, &ack->data.max_stream_id.args);
+        quicly_maxsender_acked(maxsender, &sent->data.max_stream_id.args);
     } else {
-        quicly_maxsender_lost(maxsender, &ack->data.max_stream_id.args);
+        quicly_maxsender_lost(maxsender, &sent->data.max_stream_id.args);
     }
 
     return 0;
@@ -1773,12 +1773,12 @@ static void on_ack_stream_state_sender(quicly_sender_state_t *sender_state, int 
     *sender_state = acked ? QUICLY_SENDER_STATE_ACKED : QUICLY_SENDER_STATE_SEND;
 }
 
-static int on_ack_rst_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_rst_stream(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
     quicly_stream_t *stream;
     int ret = 0;
 
-    if ((stream = quicly_get_stream(conn, ack->data.stream_state_sender.stream_id)) != NULL) {
+    if ((stream = quicly_get_stream(conn, sent->data.stream_state_sender.stream_id)) != NULL) {
         assert(stream->sendbuf.acked.num_ranges == 1);
         assert(stream->sendbuf.acked.ranges[0].end - stream->sendbuf.eos <= 1);
         on_ack_stream_state_sender(&stream->_send_aux.rst.sender_state, acked);
@@ -1792,11 +1792,11 @@ static int on_ack_rst_stream(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
     return ret;
 }
 
-static int on_ack_stop_sending(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_stop_sending(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
     quicly_stream_t *stream;
 
-    if ((stream = quicly_get_stream(conn, ack->data.stream_state_sender.stream_id)) != NULL) {
+    if ((stream = quicly_get_stream(conn, sent->data.stream_state_sender.stream_id)) != NULL) {
         on_ack_stream_state_sender(&stream->_send_aux.stop_sending.sender_state, acked);
         if (stream->_send_aux.stop_sending.sender_state != QUICLY_SENDER_STATE_ACKED)
             sched_stream_control(stream);
@@ -1805,26 +1805,26 @@ static int on_ack_stop_sending(quicly_conn_t *conn, int acked, quicly_ack_t *ack
     return 0;
 }
 
-static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_stream_id_blocked(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
-    quicly_maxsender_ackargs_t *ackargs = &ack->data.stream_id_blocked.args;
+    quicly_maxsender_sent_t *max_sent = &sent->data.stream_id_blocked.args;
     struct st_quicly_max_stream_id_t *m =
-        quicly_stream_is_unidirectional(ackargs->value) ? &conn->egress.max_stream_id.uni : &conn->egress.max_stream_id.bidi;
+        quicly_stream_is_unidirectional(max_sent->value) ? &conn->egress.max_stream_id.uni : &conn->egress.max_stream_id.bidi;
 
     if (acked) {
-        quicly_maxsender_acked(&m->blocked_sender, ackargs);
+        quicly_maxsender_acked(&m->blocked_sender, max_sent);
     } else {
-        quicly_maxsender_lost(&m->blocked_sender, ackargs);
+        quicly_maxsender_lost(&m->blocked_sender, max_sent);
     }
 
     return 0;
 }
 
-static int on_ack_cc(quicly_conn_t *conn, int acked, quicly_ack_t *ack)
+static int on_ack_cc(quicly_conn_t *conn, int acked, quicly_sent_t *sent)
 {
-    if (ack->is_alive) {
+    if (sent->is_alive) {
         conn->egress.cc.this_ack.nsegs += 1;
-        conn->egress.cc.this_ack.nbytes += ack->data.cc.bytes_in_flight;
+        conn->egress.cc.this_ack.nbytes += sent->data.cc.bytes_in_flight;
     }
     return 0;
 }
@@ -1886,7 +1886,7 @@ struct st_quicly_send_context_t {
         struct st_quicly_cipher_context_t *cipher;
         uint8_t *first_byte_at;
         const uint8_t *ack_epoch; /* expected epoch of ACK for this packet */
-        uint8_t to_be_acked : 1;  /* retransmittable packet (consumes congestion window) */
+        uint8_t ack_eliciting : 1;
     } target;
 
     /* output buffer into which list of datagrams is written */
@@ -1937,13 +1937,13 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     ptls_cipher_encrypt(s->target.cipher->pne, s->dst_encrypt_from - 4, s->dst_encrypt_from - 4, 4);
 
     /* register CC callback if the packet is carrying any acknowledgible data */
-    if (s->target.to_be_acked) {
+    if (s->target.ack_eliciting) {
         size_t packet_size = s->dst - s->target.first_byte_at;
-        quicly_ack_t *ack;
-        if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_cc, *s->target.ack_epoch, 1)) ==
-            NULL)
+        quicly_sent_t *sent;
+        if ((sent = quicly_sentmap_allocate(&conn->egress.sentmap, conn->egress.packet_number, now, on_ack_cc, *s->target.ack_epoch,
+                                            1)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
-        ack->data.cc.bytes_in_flight = packet_size;
+        sent->data.cc.bytes_in_flight = packet_size;
         conn->egress.cc.bytes_in_flight += packet_size;
         s->send_window -= packet_size;
     }
@@ -1952,7 +1952,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_COMMIT, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
-                         INT_EVENT_ATTR(LENGTH, s->target.packet->data.len), INT_EVENT_ATTR(ACK_ONLY, !s->target.to_be_acked));
+                         INT_EVENT_ATTR(LENGTH, s->target.packet->data.len), INT_EVENT_ATTR(ACK_ONLY, !s->target.ack_eliciting));
 
     ++conn->egress.packet_number;
     ++conn->super.num_packets.sent;
@@ -1977,7 +1977,7 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
-static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, int to_be_acked)
+static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, int ack_eliciting)
 {
     int coalescible, ret;
 
@@ -2022,7 +2022,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
         if (s->num_packets >= s->max_packets)
             return QUICLY_ERROR_SENDBUF_FULL;
         s->send_window = round_send_window(s->send_window);
-        if (to_be_acked && s->send_window < (ssize_t)min_space)
+        if (ack_eliciting && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
         if ((s->target.packet =
                  conn->super.ctx->alloc_packet(conn->super.ctx, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
@@ -2033,7 +2033,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
         s->dst = s->target.packet->data.base;
         s->dst_end = s->target.packet->data.base + conn->super.ctx->max_packet_size;
     }
-    s->target.to_be_acked = 0;
+    s->target.ack_eliciting = 0;
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_PREPARE, INT_EVENT_ATTR(FIRST_OCTET, s->current.first_byte),
                          VEC_EVENT_ATTR(DCID, ptls_iovec_init(conn->super.peer.cid.cid, conn->super.peer.cid.len)));
@@ -2091,12 +2091,12 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
             size_t payload_len = 0;
             s->dst = quicly_encode_crypto_frame_header(s->dst, s->dst_end, 0, &payload_len);
         }
-        to_be_acked = 1;
+        ack_eliciting = 1;
     }
 
 TargetReady:
-    if (to_be_acked) {
-        s->target.to_be_acked = 1;
+    if (ack_eliciting) {
+        s->target.ack_eliciting = 1;
         conn->egress.last_retransmittable_sent_at = now;
     }
     return 0;
@@ -2107,14 +2107,15 @@ static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *
     return _do_prepare_packet(conn, s, min_space, 0);
 }
 
-static int prepare_acked_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, quicly_ack_t **ack,
-                                quicly_ack_cb ack_cb)
+static int prepare_ack_eliciting_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space,
+                                        quicly_sent_t **sent, quicly_sent_acked_cb acked)
 {
     int ret;
 
     if ((ret = _do_prepare_packet(conn, s, min_space, 1)) != 0)
         return ret;
-    if ((*ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, ack_cb, *s->target.ack_epoch, 1)) == NULL)
+    if ((*sent = quicly_sentmap_allocate(&conn->egress.sentmap, conn->egress.packet_number, now, acked, *s->target.ack_epoch, 1)) ==
+        NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     /* TODO return the remaining window that the sender can use */
@@ -2154,11 +2155,11 @@ Emit:
     { /* save what's inflight */
         size_t i;
         for (i = 0; i != space->ack_queue.num_ranges; ++i) {
-            quicly_ack_t *ack;
-            if ((ack = quicly_acks_allocate(&conn->egress.acks, conn->egress.packet_number, now, on_ack_ack, *s->target.ack_epoch,
-                                            0)) == NULL)
+            quicly_sent_t *sent;
+            if ((sent = quicly_sentmap_allocate(&conn->egress.sentmap, conn->egress.packet_number, now, on_ack_ack,
+                                                *s->target.ack_epoch, 0)) == NULL)
                 return PTLS_ERROR_NO_MEMORY;
-            ack->data.ack.range = space->ack_queue.ranges[i];
+            sent->data.ack.range = space->ack_queue.ranges[i];
         }
     }
 
@@ -2169,14 +2170,14 @@ Emit:
 }
 
 static int prepare_stream_state_sender(quicly_stream_t *stream, quicly_sender_state_t *sender, struct st_quicly_send_context_t *s,
-                                       size_t min_space, quicly_ack_cb ack_cb)
+                                       size_t min_space, quicly_sent_acked_cb ack_cb)
 {
-    quicly_ack_t *ack;
+    quicly_sent_t *sent;
     int ret;
 
-    if ((ret = prepare_acked_packet(stream->conn, s, min_space, &ack, ack_cb)) != 0)
+    if ((ret = prepare_ack_eliciting_packet(stream->conn, s, min_space, &sent, ack_cb)) != 0)
         return ret;
-    ack->data.stream_state_sender.stream_id = stream->stream_id;
+    sent->data.stream_state_sender.stream_id = stream->stream_id;
     *sender = QUICLY_SENDER_STATE_UNACKED;
 
     return 0;
@@ -2198,15 +2199,16 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
     /* send MAX_STREAM_DATA if necessary */
     if (should_update_max_stream_data(stream)) {
         uint64_t new_value = stream->recvbuf.data_off + stream->_recv_aux.window;
-        quicly_ack_t *ack;
+        quicly_sent_t *sent;
         /* prepare */
-        if ((ret = prepare_acked_packet(stream->conn, s, QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY, &ack, on_ack_max_stream_data)) != 0)
+        if ((ret = prepare_ack_eliciting_packet(stream->conn, s, QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY, &sent,
+                                                on_ack_max_stream_data)) != 0)
             return ret;
         /* send */
         s->dst = quicly_encode_max_stream_data_frame(s->dst, stream->stream_id, new_value);
         /* register ack */
-        ack->data.max_stream_data.stream_id = stream->stream_id;
-        quicly_maxsender_record(&stream->_send_aux.max_stream_data_sender, new_value, &ack->data.max_stream_data.args);
+        sent->data.max_stream_data.stream_id = stream->stream_id;
+        quicly_maxsender_record(&stream->_send_aux.max_stream_data_sender, new_value, &sent->data.max_stream_data.args);
     }
 
     /* send RST_STREAM if necessary */
@@ -2224,11 +2226,11 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
 static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_context_t *s, quicly_sendbuf_dataiter_t *iter,
                              size_t max_bytes)
 {
-    quicly_ack_t *ack;
+    quicly_sent_t *sent;
     size_t copysize;
     int is_fin = 0, ret;
 
-    if ((ret = prepare_acked_packet(stream->conn, s, QUICLY_STREAM_FRAME_CAPACITY, &ack, on_ack_stream)) != 0)
+    if ((ret = prepare_ack_eliciting_packet(stream->conn, s, QUICLY_STREAM_FRAME_CAPACITY, &sent, on_ack_stream)) != 0)
         return ret;
 
     copysize = max_bytes - (iter->stream_off + max_bytes > stream->sendbuf.eos);
@@ -2255,10 +2257,10 @@ static int send_stream_frame(quicly_stream_t *stream, struct st_quicly_send_cont
     }
 
     /* send */
-    quicly_sendbuf_emit(&stream->sendbuf, iter, copysize, s->dst, &ack->data.stream.args);
+    quicly_sendbuf_emit(&stream->sendbuf, iter, copysize, s->dst, &sent->data.stream.args);
     s->dst += copysize;
 
-    ack->data.stream.stream_id = stream->stream_id;
+    sent->data.stream.stream_id = stream->stream_id;
 
     return 0;
 }
@@ -2319,37 +2321,37 @@ ShrinkRanges:
     return ret;
 }
 
-static void init_acks_iter(quicly_conn_t *conn, quicly_acks_iter_t *iter)
+static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
 {
     /* TODO find a better threshold */
     int64_t retire_before = now - ((conn->egress.loss.rtt.smoothed + conn->egress.loss.rtt.variance) * 4 +
                                    conn->super.peer.transport_params.max_ack_delay + QUICLY_DELAYED_ACK_TIMEOUT);
-    quicly_ack_t *ack;
+    quicly_sent_t *sent;
 
-    quicly_acks_init_iter(&conn->egress.acks, iter);
+    quicly_sentmap_init_iter(&conn->egress.sentmap, iter);
 
-    while ((ack = quicly_acks_get(iter))->sent_at < retire_before && !ack->is_alive) {
-        quicly_acks_release(&conn->egress.acks, iter);
-        quicly_acks_next(iter);
+    while ((sent = quicly_sentmap_get(iter))->sent_at < retire_before && !sent->is_alive) {
+        quicly_sentmap_release(&conn->egress.sentmap, iter);
+        quicly_sentmap_next(iter);
     }
 }
 
 int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch)
 {
-    quicly_acks_iter_t iter;
-    quicly_ack_t *ack;
+    quicly_sentmap_iter_t iter;
+    quicly_sent_t *sent;
     int ret = 0;
 
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
 
-    for (init_acks_iter(conn, &iter); (ack = quicly_acks_get(&iter))->packet_number != UINT64_MAX; quicly_acks_next(&iter)) {
-        if (ack->ack_epoch == ack_epoch) {
-            if (conn->egress.max_lost_pn <= ack->packet_number) {
-                if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
+    for (init_acks_iter(conn, &iter); (sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX; quicly_sentmap_next(&iter)) {
+        if (sent->ack_epoch == ack_epoch) {
+            if (conn->egress.max_lost_pn <= sent->packet_number) {
+                if ((ret = quicly_sentmap_on_ack(&conn->egress.sentmap, 0, sent, conn)) != 0)
                     return ret;
             }
-            quicly_acks_release(&conn->egress.acks, &iter);
+            quicly_sentmap_release(&conn->egress.sentmap, &iter);
         }
     }
 
@@ -2363,8 +2365,8 @@ int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch)
  */
 static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
 {
-    quicly_acks_iter_t iter;
-    quicly_ack_t *ack;
+    quicly_sentmap_iter_t iter;
+    quicly_sent_t *sent;
     uint64_t pn;
     int ret;
 
@@ -2372,20 +2374,20 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
 
     init_acks_iter(conn, &iter);
 
-    while ((pn = (ack = quicly_acks_get(&iter))->packet_number) < conn->egress.max_lost_pn)
-        quicly_acks_next(&iter);
+    while ((pn = (sent = quicly_sentmap_get(&iter))->packet_number) < conn->egress.max_lost_pn)
+        quicly_sentmap_next(&iter);
 
     conn->egress.cc.this_ack.nsegs = 0;
     conn->egress.cc.this_ack.nbytes = 0;
 
     do {
-        if ((pn = ack->packet_number) == UINT64_MAX)
+        if ((pn = sent->packet_number) == UINT64_MAX)
             break;
         do {
-            if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
+            if ((ret = quicly_sentmap_on_ack(&conn->egress.sentmap, 0, sent, conn)) != 0)
                 return ret;
-            quicly_acks_next(&iter);
-        } while ((ack = quicly_acks_get(&iter))->packet_number == pn);
+            quicly_sentmap_next(&iter);
+        } while ((sent = quicly_sentmap_get(&iter))->packet_number == pn);
         conn->egress.max_lost_pn = pn + 1;
     } while (--count != 0);
 
@@ -2402,8 +2404,8 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
 static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay_until_lost, int64_t *loss_time)
 {
     quicly_conn_t *conn = (void *)((char *)ld - offsetof(quicly_conn_t, egress.loss));
-    quicly_acks_iter_t iter;
-    quicly_ack_t *ack;
+    quicly_sentmap_iter_t iter;
+    quicly_sent_t *sent;
     int64_t sent_before = now - delay_until_lost;
     uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
@@ -2420,17 +2422,17 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
      * the early retransmit window. in other words, packets that are not ready
      * to be marked as lost according to the early retransmit timer.
      */
-    while ((ack = quicly_acks_get(&iter))->packet_number < largest_pn && ack->sent_at <= sent_before) {
-        if (ack->is_alive && conn->egress.max_lost_pn <= ack->packet_number) {
-            if (ack->packet_number != largest_newly_lost_pn) {
+    while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_pn && sent->sent_at <= sent_before) {
+        if (sent->is_alive && conn->egress.max_lost_pn <= sent->packet_number) {
+            if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
-                largest_newly_lost_pn = ack->packet_number;
+                largest_newly_lost_pn = sent->packet_number;
                 LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_LOST, INT_EVENT_ATTR(PACKET_NUMBER, largest_newly_lost_pn));
             }
-            if ((ret = quicly_acks_on_ack(&conn->egress.acks, 0, ack, conn)) != 0)
+            if ((ret = quicly_sentmap_on_ack(&conn->egress.sentmap, 0, sent, conn)) != 0)
                 return ret;
         }
-        quicly_acks_next(&iter);
+        quicly_sentmap_next(&iter);
     }
     assert(conn->egress.cc.bytes_in_flight >= conn->egress.cc.this_ack.nbytes);
     conn->egress.cc.bytes_in_flight -= conn->egress.cc.this_ack.nbytes;
@@ -2447,15 +2449,15 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     }
 
     /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
-    while (ack->packet_number < largest_pn && ack->sent_at != INT64_MAX) {
-        if (ack->is_alive) {
-            *loss_time = ack->sent_at + delay_until_lost;
+    while (sent->packet_number < largest_pn && sent->sent_at != INT64_MAX) {
+        if (sent->is_alive) {
+            *loss_time = sent->sent_at + delay_until_lost;
             break;
-        } else if (ack->acked != on_ack_ack) {
+        } else if (sent->acked != on_ack_ack) {
             break;
         }
-        quicly_acks_next(&iter);
-        ack = quicly_acks_get(&iter);
+        quicly_sentmap_next(&iter);
+        sent = quicly_sentmap_get(&iter);
     }
 
     return 0;
@@ -2464,7 +2466,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
 static void update_loss_alarm(quicly_conn_t *conn)
 {
     quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
-                             conn->egress.acks.num_in_flight != 0);
+                             conn->egress.sentmap.num_in_flight != 0);
 }
 
 static void open_id_blocked_streams(quicly_conn_t *conn, int uni)
@@ -2755,11 +2757,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if ((max_stream_id = quicly_maxsender_should_update_stream_id(                                                             \
                  conn->ingress.max_stream_id.label, conn->super.peer.label.next_stream_id, conn->super.peer.label.num_streams,     \
                  conn->super.ctx->max_streams_##label, 768)) >= 0) {                                                               \
-            quicly_ack_t *ack;                                                                                                     \
-            if ((ret = prepare_acked_packet(conn, &s, QUICLY_MAX_STREAM_ID_FRAME_CAPACITY, &ack, on_ack_max_stream_id)) != 0)      \
+            quicly_sent_t *sent;                                                                                                   \
+            if ((ret = prepare_ack_eliciting_packet(conn, &s, QUICLY_MAX_STREAM_ID_FRAME_CAPACITY, &sent,                          \
+                                                    on_ack_max_stream_id)) != 0)                                                   \
                 goto Exit;                                                                                                         \
             s.dst = quicly_encode_max_stream_id_frame(s.dst, max_stream_id);                                                       \
-            quicly_maxsender_record(conn->ingress.max_stream_id.label, max_stream_id, &ack->data.max_stream_id.args);              \
+            quicly_maxsender_record(conn->ingress.max_stream_id.label, max_stream_id, &sent->data.max_stream_id.args);             \
         }                                                                                                                          \
     }
             SEND_MAX_STREAM_ID(uni);
@@ -2768,12 +2771,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             /* send connection-level flow control frame */
             if (quicly_maxsender_should_update(&conn->ingress.max_data.sender, conn->ingress.max_data.bytes_consumed,
                                                conn->super.ctx->initial_max_data, 512)) {
-                quicly_ack_t *ack;
-                if ((ret = prepare_acked_packet(conn, &s, QUICLY_MAX_DATA_FRAME_CAPACITY, &ack, on_ack_max_data)) != 0)
+                quicly_sent_t *sent;
+                if ((ret = prepare_ack_eliciting_packet(conn, &s, QUICLY_MAX_DATA_FRAME_CAPACITY, &sent, on_ack_max_data)) != 0)
                     goto Exit;
                 uint64_t new_value = conn->ingress.max_data.bytes_consumed + conn->super.ctx->initial_max_data;
                 s.dst = quicly_encode_max_data_frame(s.dst, new_value);
-                quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &ack->data.max_data.args);
+                quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &sent->data.max_data.args);
             }
 /* send stream_id_blocked frames */
 #define SEND_STREAM_ID_BLOCKED(label)                                                                                              \
@@ -2783,12 +2786,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                                                offsetof(quicly_stream_t, _send_aux.pending_link.control));                         \
         assert(max_stream_id->id < max_stream->stream_id);                                                                         \
         if (quicly_maxsender_should_send_blocked(&max_stream_id->blocked_sender, max_stream->stream_id)) {                         \
-            quicly_ack_t *ack;                                                                                                     \
-            if ((ret = prepare_acked_packet(conn, &s, QUICLY_STREAM_ID_BLOCKED_FRAME_CAPACITY, &ack, on_ack_stream_id_blocked)) != \
-                0)                                                                                                                 \
+            quicly_sent_t *sent;                                                                                                   \
+            if ((ret = prepare_ack_eliciting_packet(conn, &s, QUICLY_STREAM_ID_BLOCKED_FRAME_CAPACITY, &sent,                      \
+                                                    on_ack_stream_id_blocked)) != 0)                                               \
                 goto Exit;                                                                                                         \
             s.dst = quicly_encode_stream_id_blocked_frame(s.dst, max_stream->stream_id);                                           \
-            quicly_maxsender_record(&max_stream_id->blocked_sender, max_stream->stream_id, &ack->data.stream_id_blocked.args);     \
+            quicly_maxsender_record(&max_stream_id->blocked_sender, max_stream->stream_id, &sent->data.stream_id_blocked.args);    \
         }                                                                                                                          \
     }
             SEND_STREAM_ID_BLOCKED(uni);
@@ -2830,7 +2833,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         while (s.num_packets < s.min_packets_to_send) {
             if ((ret = prepare_packet(conn, &s, 1)) != 0)
                 goto Exit;
-            assert(s.target.to_be_acked);
+            assert(s.target.ack_eliciting);
             commit_send_packet(conn, &s, 0);
         }
         assert(conn->egress.last_retransmittable_sent_at == now);
@@ -2921,7 +2924,7 @@ static int handle_rst_stream_frame(quicly_conn_t *conn, quicly_rst_stream_frame_
 
 static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_t *frame)
 {
-    quicly_acks_iter_t iter;
+    quicly_sentmap_iter_t iter;
     uint64_t packet_number = frame->smallest_acknowledged;
     uint32_t bytes_in_flight = (uint32_t)conn->egress.cc.bytes_in_flight;
     struct {
@@ -2943,16 +2946,16 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     while (1) {
         uint64_t block_length = frame->ack_block_lengths[gap_index];
         if (block_length != 0) {
-            while (quicly_acks_get(&iter)->packet_number < packet_number)
-                quicly_acks_next(&iter);
+            while (quicly_sentmap_get(&iter)->packet_number < packet_number)
+                quicly_sentmap_next(&iter);
             do {
-                quicly_ack_t *ack;
-                if ((ack = quicly_acks_get(&iter))->packet_number == packet_number) {
+                quicly_sent_t *sent;
+                if ((sent = quicly_sentmap_get(&iter))->packet_number == packet_number) {
                     ++conn->super.num_packets.ack_received;
-                    int apply = epoch == ack->ack_epoch;
+                    int apply = epoch == sent->ack_epoch;
                     if (apply) {
                         largest_newly_acked.packet_number = packet_number;
-                        largest_newly_acked.sent_at = ack->sent_at;
+                        largest_newly_acked.sent_at = sent->sent_at;
                         if (smallest_newly_acked == UINT64_MAX)
                             smallest_newly_acked = packet_number;
                     }
@@ -2960,12 +2963,12 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                                          INT_EVENT_ATTR(NEWLY_ACKED, apply));
                     do {
                         if (apply) {
-                            if ((ret = quicly_acks_on_ack(&conn->egress.acks, 1, ack, conn)) != 0)
+                            if ((ret = quicly_sentmap_on_ack(&conn->egress.sentmap, 1, sent, conn)) != 0)
                                 return ret;
-                            quicly_acks_release(&conn->egress.acks, &iter);
+                            quicly_sentmap_release(&conn->egress.sentmap, &iter);
                         }
-                        quicly_acks_next(&iter);
-                    } while ((ack = quicly_acks_get(&iter))->packet_number == packet_number);
+                        quicly_sentmap_next(&iter);
+                    } while ((sent = quicly_sentmap_get(&iter))->packet_number == packet_number);
                 }
                 ++packet_number;
             } while (--block_length != 0);
@@ -3115,13 +3118,13 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH, INT_EVENT_ATTR(QUIC_VERSION, version));
 
     { /* reschedule the Initial packet for immediate resend (FIXME logic below fails if the first packet was already deemed lost) */
-        quicly_acks_t *acks = &conn->egress.acks;
-        quicly_acks_iter_t iter;
-        quicly_acks_init_iter(acks, &iter);
-        quicly_ack_t *ack = quicly_acks_get(&iter);
-        int ret = quicly_acks_on_ack(acks, 0, ack, conn);
+        quicly_sentmap_t *sentmap = &conn->egress.sentmap;
+        quicly_sentmap_iter_t iter;
+        quicly_sentmap_init_iter(sentmap, &iter);
+        quicly_sent_t *sent = quicly_sentmap_get(&iter);
+        int ret = quicly_sentmap_on_ack(sentmap, 0, sent, conn);
         assert(ret == 0);
-        quicly_acks_release(acks, &iter);
+        quicly_sentmap_release(sentmap, &iter);
     }
 
     return 0;
@@ -3477,7 +3480,7 @@ void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
     assert(!quicly_sendbuf_transfer_complete(&stream->sendbuf));
     quicly_sendbuf_shutdown(&stream->sendbuf);
     if (stream->sendbuf.eos != 0) {
-        quicly_sendbuf_ackargs_t ackargs = {0, stream->sendbuf.eos};
+        quicly_sendbuf_sent_t ackargs = {0, stream->sendbuf.eos};
         quicly_sendbuf_acked(&stream->sendbuf, &ackargs, 0);
     }
 

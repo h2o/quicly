@@ -39,7 +39,7 @@ int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server);
 void test_ranges(void);
 void test_frame(void);
 void test_maxsender(void);
-void test_ack(void);
+void test_sentmap(void);
 void test_simple(void);
 void test_loss(void);
 void test_stream_concurrency(void);

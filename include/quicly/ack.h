@@ -29,14 +29,14 @@
 #include "quicly/sendbuf.h"
 
 struct st_quicly_conn_t;
-typedef struct st_quicly_ack_t quicly_ack_t;
+typedef struct st_quicly_sent_t quicly_sent_t;
 
-typedef int (*quicly_ack_cb)(struct st_quicly_conn_t *conn, int is_acked, quicly_ack_t *data);
+typedef int (*quicly_sent_acked_cb)(struct st_quicly_conn_t *conn, int is_acked, quicly_sent_t *data);
 
-struct st_quicly_ack_t {
+struct st_quicly_sent_t {
     uint64_t packet_number;
     int64_t sent_at;
-    quicly_ack_cb acked;
+    quicly_sent_acked_cb acked;
     uint8_t ack_epoch; /* epoch to be acked in */
     uint8_t is_alive : 1;
     union {
@@ -45,20 +45,20 @@ struct st_quicly_ack_t {
         } ack;
         struct {
             quicly_stream_id_t stream_id;
-            quicly_sendbuf_ackargs_t args;
+            quicly_sendbuf_sent_t args;
         } stream;
         struct {
             quicly_stream_id_t stream_id;
-            quicly_maxsender_ackargs_t args;
+            quicly_maxsender_sent_t args;
         } max_stream_data;
         struct {
-            quicly_maxsender_ackargs_t args;
+            quicly_maxsender_sent_t args;
         } max_data;
         struct {
-            quicly_maxsender_ackargs_t args;
+            quicly_maxsender_sent_t args;
         } max_stream_id;
         struct {
-            quicly_maxsender_ackargs_t args;
+            quicly_maxsender_sent_t args;
         } stream_id_blocked;
         struct {
             quicly_stream_id_t stream_id;
@@ -69,131 +69,131 @@ struct st_quicly_ack_t {
     } data;
 };
 
-struct st_quicly_ack_block_t {
-    struct st_quicly_ack_block_t *next;
+struct st_quicly_sent_block_t {
+    struct st_quicly_sent_block_t *next;
     size_t total, alive;
-    quicly_ack_t entries[16];
+    quicly_sent_t entries[16];
 };
 
-typedef struct st_quicly_acks_t {
+typedef struct st_quicly_sentmap_t {
     /**
      * the linked list includes entries that are deemed lost (up to 3*SRTT) as well
      */
-    struct st_quicly_ack_block_t *head, *tail;
+    struct st_quicly_sent_block_t *head, *tail;
     /**
      * number of packets considered in flight
      */
     size_t num_in_flight;
-} quicly_acks_t;
+} quicly_sentmap_t;
 
-typedef struct st_quicly_acks_iter_t {
-    quicly_ack_t *p;
+typedef struct st_quicly_sentmap_iter_t {
+    quicly_sent_t *p;
     size_t count;
-    struct st_quicly_ack_block_t **ref;
-} quicly_acks_iter_t;
+    struct st_quicly_sent_block_t **ref;
+} quicly_sentmap_iter_t;
 
-extern const quicly_ack_t quicly_acks__end_iter;
+extern const quicly_sent_t quicly_sentmap__end_iter;
 
-static void quicly_acks_init(quicly_acks_t *acks);
-void quicly_acks_dispose(quicly_acks_t *acks);
-static quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked,
-                                          uint8_t ack_epoch, int is_inflight);
-static int quicly_acks_is_empty(quicly_acks_t *acks);
-static quicly_ack_t *quicly_acks_get_tail(quicly_acks_t *acks);
-struct st_quicly_ack_block_t *quicly_acks__new_block(quicly_acks_t *acks);
-static int quicly_acks_on_ack(quicly_acks_t *acks, int is_acked, quicly_ack_t *ack, struct st_quicly_conn_t *conn);
-static void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter);
-static quicly_ack_t *quicly_acks_get(quicly_acks_iter_t *iter);
-static void quicly_acks_next(quicly_acks_iter_t *iter);
-static void quicly_acks_release(quicly_acks_t *acks, quicly_acks_iter_t *iter);
-struct st_quicly_ack_block_t **quicly_acks__release_block(quicly_acks_t *acks, struct st_quicly_ack_block_t **ref);
+static void quicly_sentmap_init(quicly_sentmap_t *map);
+void quicly_sentmap_dispose(quicly_sentmap_t *map);
+static quicly_sent_t *quicly_sentmap_allocate(quicly_sentmap_t *map, uint64_t packet_number, uint64_t now,
+                                              quicly_sent_acked_cb acked, uint8_t ack_epoch, int is_inflight);
+static int quicly_sentmap_is_empty(quicly_sentmap_t *map);
+static quicly_sent_t *quicly_sentmap_get_tail(quicly_sentmap_t *map);
+struct st_quicly_sent_block_t *quicly_sentmap__new_block(quicly_sentmap_t *map);
+static int quicly_sentmap_on_ack(quicly_sentmap_t *map, int is_acked, quicly_sent_t *sent, struct st_quicly_conn_t *conn);
+static void quicly_sentmap_init_iter(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter);
+static quicly_sent_t *quicly_sentmap_get(quicly_sentmap_iter_t *iter);
+static void quicly_sentmap_next(quicly_sentmap_iter_t *iter);
+static void quicly_sentmap_release(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter);
+struct st_quicly_sent_block_t **quicly_sentmap__release_block(quicly_sentmap_t *map, struct st_quicly_sent_block_t **ref);
 
 /* inline definitions */
 
-inline void quicly_acks_init(quicly_acks_t *acks)
+inline void quicly_sentmap_init(quicly_sentmap_t *map)
 {
-    acks->head = NULL;
-    acks->tail = NULL;
+    map->head = NULL;
+    map->tail = NULL;
 }
 
-inline quicly_ack_t *quicly_acks_allocate(quicly_acks_t *acks, uint64_t packet_number, uint64_t now, quicly_ack_cb acked,
-                                          uint8_t ack_epoch, int is_inflight)
+inline quicly_sent_t *quicly_sentmap_allocate(quicly_sentmap_t *map, uint64_t packet_number, uint64_t now,
+                                              quicly_sent_acked_cb acked, uint8_t ack_epoch, int is_inflight)
 {
-    struct st_quicly_ack_block_t *block;
+    struct st_quicly_sent_block_t *block;
 
-    if ((block = acks->tail) == NULL || block->total == sizeof(block->entries) / sizeof(block->entries[0])) {
-        if ((block = quicly_acks__new_block(acks)) == NULL)
+    if ((block = map->tail) == NULL || block->total == sizeof(block->entries) / sizeof(block->entries[0])) {
+        if ((block = quicly_sentmap__new_block(map)) == NULL)
             return NULL;
     }
 
-    quicly_ack_t *ack = block->entries + block->total++;
+    quicly_sent_t *sent = block->entries + block->total++;
     ++block->alive;
 
-    ack->packet_number = packet_number;
-    ack->sent_at = now;
-    ack->acked = acked;
-    ack->ack_epoch = ack_epoch;
+    sent->packet_number = packet_number;
+    sent->sent_at = now;
+    sent->acked = acked;
+    sent->ack_epoch = ack_epoch;
     if (is_inflight) {
-        ack->is_alive = 1;
-        ++acks->num_in_flight;
+        sent->is_alive = 1;
+        ++map->num_in_flight;
     } else {
-        ack->is_alive = 0;
+        sent->is_alive = 0;
     }
 
-    return ack;
+    return sent;
 }
 
-inline int quicly_acks_is_empty(quicly_acks_t *acks)
+inline int quicly_sentmap_is_empty(quicly_sentmap_t *map)
 {
-    return acks->head == NULL;
+    return map->head == NULL;
 }
 
-inline quicly_ack_t *quicly_acks_get_tail(quicly_acks_t *acks)
+inline quicly_sent_t *quicly_sentmap_get_tail(quicly_sentmap_t *map)
 {
-    return acks->tail->entries + acks->tail->total - 1;
+    return map->tail->entries + map->tail->total - 1;
 }
 
-inline int quicly_acks_on_ack(quicly_acks_t *acks, int is_acked, quicly_ack_t *ack, struct st_quicly_conn_t *conn)
+inline int quicly_sentmap_on_ack(quicly_sentmap_t *map, int is_acked, quicly_sent_t *sent, struct st_quicly_conn_t *conn)
 {
     int ret;
 
-    if (ack->is_alive || is_acked) {
-        if ((ret = ack->acked(conn, is_acked, ack)) != 0)
+    if (sent->is_alive || is_acked) {
+        if ((ret = sent->acked(conn, is_acked, sent)) != 0)
             return ret;
     }
 
-    if (ack->is_alive) {
-        ack->is_alive = 0;
-        --acks->num_in_flight;
+    if (sent->is_alive) {
+        sent->is_alive = 0;
+        --map->num_in_flight;
     }
     return 0;
 }
 
-inline void quicly_acks_init_iter(quicly_acks_t *acks, quicly_acks_iter_t *iter)
+inline void quicly_sentmap_init_iter(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter)
 {
-    iter->ref = &acks->head;
-    if (acks->head != NULL) {
-        assert(acks->head->alive != 0);
-        for (iter->p = acks->head->entries; iter->p->acked == NULL; ++iter->p)
+    iter->ref = &map->head;
+    if (map->head != NULL) {
+        assert(map->head->alive != 0);
+        for (iter->p = map->head->entries; iter->p->acked == NULL; ++iter->p)
             ;
-        iter->count = acks->head->alive;
+        iter->count = map->head->alive;
     } else {
-        iter->p = (quicly_ack_t *)&quicly_acks__end_iter;
+        iter->p = (quicly_sent_t *)&quicly_sentmap__end_iter;
         iter->count = 0;
     }
 }
 
-inline quicly_ack_t *quicly_acks_get(quicly_acks_iter_t *iter)
+inline quicly_sent_t *quicly_sentmap_get(quicly_sentmap_iter_t *iter)
 {
     return iter->p;
 }
 
-inline void quicly_acks_next(quicly_acks_iter_t *iter)
+inline void quicly_sentmap_next(quicly_sentmap_iter_t *iter)
 {
     if (--iter->count != 0) {
         ++iter->p;
     } else if (*(iter->ref = &(*iter->ref)->next) == NULL) {
-        iter->p = (quicly_ack_t *)&quicly_acks__end_iter;
+        iter->p = (quicly_sent_t *)&quicly_sentmap__end_iter;
         iter->count = 0;
         return;
     } else {
@@ -205,15 +205,15 @@ inline void quicly_acks_next(quicly_acks_iter_t *iter)
         ++iter->p;
 }
 
-inline void quicly_acks_release(quicly_acks_t *acks, quicly_acks_iter_t *iter)
+inline void quicly_sentmap_release(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter)
 {
     assert(iter->p->acked != NULL);
     assert(!iter->p->is_alive);
     iter->p->acked = NULL;
 
-    struct st_quicly_ack_block_t *block = *iter->ref;
+    struct st_quicly_sent_block_t *block = *iter->ref;
     if (--block->alive == 0) {
-        iter->ref = quicly_acks__release_block(acks, iter->ref);
+        iter->ref = quicly_sentmap__release_block(map, iter->ref);
         block = *iter->ref;
         iter->p = block->entries - 1;
         iter->count = block->alive + 1;

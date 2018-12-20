@@ -87,9 +87,9 @@ Exit:
 }
 
 void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
-                         quicly_sendbuf_ackargs_t *ackargs)
+                         quicly_sendbuf_sent_t *sent)
 {
-    ackargs->start = iter->stream_off;
+    sent->start = iter->stream_off;
 
     /* emit data */
     if (nbytes != 0) {
@@ -103,10 +103,10 @@ void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter,
         ++iter->stream_off;
     }
 
-    ackargs->end = iter->stream_off;
+    sent->end = iter->stream_off;
 }
 
-int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args, int is_active)
+int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_sent_t *args, int is_active)
 {
     uint64_t prev_base_off = buf->acked.ranges[0].end;
     int ret;
@@ -126,7 +126,7 @@ int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args, 
     return 0;
 }
 
-int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args)
+int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_sent_t *args)
 {
     uint64_t start = args->start, end = args->end;
     size_t acked_slot = 0;

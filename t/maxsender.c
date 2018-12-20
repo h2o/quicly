@@ -25,7 +25,7 @@
 static void test_basic(void)
 {
     quicly_maxsender_t m;
-    quicly_maxsender_ackargs_t ackargs;
+    quicly_maxsender_sent_t ackargs;
 
     quicly_maxsender_init(&m, 100);
 
