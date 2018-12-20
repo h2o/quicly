@@ -70,8 +70,21 @@ struct st_quicly_sent_t {
 };
 
 struct st_quicly_sent_block_t {
+    /**
+     * next block if exists (or NULL)
+     */
     struct st_quicly_sent_block_t *next;
-    size_t total, alive;
+    /**
+     * number of entries in the block
+     */
+    size_t num_entries;
+    /**
+     * insertion index within `entries`
+     */
+    size_t next_insert_at;
+    /**
+     * slots
+     */
     quicly_sent_t entries[16];
 };
 
@@ -121,13 +134,13 @@ inline quicly_sent_t *quicly_sentmap_allocate(quicly_sentmap_t *map, uint64_t pa
 {
     struct st_quicly_sent_block_t *block;
 
-    if ((block = map->tail) == NULL || block->total == sizeof(block->entries) / sizeof(block->entries[0])) {
+    if ((block = map->tail) == NULL || block->next_insert_at == sizeof(block->entries) / sizeof(block->entries[0])) {
         if ((block = quicly_sentmap__new_block(map)) == NULL)
             return NULL;
     }
 
-    quicly_sent_t *sent = block->entries + block->total++;
-    ++block->alive;
+    quicly_sent_t *sent = block->entries + block->next_insert_at++;
+    ++block->num_entries;
 
     sent->packet_number = packet_number;
     sent->sent_at = now;
@@ -150,7 +163,7 @@ inline int quicly_sentmap_is_empty(quicly_sentmap_t *map)
 
 inline quicly_sent_t *quicly_sentmap_get_tail(quicly_sentmap_t *map)
 {
-    return map->tail->entries + map->tail->total - 1;
+    return map->tail->entries + map->tail->next_insert_at - 1;
 }
 
 inline int quicly_sentmap_on_ack(quicly_sentmap_t *map, int is_acked, quicly_sent_t *sent, struct st_quicly_conn_t *conn)
@@ -173,10 +186,10 @@ inline void quicly_sentmap_init_iter(quicly_sentmap_t *map, quicly_sentmap_iter_
 {
     iter->ref = &map->head;
     if (map->head != NULL) {
-        assert(map->head->alive != 0);
+        assert(map->head->num_entries != 0);
         for (iter->p = map->head->entries; iter->p->acked == NULL; ++iter->p)
             ;
-        iter->count = map->head->alive;
+        iter->count = map->head->num_entries;
     } else {
         iter->p = (quicly_sent_t *)&quicly_sentmap__end_iter;
         iter->count = 0;
@@ -197,8 +210,8 @@ inline void quicly_sentmap_next(quicly_sentmap_iter_t *iter)
         iter->count = 0;
         return;
     } else {
-        assert((*iter->ref)->alive != 0);
-        iter->count = (*iter->ref)->alive;
+        assert((*iter->ref)->num_entries != 0);
+        iter->count = (*iter->ref)->num_entries;
         iter->p = (*iter->ref)->entries;
     }
     while (iter->p->acked == NULL)
@@ -212,11 +225,11 @@ inline void quicly_sentmap_release(quicly_sentmap_t *map, quicly_sentmap_iter_t 
     iter->p->acked = NULL;
 
     struct st_quicly_sent_block_t *block = *iter->ref;
-    if (--block->alive == 0) {
+    if (--block->num_entries == 0) {
         iter->ref = quicly_sentmap__release_block(map, iter->ref);
         block = *iter->ref;
         iter->p = block->entries - 1;
-        iter->count = block->alive + 1;
+        iter->count = block->num_entries + 1;
     }
 }
 

@@ -43,8 +43,8 @@ struct st_quicly_sent_block_t *quicly_sentmap__new_block(quicly_sentmap_t *map)
         return NULL;
 
     block->next = NULL;
-    block->total = 0;
-    block->alive = 0;
+    block->num_entries = 0;
+    block->next_insert_at = 0;
     if (map->tail != NULL) {
         map->tail->next = block;
         map->tail = block;
@@ -63,7 +63,7 @@ struct st_quicly_sent_block_t **quicly_sentmap__release_block(quicly_sentmap_t *
 
     if (block->next != NULL) {
         *ref = block->next;
-        assert((*ref)->alive != 0);
+        assert((*ref)->num_entries != 0);
     } else {
         assert(block == map->tail);
         if (ref == &map->head) {
