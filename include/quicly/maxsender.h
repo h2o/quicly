@@ -33,9 +33,9 @@ typedef struct st_quicly_maxsender_t {
     size_t num_inflight;
 } quicly_maxsender_t;
 
-typedef struct st_quicly_maxsender_ackargs_t {
+typedef struct st_quicly_maxsender_sent_t {
     int64_t value;
-} quicly_maxsender_ackargs_t;
+} quicly_maxsender_sent_t;
 
 static void quicly_maxsender_init(quicly_maxsender_t *m, int64_t initial_value);
 static void quicly_maxsender_dispose(quicly_maxsender_t *m);
@@ -46,9 +46,9 @@ quicly_stream_id_t quicly_maxsender_should_update_stream_id(quicly_maxsender_t *
                                                             uint32_t num_open_streams, uint32_t max_concurrent_streams,
                                                             uint32_t update_ratio);
 static int quicly_maxsender_should_send_blocked(quicly_maxsender_t *m, int64_t local_max);
-static void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly_maxsender_ackargs_t *args);
-static void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_ackargs_t *args);
-static void quicly_maxsender_lost(quicly_maxsender_t *m, quicly_maxsender_ackargs_t *args);
+static void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly_maxsender_sent_t *sent);
+static void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent);
+static void quicly_maxsender_lost(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent);
 
 /* inline definitions */
 
@@ -81,22 +81,22 @@ inline int quicly_maxsender_should_send_blocked(quicly_maxsender_t *m, int64_t l
     return m->max_sent < local_max;
 }
 
-inline void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly_maxsender_ackargs_t *args)
+inline void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly_maxsender_sent_t *sent)
 {
     if (m->max_sent < value)
         m->max_sent = value;
     ++m->num_inflight;
-    args->value = value;
+    sent->value = value;
 }
 
-inline void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_ackargs_t *args)
+inline void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent)
 {
-    if (m->max_acked < args->value)
-        m->max_acked = args->value;
+    if (m->max_acked < sent->value)
+        m->max_acked = sent->value;
     --m->num_inflight;
 }
 
-inline void quicly_maxsender_lost(quicly_maxsender_t *m, quicly_maxsender_ackargs_t *args)
+inline void quicly_maxsender_lost(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent)
 {
     if (--m->num_inflight == 0)
         m->max_sent = m->max_acked;

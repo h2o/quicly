@@ -21,59 +21,59 @@
  */
 #include <assert.h>
 #include <stdlib.h>
-#include "quicly/ack.h"
+#include "quicly/sentmap.h"
 
-const quicly_ack_t quicly_acks__end_iter = {UINT64_MAX, INT64_MAX};
+const quicly_sent_t quicly_sentmap__end_iter = {UINT64_MAX, INT64_MAX};
 
-void quicly_acks_dispose(quicly_acks_t *acks)
+void quicly_sentmap_dispose(quicly_sentmap_t *map)
 {
-    struct st_quicly_ack_block_t *block;
+    struct st_quicly_sent_block_t *block;
 
-    while ((block = acks->head) != NULL) {
-        acks->head = block->next;
+    while ((block = map->head) != NULL) {
+        map->head = block->next;
         free(block);
     }
 }
 
-struct st_quicly_ack_block_t *quicly_acks__new_block(quicly_acks_t *acks)
+struct st_quicly_sent_block_t *quicly_sentmap__new_block(quicly_sentmap_t *map)
 {
-    struct st_quicly_ack_block_t *block;
+    struct st_quicly_sent_block_t *block;
 
     if ((block = malloc(sizeof(*block))) == NULL)
         return NULL;
 
     block->next = NULL;
-    block->total = 0;
-    block->alive = 0;
-    if (acks->tail != NULL) {
-        acks->tail->next = block;
-        acks->tail = block;
+    block->num_entries = 0;
+    block->next_insert_at = 0;
+    if (map->tail != NULL) {
+        map->tail->next = block;
+        map->tail = block;
     } else {
-        acks->head = acks->tail = block;
+        map->head = map->tail = block;
     }
 
     return block;
 }
 
-struct st_quicly_ack_block_t **quicly_acks__release_block(quicly_acks_t *acks, struct st_quicly_ack_block_t **ref)
+struct st_quicly_sent_block_t **quicly_sentmap__release_block(quicly_sentmap_t *map, struct st_quicly_sent_block_t **ref)
 {
-    static const struct st_quicly_ack_block_t dummy = {NULL};
-    static const struct st_quicly_ack_block_t *const dummy_ref = &dummy;
-    struct st_quicly_ack_block_t *block = *ref;
+    static const struct st_quicly_sent_block_t dummy = {NULL};
+    static const struct st_quicly_sent_block_t *const dummy_ref = &dummy;
+    struct st_quicly_sent_block_t *block = *ref;
 
     if (block->next != NULL) {
         *ref = block->next;
-        assert((*ref)->alive != 0);
+        assert((*ref)->num_entries != 0);
     } else {
-        assert(block == acks->tail);
-        if (ref == &acks->head) {
-            acks->head = NULL;
-            acks->tail = NULL;
+        assert(block == map->tail);
+        if (ref == &map->head) {
+            map->head = NULL;
+            map->tail = NULL;
         } else {
-            acks->tail = (void *)((char *)ref - offsetof(struct st_quicly_ack_block_t, next));
-            acks->tail->next = NULL;
+            map->tail = (void *)((char *)ref - offsetof(struct st_quicly_sent_block_t, next));
+            map->tail->next = NULL;
         }
-        ref = (struct st_quicly_ack_block_t **)&dummy_ref;
+        ref = (struct st_quicly_sent_block_t **)&dummy_ref;
     }
 
     free(block);

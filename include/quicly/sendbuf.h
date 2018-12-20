@@ -55,10 +55,10 @@ struct st_quicly_sendbuf_t {
     quicly_sendbuf_change_cb on_change;
 };
 
-typedef struct st_quicly_sendbuf_ackargs_t {
+typedef struct st_quicly_sendbuf_sent_t {
     uint64_t start;
     uint64_t end;
-} quicly_sendbuf_ackargs_t;
+} quicly_sendbuf_sent_t;
 
 typedef struct st_quicly_sendbuf_dataiter_t {
     quicly_buffer_iter_t d;
@@ -73,9 +73,9 @@ static int quicly_sendbuf_transfer_complete(quicly_sendbuf_t *buf);
 int quicly_sendbuf_write(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb);
 int quicly_sendbuf_shutdown(quicly_sendbuf_t *buf);
 void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
-                         quicly_sendbuf_ackargs_t *ackargs);
-int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args, int is_active);
-int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_ackargs_t *args);
+                         quicly_sendbuf_sent_t *sent);
+int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_sent_t *args, int is_active);
+int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_sent_t *args);
 static void quicly_sendbuf_init_dataiter(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter);
 static void quicly_sendbuf_advance_dataiter(quicly_sendbuf_dataiter_t *iter, size_t nbytes);
 

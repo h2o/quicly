@@ -263,7 +263,7 @@ int main(int argc, char **argv)
     subtest("ranges", test_ranges);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
-    subtest("ack", test_ack);
+    subtest("sentmap", test_sentmap);
     subtest("pne", test_pne);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);

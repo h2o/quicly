@@ -20,7 +20,7 @@ SET(QUICLY_LIBRARY_FILES
     deps/dcc/cc.c
     deps/dcc/cc_cubic.c
     deps/dcc/cc_newreno.c
-    lib/ack.c
+    lib/sentmap.c
     lib/buffer.c
     lib/frame.c
     lib/loss.c
@@ -32,7 +32,7 @@ SET(QUICLY_LIBRARY_FILES
 
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
-    t/ack.c
+    t/sentmap.c
     t/frame.c
     t/maxsender.c
     t/loss.c
