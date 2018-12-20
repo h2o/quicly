@@ -618,9 +618,10 @@ inline int quicly_decode_stream_id_blocked_frame(const uint8_t **src, const uint
 
 inline int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint8_t *end, quicly_new_connection_id_frame_t *frame)
 {
+    uint8_t cid_len;
     if (end - *src < 1)
         goto Fail;
-    uint8_t cid_len = *(*src)++;
+    cid_len = *(*src)++;
     if ((frame->sequence = quicly_decodev(src, end)) == UINT64_MAX)
         goto Fail;
     if (cid_len == 0) {
