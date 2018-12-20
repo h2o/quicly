@@ -31,7 +31,7 @@
 #include "khash.h"
 #include "cc.h"
 #include "quicly.h"
-#include "quicly/ack.h"
+#include "quicly/sentmap.h"
 #include "quicly/frame.h"
 
 #define QUICLY_PROTOCOL_VERSION 0xff00000f

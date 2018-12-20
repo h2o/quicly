@@ -19,8 +19,8 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef quicly_ack_h
-#define quicly_ack_h
+#ifndef quicly_sentmap_h
+#define quicly_sentmap_h
 
 #include <assert.h>
 #include <stdint.h>

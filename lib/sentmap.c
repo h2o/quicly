@@ -21,7 +21,7 @@
  */
 #include <assert.h>
 #include <stdlib.h>
-#include "quicly/ack.h"
+#include "quicly/sentmap.h"
 
 const quicly_sent_t quicly_sentmap__end_iter = {UINT64_MAX, INT64_MAX};
 

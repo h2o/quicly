@@ -19,7 +19,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#include "quicly/ack.h"
+#include "quicly/sentmap.h"
 #include "test.h"
 
 static int on_acked(struct st_quicly_conn_t *conn, int is_ack, quicly_sent_t *sent)
