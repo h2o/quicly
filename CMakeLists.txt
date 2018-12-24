@@ -20,7 +20,6 @@ SET(QUICLY_LIBRARY_FILES
     deps/dcc/cc.c
     deps/dcc/cc_cubic.c
     deps/dcc/cc_newreno.c
-    lib/sentmap.c
     lib/buffer.c
     lib/frame.c
     lib/loss.c
@@ -28,15 +27,16 @@ SET(QUICLY_LIBRARY_FILES
     lib/quicly.c
     lib/ranges.c
     lib/recvbuf.c
-    lib/sendbuf.c)
+    lib/sendbuf.c
+    lib/sentmap.c)
 
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
-    t/sentmap.c
     t/frame.c
     t/maxsender.c
     t/loss.c
     t/ranges.c
+    t/sentmap.c
     t/simple.c
     t/stream-concurrency.c
     t/test.c)

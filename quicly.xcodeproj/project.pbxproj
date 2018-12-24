@@ -216,7 +216,6 @@
 		E984481F1EA48BF400390927 /* lib */ = {
 			isa = PBXGroup;
 			children = (
-				E920D22A1F49533800799777 /* sentmap.c */,
 				E920D2181F42E9CE00799777 /* buffer.c */,
 				E99F8C251F4E9EBF00C26B3D /* frame.c */,
 				E93E54BC1F6CA76C001C50FE /* loss.c */,
@@ -225,6 +224,7 @@
 				E9F6A41F1F3C0B6D0083F0B2 /* ranges.c */,
 				E920D21D1F43E05000799777 /* recvbuf.c */,
 				E9F6A42D1F41375B0083F0B2 /* sendbuf.c */,
+				E920D22A1F49533800799777 /* sentmap.c */,
 			);
 			path = lib;
 			sourceTree = "<group>";
@@ -295,11 +295,11 @@
 		E9CC44121EC1926000DC7D3E /* t */ = {
 			isa = PBXGroup;
 			children = (
-				E920D22D1F4981E500799777 /* sentmap.c */,
 				E99F8C281F4EAEF800C26B3D /* frame.c */,
 				E920D22F1F49EE0B00799777 /* loss.c */,
 				E99B75E61F5CF96900CF503E /* maxsender.c */,
 				E9F6A4291F3C3B7B0083F0B2 /* ranges.c */,
+				E920D22D1F4981E500799777 /* sentmap.c */,
 				E920D2241F49412900799777 /* simple.c */,
 				E99B75E81F5D259400CF503E /* stream-concurrency.c */,
 				E9F6A4281F3C3B3F0083F0B2 /* test.h */,
@@ -334,7 +334,6 @@
 		E9F6A4251F3C3AF90083F0B2 /* quicly */ = {
 			isa = PBXGroup;
 			children = (
-				E920D2281F4951BA00799777 /* sentmap.h */,
 				E920D2161F42E93200799777 /* buffer.h */,
 				E920D2201F44047C00799777 /* constants.h */,
 				E99F8C231F4E863200C26B3D /* frame.h */,
@@ -344,6 +343,7 @@
 				E9F6A4261F3C3B050083F0B2 /* ranges.h */,
 				E920D21B1F43DE4100799777 /* recvbuf.h */,
 				E92D43EC1F41DCF5002AC767 /* sendbuf.h */,
+				E920D2281F4951BA00799777 /* sentmap.h */,
 			);
 			path = quicly;
 			sourceTree = "<group>";
