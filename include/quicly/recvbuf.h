@@ -25,21 +25,13 @@
 #include <assert.h>
 #include <stddef.h>
 #include "picotls.h"
-#include "quicly/buffer.h"
 #include "quicly/ranges.h"
 
-typedef struct st_quicly_recvbuf_t quicly_recvbuf_t;
-typedef void (*quicly_recvbuf_change_cb)(quicly_recvbuf_t *buf, size_t shift_amount);
-
-struct st_quicly_recvbuf_t {
+typedef struct st_quicly_recvstate_t {
     /**
-     * ranges that have been received (guaranteed to be non-empty; first element always start from zero)
+     * ranges that have been received (starts and remains non-empty until transfer completes)
      */
     quicly_ranges_t received;
-    /**
-     * buffered data
-     */
-    quicly_buffer_t data;
     /**
      * starting offset of data
      */
@@ -48,66 +40,20 @@ struct st_quicly_recvbuf_t {
      * end_of_stream offset (or UINT64_MAX)
      */
     uint64_t eos;
-    /**
-     * error code of RST_STREAM frame that closed the stream (or IS_OPEN, FIN_CLOSED, STOPPED)
-     */
-    quicly_stream_error_t _error_code;
-    /**
-     * callback
-     */
-    quicly_recvbuf_change_cb on_change;
-};
+} quicly_recvstate_t;
 
-void quicly_recvbuf_init(quicly_recvbuf_t *buf, quicly_recvbuf_change_cb on_change);
-void quicly_recvbuf_init_closed(quicly_recvbuf_t *buf);
-void quicly_recvbuf_dispose(quicly_recvbuf_t *buf);
-static quicly_stream_error_t quicly_recvbuf_get_error(quicly_recvbuf_t *buf);
-static int quicly_recvbuf_transfer_complete(quicly_recvbuf_t *buf);
-static size_t quicly_recvbuf_available(quicly_recvbuf_t *buf);
-static ptls_iovec_t quicly_recvbuf_get(quicly_recvbuf_t *buf);
-static void quicly_recvbuf_shift(quicly_recvbuf_t *buf, size_t delta);
-int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at);
-int quicly_recvbuf_reset(quicly_recvbuf_t *buf, uint16_t error_code, uint64_t eos_at, uint64_t *bytes_missing);
-int quicly_recvbuf_write(quicly_recvbuf_t *buf, uint64_t offset, const void *p, size_t len);
+void quicly_recvstate_init(quicly_recvstate_t *state);
+void quicly_recvstate_init_closed(quicly_recvstate_t *state);
+void quicly_recvstate_dispose(quicly_recvstate_t *state);
+static int quicly_recvstate_transfer_complete(quicly_recvstate_t *state);
+int quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin);
+int quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t eos_at, uint64_t *bytes_missing);
 
 /* inline definitions */
 
-inline quicly_stream_error_t quicly_recvbuf_get_error(quicly_recvbuf_t *buf)
+inline int quicly_recvstate_transfer_complete(quicly_recvstate_t *state)
 {
-    if (buf->data_off != buf->eos)
-        return QUICLY_STREAM_ERROR_IS_OPEN;
-    return buf->_error_code;
-}
-
-inline int quicly_recvbuf_transfer_complete(quicly_recvbuf_t *buf)
-{
-    return buf->received.ranges[0].end == buf->eos;
-}
-
-inline size_t quicly_recvbuf_available(quicly_recvbuf_t *buf)
-{
-    return buf->received.ranges[0].end - buf->data_off;
-}
-
-inline ptls_iovec_t quicly_recvbuf_get(quicly_recvbuf_t *buf)
-{
-    size_t avail = quicly_recvbuf_available(buf);
-    if (avail == 0)
-        return ptls_iovec_init(NULL, 0);
-    ptls_iovec_t ret = ptls_iovec_init(buf->data.first->p + buf->data.skip, buf->data.first->len - buf->data.skip);
-    if (ret.len > avail)
-        ret.len = avail;
-    return ret;
-}
-
-inline void quicly_recvbuf_shift(quicly_recvbuf_t *buf, size_t delta)
-{
-    if (delta == 0)
-        return;
-
-    buf->data_off += delta;
-    quicly_buffer_shift(&buf->data, delta);
-    (*buf->on_change)(buf, delta);
+    return state->received.num_ranges == 0;
 }
 
 #endif

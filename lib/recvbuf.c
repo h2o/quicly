@@ -22,75 +22,80 @@
 #include "quicly/constants.h"
 #include "quicly/recvbuf.h"
 
-void quicly_recvbuf_init(quicly_recvbuf_t *buf, quicly_recvbuf_change_cb on_change)
+void quicly_recvstate_init(quicly_recvstate_t *state)
 {
-    quicly_ranges_init_with_empty_range(&buf->received);
-    quicly_buffer_init(&buf->data);
-    buf->data_off = 0;
-    buf->eos = UINT64_MAX;
-    buf->_error_code = QUICLY_STREAM_ERROR_FIN_CLOSED; /* see get_error; the value is not returned until all the data is read */
-    buf->on_change = on_change;
+    quicly_ranges_init_with_range(&state->received, 0, 0);
+    state->data_off = 0;
+    state->eos = UINT64_MAX;
 }
 
-void quicly_recvbuf_init_closed(quicly_recvbuf_t *buf)
+void quicly_recvstate_init_closed(quicly_recvstate_t *state)
 {
-    quicly_recvbuf_init(buf, NULL);
-    buf->eos = 0;
-    buf->_error_code = QUICLY_STREAM_ERROR_NOT_IN_USE;
+    quicly_ranges_init(&state->received);
+    state->data_off = 0;
+    state->eos = 0;
 }
 
-void quicly_recvbuf_dispose(quicly_recvbuf_t *buf)
+void quicly_recvstate_dispose(quicly_recvstate_t *state)
 {
-    quicly_buffer_dispose(&buf->data);
-    quicly_ranges_dispose(&buf->received);
+    quicly_ranges_clear(&state->received);
 }
 
-int quicly_recvbuf_write(quicly_recvbuf_t *buf, uint64_t offset, const void *p, size_t len)
+int quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin)
 {
     int ret;
 
-    if (len == 0)
+    assert(!quicly_recvstate_transfer_complete(state));
+
+    /* eos handling */
+    if (state->eos == UINT64_MAX) {
+        if (is_fin) {
+            state->eos = off + *len;
+            if (state->eos < state->received.ranges[state->received.num_ranges - 1].end)
+                return QUICLY_ERROR_FINAL_OFFSET;
+        }
+    } else {
+        if (off + *len > state->eos)
+            return QUICLY_ERROR_FINAL_OFFSET;
+    }
+
+    /* no state change; entire data has already been received */
+    if (off + *len <= state->data_off) {
+        *len = 0;
         return 0;
-    if ((ret = quicly_ranges_add(&buf->received, offset, offset + len)) != 0)
+    }
+
+    /* adjust if partially received */
+    if (off < state->data_off) {
+        size_t delta = state->data_off - off;
+        off += delta;
+        *len -= delta;
+    }
+
+    /* update received range */
+    if ((ret = quicly_ranges_add(&state->received, off, off + *len)) != 0)
         return ret;
-    if ((ret = quicly_buffer_write(&buf->data, offset - buf->data_off, p, len)) != 0)
-        return ret;
+    if (state->received.num_ranges == 1 && state->received.ranges[0].start == 0 && state->received.ranges[0].end == state->eos)
+        quicly_ranges_clear(&state->received);
+
     return 0;
 }
 
-int quicly_recvbuf_mark_eos(quicly_recvbuf_t *buf, uint64_t eos_at)
+int quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t eos_at, uint64_t *bytes_missing)
 {
-    if (eos_at < buf->received.ranges[buf->received.num_ranges - 1].end)
+    assert(!quicly_recvstate_transfer_complete(state));
+
+    /* validate */
+    if (state->eos != UINT64_MAX && state->eos != eos_at)
         return QUICLY_ERROR_FINAL_OFFSET;
-    if (buf->eos == UINT64_MAX) {
-        buf->eos = eos_at;
-        return 0;
-    }
-    return buf->eos == eos_at ? 0 : QUICLY_ERROR_FINAL_OFFSET;
-}
+    if (eos_at < state->received.ranges[state->received.num_ranges - 1].end)
+        return QUICLY_ERROR_FINAL_OFFSET;
 
-int quicly_recvbuf_reset(quicly_recvbuf_t *buf, uint16_t error_code, uint64_t eos_at, uint64_t *bytes_missing)
-{
-    int ret;
+    /* calculate bytes missing */
+    *bytes_missing = eos_at - state->received.ranges[state->received.num_ranges - 1].end;
 
-    if ((ret = quicly_recvbuf_mark_eos(buf, eos_at)) != 0)
-        goto Exit;
-    *bytes_missing = eos_at - buf->received.ranges[buf->received.num_ranges - 1].end;
+    /* clear the received range */
+    quicly_ranges_clear(&state->received);
 
-    quicly_buffer_dispose(&buf->data);
-    quicly_ranges_dispose(&buf->received);
-
-    if ((ret = quicly_ranges_init_with_empty_range(&buf->received)) != 0)
-        goto Exit;
-    if (eos_at != 0 && (ret = quicly_ranges_add(&buf->received, 0, eos_at)) != 0)
-        goto Exit;
-    quicly_buffer_init(&buf->data);
-    buf->data_off = eos_at;
-
-    /* the code will be set to STOPPED if we have sent STOP_SENDING */
-    if (buf->_error_code != QUICLY_STREAM_ERROR_STOPPED)
-        buf->_error_code = error_code;
-
-Exit:
-    return ret;
+    return 0;
 }

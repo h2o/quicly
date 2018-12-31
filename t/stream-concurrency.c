@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include <string.h>
+#include "quicly/streambuf.h"
 #include "test.h"
 
 void test_stream_concurrency(void)
@@ -27,6 +28,7 @@ void test_stream_concurrency(void)
     quicly_conn_t *client, *server;
     size_t limit = quic_ctx.max_streams_bidi;
     quicly_stream_t *client_streams[limit + 1], *server_stream;
+    test_streambuf_t *client_streambufs[limit + 1], *server_streambuf;
     size_t i;
     int ret;
 
@@ -52,42 +54,44 @@ void test_stream_concurrency(void)
     /* open as many streams as we can */
     for (i = 0; i < limit + 1; ++i) {
         ret = quicly_open_stream(client, client_streams + i, 0);
+        assert(ret == 0);
+        client_streambufs[i] = client_streams[i]->data;
         if (client_streams[i]->stream_id_blocked)
             break;
-        client_streams[i]->on_update = on_update_noop;
-        quicly_sendbuf_write(&client_streams[i]->sendbuf, "hello", 5, NULL);
+        ret = quicly_streambuf_egress_write(client_streams[i], "hello", 5);
+        assert(ret == 0);
     }
     ok(i == limit);
 
     transmit(client, server);
     transmit(server, client);
 
-    /* the last steram is still ID-blocked after 1RT */
+    /* the last stream is still ID-blocked after 1RT */
     ok(client_streams[i]->stream_id_blocked);
 
     /* reset one stream in both directions and close on the client-side */
     server_stream = quicly_get_stream(server, client_streams[i - 1]->stream_id);
     ok(server_stream != NULL);
-    quicly_reset_stream(client_streams[i - 1], 0);
-    quicly_request_stop(client_streams[i - 1], 0);
+    server_streambuf = server_stream->data;
+    quicly_reset_stream(client_streams[i - 1], 123);
+    quicly_request_stop(client_streams[i - 1], 456);
     transmit(client, server);
     transmit(server, client);
-    ok(quicly_stream_is_closable(client_streams[i - 1]));
-    quicly_close_stream(client_streams[i - 1]);
-    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
-    transmit(client, server);
-    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
-    transmit(server, client);
+    ok(server_streambuf->error_received.reset_stream == 123);
+    ok(server_streambuf->error_received.stop_sending == 456);
+    ok(!server_streambuf->is_detached); /* haven't gotten ACK for reset */
+    ok(client_streambufs[i - 1]->error_received.reset_stream == 456);
+    ok(client_streambufs[i - 1]->is_detached);
 
-    /* still ID-blocked */
+    /* the last stream is still ID-blocked */
     ok(client_streams[i]->stream_id_blocked);
 
-    /* close the stream on the server-side */
-    ok(quicly_stream_is_closable(server_stream));
-    quicly_close_stream(server_stream);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(client, server);
     transmit(server, client);
 
-    /* no longer ID-blocked */
+    /* we would have free room now that RST of the server-sent side is ACKed */
+    ok(server_streambuf->is_detached);
     ok(!client_streams[i]->stream_id_blocked);
     ++i;
 

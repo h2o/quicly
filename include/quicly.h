@@ -342,6 +342,15 @@ typedef enum {
     QUICLY_SENDER_STATE_ACKED,
 } quicly_sender_state_t;
 
+typedef struct st_quicly_stream_callbacks_t {
+    void (*destroy)(quicly_stream_t *stream);
+    void (*send_shift)(quicly_stream_t *stream, size_t delta);
+    int (*send_emit)(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
+    int (*send_stop)(quicly_stream_t *stream, uint16_t error_code);
+    int (*receive)(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+    int (*receive_reset)(quicly_stream_t *stream, uint16_t error_code);
+} quicly_stream_callbacks_t;
+
 struct st_quicly_stream_t {
     /**
      *
@@ -352,21 +361,21 @@ struct st_quicly_stream_t {
      */
     quicly_stream_id_t stream_id;
     /**
+     *
+     */
+    const quicly_stream_callbacks_t *callbacks;
+    /**
      * send buffer
      */
-    quicly_sendbuf_t sendbuf;
+    quicly_sendstate_t sendstate;
     /**
      * receive buffer
      */
-    quicly_recvbuf_t recvbuf;
+    quicly_recvstate_t recvstate;
     /**
      *
      */
     void *data;
-    /**
-     * the receive callback
-     */
-    quicly_stream_update_cb on_update;
     /**
      *
      */
@@ -394,6 +403,9 @@ struct st_quicly_stream_t {
          * rst_stream
          */
         struct {
+            /**
+             * STATE_NONE until RST is generated
+             */
             quicly_sender_state_t sender_state;
             uint16_t error_code;
         } rst;
@@ -549,10 +561,6 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream, int unidir
 /**
  *
  */
-static int quicly_stream_is_closable(quicly_stream_t *stream);
-/**
- *
- */
 void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code);
 /**
  *
@@ -561,7 +569,11 @@ void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code);
 /**
  *
  */
-void quicly_close_stream(quicly_stream_t *stream);
+int quicly_stream_sync_sendbuf(quicly_stream_t *stream, int activate);
+/**
+ *
+ */
+void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount);
 /**
  *
  */
@@ -570,6 +582,10 @@ static int quicly_stream_is_client_initiated(quicly_stream_id_t stream_id);
  *
  */
 static int quicly_stream_is_unidirectional(quicly_stream_id_t stream_id);
+/**
+ *
+ */
+static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
 /**
  *
  */
@@ -692,6 +708,11 @@ inline int quicly_stream_is_unidirectional(quicly_stream_id_t stream_id)
     return (stream_id & 2) != 0;
 }
 
+inline int quicly_stream_is_self_initiated(quicly_stream_t *stream)
+{
+    return quicly_stream_is_client_initiated(stream->stream_id) == quicly_is_client(stream->conn);
+}
+
 inline void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received, uint64_t *num_sent, uint64_t *num_lost,
                                     uint64_t *num_ack_received, uint64_t *num_bytes_sent)
 {
@@ -701,15 +722,6 @@ inline void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received,
     *num_lost = c->num_packets.lost;
     *num_ack_received = c->num_packets.ack_received;
     *num_bytes_sent = c->num_bytes_sent;
-}
-
-inline int quicly_stream_is_closable(quicly_stream_t *stream)
-{
-    if (!quicly_sendbuf_transfer_complete(&stream->sendbuf))
-        return 0;
-    if (!quicly_recvbuf_transfer_complete(&stream->recvbuf))
-        return 0;
-    return 1;
 }
 
 #ifdef __cplusplus

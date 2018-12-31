@@ -30,6 +30,7 @@
 #include "picotls.h"
 #include "picotls/openssl.h"
 #include "quicly.h"
+#include "quicly/streambuf.h"
 #include "../lib/quicly.c"
 #include "test.h"
 
@@ -82,13 +83,55 @@
     "-----END CERTIFICATE-----\n"
 
 static int64_t get_now(quicly_context_t *ctx);
+static void on_destroy(quicly_stream_t *stream);
+static int on_egress_stop(quicly_stream_t *stream, uint16_t error_code);
+static int on_ingress_reset(quicly_stream_t *stream, uint16_t error_code);
 
 int64_t quic_now;
 quicly_context_t quic_ctx;
+quicly_stream_callbacks_t stream_callbacks = {on_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit,
+                                              on_egress_stop, quicly_streambuf_ingress_receive, on_ingress_reset};
+size_t on_destroy_callcnt;
 
-static int64_t get_now(quicly_context_t *ctx)
+int64_t get_now(quicly_context_t *ctx)
 {
     return quic_now;
+}
+
+void on_destroy(quicly_stream_t *stream)
+{
+    test_streambuf_t *sbuf = stream->data;
+    sbuf->is_detached = 1;
+    ++on_destroy_callcnt;
+}
+
+int on_egress_stop(quicly_stream_t *stream, uint16_t error_code)
+{
+    test_streambuf_t *sbuf = stream->data;
+    sbuf->error_received.stop_sending = error_code;
+    return 0;
+}
+
+int on_ingress_reset(quicly_stream_t *stream, uint16_t error_code)
+{
+    test_streambuf_t *sbuf = stream->data;
+    sbuf->error_received.reset_stream = error_code;
+    return 0;
+}
+
+int on_stream_open(quicly_stream_t *stream)
+{
+    test_streambuf_t *sbuf;
+    int ret;
+
+    ret = quicly_streambuf_create(stream, sizeof(*sbuf));
+    assert(ret == 0);
+    sbuf = stream->data;
+    sbuf->error_received.stop_sending = -1;
+    sbuf->error_received.reset_stream = -1;
+    stream->callbacks = &stream_callbacks;
+
+    return 0;
 }
 
 static void test_pne(void)
@@ -134,29 +177,9 @@ size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw,
     return dc;
 }
 
-int on_update_noop(quicly_stream_t *stream)
+int buffer_is(ptls_buffer_t *buf, const char *s)
 {
-    return 0;
-}
-
-int on_stream_open_buffering(quicly_stream_t *stream)
-{
-    stream->on_update = on_update_noop;
-    return 0;
-}
-
-int recvbuf_is(quicly_recvbuf_t *buf, const char *s)
-{
-    for (; *s != '\0'; ++s) {
-        ptls_iovec_t input = quicly_recvbuf_get(buf);
-        if (input.len == 0)
-            return 0;
-        if (*s != input.base[0])
-            return 0;
-        quicly_recvbuf_shift(buf, 1);
-    }
-
-    return 1;
+    return buf->off == strlen(s) && memcmp(buf->base, s, buf->off) == 0;
 }
 
 size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
@@ -227,7 +250,7 @@ int main(int argc, char **argv)
     quic_ctx = quicly_default_context;
     quic_ctx.tls = &tlsctx;
     quic_ctx.max_streams_bidi = 10;
-    quic_ctx.on_stream_open = on_stream_open_buffering;
+    quic_ctx.on_stream_open = on_stream_open;
     quic_ctx.now = get_now;
 
     ERR_load_crypto_strings();

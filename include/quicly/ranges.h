@@ -38,8 +38,7 @@ typedef struct st_quicly_ranges_t {
 } quicly_ranges_t;
 
 static void quicly_ranges_init(quicly_ranges_t *ranges);
-int quicly_ranges_init_with_empty_range(quicly_ranges_t *ranges);
-static void quicly_ranges_dispose(quicly_ranges_t *ranges);
+int quicly_ranges_init_with_range(quicly_ranges_t *ranges, uint64_t start, uint64_t end);
 static void quicly_ranges_clear(quicly_ranges_t *ranges);
 int quicly_ranges_add(quicly_ranges_t *ranges, uint64_t start, uint64_t end);
 int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end);
@@ -54,16 +53,14 @@ inline void quicly_ranges_init(quicly_ranges_t *ranges)
     ranges->capacity = 1;
 }
 
-inline void quicly_ranges_dispose(quicly_ranges_t *ranges)
-{
-    if (ranges->ranges != &ranges->_initial)
-        free(ranges->ranges);
-}
-
 inline void quicly_ranges_clear(quicly_ranges_t *ranges)
 {
-    quicly_ranges_dispose(ranges);
-    quicly_ranges_init(ranges);
+    if (ranges->ranges != &ranges->_initial) {
+        free(ranges->ranges);
+        ranges->ranges = &ranges->_initial;
+    }
+    ranges->num_ranges = 0;
+    ranges->capacity = 1;
 }
 
 #endif

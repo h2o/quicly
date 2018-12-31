@@ -45,7 +45,7 @@ struct st_quicly_sent_t {
         } ack;
         struct {
             quicly_stream_id_t stream_id;
-            quicly_sendbuf_sent_t args;
+            quicly_sendstate_sent_t args;
         } stream;
         struct {
             quicly_stream_id_t stream_id;

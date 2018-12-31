@@ -178,11 +178,6 @@ static int cond_rand(void)
     return v < rand_ratio;
 }
 
-static int fully_received(quicly_recvbuf_t *buf)
-{
-    return buf->received.ranges[0].end == buf->eos;
-}
-
 static void loss_core(int downstream_only)
 {
     size_t num_sent_up, num_sent_down, num_received;
@@ -211,6 +206,7 @@ static void loss_core(int downstream_only)
     }
 
     quicly_stream_t *client_stream = NULL, *server_stream = NULL;
+    test_streambuf_t *client_streambuf = NULL, *server_streambuf = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
     size_t i, stall_count = 0;
     for (i = 0; i < 2000; ++i) {
@@ -230,11 +226,11 @@ static void loss_core(int downstream_only)
                     fprintf(stderr, "%s: quicly_open_stream: ret=%d\n", __FUNCTION__, ret);
                     goto Fail;
                 }
-                client_stream->on_update = on_update_noop;
-                quicly_sendbuf_write(&client_stream->sendbuf, req, strlen(req), NULL);
-                quicly_sendbuf_shutdown(&client_stream->sendbuf);
-            } else if (fully_received(&client_stream->recvbuf)) {
-                ok(recvbuf_is(&client_stream->recvbuf, resp));
+                client_streambuf = client_stream->data;
+                quicly_streambuf_egress_write(client_stream, req, strlen(req));
+                quicly_streambuf_egress_shutdown(client_stream);
+            } else if (client_streambuf->is_detached) {
+                ok(buffer_is(&client_streambuf->super.ingress, resp));
                 ok(max_data_is_equal(client, server));
                 return;
             }
@@ -244,10 +240,11 @@ static void loss_core(int downstream_only)
         client_timeout = quicly_get_first_timeout(client);
         assert(client_timeout > quic_now - 20);
         if (client_stream != NULL && (server_stream = quicly_get_stream(server, client_stream->stream_id)) != NULL) {
-            if (fully_received(&server_stream->recvbuf) && server_stream->recvbuf.data_off == 0) {
-                ok(recvbuf_is(&server_stream->recvbuf, req));
-                quicly_sendbuf_write(&server_stream->sendbuf, resp, strlen(resp), NULL);
-                quicly_sendbuf_shutdown(&server_stream->sendbuf);
+            if (server_streambuf == NULL && quicly_recvstate_transfer_complete(&server_stream->recvstate)) {
+                server_streambuf = server_stream->data;
+                ok(buffer_is(&server_streambuf->super.ingress, req));
+                quicly_streambuf_egress_write(server_stream, resp, strlen(resp));
+                quicly_streambuf_egress_shutdown(server_stream);
             }
         }
         if (num_sent_up + num_sent_down == 0) {

@@ -130,7 +130,7 @@ static void test_ack_encode(void)
     ok(decoded.gaps[0] == 1);
     ok(decoded.ack_block_lengths[1] == 1);
 
-    quicly_ranges_dispose(&ranges);
+    quicly_ranges_clear(&ranges);
 }
 
 static void test_mozquic(void)

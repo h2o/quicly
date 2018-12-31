@@ -26,127 +26,106 @@
 #include "quicly/constants.h"
 #include "quicly/sendbuf.h"
 
-void quicly_sendbuf_init(quicly_sendbuf_t *buf, quicly_sendbuf_change_cb on_change)
+void quicly_sendstate_init(quicly_sendstate_t *state)
 {
-    quicly_ranges_init_with_empty_range(&buf->acked);
-    quicly_ranges_init(&buf->pending);
-    quicly_buffer_init(&buf->data);
-    buf->eos = UINT64_MAX;
-    buf->error_code = QUICLY_STREAM_ERROR_IS_OPEN;
-    buf->on_change = on_change;
+    quicly_ranges_init_with_range(&state->acked, 0, 0);
+    quicly_ranges_init(&state->pending);
+    state->size_committed = 0;
+    state->is_open = 1;
 }
 
-void quicly_sendbuf_init_closed(quicly_sendbuf_t *buf)
+void quicly_sendstate_init_closed(quicly_sendstate_t *state)
 {
-    quicly_sendbuf_init(buf, NULL);
-    buf->eos = 1;
-    assert(buf->acked.num_ranges == 1);
-    buf->acked.ranges[0].end = 1;
-    buf->error_code = QUICLY_STREAM_ERROR_NOT_IN_USE;
+    quicly_sendstate_init(state);
+    state->is_open = 0;
 }
 
-void quicly_sendbuf_dispose(quicly_sendbuf_t *buf)
+void quicly_sendstate_dispose(quicly_sendstate_t *state)
 {
-    quicly_buffer_dispose(&buf->data);
-    quicly_ranges_dispose(&buf->acked);
-    quicly_ranges_dispose(&buf->pending);
+    quicly_ranges_clear(&state->acked);
+    quicly_ranges_clear(&state->pending);
+    state->size_committed = 0;
+    state->is_open = 0;
 }
 
-int quicly_sendbuf_write(quicly_sendbuf_t *buf, const void *p, size_t len, quicly_buffer_free_cb free_cb)
+int quicly_sendstate_activate(quicly_sendstate_t *state)
 {
-    uint64_t end_off;
-    int ret;
+    uint64_t end_off = state->is_open ? UINT64_MAX : state->size_committed;
 
-    assert(buf->eos == UINT64_MAX);
+    /* do nothing if already active */
+    if (state->pending.num_ranges != 0 && state->pending.ranges[state->pending.num_ranges - 1].end == end_off)
+        return 0;
 
-    if ((ret = quicly_buffer_push(&buf->data, p, len, free_cb)) != 0)
-        goto Exit;
-    end_off = buf->acked.ranges[0].end + buf->data.len;
-    if ((ret = quicly_ranges_add(&buf->pending, end_off - len, end_off)) != 0)
-        goto Exit;
-
-    buf->on_change(buf);
-Exit:
-    return ret;
+    return quicly_ranges_add(&state->pending, state->size_committed, end_off);
 }
 
-int quicly_sendbuf_shutdown(quicly_sendbuf_t *buf)
+int quicly_sendstate_shutdown(quicly_sendstate_t *state, uint64_t end_off)
 {
     int ret;
 
-    assert(buf->eos == UINT64_MAX);
+    assert(state->is_open);
+    assert(state->size_committed <= end_off);
 
-    buf->eos = buf->acked.ranges[0].end + buf->data.len;
-    if ((ret = quicly_ranges_add(&buf->pending, buf->eos, buf->eos + 1)) != 0)
-        goto Exit;
-    buf->error_code = QUICLY_STREAM_ERROR_FIN_CLOSED;
-
-    buf->on_change(buf);
-Exit:
-    return ret;
-}
-
-void quicly_sendbuf_emit(quicly_sendbuf_t *buf, quicly_sendbuf_dataiter_t *iter, size_t nbytes, void *dst,
-                         quicly_sendbuf_sent_t *sent)
-{
-    sent->start = iter->stream_off;
-
-    /* emit data */
-    if (nbytes != 0) {
-        iter->stream_off += nbytes;
-        quicly_buffer_emit(&iter->d, nbytes, dst);
-    }
-
-    /* adjust iter->stream_off to off-by-one indicating that FIN has been sent */
-    if (buf->eos == iter->stream_off) {
-        assert(iter->d.vec == NULL);
-        ++iter->stream_off;
-    }
-
-    sent->end = iter->stream_off;
-}
-
-int quicly_sendbuf_acked(quicly_sendbuf_t *buf, quicly_sendbuf_sent_t *args, int is_active)
-{
-    uint64_t prev_base_off = buf->acked.ranges[0].end;
-    int ret;
-
-    if ((ret = quicly_ranges_add(&buf->acked, args->start, args->end)) != 0)
-        return ret;
-    if (!is_active) {
-        if ((ret = quicly_ranges_subtract(&buf->pending, args->start, args->end)) != 0)
+    if (state->pending.num_ranges != 0 && state->pending.ranges[state->pending.num_ranges - 1].end == UINT64_MAX) {
+        state->pending.ranges[state->pending.num_ranges - 1].end = end_off + 1;
+    } else {
+        if ((ret = quicly_ranges_add(&state->pending, state->size_committed, end_off + 1)) != 0)
             return ret;
     }
-    assert(buf->pending.num_ranges == 0 || buf->acked.ranges[0].end <= buf->pending.ranges[0].start);
 
-    size_t delta = buf->acked.ranges[0].end - prev_base_off;
-    if (delta != 0)
-        quicly_buffer_shift(&buf->data, delta);
+    state->size_committed = end_off + 1;
+    state->is_open = 0;
+    return 0;
+}
+
+int quicly_sendstate_acked(quicly_sendstate_t *state, quicly_sendstate_sent_t *args, int is_active, size_t *bytes_to_shift)
+{
+    uint64_t prev_sent_upto = state->acked.ranges[0].end;
+    int ret;
+
+    /* adjust acked and pending ranges */
+    if ((ret = quicly_ranges_add(&state->acked, args->start, args->end)) != 0)
+        return ret;
+    if (!is_active) {
+        if ((ret = quicly_ranges_subtract(&state->pending, args->start, args->end)) != 0)
+            return ret;
+    }
+    assert(state->pending.num_ranges == 0 || state->acked.ranges[0].end <= state->pending.ranges[0].start);
+
+    /* calculate number of bytes that can be retired from the send buffer */
+    if (prev_sent_upto != state->acked.ranges[0].end) {
+        uint64_t sent_upto = state->acked.ranges[0].end;
+        if (!state->is_open && state->pending.num_ranges == 0)
+            sent_upto -= 1;
+        *bytes_to_shift = sent_upto - prev_sent_upto;
+    } else {
+        *bytes_to_shift = 0;
+    }
 
     return 0;
 }
 
-int quicly_sendbuf_lost(quicly_sendbuf_t *buf, quicly_sendbuf_sent_t *args)
+int quicly_sendstate_lost(quicly_sendstate_t *state, quicly_sendstate_sent_t *args)
 {
     uint64_t start = args->start, end = args->end;
     size_t acked_slot = 0;
     int ret;
 
     while (start < end) {
-        if (start < buf->acked.ranges[acked_slot].end)
-            start = buf->acked.ranges[acked_slot].end;
+        if (start < state->acked.ranges[acked_slot].end)
+            start = state->acked.ranges[acked_slot].end;
         ++acked_slot;
-        if (acked_slot == buf->acked.num_ranges || end <= buf->acked.ranges[acked_slot].start) {
+        if (acked_slot == state->acked.num_ranges || end <= state->acked.ranges[acked_slot].start) {
             if (!(start < end))
                 return 0;
-            return quicly_ranges_add(&buf->pending, start, end);
+            return quicly_ranges_add(&state->pending, start, end);
         }
-        if (start < buf->acked.ranges[acked_slot].start) {
-            if ((ret = quicly_ranges_add(&buf->pending, start, buf->acked.ranges[acked_slot].start)) != 0)
+        if (start < state->acked.ranges[acked_slot].start) {
+            if ((ret = quicly_ranges_add(&state->pending, start, state->acked.ranges[acked_slot].start)) != 0)
                 return ret;
         }
     }
 
-    assert(buf->acked.ranges[0].end <= buf->pending.ranges[0].start);
+    assert(state->acked.ranges[0].end <= state->pending.ranges[0].start);
     return 0;
 }
