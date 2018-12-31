@@ -21,41 +21,29 @@
  */
 #include <assert.h>
 #include <stdlib.h>
+#include "picotls.h"
 #include "quicly/sentmap.h"
 
-const quicly_sent_t quicly_sentmap__end_iter = {UINT64_MAX, INT64_MAX};
+const quicly_sent_t quicly_sentmap__end_iter = {quicly_sentmap__type_packet, {{UINT64_MAX, INT64_MAX}}};
 
-void quicly_sentmap_dispose(quicly_sentmap_t *map)
+static void next_entry(quicly_sentmap_iter_t *iter)
 {
-    struct st_quicly_sent_block_t *block;
-
-    while ((block = map->head) != NULL) {
-        map->head = block->next;
-        free(block);
-    }
-}
-
-struct st_quicly_sent_block_t *quicly_sentmap__new_block(quicly_sentmap_t *map)
-{
-    struct st_quicly_sent_block_t *block;
-
-    if ((block = malloc(sizeof(*block))) == NULL)
-        return NULL;
-
-    block->next = NULL;
-    block->num_entries = 0;
-    block->next_insert_at = 0;
-    if (map->tail != NULL) {
-        map->tail->next = block;
-        map->tail = block;
+    if (--iter->count != 0) {
+        ++iter->p;
+    } else if (*(iter->ref = &(*iter->ref)->next) == NULL) {
+        iter->p = (quicly_sent_t *)&quicly_sentmap__end_iter;
+        iter->count = 0;
+        return;
     } else {
-        map->head = map->tail = block;
+        assert((*iter->ref)->num_entries != 0);
+        iter->count = (*iter->ref)->num_entries;
+        iter->p = (*iter->ref)->entries;
     }
-
-    return block;
+    while (iter->p->acked == NULL)
+        ++iter->p;
 }
 
-struct st_quicly_sent_block_t **quicly_sentmap__release_block(quicly_sentmap_t *map, struct st_quicly_sent_block_t **ref)
+static struct st_quicly_sent_block_t **free_block(quicly_sentmap_t *map, struct st_quicly_sent_block_t **ref)
 {
     static const struct st_quicly_sent_block_t dummy = {NULL};
     static const struct st_quicly_sent_block_t *const dummy_ref = &dummy;
@@ -78,4 +66,110 @@ struct st_quicly_sent_block_t **quicly_sentmap__release_block(quicly_sentmap_t *
 
     free(block);
     return ref;
+}
+
+static void discard_entry(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter)
+{
+    assert(iter->p->acked != NULL);
+    iter->p->acked = NULL;
+
+    struct st_quicly_sent_block_t *block = *iter->ref;
+    if (--block->num_entries == 0) {
+        iter->ref = free_block(map, iter->ref);
+        block = *iter->ref;
+        iter->p = block->entries - 1;
+        iter->count = block->num_entries + 1;
+    }
+}
+
+void quicly_sentmap_dispose(quicly_sentmap_t *map)
+{
+    struct st_quicly_sent_block_t *block;
+
+    while ((block = map->head) != NULL) {
+        map->head = block->next;
+        free(block);
+    }
+}
+
+int quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_t now, uint8_t ack_epoch)
+{
+    assert(map->_pending_packet == NULL);
+
+    if ((map->_pending_packet = quicly_sentmap_allocate(map, quicly_sentmap__type_packet)) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+    map->_pending_packet->data.packet = (quicly_sent_packet_t){packet_number, now, ack_epoch};
+    return 0;
+}
+
+struct st_quicly_sent_block_t *quicly_sentmap__new_block(quicly_sentmap_t *map)
+{
+    struct st_quicly_sent_block_t *block;
+
+    if ((block = malloc(sizeof(*block))) == NULL)
+        return NULL;
+
+    block->next = NULL;
+    block->num_entries = 0;
+    block->next_insert_at = 0;
+    if (map->tail != NULL) {
+        map->tail->next = block;
+        map->tail = block;
+    } else {
+        map->head = map->tail = block;
+    }
+
+    return block;
+}
+
+void quicly_sentmap_skip(quicly_sentmap_iter_t *iter)
+{
+    do {
+        next_entry(iter);
+    } while (iter->p->acked != quicly_sentmap__type_packet);
+}
+
+int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, unsigned flags, struct st_quicly_conn_t *conn)
+{
+    quicly_sent_packet_t packet;
+    int ret = 0;
+
+    assert(iter->p != &quicly_sentmap__end_iter);
+    assert(iter->p->acked == quicly_sentmap__type_packet);
+
+    /* copy packet info */
+    packet = iter->p->data.packet;
+
+    /* update packet-level metrics */
+    if (packet.bytes_in_flight != 0) {
+        assert(map->bytes_in_flight >= packet.bytes_in_flight);
+        map->bytes_in_flight -= packet.bytes_in_flight;
+    }
+
+    /* release the packet info, or change bytes_in_flight to zero if it's been deemed lost (note that we'd still be passing the
+     * correct value to the acked callbacks) */
+    if ((flags & QUICLY_SENTMAP_UPDATE_DISCARD) != 0) {
+        /* the only case we can retire an entry without calling the acked callback is for ACK frames */
+        assert((flags & (QUICLY_SENTMAP_UPDATE_ACKED | QUICLY_SENTMAP_UPDATE_LOST)) != 0 || packet.bytes_in_flight == 0);
+        discard_entry(map, iter);
+    } else if ((flags & QUICLY_SENTMAP_UPDATE_LOST) != 0) {
+        iter->p->data.packet.bytes_in_flight = 0;
+    }
+
+    /* iterate through the frames */
+    for (next_entry(iter); iter->p->acked != quicly_sentmap__type_packet; next_entry(iter)) {
+        if (ret == 0 && (flags & (QUICLY_SENTMAP_UPDATE_LOST | QUICLY_SENTMAP_UPDATE_ACKED)) != 0)
+            ret = iter->p->acked(conn, (flags & QUICLY_SENTMAP_UPDATE_ACKED) != 0, &packet, iter->p);
+        if ((flags & QUICLY_SENTMAP_UPDATE_DISCARD) != 0)
+            discard_entry(map, iter);
+    }
+
+    return ret;
+}
+
+int quicly_sentmap__type_packet(struct st_quicly_conn_t *conn, int is_acked, const quicly_sent_packet_t *packet,
+                                quicly_sent_t *sent)
+{
+    assert(!"quicly_sentmap__type_packet cannot be called");
+    return QUICLY_ERROR_INTERNAL;
 }

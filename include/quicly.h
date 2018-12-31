@@ -336,9 +336,21 @@ struct _st_quicly_conn_public_t {
 };
 
 typedef enum {
+    /**
+     * initial state
+     */
     QUICLY_SENDER_STATE_NONE,
+    /**
+     * to be sent. Changes to UNACKED when sent out by quicly_send
+     */
     QUICLY_SENDER_STATE_SEND,
+    /**
+     * inflight. changes to SEND (when packet is deemed lost), or ACKED (when packet is ACKed)
+     */
     QUICLY_SENDER_STATE_UNACKED,
+    /**
+     * the sent value acknowledged by peer
+     */
     QUICLY_SENDER_STATE_ACKED,
 } quicly_sender_state_t;
 
