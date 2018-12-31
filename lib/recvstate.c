@@ -20,7 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include "quicly/constants.h"
-#include "quicly/recvbuf.h"
+#include "quicly/recvstate.h"
 
 void quicly_recvstate_init(quicly_recvstate_t *state)
 {

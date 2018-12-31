@@ -19,8 +19,8 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef quicly_recvbuf_h
-#define quicly_recvbuf_h
+#ifndef quicly_recvstate_h
+#define quicly_recvstate_h
 
 #include <assert.h>
 #include <stddef.h>

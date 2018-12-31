@@ -19,8 +19,8 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef quicly_sendbuf_h
-#define quicly_sendbuf_h
+#ifndef quicly_sendstate_h
+#define quicly_sendstate_h
 
 #include "quicly/ranges.h"
 

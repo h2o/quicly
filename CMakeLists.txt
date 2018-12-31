@@ -25,8 +25,8 @@ SET(QUICLY_LIBRARY_FILES
     lib/maxsender.c
     lib/quicly.c
     lib/ranges.c
-    lib/recvbuf.c
-    lib/sendbuf.c
+    lib/recvstate.c
+    lib/sendstate.c
     lib/sentmap.c
     lib/streambuf.c)
 

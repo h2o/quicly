@@ -26,7 +26,7 @@
 #include <stdint.h>
 #include "quicly/constants.h"
 #include "quicly/maxsender.h"
-#include "quicly/sendbuf.h"
+#include "quicly/sendstate.h"
 
 struct st_quicly_conn_t;
 typedef struct st_quicly_sent_t quicly_sent_t;

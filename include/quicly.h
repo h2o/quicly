@@ -36,8 +36,8 @@ extern "C" {
 #include "quicly/frame.h"
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
-#include "quicly/recvbuf.h"
-#include "quicly/sendbuf.h"
+#include "quicly/recvstate.h"
+#include "quicly/sendstate.h"
 #include "quicly/maxsender.h"
 
 #ifndef QUICLY_DEBUG

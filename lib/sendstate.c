@@ -24,7 +24,7 @@
 #include <string.h>
 #include "picotls.h"
 #include "quicly/constants.h"
-#include "quicly/sendbuf.h"
+#include "quicly/sendstate.h"
 
 void quicly_sendstate_init(quicly_sendstate_t *state)
 {
