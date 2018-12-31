@@ -22,8 +22,13 @@
 #include "quicly/sentmap.h"
 #include "test.h"
 
-static int on_acked(struct st_quicly_conn_t *conn, int is_ack, quicly_sent_t *sent)
+static int on_acked_callcnt, on_acked_ackcnt;
+
+static int on_acked(struct st_quicly_conn_t *conn, int is_ack, const quicly_sent_packet_t *packet, quicly_sent_t *sent)
 {
+    ++on_acked_callcnt;
+    if (is_ack)
+        ++on_acked_ackcnt;
     return 0;
 }
 
@@ -41,31 +46,33 @@ static size_t num_blocks(quicly_sentmap_t *map)
 void test_sentmap(void)
 {
     quicly_sentmap_t map;
-    quicly_sent_t *sent;
     uint64_t at;
-    size_t i, j;
+    size_t i;
+    quicly_sentmap_iter_t iter;
+    const quicly_sent_packet_t *sent;
 
     quicly_sentmap_init(&map);
 
-    /* save 150 acks, packet number from 1 to 50 */
-    for (at = 0; at < 10; ++at)
-        for (i = 1; i <= 5; ++i)
-            for (j = 0; j < 3; ++j)
-                quicly_sentmap_allocate(&map, at * 5 + i, at, on_acked, 0, 1);
+    /* save 50 packets, with 2 frames each */
+    for (at = 0; at < 10; ++at) {
+        for (i = 1; i <= 5; ++i) {
+            quicly_sentmap_prepare(&map, at * 5 + i, at, 0);
+            quicly_sentmap_allocate(&map, on_acked);
+            quicly_sentmap_allocate(&map, on_acked);
+            quicly_sentmap_commit(&map, 1);
+        }
+    }
 
     /* check all acks */
-    quicly_sentmap_iter_t iter;
     quicly_sentmap_init_iter(&map, &iter);
     for (at = 0; at < 10; ++at) {
         for (i = 1; i <= 5; ++i) {
-            for (j = 0; j < 3; ++j) {
-                quicly_sent_t *ack = quicly_sentmap_get(&iter);
-                ok(ack->packet_number != UINT64_MAX);
-                ok(ack->packet_number == at * 5 + i);
-                ok(ack->sent_at == at);
-                ok(ack->acked == on_acked);
-                quicly_sentmap_next(&iter);
-            }
+            const quicly_sent_packet_t *sent = quicly_sentmap_get(&iter);
+            ok(sent->packet_number == at * 5 + i);
+            ok(sent->sent_at == at);
+            ok(sent->ack_epoch == 0);
+            ok(sent->bytes_in_flight == 1);
+            quicly_sentmap_skip(&iter);
         }
     }
     ok(quicly_sentmap_get(&iter)->packet_number == UINT64_MAX);
@@ -73,26 +80,22 @@ void test_sentmap(void)
 
     /* pop acks between 11 <= packet_number <= 40 */
     quicly_sentmap_init_iter(&map, &iter);
-    while (quicly_sentmap_get(&iter)->packet_number <= 10) {
-        quicly_sentmap_next(&iter);
-        ok(quicly_sentmap_get(&iter)->packet_number != UINT64_MAX);
-    }
-    while ((sent = quicly_sentmap_get(&iter))->packet_number <= 40) {
-        quicly_sentmap_on_ack(&map, 0, sent, NULL);
-        quicly_sentmap_release(&map, &iter);
-        quicly_sentmap_next(&iter);
-        ok(quicly_sentmap_get(&iter)->packet_number != UINT64_MAX);
-    }
+    while (quicly_sentmap_get(&iter)->packet_number <= 10)
+        quicly_sentmap_skip(&iter);
+    assert(quicly_sentmap_get(&iter)->packet_number == 11);
+    while (quicly_sentmap_get(&iter)->packet_number <= 40)
+        quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_UPDATE_LOST | QUICLY_SENTMAP_UPDATE_DISCARD, NULL);
+    ok(on_acked_callcnt == 30 * 2);
+    ok(on_acked_ackcnt == 0);
 
-    quicly_sentmap_init_iter(&map, &iter);
     size_t cnt = 0;
-    for (; quicly_sentmap_get(&iter)->packet_number != UINT64_MAX; quicly_sentmap_next(&iter)) {
-        quicly_sent_t *ack = quicly_sentmap_get(&iter);
-        ok(ack->acked != NULL);
-        ok(ack->packet_number <= 10 || 40 < ack->packet_number);
+    for (quicly_sentmap_init_iter(&map, &iter); (sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX;
+         quicly_sentmap_skip(&iter)) {
+        ok(sent->bytes_in_flight != 0);
+        ok(sent->packet_number <= 10 || 40 < sent->packet_number);
         ++cnt;
     }
-    ok(cnt == 60);
+    ok(cnt == 20);
     ok(num_blocks(&map) == 30 / 16 + 1 + 1 + 30 / 16 + 1);
 
     quicly_sentmap_dispose(&map);
