@@ -1076,7 +1076,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
     if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin)) != 0)
         return ret;
 
-    if (apply_len != 0) {
+    if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t buf_offset = frame->offset + frame->data.len - apply_len - stream->recvstate.data_off;
         if ((ret = stream->callbacks->receive(stream, (size_t)buf_offset, frame->data.base + frame->data.len - apply_len,
                                               apply_len)) != 0)
@@ -2243,13 +2243,29 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
         s->dst = quicly_encodev(s->dst, off);
         capacity = s->dst_end - s->dst;
     } else {
-        uint8_t header[17], *hp = header + 1;
+        uint8_t header[18], *hp = header + 1;
         hp = quicly_encodev(hp, stream->stream_id);
         if (off != 0) {
             header[0] = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF;
             hp = quicly_encodev(hp, off);
         } else {
             header[0] = QUICLY_FRAME_TYPE_STREAM_BASE;
+        }
+        if (!stream->sendstate.is_open &&
+            off + 1 == stream->sendstate.pending.ranges[stream->sendstate.pending.num_ranges - 1].end) {
+            /* special case for emitting FIN only */
+            header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+            if ((ret = prepare_ack_eliciting_packet(stream->conn, s, hp - header, &sent, on_ack_stream)) != 0)
+                return ret;
+            if (hp - header != s->dst_end - s->dst) {
+                header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
+                *hp++ = 0; /* empty length */
+            }
+            memcpy(s->dst, header, hp - header);
+            s->dst += hp - header;
+            end_off = off + 1;
+            wrote_all = 1;
+            goto UpdateState;
         }
         if ((ret = prepare_ack_eliciting_packet(stream->conn, s, hp - header + 1, &sent, on_ack_stream)) != 0)
             return ret;
@@ -2321,9 +2337,9 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
     if (is_fin) {
         *frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
         ++end_off;
-        stream->_send_aux.max_sent = end_off;
     }
 
+UpdateState:
     /* update sendstate */
     if (stream->sendstate.size_committed < end_off)
         stream->sendstate.size_committed = end_off;

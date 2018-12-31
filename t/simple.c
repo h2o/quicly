@@ -151,6 +151,52 @@ static void test_rst_then_close(void)
     ok(quicly_num_streams(server) == 1);
 }
 
+static void test_send_then_close(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *client_streambuf, *server_streambuf;
+    int ret;
+
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    client_streambuf = client_stream->data;
+    quicly_streambuf_egress_write(client_stream, "hello", 5);
+
+    transmit(client, server);
+
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    assert(server_stream != NULL);
+    server_streambuf = server_stream->data;
+    ok(buffer_is(&server_streambuf->super.ingress, "hello"));
+    quicly_streambuf_ingress_shift(server_stream, 5);
+
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+
+    ok(client_stream->sendstate.acked.num_ranges == 1);
+    ok(client_stream->sendstate.acked.ranges[0].start == 0);
+    ok(client_stream->sendstate.acked.ranges[0].end == 5);
+    quicly_sendstate_shutdown(&client_stream->sendstate, 5);
+    quicly_stream_sync_sendbuf(client_stream, 1);
+
+    transmit(client, server);
+
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(buffer_is(&server_streambuf->super.ingress, ""));
+    quicly_sendstate_shutdown(&server_stream->sendstate, 0);
+    quicly_stream_sync_sendbuf(server_stream, 1);
+
+    transmit(server, client);
+
+    ok(client_streambuf->is_detached);
+    ok(!server_streambuf->is_detached);
+
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(client, server);
+
+    ok(server_streambuf->is_detached);
+}
+
 static void tiny_stream_window(void)
 {
     quicly_initial_max_stream_data_t initial_max_stream_data_orig = quic_ctx.initial_max_stream_data;
@@ -374,6 +420,7 @@ void test_simple(void)
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
     subtest("rst-then-close", test_rst_then_close);
+    subtest("send-then-close", test_send_then_close);
     subtest("tiny-stream-window", tiny_stream_window);
     subtest("rst-during-loss", test_rst_during_loss);
     subtest("tiny-connection-window", tiny_connection_window);
