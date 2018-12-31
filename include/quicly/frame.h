@@ -252,7 +252,7 @@ inline uint64_t quicly_decodev(const uint8_t **src, const uint8_t *end)
 
     /* multi-byte */
     size_t len = 1 << (**src >> 6);
-    if (end - *src < len)
+    if ((size_t)(end - *src) < len)
         return UINT64_MAX;
     uint64_t v = *(*src)++ & 0x3f;
     --len;
@@ -401,7 +401,7 @@ inline int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, c
         uint64_t len;
         if ((len = quicly_decodev(src, end)) == UINT64_MAX)
             goto Error;
-        if (end - *src < len)
+        if ((uint64_t)(end - *src) < len)
             goto Error;
         frame->data = ptls_iovec_init(*src, len);
         *src += len;
@@ -453,7 +453,7 @@ inline int quicly_decode_crypto_frame(const uint8_t **src, const uint8_t *end, q
         goto Error;
     if ((len = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if (end - *src < len)
+    if ((uint64_t)(end - *src) < len)
         goto Error;
     frame->data = ptls_iovec_init(*src, len);
     *src += len;
@@ -494,7 +494,7 @@ inline int quicly_decode_application_close_frame(const uint8_t **src, const uint
     frame->error_code = quicly_decode16(src);
     if ((reason_len = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if (end - *src < reason_len)
+    if ((uint64_t)(end - *src) < reason_len)
         goto Error;
     frame->reason_phrase = ptls_iovec_init(*src, reason_len);
     *src += reason_len;
@@ -514,7 +514,7 @@ inline int quicly_decode_connection_close_frame(const uint8_t **src, const uint8
         goto Error;
     if ((reason_len = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if (end - *src < reason_len)
+    if ((uint64_t)(end - *src) < reason_len)
         goto Error;
     frame->reason_phrase = ptls_iovec_init(*src, reason_len);
     *src += reason_len;
@@ -680,7 +680,7 @@ inline int quicly_decode_new_token_frame(const uint8_t **src, const uint8_t *end
     uint64_t token_len;
     if ((token_len = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if (end - *src < token_len)
+    if ((uint64_t)(end - *src) < token_len)
         goto Error;
     frame->token = ptls_iovec_init(*src, (size_t)token_len);
     *src += frame->token.len;
