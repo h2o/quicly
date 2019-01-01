@@ -84,9 +84,6 @@ static size_t quicly_encodev_capacity(uint64_t v);
 static unsigned quicly_clz32(uint32_t v);
 static unsigned quicly_clz64(uint64_t v);
 
-static uint8_t *quicly_encode_stream_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t stream_id, int is_fin, uint64_t offset,
-                                                  size_t *data_len);
-
 typedef struct st_quicly_stream_frame_t {
     uint64_t stream_id;
     unsigned is_fin : 1;
@@ -338,48 +335,6 @@ inline unsigned quicly_clz64(uint64_t v)
 {
     QUICLY_BUILD_ASSERT(sizeof(long long) == 8);
     return v != 0 ? __builtin_clzll(v) : 64;
-}
-
-inline uint8_t *quicly_encode_stream_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t stream_id, int is_fin, uint64_t offset,
-                                                  size_t *data_len)
-{
-    uint8_t type, *type_at;
-    size_t copysize;
-
-Redo:
-    type = QUICLY_FRAME_TYPE_STREAM_BASE;
-    type_at = dst++;
-
-    /* emit stream id and offset */
-    dst = quicly_encodev(dst, stream_id);
-    if (offset != 0) {
-        type |= QUICLY_FRAME_TYPE_STREAM_BIT_OFF;
-        dst = quicly_encodev(dst, offset);
-    }
-
-    /* determine the amount to write as well as adjusting the flags */
-    copysize = dst_end - dst;
-    if (copysize >= *data_len) {
-        /* can emit entire data */
-        if (copysize == *data_len + 1) {
-            /* ensure that any 1-byte frame does not get appended, by using all the space up to `dst_end` */
-            *type_at = QUICLY_FRAME_TYPE_PADDING;
-            dst = type_at + 1;
-            goto Redo;
-        } else if (copysize >= *data_len + 2) {
-            /* emit with length to allow succeeding frames */
-            dst = quicly_encodev(dst, *data_len);
-            type |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
-        }
-        if (is_fin)
-            type |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
-    } else {
-        /* partial write */
-        *data_len = copysize;
-    }
-
-    *type_at = type;
-    return dst;
 }
 
 inline int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame)
