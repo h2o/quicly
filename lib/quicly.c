@@ -3496,8 +3496,8 @@ void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
 {
     assert(!(quicly_stream_is_unidirectional(stream->stream_id) &&
              quicly_stream_is_client_initiated(stream->stream_id) != quicly_is_client(stream->conn)));
-    assert(stream->sendstate.is_open);
     assert(stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE);
+    assert(!quicly_sendstate_transfer_complete(&stream->sendstate));
 
     /* dispose sendbuf state */
     quicly_sendstate_dispose(&stream->sendstate);
@@ -3509,6 +3509,7 @@ void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
 
     /* schedule for delivery */
     sched_stream_control(stream);
+    resched_stream_data(stream);
 }
 
 void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code)

@@ -101,10 +101,11 @@ Exit:
     return ret;
 }
 
-void quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
+int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
 {
     quicly_streambuf_t *sbuf = stream->data;
     quicly_sendstate_shutdown(&stream->sendstate, sbuf->egress.max_stream_data);
+    return quicly_stream_sync_sendbuf(stream, 1);
 }
 
 void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta)
