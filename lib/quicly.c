@@ -3070,8 +3070,11 @@ static int handle_stream_blocked_frame(quicly_conn_t *conn, quicly_stream_blocke
         quicly_stream_is_client_initiated(frame->stream_id) != quicly_is_client(conn))
         return QUICLY_ERROR_FRAME_ENCODING;
 
-    if ((stream = quicly_get_stream(conn, frame->stream_id)) != NULL)
+    if ((stream = quicly_get_stream(conn, frame->stream_id)) != NULL) {
         quicly_maxsender_reset(&stream->_send_aux.max_stream_data_sender, 0);
+        if (should_update_max_stream_data(stream))
+            sched_stream_control(stream);
+    }
 
     return 0;
 }
@@ -3272,6 +3275,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                     if ((ret = quicly_decode_blocked_frame(&src, end, &frame)) != 0)
                         goto Exit;
                     quicly_maxsender_reset(&conn->ingress.max_data.sender, 0);
+                    /* TODO disable ack-delay to respond immediately (by sending MAX_DATA)? */
                     ret = 0;
                 } break;
                 case QUICLY_FRAME_TYPE_STREAM_BLOCKED: {
