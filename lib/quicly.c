@@ -672,7 +672,7 @@ Exit:
 }
 
 static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max_stream_data_local,
-                                   uint32_t initial_max_stream_data_remote)
+                                   uint64_t initial_max_stream_data_remote)
 {
     int uni = quicly_stream_is_unidirectional(stream->stream_id),
         self_initiated = quicly_stream_is_client_initiated(stream->stream_id) == quicly_is_client(stream->conn);
@@ -712,7 +712,7 @@ static void dispose_stream_properties(quicly_stream_t *stream)
 }
 
 static quicly_stream_t *open_stream(quicly_conn_t *conn, uint64_t stream_id, uint32_t initial_max_stream_data_local,
-                                    uint32_t initial_max_stream_data_remote)
+                                    uint64_t initial_max_stream_data_remote)
 {
     quicly_stream_t *stream;
 
@@ -2885,7 +2885,7 @@ static int get_stream_or_open_if_new(quicly_conn_t *conn, uint64_t stream_id, qu
         /* open new streams upto given id */
         struct st_quicly_conn_streamgroup_state_t *group = get_streamgroup_state(conn, stream_id);
         if (group->next_stream_id <= stream_id) {
-            uint32_t max_stream_data_local, max_stream_data_remote;
+            uint64_t max_stream_data_local, max_stream_data_remote;
             if (quicly_stream_is_unidirectional(stream_id)) {
                 max_stream_data_local = conn->super.ctx->initial_max_stream_data.uni;
                 max_stream_data_remote = 0;
@@ -2894,7 +2894,8 @@ static int get_stream_or_open_if_new(quicly_conn_t *conn, uint64_t stream_id, qu
                 max_stream_data_remote = conn->super.peer.transport_params.initial_max_stream_data.bidi_local;
             }
             do {
-                if ((*stream = open_stream(conn, group->next_stream_id, max_stream_data_local, max_stream_data_remote)) == NULL) {
+                if ((*stream = open_stream(conn, group->next_stream_id, (uint32_t)max_stream_data_local, max_stream_data_remote)) ==
+                    NULL) {
                     ret = PTLS_ERROR_NO_MEMORY;
                     goto Exit;
                 }
