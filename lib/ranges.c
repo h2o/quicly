@@ -70,10 +70,10 @@ static inline int merge_update(quicly_ranges_t *ranges, uint64_t start, uint64_t
     return 0;
 }
 
-int quicly_ranges_init_with_empty_range(quicly_ranges_t *ranges)
+int quicly_ranges_init_with_range(quicly_ranges_t *ranges, uint64_t start, uint64_t end)
 {
     quicly_ranges_init(ranges);
-    return insert_at(ranges, 0, 0, 0);
+    return insert_at(ranges, start, end, 0);
 }
 
 int quicly_ranges_add(quicly_ranges_t *ranges, uint64_t start, uint64_t end)

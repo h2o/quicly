@@ -29,6 +29,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include "quicly.h"
+#include "quicly/streambuf.h"
 #include "../deps/picotls/t/util.h"
 
 static unsigned verbosity = 0;
@@ -66,11 +67,23 @@ static ptls_context_t tlsctx = {ptls_openssl_random_bytes,
                                 1};
 static const char *req_paths[1024];
 
-static void send_data(quicly_stream_t *stream, const char *s)
-{
-    quicly_sendbuf_write(&stream->sendbuf, s, strlen(s), NULL);
-    quicly_sendbuf_shutdown(&stream->sendbuf);
-}
+static int on_stop_sending(quicly_stream_t *stream, uint16_t error_code);
+static int on_receive_reset(quicly_stream_t *stream, uint16_t error_code);
+static int server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+static int client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+
+static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streambuf_destroy,
+                                                                  quicly_streambuf_egress_shift,
+                                                                  quicly_streambuf_egress_emit,
+                                                                  on_stop_sending,
+                                                                  server_on_receive,
+                                                                  on_receive_reset},
+                                       client_stream_callbacks = {quicly_streambuf_destroy,
+                                                                  quicly_streambuf_egress_shift,
+                                                                  quicly_streambuf_egress_emit,
+                                                                  on_stop_sending,
+                                                                  client_on_receive,
+                                                                  on_receive_reset};
 
 static int parse_request(ptls_iovec_t input, ptls_iovec_t *path, int *is_http1)
 {
@@ -103,7 +116,12 @@ static int path_is(ptls_iovec_t path, const char *expected)
     return memcmp(path.base, expected, path.len) == 0;
 }
 
-static void send_header(quicly_sendbuf_t *sendbuf, int is_http1, int status, const char *mime_type)
+static void send_str(quicly_stream_t *stream, const char *s)
+{
+    quicly_streambuf_egress_write(stream, s, strlen(s));
+}
+
+static void send_header(quicly_stream_t *stream, int is_http1, int status, const char *mime_type)
 {
     char buf[256];
 
@@ -111,10 +129,10 @@ static void send_header(quicly_sendbuf_t *sendbuf, int is_http1, int status, con
         return;
 
     sprintf(buf, "HTTP/1.1 %03d OK\r\nConnection: close\r\nContent-Type: %s\r\n\r\n", status, mime_type);
-    quicly_sendbuf_write(sendbuf, buf, strlen(buf), NULL);
+    send_str(stream, buf);
 }
 
-static int send_file(quicly_sendbuf_t *sendbuf, int is_http1, const char *fn, const char *mime_type)
+static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, const char *mime_type)
 {
     FILE *fp;
     char buf[1024];
@@ -122,15 +140,15 @@ static int send_file(quicly_sendbuf_t *sendbuf, int is_http1, const char *fn, co
 
     if ((fp = fopen(fn, "r")) == NULL)
         return 0;
-    send_header(sendbuf, is_http1, 200, mime_type);
+    send_header(stream, is_http1, 200, mime_type);
     while ((n = fread(buf, 1, sizeof(buf), fp)) != 0)
-        quicly_sendbuf_write(sendbuf, buf, n, NULL);
+        quicly_streambuf_egress_write(stream, buf, n);
     fclose(fp);
 
     return 1;
 }
 
-static int send_sized_text(quicly_sendbuf_t *sendbuf, ptls_iovec_t path, int is_http1)
+static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_http1)
 {
     unsigned size;
     if (!(path.len > 5 && path.base[0] == '/' && memcmp(path.base + path.len - 4, ".txt", 4) == 0))
@@ -138,52 +156,73 @@ static int send_sized_text(quicly_sendbuf_t *sendbuf, ptls_iovec_t path, int is_
     if (sscanf((const char *)path.base + 1, "%u", &size) != 1)
         return 0;
 
-    send_header(sendbuf, is_http1, 200, "text/plain; charset=utf-8");
+    send_header(stream, is_http1, 200, "text/plain; charset=utf-8");
     for (; size >= 12; size -= 12)
-        quicly_sendbuf_write(sendbuf, "hello world\n", 12, NULL);
+        quicly_streambuf_egress_write(stream, "hello world\n", 12);
     if (size != 0)
-        quicly_sendbuf_write(sendbuf, "hello world", size, NULL);
+        quicly_streambuf_egress_write(stream, "hello world", size);
     return 1;
 }
 
-static int on_req_receive(quicly_stream_t *stream)
+static int on_stop_sending(quicly_stream_t *stream, uint16_t error_code)
 {
-    ptls_iovec_t path;
-    int is_http1;
-
-    /* fixme call is_shutdown */
-    if (stream->sendbuf.eos != UINT64_MAX)
-        return 0;
-
-    /* obtain path of the request, or return without doing anything */
-    if (!parse_request(quicly_recvbuf_get(&stream->recvbuf), &path, &is_http1))
-        return 0;
-
-    if (path_is(path, "/logo.jpg") && send_file(&stream->sendbuf, is_http1, "assets/logo.jpg", "image/jpeg"))
-        goto Sent;
-    if (path_is(path, "/main.jpg") && send_file(&stream->sendbuf, is_http1, "assets/main.jpg", "image/jpeg"))
-        goto Sent;
-    if (send_sized_text(&stream->sendbuf, path, is_http1))
-        goto Sent;
-
-    send_header(&stream->sendbuf, is_http1, 404, "text/plain; charset=utf-8");
-    quicly_sendbuf_write(&stream->sendbuf, "not found\n", 10, NULL);
-Sent:
-    quicly_sendbuf_shutdown(&stream->sendbuf);
+    fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", error_code);
     return 0;
 }
 
-static int on_resp_receive(quicly_stream_t *stream)
+static int on_receive_reset(quicly_stream_t *stream, uint16_t error_code)
 {
-    ptls_iovec_t input;
+    fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", error_code);
+    return 0;
+}
 
-    while ((input = quicly_recvbuf_get(&stream->recvbuf)).len != 0) {
-        fwrite(input.base, 1, input.len, stdout);
-        fflush(stdout);
-        quicly_recvbuf_shift(&stream->recvbuf, input.len);
+static int server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+{
+    ptls_iovec_t path;
+    int is_http1;
+    int ret;
+
+    if ((ret = quicly_streambuf_ingress_receive(stream, off, src, len)) != 0)
+        return ret;
+
+    if (!parse_request(quicly_streambuf_ingress_get(stream), &path, &is_http1)) {
+        if (!quicly_recvstate_transfer_complete(&stream->recvstate))
+            return 0;
+        /* failed to parse request */
+        send_header(stream, 1, 500, "text/plain; charset=utf-8");
+        send_str(stream, "failed to parse HTTP request\n");
+        goto Sent;
     }
 
-    if (quicly_recvbuf_get_error(&stream->recvbuf) != QUICLY_STREAM_ERROR_IS_OPEN) {
+    if (path_is(path, "/logo.jpg") && send_file(stream, is_http1, "assets/logo.jpg", "image/jpeg"))
+        goto Sent;
+    if (path_is(path, "/main.jpg") && send_file(stream, is_http1, "assets/main.jpg", "image/jpeg"))
+        goto Sent;
+    if (send_sized_text(stream, path, is_http1))
+        goto Sent;
+
+    send_header(stream, is_http1, 404, "text/plain; charset=utf-8");
+    send_str(stream, "not found\n");
+Sent:
+    quicly_streambuf_egress_shutdown(stream);
+    return 0;
+}
+
+static int client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+{
+    ptls_iovec_t input;
+    int ret;
+
+    if ((ret = quicly_streambuf_ingress_receive(stream, off, src, len)) != 0)
+        return ret;
+
+    if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
+        fwrite(input.base, 1, input.len, stdout);
+        fflush(stdout);
+        quicly_streambuf_ingress_shift(stream, input.len);
+    }
+
+    if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
         static size_t num_resp_received;
         ++num_resp_received;
         if (req_paths[num_resp_received] == NULL) {
@@ -202,7 +241,11 @@ static int on_resp_receive(quicly_stream_t *stream)
 
 static int on_stream_open(quicly_stream_t *stream)
 {
-    stream->on_update = on_req_receive;
+    int ret;
+
+    if ((ret = quicly_streambuf_create(stream, sizeof(quicly_streambuf_t))) != 0)
+        return ret;
+    stream->callbacks = ctx.tls->certificates.count != 0 ? &server_stream_callbacks : &client_stream_callbacks;
     return 0;
 }
 
@@ -292,9 +335,9 @@ static void send_if_possible(quicly_conn_t *conn)
             quicly_stream_t *stream;
             ret = quicly_open_stream(conn, &stream, 0);
             assert(ret == 0);
-            stream->on_update = on_resp_receive;
             sprintf(req, "GET %s\r\n", req_paths[i]);
-            send_data(stream, req);
+            send_str(stream, req);
+            quicly_streambuf_egress_shutdown(stream);
         }
     }
 }

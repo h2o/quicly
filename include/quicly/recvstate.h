@@ -19,40 +19,41 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#ifndef test_h
-#define test_h
+#ifndef quicly_recvstate_h
+#define quicly_recvstate_h
 
-#include "quicly.h"
-#include "quicly/streambuf.h"
-#include "picotest.h"
+#include <assert.h>
+#include <stddef.h>
+#include "picotls.h"
+#include "quicly/ranges.h"
 
-typedef struct st_test_streambuf_t {
-    quicly_streambuf_t super;
-    struct {
-        int32_t stop_sending;
-        int32_t reset_stream;
-    } error_received;
-    int is_detached;
-} test_streambuf_t;
+typedef struct st_quicly_recvstate_t {
+    /**
+     * ranges that have been received (starts and remains non-empty until transfer completes)
+     */
+    quicly_ranges_t received;
+    /**
+     * starting offset of data
+     */
+    uint64_t data_off;
+    /**
+     * end_of_stream offset (or UINT64_MAX)
+     */
+    uint64_t eos;
+} quicly_recvstate_t;
 
-extern int64_t quic_now;
-extern quicly_context_t quic_ctx;
-extern quicly_stream_callbacks_t stream_callbacks;
-extern size_t on_destroy_callcnt;
+void quicly_recvstate_init(quicly_recvstate_t *state);
+void quicly_recvstate_init_closed(quicly_recvstate_t *state);
+void quicly_recvstate_dispose(quicly_recvstate_t *state);
+static int quicly_recvstate_transfer_complete(quicly_recvstate_t *state);
+int quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin);
+int quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t eos_at, uint64_t *bytes_missing);
 
-int on_stream_open(quicly_stream_t *stream);
-void free_packets(quicly_datagram_t **packets, size_t cnt);
-size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw, size_t cnt, size_t host_cidl);
-int buffer_is(ptls_buffer_t *buf, const char *s);
-size_t transmit(quicly_conn_t *src, quicly_conn_t *dst);
-int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server);
+/* inline definitions */
 
-void test_ranges(void);
-void test_frame(void);
-void test_maxsender(void);
-void test_sentmap(void);
-void test_simple(void);
-void test_loss(void);
-void test_stream_concurrency(void);
+inline int quicly_recvstate_transfer_complete(quicly_recvstate_t *state)
+{
+    return state->received.num_ranges == 0;
+}
 
 #endif

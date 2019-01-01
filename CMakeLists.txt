@@ -20,15 +20,15 @@ SET(QUICLY_LIBRARY_FILES
     deps/dcc/cc.c
     deps/dcc/cc_cubic.c
     deps/dcc/cc_newreno.c
-    lib/buffer.c
     lib/frame.c
     lib/loss.c
     lib/maxsender.c
     lib/quicly.c
     lib/ranges.c
-    lib/recvbuf.c
-    lib/sendbuf.c
-    lib/sentmap.c)
+    lib/recvstate.c
+    lib/sendstate.c
+    lib/sentmap.c
+    lib/streambuf.c)
 
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
