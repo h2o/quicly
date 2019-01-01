@@ -35,8 +35,6 @@
 		E98F4CBE20E5CF4000362F15 /* udpfw.c in Sources */ = {isa = PBXBuildFile; fileRef = E98F4CBC20E5CF3A00362F15 /* udpfw.c */; };
 		E99B75E71F5CF96900CF503E /* maxsender.c in Sources */ = {isa = PBXBuildFile; fileRef = E99B75E61F5CF96900CF503E /* maxsender.c */; };
 		E99B75E91F5D259400CF503E /* stream-concurrency.c in Sources */ = {isa = PBXBuildFile; fileRef = E99B75E81F5D259400CF503E /* stream-concurrency.c */; };
-		E99B75EB1F5D353A00CF503E /* maxsender.c in Sources */ = {isa = PBXBuildFile; fileRef = E99B75EA1F5D353A00CF503E /* maxsender.c */; };
-		E99B75EC1F5D353A00CF503E /* maxsender.c in Sources */ = {isa = PBXBuildFile; fileRef = E99B75EA1F5D353A00CF503E /* maxsender.c */; };
 		E99F8C241F4E863200C26B3D /* frame.h in Headers */ = {isa = PBXBuildFile; fileRef = E99F8C231F4E863200C26B3D /* frame.h */; };
 		E99F8C261F4E9EBF00C26B3D /* frame.c in Sources */ = {isa = PBXBuildFile; fileRef = E99F8C251F4E9EBF00C26B3D /* frame.c */; };
 		E99F8C271F4E9F5D00C26B3D /* frame.c in Sources */ = {isa = PBXBuildFile; fileRef = E99F8C251F4E9EBF00C26B3D /* frame.c */; };
@@ -124,7 +122,6 @@
 		E98F4CBC20E5CF3A00362F15 /* udpfw.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = udpfw.c; sourceTree = "<group>"; };
 		E99B75E61F5CF96900CF503E /* maxsender.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = maxsender.c; sourceTree = "<group>"; };
 		E99B75E81F5D259400CF503E /* stream-concurrency.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "stream-concurrency.c"; sourceTree = "<group>"; };
-		E99B75EA1F5D353A00CF503E /* maxsender.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = maxsender.c; sourceTree = "<group>"; };
 		E99F8C231F4E863200C26B3D /* frame.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = frame.h; sourceTree = "<group>"; };
 		E99F8C251F4E9EBF00C26B3D /* frame.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = frame.c; sourceTree = "<group>"; };
 		E99F8C281F4EAEF800C26B3D /* frame.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = frame.c; sourceTree = "<group>"; };
@@ -218,7 +215,6 @@
 			children = (
 				E99F8C251F4E9EBF00C26B3D /* frame.c */,
 				E93E54BC1F6CA76C001C50FE /* loss.c */,
-				E99B75EA1F5D353A00CF503E /* maxsender.c */,
 				E98448411EA490A500390927 /* quicly.c */,
 				E9F6A41F1F3C0B6D0083F0B2 /* ranges.c */,
 				E920D21D1F43E05000799777 /* recvstate.c */,
@@ -499,7 +495,6 @@
 				E98448421EA490A500390927 /* quicly.c in Sources */,
 				E920D22B1F49533800799777 /* sentmap.c in Sources */,
 				E9D69D72202680FE003A5F51 /* cc_cubic.c in Sources */,
-				E99B75EB1F5D353A00CF503E /* maxsender.c in Sources */,
 				E9D3CCCF21D22F4300516202 /* streambuf.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -548,7 +543,6 @@
 				E9D69D75202809C3003A5F51 /* cc_cubic.c in Sources */,
 				E9CC441C1EC195DF00DC7D3E /* picotls.c in Sources */,
 				E99F8C271F4E9F5D00C26B3D /* frame.c in Sources */,
-				E99B75EC1F5D353A00CF503E /* maxsender.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

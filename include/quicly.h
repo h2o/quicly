@@ -419,7 +419,7 @@ struct st_quicly_stream_t {
     /**
      *
      */
-    unsigned stream_id_blocked : 1;
+    unsigned streams_blocked : 1;
     /**
      *
      */
@@ -457,7 +457,7 @@ struct st_quicly_stream_t {
          * linklist of pending streams
          */
         struct {
-            quicly_linklist_t control; /* links to conn_t::control (or to conn_t::stream_id_blocked if the blocked flag is set) */
+            quicly_linklist_t control; /* links to conn_t::control (or to conn_t::streams_blocked if the blocked flag is set) */
             quicly_linklist_t stream;
         } pending_link;
     } _send_aux;

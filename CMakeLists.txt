@@ -22,7 +22,6 @@ SET(QUICLY_LIBRARY_FILES
     deps/dcc/cc_newreno.c
     lib/frame.c
     lib/loss.c
-    lib/maxsender.c
     lib/quicly.c
     lib/ranges.c
     lib/recvstate.c

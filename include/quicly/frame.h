@@ -34,37 +34,40 @@ extern "C" {
 #include "quicly/ranges.h"
 
 #define QUICLY_FRAME_TYPE_PADDING 0
-#define QUICLY_FRAME_TYPE_RST_STREAM 1
-#define QUICLY_FRAME_TYPE_CONNECTION_CLOSE 2
-#define QUICLY_FRAME_TYPE_APPLICATION_CLOSE 3
-#define QUICLY_FRAME_TYPE_MAX_DATA 4
-#define QUICLY_FRAME_TYPE_MAX_STREAM_DATA 5
-#define QUICLY_FRAME_TYPE_MAX_STREAM_ID 6
-#define QUICLY_FRAME_TYPE_PING 7
-#define QUICLY_FRAME_TYPE_BLOCKED 8
-#define QUICLY_FRAME_TYPE_STREAM_BLOCKED 9
-#define QUICLY_FRAME_TYPE_STREAM_ID_BLOCKED 10
-#define QUICLY_FRAME_TYPE_NEW_CONNECTION_ID 11
-#define QUICLY_FRAME_TYPE_STOP_SENDING 12
-#define QUICLY_FRAME_TYPE_PATH_CHALLENGE 14
-#define QUICLY_FRAME_TYPE_PATH_RESPONSE 15
-#define QUICLY_FRAME_TYPE_NEW_TOKEN 25
-#define QUICLY_FRAME_TYPE_ACK 26
-#define QUICLY_FRAME_TYPE_ACK_ECN 27
+#define QUICLY_FRAME_TYPE_PING 1
+#define QUICLY_FRAME_TYPE_ACK 2
+#define QUICLY_FRAME_TYPE_ACK_ECN 3
+#define QUICLY_FRAME_TYPE_RESET_STREAM 4 /* RESET_STREAM */
+#define QUICLY_FRAME_TYPE_STOP_SENDING 5
+#define QUICLY_FRAME_TYPE_CRYPTO 6
+#define QUICLY_FRAME_TYPE_NEW_TOKEN 7
+#define QUICLY_FRAME_TYPE_STREAM_BASE 8
+#define QUICLY_FRAME_TYPE_MAX_DATA 16
+#define QUICLY_FRAME_TYPE_MAX_STREAM_DATA 17
+#define QUICLY_FRAME_TYPE_MAX_STREAMS_BIDI 18
+#define QUICLY_FRAME_TYPE_MAX_STREAMS_UNI 19
+#define QUICLY_FRAME_TYPE_DATA_BLOCKED 20
+#define QUICLY_FRAME_TYPE_STREAM_DATA_BLOCKED 21
+#define QUICLY_FRAME_TYPE_STREAMS_BLOCKED_BIDI 22
+#define QUICLY_FRAME_TYPE_STREAMS_BLOCKED_UNI 23
+#define QUICLY_FRAME_TYPE_NEW_CONNECTION_ID 24
+#define QUICLY_FRAME_TYPE_RETIRE_CONNECTION_ID 25
+#define QUICLY_FRAME_TYPE_PATH_CHALLENGE 26
+#define QUICLY_FRAME_TYPE_PATH_RESPONSE 27
+#define QUICLY_FRAME_TYPE_CONNECTION_CLOSE_TRANSPORT 28
+#define QUICLY_FRAME_TYPE_CONNECTION_CLOSE_APPLICATION 29
 
-#define QUICLY_FRAME_TYPE_STREAM_BASE 0x10
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
-#define QUICLY_FRAME_TYPE_CRYPTO 0x18
 #define QUICLY_FRAME_TYPE_STREAM_BIT_OFF 0x4
 #define QUICLY_FRAME_TYPE_STREAM_BIT_LEN 0x2
 #define QUICLY_FRAME_TYPE_STREAM_BIT_FIN 0x1
 
 #define QUICLY_MAX_DATA_FRAME_CAPACITY (1 + 8)
 #define QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY (1 + 8 + 8)
-#define QUICLY_MAX_STREAM_ID_FRAME_CAPACITY (1 + 8)
+#define QUICLY_MAX_STREAMS_FRAME_CAPACITY (1 + 8)
 #define QUICLY_PING_FRAME_CAPACITY 1
 #define QUICLY_RST_FRAME_CAPACITY (1 + 8 + 2 + 8)
-#define QUICLY_STREAM_ID_BLOCKED_FRAME_CAPACITY (1 + 8)
+#define QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STOP_SENDING_FRAME_CAPACITY (1 + 8 + 2)
 #define QUICLY_ACK_FRAME_CAPACITY (1 + 8 + 8 + 1 + 8)
 #define QUICLY_PATH_CHALLENGE_FRAME_CAPACITY (1 + 8)
@@ -101,9 +104,9 @@ typedef struct st_quicly_rst_stream_frame_t {
     uint64_t stream_id;
     uint16_t app_error_code;
     uint64_t final_offset;
-} quicly_rst_stream_frame_t;
+} quicly_reset_stream_frame_t;
 
-static int quicly_decode_rst_stream_frame(const uint8_t **src, const uint8_t *end, quicly_rst_stream_frame_t *frame);
+static int quicly_decode_reset_stream_frame(const uint8_t **src, const uint8_t *end, quicly_reset_stream_frame_t *frame);
 
 typedef struct st_quicly_connection_close_frame_t {
     uint16_t error_code;
@@ -137,13 +140,13 @@ typedef struct st_quicly_max_stream_data_frame_t {
 
 static int quicly_decode_max_stream_data_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_data_frame_t *frame);
 
-static uint8_t *quicly_encode_max_stream_id_frame(uint8_t *dst, quicly_stream_id_t max_stream_id);
+static uint8_t *quicly_encode_max_streams_frame(uint8_t *dst, int uni, uint64_t count);
 
-typedef struct st_quicly_max_stream_id_frame_t {
-    uint64_t max_stream_id;
-} quicly_max_stream_id_frame_t;
+typedef struct st_quicly_max_streams_frame_t {
+    uint64_t count;
+} quicly_max_streams_frame_t;
 
-static int quicly_decode_max_stream_id_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_id_frame_t *frame);
+static int quicly_decode_max_streams_frame(const uint8_t **src, const uint8_t *end, quicly_max_streams_frame_t *frame);
 
 #define QUICLY_PATH_CHALLENGE_DATA_LEN 8
 
@@ -155,26 +158,27 @@ typedef struct st_quicly_path_challenge_frame_t {
 
 static int quicly_decode_path_challenge_frame(const uint8_t **src, const uint8_t *end, quicly_path_challenge_frame_t *frame);
 
-typedef struct st_quicly_blocked_frame_t {
+typedef struct st_quicly_data_blocked_frame_t {
     uint64_t offset;
-} quicly_blocked_frame_t;
+} quicly_data_blocked_frame_t;
 
-static int quicly_decode_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_blocked_frame_t *frame);
+static int quicly_decode_data_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_data_blocked_frame_t *frame);
 
-typedef struct st_quicly_stream_blocked_frame_t {
-    uint64_t stream_id;
+typedef struct st_quicly_stream_data_blocked_frame_t {
+    quicly_stream_id_t stream_id;
     uint64_t offset;
-} quicly_stream_blocked_frame_t;
+} quicly_stream_data_blocked_frame_t;
 
-static int quicly_decode_stream_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_stream_blocked_frame_t *frame);
+static int quicly_decode_stream_data_blocked_frame(const uint8_t **src, const uint8_t *end,
+                                                   quicly_stream_data_blocked_frame_t *frame);
 
-static uint8_t *quicly_encode_stream_id_blocked_frame(uint8_t *dst, uint64_t stream_id);
+static uint8_t *quicly_encode_streams_blocked_frame(uint8_t *dst, int uni, uint64_t count);
 
-typedef struct st_quicly_stream_id_blocked_frame_t {
-    uint64_t stream_id;
-} quicly_stream_id_blocked_frame_t;
+typedef struct st_quicly_streams_blocked_frame_t {
+    uint64_t count;
+} quicly_streams_blocked_frame_t;
 
-static int quicly_decode_stream_id_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_stream_id_blocked_frame_t *frame);
+static int quicly_decode_streams_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_streams_blocked_frame_t *frame);
 
 typedef struct st_quicly_new_connection_id_frame_t {
     uint64_t sequence;
@@ -420,14 +424,14 @@ Error:
 
 inline uint8_t *quicly_encode_rst_stream_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code, uint64_t final_offset)
 {
-    *dst++ = QUICLY_FRAME_TYPE_RST_STREAM;
+    *dst++ = QUICLY_FRAME_TYPE_RESET_STREAM;
     dst = quicly_encodev(dst, stream_id);
     dst = quicly_encode16(dst, app_error_code);
     dst = quicly_encodev(dst, final_offset);
     return dst;
 }
 
-inline int quicly_decode_rst_stream_frame(const uint8_t **src, const uint8_t *end, quicly_rst_stream_frame_t *frame)
+inline int quicly_decode_reset_stream_frame(const uint8_t **src, const uint8_t *end, quicly_reset_stream_frame_t *frame)
 {
     if ((frame->stream_id = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
@@ -511,17 +515,16 @@ Error:
     return QUICLY_ERROR_FRAME_ENCODING;
 }
 
-inline uint8_t *quicly_encode_max_stream_id_frame(uint8_t *dst, quicly_stream_id_t max_stream_id)
+inline uint8_t *quicly_encode_max_streams_frame(uint8_t *dst, int uni, uint64_t count)
 {
-    assert(max_stream_id >= 0);
-    *dst++ = QUICLY_FRAME_TYPE_MAX_STREAM_ID;
-    dst = quicly_encodev(dst, max_stream_id);
+    *dst++ = uni ? QUICLY_FRAME_TYPE_MAX_STREAMS_UNI : QUICLY_FRAME_TYPE_MAX_STREAMS_BIDI;
+    dst = quicly_encodev(dst, count);
     return dst;
 }
 
-inline int quicly_decode_max_stream_id_frame(const uint8_t **src, const uint8_t *end, quicly_max_stream_id_frame_t *frame)
+inline int quicly_decode_max_streams_frame(const uint8_t **src, const uint8_t *end, quicly_max_streams_frame_t *frame)
 {
-    if ((frame->max_stream_id = quicly_decodev(src, end)) == UINT64_MAX)
+    if ((frame->count = quicly_decodev(src, end)) == UINT64_MAX)
         return QUICLY_ERROR_FRAME_ENCODING;
     return 0;
 }
@@ -539,14 +542,15 @@ Error:
     return QUICLY_ERROR_FRAME_ENCODING;
 }
 
-inline int quicly_decode_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_blocked_frame_t *frame)
+inline int quicly_decode_data_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_data_blocked_frame_t *frame)
 {
     if ((frame->offset = quicly_decodev(src, end)) == UINT64_MAX)
         return QUICLY_ERROR_FRAME_ENCODING;
     return 0;
 }
 
-inline int quicly_decode_stream_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_stream_blocked_frame_t *frame)
+inline int quicly_decode_stream_data_blocked_frame(const uint8_t **src, const uint8_t *end,
+                                                   quicly_stream_data_blocked_frame_t *frame)
 {
     if ((frame->stream_id = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
@@ -557,16 +561,16 @@ Error:
     return QUICLY_ERROR_FRAME_ENCODING;
 }
 
-inline uint8_t *quicly_encode_stream_id_blocked_frame(uint8_t *dst, uint64_t stream_id)
+inline uint8_t *quicly_encode_streams_blocked_frame(uint8_t *dst, int uni, uint64_t count)
 {
-    *dst++ = QUICLY_FRAME_TYPE_STREAM_ID_BLOCKED;
-    dst = quicly_encodev(dst, stream_id);
+    *dst++ = uni ? QUICLY_FRAME_TYPE_STREAMS_BLOCKED_UNI : QUICLY_FRAME_TYPE_STREAMS_BLOCKED_BIDI;
+    dst = quicly_encodev(dst, count);
     return dst;
 }
 
-inline int quicly_decode_stream_id_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_stream_id_blocked_frame_t *frame)
+inline int quicly_decode_streams_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_streams_blocked_frame_t *frame)
 {
-    if ((frame->stream_id = quicly_decodev(src, end)) == UINT64_MAX)
+    if ((frame->count = quicly_decodev(src, end)) == UINT64_MAX)
         return QUICLY_ERROR_FRAME_ENCODING;
     return 0;
 }

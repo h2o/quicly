@@ -56,7 +56,7 @@ void test_stream_concurrency(void)
         ret = quicly_open_stream(client, client_streams + i, 0);
         assert(ret == 0);
         client_streambufs[i] = client_streams[i]->data;
-        if (client_streams[i]->stream_id_blocked)
+        if (client_streams[i]->streams_blocked)
             break;
         ret = quicly_streambuf_egress_write(client_streams[i], "hello", 5);
         assert(ret == 0);
@@ -67,7 +67,7 @@ void test_stream_concurrency(void)
     transmit(server, client);
 
     /* the last stream is still ID-blocked after 1RT */
-    ok(client_streams[i]->stream_id_blocked);
+    ok(client_streams[i]->streams_blocked);
 
     /* reset one stream in both directions and close on the client-side */
     server_stream = quicly_get_stream(server, client_streams[i - 1]->stream_id);
@@ -84,7 +84,7 @@ void test_stream_concurrency(void)
     ok(client_streambufs[i - 1]->is_detached);
 
     /* the last stream is still ID-blocked */
-    ok(client_streams[i]->stream_id_blocked);
+    ok(client_streams[i]->streams_blocked);
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(client, server);
@@ -92,13 +92,13 @@ void test_stream_concurrency(void)
 
     /* we would have free room now that RST of the server-sent side is ACKed */
     ok(server_streambuf->is_detached);
-    ok(!client_streams[i]->stream_id_blocked);
+    ok(!client_streams[i]->streams_blocked);
     ++i;
 
     /* but we cannot open one more */
     ret = quicly_open_stream(client, client_streams + i, 0);
     ok(ret == 0);
-    ok(client_streams[i]->stream_id_blocked);
+    ok(client_streams[i]->streams_blocked);
 
     quicly_free(client);
     quicly_free(server);
