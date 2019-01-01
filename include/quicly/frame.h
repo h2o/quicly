@@ -220,6 +220,9 @@ typedef struct st_quicly_new_token_frame_t {
 
 static int quicly_decode_new_token_frame(const uint8_t **src, const uint8_t *end, quicly_new_token_frame_t *frame);
 
+int quicly_tls_push_varint(ptls_buffer_t *buf, uint64_t v);
+int quicly_tls_decode_varint(uint64_t *value, const uint8_t **src, const uint8_t *end);
+
 /* inline definitions */
 
 inline uint16_t quicly_decode16(const uint8_t **src)

@@ -150,7 +150,7 @@ typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t t
                                     size_t num_attributes);
 
 typedef struct st_quicly_initial_max_stream_data_t {
-    uint32_t bidi_local, bidi_remote, uni;
+    uint64_t bidi_local, bidi_remote, uni;
 } quicly_initial_max_stream_data_t;
 
 typedef struct st_quicly_transport_parameters_t {
@@ -161,19 +161,19 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      * in octets
      */
-    uint32_t initial_max_data;
+    uint64_t initial_max_data;
     /**
      * in seconds
      */
-    uint16_t idle_timeout;
+    uint64_t idle_timeout;
     /**
      *
      */
-    uint16_t initial_max_streams_bidi;
+    uint64_t initial_max_streams_bidi;
     /**
      *
      */
-    uint16_t initial_max_streams_uni;
+    uint64_t initial_max_streams_uni;
     /**
      *
      */

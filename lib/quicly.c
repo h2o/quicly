@@ -47,16 +47,20 @@
 #define QUICLY_PACKET_TYPE_1RTT_TO_KEY_PHASE(t) (((t)&0x40) == 0) /* first slot is for 0-rtt and odd-numbered generations */
 
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS 0xffa5
-#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL 0
-#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA 1
-#define QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT 3
-#define QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT 7
-#define QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN 6
-#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI 2
-#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI 8
-#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE 10
-#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI 11
-#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY 12
+#define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
+#define QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT 1
+#define QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN 2
+#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_PACKET_SIZE 3
+#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA 4
+#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL 5
+#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE 6
+#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI 7
+#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI 8
+#define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI 9
+#define QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT 10
+#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY 11
+#define QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_MIGRATION 12
+#define QUICLY_TRANSPORT_PARAMETER_ID_PREFERRED_ADDRESS 13
 
 #define QUICLY_ACK_DELAY_EXPONENT 10
 
@@ -1107,22 +1111,23 @@ static int encode_transport_parameter_list(quicly_context_t *ctx, ptls_buffer_t 
 {
     int ret;
 
+#define pushv(buf, v)                                                                                                              \
+    if ((ret = quicly_tls_push_varint((buf), (v))) != 0)                                                                           \
+    goto Exit
     ptls_buffer_push_block(buf, 2, {
         if (ctx->initial_max_stream_data.bidi_local != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL,
-                                     { ptls_buffer_push32(buf, ctx->initial_max_stream_data.bidi_local); });
+                                     { pushv(buf, ctx->initial_max_stream_data.bidi_local); });
         if (ctx->initial_max_stream_data.bidi_remote != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE,
-                                     { ptls_buffer_push32(buf, ctx->initial_max_stream_data.bidi_remote); });
+                                     { pushv(buf, ctx->initial_max_stream_data.bidi_remote); });
         if (ctx->initial_max_stream_data.uni != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI,
-                                     { ptls_buffer_push32(buf, ctx->initial_max_stream_data.uni); });
+                                     { pushv(buf, ctx->initial_max_stream_data.uni); });
         if (ctx->initial_max_data != 0)
-            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA,
-                                     { ptls_buffer_push32(buf, ctx->initial_max_data); });
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA, { pushv(buf, ctx->initial_max_data); });
         if (ctx->idle_timeout != 0)
-            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT,
-                                     { ptls_buffer_push16(buf, ctx->idle_timeout); });
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT, { pushv(buf, ctx->idle_timeout); });
         if (!is_client) {
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN, {
                 /* FIXME implement stateless reset */
@@ -1132,14 +1137,15 @@ static int encode_transport_parameter_list(quicly_context_t *ctx, ptls_buffer_t 
         }
         if (ctx->max_streams_bidi != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI,
-                                     { ptls_buffer_push16(buf, ctx->max_streams_bidi); });
+                                     { pushv(buf, ctx->max_streams_bidi); });
         if (ctx->max_streams_uni != 0) {
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
-                                     { ptls_buffer_push16(buf, ctx->max_streams_uni); });
+                                     { pushv(buf, ctx->max_streams_uni); });
         }
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT,
-                                 { ptls_buffer_push(buf, QUICLY_ACK_DELAY_EXPONENT); });
+        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT, { pushv(buf, QUICLY_ACK_DELAY_EXPONENT); });
     });
+#undef pushv
+
     ret = 0;
 Exit:
     return ret;
@@ -1173,19 +1179,19 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
             ptls_decode_open_block(src, end, 2, {
                 switch (id) {
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL:
-                    if ((ret = ptls_decode32(&params->initial_max_stream_data.bidi_local, &src, end)) != 0)
+                    if ((ret = quicly_tls_decode_varint(&params->initial_max_stream_data.bidi_local, &src, end)) != 0)
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE:
-                    if ((ret = ptls_decode32(&params->initial_max_stream_data.bidi_remote, &src, end)) != 0)
+                    if ((ret = quicly_tls_decode_varint(&params->initial_max_stream_data.bidi_remote, &src, end)) != 0)
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI:
-                    if ((ret = ptls_decode32(&params->initial_max_stream_data.uni, &src, end)) != 0)
+                    if ((ret = quicly_tls_decode_varint(&params->initial_max_stream_data.uni, &src, end)) != 0)
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA:
-                    if ((ret = ptls_decode32(&params->initial_max_data, &src, end)) != 0)
+                    if ((ret = quicly_tls_decode_varint(&params->initial_max_data, &src, end)) != 0)
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN:
@@ -1197,34 +1203,36 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
                     src = end;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT:
-                    if ((ret = ptls_decode16(&params->idle_timeout, &src, end)) != 0)
+                    if ((ret = quicly_tls_decode_varint(&params->idle_timeout, &src, end)) != 0)
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI:
-                    if ((ret = ptls_decode16(&params->initial_max_streams_bidi, &src, end)) != 0)
+                    if ((ret = quicly_tls_decode_varint(&params->initial_max_streams_bidi, &src, end)) != 0)
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI:
-                    if ((ret = ptls_decode16(&params->initial_max_streams_uni, &src, end)) != 0)
+                    if ((ret = quicly_tls_decode_varint(&params->initial_max_streams_uni, &src, end)) != 0)
                         goto Exit;
                     break;
-                case QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT:
-                    if (src == end) {
+                case QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT: {
+                    uint64_t v;
+                    if ((ret = quicly_tls_decode_varint(&v, &src, end)) != 0)
+                        goto Exit;
+                    if (v > 20) {
                         ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
                         goto Exit;
                     }
-                    if ((params->ack_delay_exponent = *src++) > 20) {
-                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
+                    params->ack_delay_exponent = (uint8_t)v;
+                } break;
+                case QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY: {
+                    uint64_t v;
+                    if ((ret = quicly_tls_decode_varint(&v, &src, end)) != 0)
                         goto Exit;
-                    }
-                    break;
-                case QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY:
-                    if (src == end) {
-                        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
-                        goto Exit;
-                    }
-                    params->max_ack_delay = *src++;
-                    break;
+                    /* FIXME do we have a maximum? */
+                    if (v > 255)
+                        v = 255;
+                    params->ack_delay_exponent = (uint8_t)v;
+                } break;
                 default:
                     src = end;
                     break;
@@ -1235,7 +1243,8 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
 
     ret = 0;
 Exit:
-    /* FIXME convert to quic error */
+    if (ret == PTLS_ALERT_DECODE_ERROR)
+        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;
     return ret;
 
 #undef ID_TO_BIT
