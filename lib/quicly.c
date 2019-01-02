@@ -2071,7 +2071,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
             ack_epoch = QUICLY_EPOCH_HANDSHAKE;
             break;
         case QUICLY_PACKET_TYPE_0RTT_PROTECTED:
-            ack_epoch = QUICLY_EPOCH_0RTT;
+            ack_epoch = QUICLY_EPOCH_1RTT;
             break;
         default:
             if ((s->current.first_byte & 0x80) != 0) {
