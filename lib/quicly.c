@@ -49,6 +49,8 @@
 
 #define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
 
+#define QUICLY_MAX_PN_SIZE 4 /* maximum defined by the RFC used for calculating header protection sampling offset */
+
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS 0xffa5
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
 #define QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT 1
@@ -1507,22 +1509,17 @@ Exit:
 static ptls_iovec_t decrypt_packet(struct st_quicly_cipher_context_t *ctx, uint64_t *next_expected_pn,
                                    quicly_decoded_packet_t *packet, uint64_t *pn)
 {
-    size_t encrypted_len = packet->octets.len - packet->encrypted_off, iv_offset;
+    size_t encrypted_len = packet->octets.len - packet->encrypted_off;
     uint8_t pnbuf[4];
     uint32_t pnbits, pnmask;
     size_t pnlen;
 
     /* determine the IV offset of pne */
-    if (encrypted_len < ctx->pne->algo->iv_size + 1) {
+    if (encrypted_len < ctx->pne->algo->iv_size + QUICLY_MAX_PN_SIZE)
         goto Error;
-    } else if (encrypted_len < ctx->pne->algo->iv_size + 4) {
-        iv_offset = packet->octets.len - ctx->pne->algo->iv_size;
-    } else {
-        iv_offset = packet->encrypted_off + 4;
-    }
 
     /* decrypt PN */
-    ptls_cipher_init(ctx->pne, packet->octets.base + iv_offset);
+    ptls_cipher_init(ctx->pne, packet->octets.base + packet->encrypted_off + QUICLY_MAX_PN_SIZE);
     ptls_cipher_encrypt(ctx->pne, pnbuf, packet->octets.base + packet->encrypted_off, sizeof(pnbuf));
     if ((pnbuf[0] & 0x80) == 0) {
         pnbits = pnbuf[0];
