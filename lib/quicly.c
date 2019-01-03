@@ -77,7 +77,7 @@
  */
 #define MIN_SEND_WINDOW 64
 
-#define HKDF_BASE_LABEL "quic "
+#define AEAD_BASE_LABEL "tl13 quic "
 
 #define STATELESS_RESET_TOKEN_SIZE 16
 
@@ -889,12 +889,12 @@ static int setup_cipher(struct st_quicly_cipher_context_t *ctx, ptls_aead_algori
 
     *ctx = (struct st_quicly_cipher_context_t){NULL};
 
-    if ((ctx->aead = ptls_aead_new(aead, hash, is_enc, secret, HKDF_BASE_LABEL)) == NULL) {
+    if ((ctx->aead = ptls_aead_new(aead, hash, is_enc, secret, AEAD_BASE_LABEL)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    if ((ret = ptls_hkdf_expand_label(hash, pnekey, aead->ctr_cipher->key_size, ptls_iovec_init(secret, hash->digest_size), "pn",
-                                      ptls_iovec_init(NULL, 0), HKDF_BASE_LABEL)) != 0)
+    if ((ret = ptls_hkdf_expand_label(hash, pnekey, aead->ctr_cipher->key_size, ptls_iovec_init(secret, hash->digest_size),
+                                      "quic hp", ptls_iovec_init(NULL, 0), NULL)) != 0)
         goto Exit;
     if ((ctx->pne = ptls_cipher_new(aead->ctr_cipher, is_enc, pnekey)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
@@ -1009,7 +1009,7 @@ static int setup_initial_key(struct st_quicly_cipher_context_t *ctx, ptls_cipher
 
     if ((ret = ptls_hkdf_expand_label(cs->hash, aead_secret, cs->hash->digest_size,
                                       ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0),
-                                      HKDF_BASE_LABEL)) != 0)
+                                      NULL)) != 0)
         goto Exit;
     if ((ret = setup_cipher(ctx, cs->aead, cs->hash, is_enc, aead_secret)) != 0)
         goto Exit;
@@ -1022,8 +1022,8 @@ Exit:
 static int setup_initial_encryption(struct st_quicly_cipher_context_t *ingress, struct st_quicly_cipher_context_t *egress,
                                     ptls_cipher_suite_t **cipher_suites, ptls_iovec_t cid, int is_client)
 {
-    static const uint8_t salt[] = {0x9c, 0x10, 0x8f, 0x98, 0x52, 0x0a, 0x5c, 0x5c, 0x32, 0x96,
-                                   0x8e, 0x95, 0x0e, 0x8a, 0x2c, 0x5f, 0xe0, 0x6d, 0x6c, 0x38};
+    static const uint8_t salt[] = {0xef, 0x4f, 0xb0, 0xab, 0xb4, 0x74, 0x70, 0xc4, 0x1b, 0xef,
+                                   0xcf, 0x80, 0x31, 0x33, 0x4f, 0xae, 0x48, 0x5e, 0x09, 0xa0};
     static const char *labels[2] = {"client in", "server in"};
     ptls_cipher_suite_t **cs;
     uint8_t secret[PTLS_MAX_DIGEST_SIZE];
@@ -3689,7 +3689,6 @@ void quicly_amend_ptls_context(ptls_context_t *ptls)
 
     ptls->omit_end_of_early_data = 1;
     ptls->max_early_data_size = UINT32_MAX;
-    ptls->hkdf_label_prefix = HKDF_BASE_LABEL;
     ptls->update_traffic_key = &update_traffic_key;
 }
 

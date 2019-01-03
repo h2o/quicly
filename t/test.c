@@ -241,6 +241,7 @@ int main(int argc, char **argv)
                                     {&cert, 1},
                                     NULL,
                                     NULL,
+                                    NULL,
                                     &cert_signer.super,
                                     NULL,
                                     0,
