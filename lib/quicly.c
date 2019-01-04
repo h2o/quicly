@@ -3470,7 +3470,8 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
     quicly_stream_t *stream;
     struct st_quicly_conn_streamgroup_state_t *group;
     uint64_t *max_stream_count;
-    uint32_t max_stream_data_local, max_stream_data_remote;
+    uint32_t max_stream_data_local;
+    uint64_t max_stream_data_remote;
     int ret;
 
     /* determine the states */
@@ -3482,7 +3483,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
     } else {
         group = &conn->super.host.bidi;
         max_stream_count = &conn->egress.max_streams.bidi.count;
-        max_stream_data_local = conn->super.ctx->initial_max_stream_data.bidi_local;
+        max_stream_data_local = (uint32_t)conn->super.ctx->initial_max_stream_data.bidi_local;
         max_stream_data_remote = conn->super.peer.transport_params.initial_max_stream_data.bidi_remote;
     }
 
