@@ -35,7 +35,7 @@
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
 
-#define QUICLY_PROTOCOL_VERSION 0xff00000f
+#define QUICLY_PROTOCOL_VERSION 0xff000011
 
 #define QUICLY_LONG_HEADER_BIT 0x80
 #define QUICLY_QUIC_BIT 0x40
