@@ -2098,7 +2098,7 @@ static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context
                 ack_epoch = QUICLY_EPOCH_HANDSHAKE;
                 break;
             case QUICLY_PACKET_TYPE_0RTT:
-                ack_epoch = QUICLY_EPOCH_0RTT;
+                ack_epoch = QUICLY_EPOCH_1RTT;
                 break;
             default:
                 assert(s->current.first_byte == QUICLY_PACKET_TYPE_RETRY);
@@ -3117,8 +3117,11 @@ static int handle_stream_data_blocked_frame(quicly_conn_t *conn, quicly_stream_d
         quicly_stream_is_client_initiated(frame->stream_id) != quicly_is_client(conn))
         return QUICLY_ERROR_FRAME_ENCODING;
 
-    if ((stream = quicly_get_stream(conn, frame->stream_id)) != NULL)
+    if ((stream = quicly_get_stream(conn, frame->stream_id)) != NULL) {
         quicly_maxsender_reset(&stream->_send_aux.max_stream_data_sender, 0);
+        if (should_update_max_stream_data(stream))
+            sched_stream_control(stream);
+    }
 
     return 0;
 }
@@ -3318,6 +3321,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                     if ((ret = quicly_decode_data_blocked_frame(&src, end, &frame)) != 0)
                         goto Exit;
                     quicly_maxsender_reset(&conn->ingress.max_data.sender, 0);
+                    /* TODO disable ack-delay to respond immediately (by sending MAX_DATA)? */
                     ret = 0;
                 } break;
                 case QUICLY_FRAME_TYPE_STREAM_DATA_BLOCKED: {
@@ -3395,8 +3399,9 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     update_now(conn->super.ctx);
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_RECEIVE, VEC_EVENT_ATTR(DCID, packet->cid.dest),
-                         QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0]) ? VEC_EVENT_ATTR(SCID, packet->cid.src)
-                                                              : (quicly_event_attribute_t){QUICLY_EVENT_ATTRIBUTE_NULL},
+                         QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])
+                             ? VEC_EVENT_ATTR(SCID, packet->cid.src)
+                             : (quicly_event_attribute_t){QUICLY_EVENT_ATTRIBUTE_NULL},
                          INT_EVENT_ATTR(LENGTH, packet->octets.len), INT_EVENT_ATTR(FIRST_OCTET, packet->octets.base[0]));
 
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
