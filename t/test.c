@@ -145,8 +145,8 @@ static void test_pne(void)
 
     ret = setup_initial_encryption(&ingress, &egress, ptls_openssl_cipher_suites, ptls_iovec_init(cid, sizeof(cid)), 0);
     ok(ret == 0);
-    ptls_cipher_init(ingress.pne, iv);
-    ptls_cipher_encrypt(ingress.pne, pn, encrypted_pn, sizeof(encrypted_pn));
+    ptls_cipher_init(ingress.header_protection, iv);
+    ptls_cipher_encrypt(ingress.header_protection, pn, encrypted_pn, sizeof(encrypted_pn));
     ok(memcmp(pn, expected_pn, sizeof(expected_pn)) == 0);
 
     dispose_cipher(&ingress);
@@ -228,6 +228,8 @@ static void test_next_packet_number(void)
     ok(n == 0xc0);
     n = quicly_determine_packet_number(0xc0, 0xff, 0x141);
     ok(n == 0x1c0);
+    n = quicly_determine_packet_number(0x9b32, 0xffff, 0xa82f30eb);
+    ok(n == 0xa82f9b32);
 }
 
 int main(int argc, char **argv)
