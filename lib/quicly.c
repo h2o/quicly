@@ -82,7 +82,7 @@
  */
 #define MIN_SEND_WINDOW 64
 
-#define AEAD_BASE_LABEL "tl13 quic "
+#define AEAD_BASE_LABEL "tls13 quic "
 
 #define STATELESS_RESET_TOKEN_SIZE 16
 
