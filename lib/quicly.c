@@ -39,6 +39,8 @@
 
 #define QUICLY_LONG_HEADER_BIT 0x80
 #define QUICLY_QUIC_BIT 0x40
+#define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
+#define QUICLY_SHORT_HEADER_RESERVED_BITS 0x18
 #define QUICLY_KEY_PHASE_BIT 0x4
 
 #define QUICLY_PACKET_TYPE_INITIAL (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0)
@@ -1542,6 +1544,15 @@ static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptl
                                    packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
         if (QUICLY_DEBUG)
             fprintf(stderr, "%s: aead decryption failure (pn: %" PRIu64 ")\n", __FUNCTION__, *pn);
+        goto Error;
+    }
+
+    /* check reserved bits after AEAD decryption */
+    if ((packet->octets.base[0] & (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0]) ? QUICLY_LONG_HEADER_RESERVED_BITS
+                                                                                        : QUICLY_SHORT_HEADER_RESERVED_BITS)) !=
+        0) {
+        if (QUICLY_DEBUG)
+            fprintf(stderr, "%s: non-zero reserved bits (pn: %" PRIu64 ")\n", __FUNCTION__, *pn);
         goto Error;
     }
 
