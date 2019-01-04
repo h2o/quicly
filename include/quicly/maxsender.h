@@ -42,9 +42,6 @@ static void quicly_maxsender_dispose(quicly_maxsender_t *m);
 static void quicly_maxsender_reset(quicly_maxsender_t *m, int64_t initial_value);
 static int quicly_maxsender_should_update(quicly_maxsender_t *m, int64_t buffered_from, uint32_t window_size,
                                           uint32_t update_ratio);
-quicly_stream_id_t quicly_maxsender_should_update_stream_id(quicly_maxsender_t *m, quicly_stream_id_t next_stream_id,
-                                                            uint32_t num_open_streams, uint32_t max_concurrent_streams,
-                                                            uint32_t update_ratio);
 static int quicly_maxsender_should_send_blocked(quicly_maxsender_t *m, int64_t local_max);
 static void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly_maxsender_sent_t *sent);
 static void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent);

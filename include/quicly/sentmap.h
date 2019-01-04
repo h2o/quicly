@@ -60,11 +60,13 @@ struct st_quicly_sent_t {
             quicly_maxsender_sent_t args;
         } max_data;
         struct {
+            int uni;
             quicly_maxsender_sent_t args;
-        } max_stream_id;
+        } max_streams;
         struct {
+            int uni;
             quicly_maxsender_sent_t args;
-        } stream_id_blocked;
+        } streams_blocked;
         struct {
             quicly_stream_id_t stream_id;
         } stream_state_sender;
