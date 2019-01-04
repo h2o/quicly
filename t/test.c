@@ -138,16 +138,16 @@ static void test_pne(void)
 {
     static const uint8_t cid[] = {0x69, 0xbd, 0xdf, 0xea, 0xac, 0x2c, 0xff, 0xd7},
                          iv[] = {0x43, 0xd2, 0xad, 0x97, 0x34, 0x40, 0xe2, 0xd6, 0xae, 0xd2, 0x0c, 0xc9, 0xc9, 0x2c, 0x6f, 0x23},
-                         encrypted_pn[] = {0x16, 0x08, 0x67, 0x062}, expected_pn[] = {0xc0, 0x00, 0x00, 0x00};
+                         expected[5] = {0x32, 0x63, 0x35, 0xb1, 0x4c};
     struct st_quicly_cipher_context_t ingress, egress;
-    uint8_t pn[sizeof(encrypted_pn)];
+    uint8_t actual[sizeof(expected)] = {0};
     int ret;
 
     ret = setup_initial_encryption(&ingress, &egress, ptls_openssl_cipher_suites, ptls_iovec_init(cid, sizeof(cid)), 0);
     ok(ret == 0);
     ptls_cipher_init(ingress.header_protection, iv);
-    ptls_cipher_encrypt(ingress.header_protection, pn, encrypted_pn, sizeof(encrypted_pn));
-    ok(memcmp(pn, expected_pn, sizeof(expected_pn)) == 0);
+    ptls_cipher_encrypt(ingress.header_protection, actual, actual, sizeof(actual));
+    ok(memcmp(actual, expected, sizeof(actual)) == 0);
 
     dispose_cipher(&ingress);
     dispose_cipher(&egress);
