@@ -269,7 +269,7 @@ struct st_quicly_conn_t {
         struct {
             ptls_raw_extension_t ext[2];
             ptls_buffer_t buf;
-        } transport_parameters;
+        } transport_params;
         /**
          * bit vector indicating if there's any pending handshake data at epoch 0,1,2
          */
@@ -1115,7 +1115,7 @@ static int apply_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_stream
         ptls_buffer_push_block((buf), 2, block);                                                                                   \
     } while (0)
 
-static int encode_transport_parameter_list(quicly_transport_parameters_t *params, ptls_buffer_t *buf, int is_client)
+int quicly_encode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, ptls_buffer_t *buf)
 {
     int ret;
 
@@ -1159,7 +1159,7 @@ Exit:
     return ret;
 }
 
-static int decode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, const uint8_t *src,
+int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, const uint8_t *src,
                                            const uint8_t *end)
 {
 #define ID_TO_BIT(id) ((uint64_t)1 << (id))
@@ -1398,7 +1398,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
             goto Exit;
         }
     });
-    ret = decode_transport_parameter_list(&conn->super.peer.transport_params, 1, src, end);
+    ret = quicly_decode_transport_parameter_list(&conn->super.peer.transport_params, 1, src, end);
 
 Exit:
     return ret;
@@ -1432,15 +1432,16 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         goto Exit;
 
     /* handshake */
-    ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
-    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, conn->super.version);
-    if ((ret = encode_transport_parameter_list(&conn->super.ctx->transport_params, &conn->crypto.transport_parameters.buf, 1)) != 0)
+    ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
+    ptls_buffer_push32(&conn->crypto.transport_params.buf, conn->super.version);
+    if ((ret = quicly_encode_transport_parameter_list(&conn->super.ctx->transport_params, 1, &conn->crypto.transport_params.buf)) !=
+        0)
         goto Exit;
-    conn->crypto.transport_parameters.ext[0] =
+    conn->crypto.transport_params.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
-                               {conn->crypto.transport_parameters.buf.base, conn->crypto.transport_parameters.buf.off}};
-    conn->crypto.transport_parameters.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
-    conn->crypto.handshake_properties.additional_extensions = conn->crypto.transport_parameters.ext;
+                               {conn->crypto.transport_params.buf.base, conn->crypto.transport_params.buf.off}};
+    conn->crypto.transport_params.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
+    conn->crypto.handshake_properties.additional_extensions = conn->crypto.transport_params.ext;
     conn->crypto.handshake_properties.collected_extensions = client_collected_extensions;
 
     ptls_buffer_init(&buf, "", 0);
@@ -1484,24 +1485,25 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
         if ((ret = ptls_decode32(&initial_version, &src, end)) != 0)
             goto Exit;
         /* TODO we need to check initial_version when supporting multiple versions */
-        if ((ret = decode_transport_parameter_list(&conn->super.peer.transport_params, 0, src, end)) != 0)
+        if ((ret = quicly_decode_transport_parameter_list(&conn->super.peer.transport_params, 0, src, end)) != 0)
             goto Exit;
     }
 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
-    ptls_buffer_init(&conn->crypto.transport_parameters.buf, "", 0);
-    ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION);
-    ptls_buffer_push_block(&conn->crypto.transport_parameters.buf, 1,
-                           { ptls_buffer_push32(&conn->crypto.transport_parameters.buf, QUICLY_PROTOCOL_VERSION); });
-    if ((ret = encode_transport_parameter_list(&conn->super.ctx->transport_params, &conn->crypto.transport_parameters.buf, 0)) != 0)
+    ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
+    ptls_buffer_push32(&conn->crypto.transport_params.buf, QUICLY_PROTOCOL_VERSION);
+    ptls_buffer_push_block(&conn->crypto.transport_params.buf, 1,
+                           { ptls_buffer_push32(&conn->crypto.transport_params.buf, QUICLY_PROTOCOL_VERSION); });
+    if ((ret = quicly_encode_transport_parameter_list(&conn->super.ctx->transport_params, 0, &conn->crypto.transport_params.buf)) !=
+        0)
         goto Exit;
-    properties->additional_extensions = conn->crypto.transport_parameters.ext;
-    conn->crypto.transport_parameters.ext[0] =
+    properties->additional_extensions = conn->crypto.transport_params.ext;
+    conn->crypto.transport_params.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
-                               {conn->crypto.transport_parameters.buf.base, conn->crypto.transport_parameters.buf.off}};
-    conn->crypto.transport_parameters.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
-    conn->crypto.handshake_properties.additional_extensions = conn->crypto.transport_parameters.ext;
+                               {conn->crypto.transport_params.buf.base, conn->crypto.transport_params.buf.off}};
+    conn->crypto.transport_params.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
+    conn->crypto.handshake_properties.additional_extensions = conn->crypto.transport_params.ext;
 
     ret = 0;
 

@@ -567,6 +567,15 @@ int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid);
 /**
  *
  */
+int quicly_encode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, ptls_buffer_t *buf);
+/**
+ *
+ */
+int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, const uint8_t *src,
+                                           const uint8_t *end);
+/**
+ *
+ */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
                    ptls_handshake_properties_t *handshake_properties);
 /**
