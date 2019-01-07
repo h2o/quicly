@@ -139,7 +139,7 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
     char buf[1024];
     size_t n;
 
-    if ((fp = fopen(fn, "r")) == NULL)
+    if ((fp = fopen(fn, "rb")) == NULL)
         return 0;
     send_header(stream, is_http1, 200, mime_type);
     while ((n = fread(buf, 1, sizeof(buf), fp)) != 0)
@@ -658,7 +658,7 @@ int main(int argc, char **argv)
         req_paths[0] = "/";
 
     if (fcntl(5, F_GETFD) != -1) {
-        if ((quicly_default_event_log_fp = fdopen(5, "at")) == NULL) {
+        if ((quicly_default_event_log_fp = fdopen(5, "a")) == NULL) {
             fprintf(stderr, "failed to open stdio for fd 5:%s\n", strerror(errno));
             exit(1);
         }
