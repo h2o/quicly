@@ -149,19 +149,19 @@ typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
 typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
                                     size_t num_attributes);
 
-typedef struct st_quicly_initial_max_stream_data_t {
+typedef struct st_quicly_max_stream_data_t {
     uint64_t bidi_local, bidi_remote, uni;
-} quicly_initial_max_stream_data_t;
+} quicly_max_stream_data_t;
 
 typedef struct st_quicly_transport_parameters_t {
     /**
      * in octets
      */
-    quicly_initial_max_stream_data_t initial_max_stream_data;
+    quicly_max_stream_data_t max_stream_data;
     /**
      * in octets
      */
-    uint64_t initial_max_data;
+    uint64_t max_data;
     /**
      * in seconds
      */
@@ -169,17 +169,17 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint64_t initial_max_streams_bidi;
+    uint64_t max_streams_bidi;
     /**
      *
      */
-    uint64_t initial_max_streams_uni;
+    uint64_t max_streams_uni;
     /**
-     *
+     * quicly ignores the value set for quicly_context_t::transport_parameters
      */
     uint8_t ack_delay_exponent;
     /**
-     * in milliseconds
+     * in milliseconds; quicly ignores the value set for quicly_context_t::transport_parameters
      */
     uint8_t max_ack_delay;
 } quicly_transport_parameters_t;
@@ -209,23 +209,7 @@ struct st_quicly_context_t {
     /**
      * transport parameters
      */
-    quicly_initial_max_stream_data_t initial_max_stream_data;
-    /**
-     *
-     */
-    uint32_t initial_max_data;
-    /**
-     *
-     */
-    uint16_t idle_timeout;
-    /**
-     *
-     */
-    uint32_t max_streams_bidi;
-    /**
-     *
-     */
-    uint32_t max_streams_uni;
+    quicly_transport_parameters_t transport_params;
     /**
      * stateless reset
      */
