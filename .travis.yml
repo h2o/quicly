@@ -40,6 +40,10 @@ matrix:
     - os: osx
       env:
         - label=osx/x86-64
+      before_install:
+        - curl -L https://cpanmin.us | sudo perl - App::cpanminus
+        - sudo cpanm --totest Scope::Guard
+        - sudo cpanm --notest Test::TCP
       script:
         - cmake -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl .
         - make && make check
