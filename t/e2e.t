@@ -45,7 +45,7 @@ sub spawn_server {
         exec @cmd;
         die "failed to exec $cmd[0]:$?";
     }
-    while (`netstat -na` !~ /^udp.*\s127\.0\.0\.1\.$port\s/m) {
+    while (`netstat -na` !~ /^udp.*\s127\.0\.0\.1[\.:]$port\s/m) {
         if (waitpid($pid, WNOHANG) == $pid) {
             die "failed to launch server";
         }
