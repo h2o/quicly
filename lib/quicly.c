@@ -1115,7 +1115,7 @@ static int apply_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_stream
         ptls_buffer_push_block((buf), 2, block);                                                                                   \
     } while (0)
 
-int quicly_encode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, ptls_buffer_t *buf)
+int quicly_encode_transport_parameter_list(const quicly_transport_parameters_t *params, int is_client, ptls_buffer_t *buf)
 {
     int ret;
 
@@ -1398,20 +1398,38 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
             goto Exit;
         }
     });
-    ret = quicly_decode_transport_parameter_list(&conn->super.peer.transport_params, 1, src, end);
+
+    {
+        quicly_transport_parameters_t params;
+        if ((ret = quicly_decode_transport_parameter_list(&params, 1, src, end)) != 0)
+            goto Exit;
+#define VALIDATE(x)                                                                                                                \
+    if (params.x < conn->super.peer.transport_params.x) {                                                                          \
+        ret = QUICLY_ERROR_TRANSPORT_PARAMETER;                                                                                    \
+        goto Exit;                                                                                                                 \
+    }
+        VALIDATE(max_data);
+        VALIDATE(max_stream_data.bidi_local);
+        VALIDATE(max_stream_data.bidi_remote);
+        VALIDATE(max_stream_data.uni);
+        VALIDATE(max_streams_bidi);
+        VALIDATE(max_streams_uni);
+#undef VALIDATE
+        conn->super.peer.transport_params = params;
+    }
 
 Exit:
     return ret;
 }
 
 int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                   ptls_handshake_properties_t *handshake_properties)
+                   ptls_handshake_properties_t *handshake_properties, const quicly_transport_parameters_t *resumed_transport_params)
 {
     quicly_conn_t *conn = NULL;
     const quicly_cid_t *server_cid;
     ptls_buffer_t buf;
     size_t epoch_offsets[5] = {0};
-    size_t max_early_data_size;
+    size_t max_early_data_size = 0;
     int ret;
 
     update_now(ctx);
@@ -1445,7 +1463,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     conn->crypto.handshake_properties.collected_extensions = client_collected_extensions;
 
     ptls_buffer_init(&buf, "", 0);
-    conn->crypto.handshake_properties.client.max_early_data_size = &max_early_data_size;
+    if (resumed_transport_params != NULL)
+        conn->crypto.handshake_properties.client.max_early_data_size = &max_early_data_size;
     ret = ptls_handle_message(conn->crypto.tls, &buf, epoch_offsets, 0, NULL, 0, &conn->crypto.handshake_properties);
     conn->crypto.handshake_properties.client.max_early_data_size = NULL;
     if (ret != PTLS_ERROR_IN_PROGRESS)
@@ -1453,8 +1472,10 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     write_crypto_data(conn, &buf, epoch_offsets);
     ptls_buffer_dispose(&buf);
 
-    if (max_early_data_size != 0)
+    if (max_early_data_size != 0) {
+        conn->super.peer.transport_params = *resumed_transport_params;
         apply_peer_transport_params(conn);
+    }
 
     *_conn = conn;
     ret = 0;
@@ -1482,6 +1503,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     { /* decode transport_parameters extension */
         const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
         uint32_t initial_version;
+        quicly_transport_parameters_t params;
         if ((ret = ptls_decode32(&initial_version, &src, end)) != 0)
             goto Exit;
         /* TODO we need to check initial_version when supporting multiple versions */

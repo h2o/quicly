@@ -50,22 +50,20 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
     }
 }
 
+static int save_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src);
+
+static const char *ticket_file = NULL;
 static ptls_handshake_properties_t hs_properties;
+static quicly_transport_parameters_t resumed_transport_params;
 static quicly_context_t ctx;
-static ptls_context_t tlsctx = {ptls_openssl_random_bytes,
-                                &ptls_get_time,
-                                ptls_openssl_key_exchanges,
-                                ptls_openssl_cipher_suites,
-                                {NULL},
-                                NULL,
-                                NULL,
-                                NULL,
-                                NULL,
-                                NULL,
-                                0,
-                                0,
-                                NULL,
-                                1};
+static ptls_save_ticket_t save_ticket = {save_ticket_cb};
+
+static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
+                                .get_time = &ptls_get_time,
+                                .key_exchanges = ptls_openssl_key_exchanges,
+                                .cipher_suites = ptls_openssl_cipher_suites,
+                                .require_dhe_on_psk = 1,
+                                .save_ticket = &save_ticket};
 static const char *req_paths[1024];
 
 static int on_stop_sending(quicly_stream_t *stream, uint16_t error_code);
@@ -359,7 +357,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
         perror("bind(2) failed");
         return 1;
     }
-    ret = quicly_connect(&conn, &ctx, host, sa, salen, &hs_properties);
+    ret = quicly_connect(&conn, &ctx, host, sa, salen, &hs_properties, &resumed_transport_params);
     assert(ret == 0);
     send_if_possible(conn);
     send_pending(fd, conn);
@@ -562,6 +560,77 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
     }
 }
 
+int save_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src)
+{
+    quicly_conn_t *conn = *ptls_get_data_ptr(tls);
+    ptls_buffer_t buf;
+    FILE *fp = NULL;
+    int ret;
+
+    if (ticket_file == NULL)
+        return 0;
+
+    ptls_buffer_init(&buf, "", 0);
+
+    /* build data (session ticket and transport parameters) */
+    ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, src.base, src.len); });
+    ptls_buffer_push_block(&buf, 2, {
+        if ((ret = quicly_encode_transport_parameter_list(quicly_get_peer_transport_parameters(conn), 1, &buf)) != 0)
+            goto Exit;
+    });
+
+    /* write file */
+    if ((fp = fopen(ticket_file, "wb")) == NULL) {
+        fprintf(stderr, "failed to open file:%s:%s\n", ticket_file, strerror(errno));
+        ret = PTLS_ERROR_LIBRARY;
+        goto Exit;
+    }
+    fwrite(buf.base, 1, buf.off, fp);
+
+    ret = 0;
+Exit:
+    if (fp != NULL)
+        fclose(fp);
+    ptls_buffer_dispose(&buf);
+    return 0;
+}
+
+static void load_ticket(void)
+{
+    static uint8_t buf[65536];
+    size_t len;
+    int ret;
+
+    {
+        FILE *fp;
+        if ((fp = fopen(ticket_file, "rb")) == NULL)
+            return;
+        len = fread(buf, 1, sizeof(buf), fp);
+        if (len == 0 || !feof(fp)) {
+            fprintf(stderr, "failed to load ticket from file:%s\n", ticket_file);
+            exit(1);
+        }
+        fclose(fp);
+    }
+
+    {
+        const uint8_t *src = buf, *end = buf + len;
+        ptls_iovec_t ticket;
+        ptls_decode_open_block(src, end, 2, {
+            ticket = ptls_iovec_init(src, end - src);
+            src = end;
+        });
+        ptls_decode_block(src, end, 2, {
+            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, 1, src, end)) != 0)
+                goto Exit;
+            src = end;
+        });
+        hs_properties.client.session_ticket = ticket;
+    }
+
+Exit:;
+}
+
 static void usage(const char *cmd)
 {
     printf("Usage: %s [options] host port\n"
@@ -638,7 +707,7 @@ int main(int argc, char **argv)
             }
             break;
         case 's':
-            setup_session_file(ctx.tls, &hs_properties, optarg);
+            ticket_file = optarg;
             break;
         case 'V':
             setup_verify_certificate(ctx.tls);
@@ -675,6 +744,8 @@ int main(int argc, char **argv)
         }
     } else {
         /* client */
+        if (ticket_file != NULL)
+            load_ticket();
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");

@@ -505,6 +505,10 @@ static const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn);
 /**
  *
  */
+static const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn);
+/**
+ *
+ */
 static quicly_state_t quicly_get_state(quicly_conn_t *conn);
 /**
  *
@@ -567,7 +571,7 @@ int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid);
 /**
  *
  */
-int quicly_encode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, ptls_buffer_t *buf);
+int quicly_encode_transport_parameter_list(const quicly_transport_parameters_t *params, int is_client, ptls_buffer_t *buf);
 /**
  *
  */
@@ -577,7 +581,8 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
  *
  */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                   ptls_handshake_properties_t *handshake_properties);
+                   ptls_handshake_properties_t *handshake_properties,
+                   const quicly_transport_parameters_t *resumed_transport_params);
 /**
  *
  */
@@ -700,6 +705,12 @@ inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->peer.cid;
+}
+
+inline const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return &c->peer.transport_params;
 }
 
 inline int quicly_is_client(quicly_conn_t *conn)
