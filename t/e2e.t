@@ -29,7 +29,9 @@ subtest "0-rtt" => sub {
     my $resp = `$cli -s $tempdir/session -p /12.txt 127.0.0.1 $port 2> /dev/null`;
     is $resp, "hello world\n";
     ok -e "$tempdir/session", "session saved";
-    my $events = `$cli -s $tempdir/session 127.0.0.1 $port 5>&1 > /dev/null 2> /dev/null`;
+    system("$cli -s $tempdir/session 127.0.0.1 $port > /dev/null 2> /dev/null 5> $tempdir/events") == 0
+        or die "client failed:$?";
+    my $events = slurp_file("$tempdir/events");
     like $events, qr/"type":"stream-send".*"stream-id":0,(.|\n)*"type":"packet-commit".*"pn":1,/m, "stream 0 on pn 1";
     like $events, qr/"type":"cc-ack-received".*"pn":1,/m, "pn 1 acked";
 };
