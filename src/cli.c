@@ -727,7 +727,7 @@ int main(int argc, char **argv)
         req_paths[0] = "/";
 
     if (fcntl(5, F_GETFD) != -1) {
-        if ((quicly_default_event_log_fp = fdopen(5, "a")) == NULL) {
+        if ((quicly_default_event_log_fp = fdopen(5, "w")) == NULL) {
             fprintf(stderr, "failed to open stdio for fd 5:%s\n", strerror(errno));
             exit(1);
         }
