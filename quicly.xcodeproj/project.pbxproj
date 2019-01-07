@@ -118,6 +118,7 @@
 		E984483D1EA48E7200390927 /* cli.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = cli.c; sourceTree = "<group>"; };
 		E984483F1EA48F6800390927 /* quicly.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = quicly.h; sourceTree = "<group>"; };
 		E98448411EA490A500390927 /* quicly.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = quicly.c; sourceTree = "<group>"; };
+		E98884C221E3F23A0060F010 /* e2e.t */ = {isa = PBXFileReference; lastKnownFileType = text; path = e2e.t; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.perl; };
 		E98F4CBB20E5CF1B00362F15 /* udpfw */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = udpfw; sourceTree = BUILT_PRODUCTS_DIR; };
 		E98F4CBC20E5CF3A00362F15 /* udpfw.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = udpfw.c; sourceTree = "<group>"; };
 		E99B75E61F5CF96900CF503E /* maxsender.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = maxsender.c; sourceTree = "<group>"; };
@@ -291,6 +292,7 @@
 		E9CC44121EC1926000DC7D3E /* t */ = {
 			isa = PBXGroup;
 			children = (
+				E98884C221E3F23A0060F010 /* e2e.t */,
 				E99F8C281F4EAEF800C26B3D /* frame.c */,
 				E920D22F1F49EE0B00799777 /* loss.c */,
 				E99B75E61F5CF96900CF503E /* maxsender.c */,
