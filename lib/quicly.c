@@ -1166,7 +1166,7 @@ static int decode_transport_parameter_list(quicly_transport_parameters_t *params
     int ret;
 
     /* set parameters to their default values */
-    *params = (quicly_transport_parameters_t){{0}, 0, 0, 0, 0, 3};
+    *params = (quicly_transport_parameters_t){{0}, 0, 0, 0, 0, 3, 25};
 
     /* decode the parameters block */
     ptls_decode_block(src, end, 2, {
