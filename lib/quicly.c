@@ -1503,7 +1503,6 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     { /* decode transport_parameters extension */
         const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
         uint32_t initial_version;
-        quicly_transport_parameters_t params;
         if ((ret = ptls_decode32(&initial_version, &src, end)) != 0)
             goto Exit;
         /* TODO we need to check initial_version when supporting multiple versions */
