@@ -1,5 +1,5 @@
 language: c
-cache: ccache
+#cache: ccache
 
 env:
   global:
