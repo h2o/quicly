@@ -571,6 +571,7 @@ static void usage(const char *cmd)
            "  -c certificate-file\n"
            "  -k key-file          specifies the credentials to be used for running the\n"
            "                       server. If omitted, the command runs as a client.\n"
+           "  -e event-log-file    file to log events\n"
            "  -l log-file          file to log traffic secrets\n"
            "  -n                   enforce version negotiation (client-only)\n"
            "  -p path              path to request (can be set multiple times)\n"
@@ -599,7 +600,7 @@ int main(int argc, char **argv)
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
 
-    while ((ch = getopt(argc, argv, "a:c:k:l:np:r:S:s:Vvh")) != -1) {
+    while ((ch = getopt(argc, argv, "a:c:k:e:l:np:r:S:s:Vvh")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -609,6 +610,15 @@ int main(int argc, char **argv)
             break;
         case 'k':
             load_private_key(ctx.tls, optarg);
+            break;
+        case 'e':
+            if ((quicly_default_event_log_fp = fopen(optarg, "w")) == NULL) {
+                fprintf(stderr, "failed to open file:%s:%s\n", optarg, strerror(errno));
+                exit(1);
+            }
+            setvbuf(quicly_default_event_log_fp, NULL, _IONBF, 0);
+            ctx.event_log.mask = UINT64_MAX;
+            ctx.event_log.cb = quicly_default_event_log;
             break;
         case 'l':
             setup_log_secret(ctx.tls, optarg);
@@ -656,16 +666,6 @@ int main(int argc, char **argv)
 
     if (req_paths[0] == NULL)
         req_paths[0] = "/";
-
-    if (fcntl(5, F_GETFD) != -1) {
-        if ((quicly_default_event_log_fp = fdopen(5, "a")) == NULL) {
-            fprintf(stderr, "failed to open stdio for fd 5:%s\n", strerror(errno));
-            exit(1);
-        }
-        setvbuf(quicly_default_event_log_fp, NULL, _IONBF, 0);
-        ctx.event_log.mask = UINT64_MAX;
-        ctx.event_log.cb = quicly_default_event_log;
-    }
 
     if (ctx.tls->certificates.count != 0 || ctx.tls->sign_certificate != NULL) {
         /* server */
