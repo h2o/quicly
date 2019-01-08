@@ -29,7 +29,8 @@ subtest "0-rtt" => sub {
     my $resp = `$cli -s $tempdir/session -p /12.txt 127.0.0.1 $port 2> /dev/null`;
     is $resp, "hello world\n";
     ok -e "$tempdir/session", "session saved";
-    my $events = `$cli -s $tempdir/session 127.0.0.1 $port 5>&1 > /dev/null 2> /dev/null`;
+    system "$cli -s $tempdir/session -e $tempdir/events 127.0.0.1 $port > /dev/null 2>&1";
+    my $events = slurp_file("$tempdir/events");
     like $events, qr/"type":"stream-send".*"stream-id":0,(.|\n)*"type":"packet-commit".*"pn":1,/m, "stream 0 on pn 1";
     like $events, qr/"type":"cc-ack-received".*"pn":1,/m, "pn 1 acked";
 };
@@ -45,7 +46,7 @@ sub spawn_server {
         exec @cmd;
         die "failed to exec $cmd[0]:$?";
     }
-    while (`netstat -na` !~ /^udp.*\s127\.0\.0\.1\.$port\s/m) {
+    while (`netstat -na` !~ /^udp.*\s127\.0\.0\.1[\.:]$port\s/m) {
         if (waitpid($pid, WNOHANG) == $pid) {
             die "failed to launch server";
         }
