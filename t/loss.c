@@ -97,7 +97,7 @@ static void test_even(void)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL);
+        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL, NULL);
         ok(ret == 0);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);
@@ -190,7 +190,7 @@ static void loss_core(int downstream_only)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL);
+        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL, NULL);
         ok(ret == 0);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);

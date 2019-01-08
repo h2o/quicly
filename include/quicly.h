@@ -149,19 +149,19 @@ typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
 typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
                                     size_t num_attributes);
 
-typedef struct st_quicly_initial_max_stream_data_t {
+typedef struct st_quicly_max_stream_data_t {
     uint64_t bidi_local, bidi_remote, uni;
-} quicly_initial_max_stream_data_t;
+} quicly_max_stream_data_t;
 
 typedef struct st_quicly_transport_parameters_t {
     /**
      * in octets
      */
-    quicly_initial_max_stream_data_t initial_max_stream_data;
+    quicly_max_stream_data_t max_stream_data;
     /**
      * in octets
      */
-    uint64_t initial_max_data;
+    uint64_t max_data;
     /**
      * in seconds
      */
@@ -169,17 +169,17 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint64_t initial_max_streams_bidi;
+    uint64_t max_streams_bidi;
     /**
      *
      */
-    uint64_t initial_max_streams_uni;
+    uint64_t max_streams_uni;
     /**
-     *
+     * quicly ignores the value set for quicly_context_t::transport_parameters
      */
     uint8_t ack_delay_exponent;
     /**
-     * in milliseconds
+     * in milliseconds; quicly ignores the value set for quicly_context_t::transport_parameters
      */
     uint8_t max_ack_delay;
 } quicly_transport_parameters_t;
@@ -209,23 +209,7 @@ struct st_quicly_context_t {
     /**
      * transport parameters
      */
-    quicly_initial_max_stream_data_t initial_max_stream_data;
-    /**
-     *
-     */
-    uint32_t initial_max_data;
-    /**
-     *
-     */
-    uint16_t idle_timeout;
-    /**
-     *
-     */
-    uint32_t max_streams_bidi;
-    /**
-     *
-     */
-    uint32_t max_streams_uni;
+    quicly_transport_parameters_t transport_params;
     /**
      * stateless reset
      */
@@ -521,6 +505,10 @@ static const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn);
 /**
  *
  */
+static const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn);
+/**
+ *
+ */
 static quicly_state_t quicly_get_state(quicly_conn_t *conn);
 /**
  *
@@ -583,8 +571,18 @@ int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid);
 /**
  *
  */
+int quicly_encode_transport_parameter_list(const quicly_transport_parameters_t *params, int is_client, ptls_buffer_t *buf);
+/**
+ *
+ */
+int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, const uint8_t *src,
+                                           const uint8_t *end);
+/**
+ *
+ */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                   ptls_handshake_properties_t *handshake_properties);
+                   ptls_handshake_properties_t *handshake_properties,
+                   const quicly_transport_parameters_t *resumed_transport_params);
 /**
  *
  */
@@ -707,6 +705,12 @@ inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->peer.cid;
+}
+
+inline const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return &c->peer.transport_params;
 }
 
 inline int quicly_is_client(quicly_conn_t *conn)
