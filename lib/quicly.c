@@ -2027,7 +2027,7 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
-static int _do_prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, int ack_eliciting)
+static int _do_allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, int ack_eliciting)
 {
     int coalescible, ret;
 
@@ -2156,17 +2156,17 @@ TargetReady:
     return 0;
 }
 
-static int prepare_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
+static int allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
 {
-    return _do_prepare_packet(conn, s, min_space, 0);
+    return _do_allocate_frame(conn, s, min_space, 0);
 }
 
-static int prepare_ack_eliciting_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space,
+static int allocate_ack_eliciting_frame(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space,
                                         quicly_sent_t **sent, quicly_sent_acked_cb acked)
 {
     int ret;
 
-    if ((ret = _do_prepare_packet(conn, s, min_space, 1)) != 0)
+    if ((ret = _do_allocate_frame(conn, s, min_space, 1)) != 0)
         return ret;
     if ((*sent = quicly_sentmap_allocate(&conn->egress.sentmap, acked)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
@@ -2194,7 +2194,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, str
 
     /* emit ack frame */
 Emit:
-    if ((ret = prepare_packet(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
+    if ((ret = allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
         return ret;
     uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, ack_delay);
     if (new_dst == NULL) {
@@ -2227,7 +2227,7 @@ static int prepare_stream_state_sender(quicly_stream_t *stream, quicly_sender_st
     quicly_sent_t *sent;
     int ret;
 
-    if ((ret = prepare_ack_eliciting_packet(stream->conn, s, min_space, &sent, ack_cb)) != 0)
+    if ((ret = allocate_ack_eliciting_frame(stream->conn, s, min_space, &sent, ack_cb)) != 0)
         return ret;
     sent->data.stream_state_sender.stream_id = stream->stream_id;
     *sender = QUICLY_SENDER_STATE_UNACKED;
@@ -2253,7 +2253,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
         uint64_t new_value = stream->recvstate.data_off + stream->_recv_aux.window;
         quicly_sent_t *sent;
         /* prepare */
-        if ((ret = prepare_ack_eliciting_packet(stream->conn, s, QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY, &sent,
+        if ((ret = allocate_ack_eliciting_frame(stream->conn, s, QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY, &sent,
                                                 on_ack_max_stream_data)) != 0)
             return ret;
         /* send */
@@ -2285,7 +2285,7 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
 
     /* write frame type, stream_id and offset, calculate capacity */
     if (stream->stream_id < 0) {
-        if ((ret = prepare_ack_eliciting_packet(stream->conn, s,
+        if ((ret = allocate_ack_eliciting_frame(stream->conn, s,
                                                 1 + quicly_encodev_capacity(off) + 2 /* type + len + offset + 1-byte payload */,
                                                 &sent, on_ack_stream)) != 0)
             return ret;
@@ -2306,7 +2306,7 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
             off + 1 == stream->sendstate.pending.ranges[stream->sendstate.pending.num_ranges - 1].end) {
             /* special case for emitting FIN only */
             header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
-            if ((ret = prepare_ack_eliciting_packet(stream->conn, s, hp - header, &sent, on_ack_stream)) != 0)
+            if ((ret = allocate_ack_eliciting_frame(stream->conn, s, hp - header, &sent, on_ack_stream)) != 0)
                 return ret;
             if (hp - header != s->dst_end - s->dst) {
                 header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
@@ -2318,7 +2318,7 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
             wrote_all = 1;
             goto UpdateState;
         }
-        if ((ret = prepare_ack_eliciting_packet(stream->conn, s, hp - header + 1, &sent, on_ack_stream)) != 0)
+        if ((ret = allocate_ack_eliciting_frame(stream->conn, s, hp - header + 1, &sent, on_ack_stream)) != 0)
             return ret;
         frame_type_at = s->dst;
         memcpy(s->dst, header, hp - header);
@@ -2833,7 +2833,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             if (conn->egress.path_challenge.head != NULL) {
                 do {
                     struct st_quicly_pending_path_challenge_t *c = conn->egress.path_challenge.head;
-                    if ((ret = prepare_packet(conn, &s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY)) != 0)
+                    if ((ret = allocate_frame(conn, &s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY)) != 0)
                         goto Exit;
                     s.dst = quicly_encode_path_challenge_frame(s.dst, c->is_response, c->data);
                     conn->egress.path_challenge.head = c->next;
@@ -2849,7 +2849,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             uint64_t new_count = conn->super.peer.label.next_stream_id / 4 +                                                       \
                                  conn->super.ctx->transport_params.max_streams_##label - conn->super.peer.label.num_streams;       \
             quicly_sent_t *sent;                                                                                                   \
-            if ((ret = prepare_ack_eliciting_packet(conn, &s, QUICLY_MAX_STREAMS_FRAME_CAPACITY, &sent, on_ack_max_streams)) != 0) \
+            if ((ret = allocate_ack_eliciting_frame(conn, &s, QUICLY_MAX_STREAMS_FRAME_CAPACITY, &sent, on_ack_max_streams)) != 0) \
                 goto Exit;                                                                                                         \
             s.dst = quicly_encode_max_streams_frame(s.dst, is_uni, new_count);                                                     \
             sent->data.max_streams.uni = is_uni;                                                                                   \
@@ -2863,7 +2863,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             if (quicly_maxsender_should_update(&conn->ingress.max_data.sender, conn->ingress.max_data.bytes_consumed,
                                                (uint32_t)conn->super.ctx->transport_params.max_data, 512)) {
                 quicly_sent_t *sent;
-                if ((ret = prepare_ack_eliciting_packet(conn, &s, QUICLY_MAX_DATA_FRAME_CAPACITY, &sent, on_ack_max_data)) != 0)
+                if ((ret = allocate_ack_eliciting_frame(conn, &s, QUICLY_MAX_DATA_FRAME_CAPACITY, &sent, on_ack_max_data)) != 0)
                     goto Exit;
                 uint64_t new_value = conn->ingress.max_data.bytes_consumed + conn->super.ctx->transport_params.max_data;
                 s.dst = quicly_encode_max_data_frame(s.dst, new_value);
@@ -2878,7 +2878,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         assert(max_streams->count == max_stream->stream_id / 4);                                                                   \
         if (quicly_maxsender_should_send_blocked(&max_streams->blocked_sender, max_stream->stream_id / 4)) {                       \
             quicly_sent_t *sent;                                                                                                   \
-            if ((ret = prepare_ack_eliciting_packet(conn, &s, QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY, &sent,                        \
+            if ((ret = allocate_ack_eliciting_frame(conn, &s, QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY, &sent,                        \
                                                     on_ack_streams_blocked)) != 0)                                                 \
                 goto Exit;                                                                                                         \
             s.dst = quicly_encode_streams_blocked_frame(s.dst, is_uni, max_stream->stream_id / 4);                                 \
@@ -2919,7 +2919,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             }
         }
         while (s.num_packets < s.min_packets_to_send) {
-            if ((ret = prepare_packet(conn, &s, 1)) != 0)
+            if ((ret = allocate_frame(conn, &s, 1)) != 0)
                 goto Exit;
             assert(s.target.ack_eliciting);
             commit_send_packet(conn, &s, 0);
