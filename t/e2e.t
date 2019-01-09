@@ -24,6 +24,21 @@ subtest "hello" => sub {
     is $resp, "hello world\n";
 };
 
+subtest "version-negotiation" => sub {
+    my $guard = spawn_server();
+    system "$cli -n -e $tempdir/events 127.0.0.1 $port > /dev/null 2>&1";
+    my $events = slurp_file("$tempdir/events");
+    if ($events =~ /"type":"connect",.*"quic-version":(\d+)(?:.|\n)*"type":"quic-version-switch",.*"quic-version":(\d+)/m) {
+        is $2, 0xff000011;
+        isnt $1, 0xff000011;
+    } else {
+        fail "no quic-version-switch event";
+        diag $events;
+    }
+};
+
+unlink "$tempdir/events";
+
 subtest "0-rtt" => sub {
     my $guard = spawn_server();
     my $resp = `$cli -s $tempdir/session -p /12.txt 127.0.0.1 $port 2> /dev/null`;

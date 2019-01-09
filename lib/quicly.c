@@ -1441,7 +1441,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     server_cid = quicly_get_peer_cid(conn);
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CONNECT, VEC_EVENT_ATTR(DCID, ptls_iovec_init(server_cid->cid, server_cid->len)),
-                         VEC_EVENT_ATTR(SCID, ptls_iovec_init(conn->super.host.cid.cid, conn->super.host.cid.len)));
+                         VEC_EVENT_ATTR(SCID, ptls_iovec_init(conn->super.host.cid.cid, conn->super.host.cid.len)),
+                         INT_EVENT_ATTR(QUIC_VERSION, conn->super.version));
 
     if ((ret = setup_handshake_space_and_flow(conn, 0)) != 0)
         goto Exit;
