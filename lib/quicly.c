@@ -2477,8 +2477,10 @@ static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
     do {
         const quicly_sent_packet_t *sent = quicly_sentmap_get(&iter);
         uint64_t pn;
-        if ((pn = sent->packet_number) == UINT64_MAX)
+        if ((pn = sent->packet_number) == UINT64_MAX) {
+            assert(conn->egress.sentmap.bytes_in_flight == 0);
             break;
+        }
         if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_UPDATE_LOST, conn)) != 0)
             return ret;
         conn->egress.max_lost_pn = pn + 1;
@@ -3251,19 +3253,8 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
     conn->super.version = version;
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH, INT_EVENT_ATTR(QUIC_VERSION, version));
 
-    { /* reschedule all the packets that have been sent for immediate resend */
-        quicly_sentmap_iter_t iter;
-        const quicly_sent_packet_t *packet;
-        quicly_sentmap_init_iter(&conn->egress.sentmap, &iter);
-        while ((packet = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
-            int ret = quicly_sentmap_update(&conn->egress.sentmap, &iter,
-                                            QUICLY_SENTMAP_UPDATE_LOST | QUICLY_SENTMAP_UPDATE_DISCARD, conn);
-            assert(ret == 0);
-        }
-        assert(conn->egress.sentmap.bytes_in_flight == 0);
-    }
-
-    return 0;
+    /* reschedule all the packets that have been sent for immediate resend */
+    return retire_acks_by_count(conn, SIZE_MAX);
 }
 
 static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
