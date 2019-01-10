@@ -3476,16 +3476,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                              : (quicly_event_attribute_t){QUICLY_EVENT_ATTRIBUTE_NULL},
                          INT_EVENT_ATTR(LENGTH, packet->octets.len), INT_EVENT_ATTR(FIRST_OCTET, packet->octets.base[0]));
 
-    if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
-        assert(quicly_is_client(conn));
-        if (!QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
-            ret = QUICLY_ERROR_PACKET_IGNORED;
-            goto Exit;
-        }
-        /* FIXME check peer address */
-        memcpy(conn->super.peer.cid.cid, packet->cid.src.base, packet->cid.src.len);
-        conn->super.peer.cid.len = packet->cid.src.len;
-    }
+    /* FIXME check peer address */
+
     if (conn->super.state == QUICLY_STATE_DRAINING) {
         ret = 0;
         goto Exit;
@@ -3505,7 +3497,6 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             }
             ptls_iovec_t odcid = ptls_iovec_init(packet->octets.base + packet->encrypted_off,
                                                  packet->token.base - (packet->octets.base + packet->encrypted_off));
-            ;
             if (!quicly_cid_is_equal(&conn->super.peer.cid, odcid)) {
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
@@ -3533,6 +3524,12 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             if (conn->initial == NULL || (header_protection = conn->initial->cipher.ingress.header_protection) == NULL) {
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
+            }
+            /* update cid if this is the first Initial packet that's being received */
+            if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
+                assert(quicly_is_client(conn));
+                memcpy(conn->super.peer.cid.cid, packet->cid.src.base, packet->cid.src.len);
+                conn->super.peer.cid.len = packet->cid.src.len;
             }
             aead = &conn->initial->cipher.ingress.aead;
             space = (void *)&conn->initial;
