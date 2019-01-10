@@ -26,7 +26,8 @@ subtest "hello" => sub {
 
 subtest "version-negotiation" => sub {
     my $guard = spawn_server();
-    system "$cli -n -e $tempdir/events 127.0.0.1 $port > /dev/null 2>&1";
+    my $resp = `$cli -n -e $tempdir/events -p /12.txt 127.0.0.1 $port 2> /dev/null`;
+    is $resp, "hello world\n";
     my $events = slurp_file("$tempdir/events");
     if ($events =~ /"type":"connect",.*"quic-version":(\d+)(?:.|\n)*"type":"quic-version-switch",.*"quic-version":(\d+)/m) {
         is $2, 0xff000011;
@@ -37,7 +38,13 @@ subtest "version-negotiation" => sub {
     }
 };
 
-unlink "$tempdir/events";
+subtest "retry" => sub {
+    my $guard = spawn_server("-R");
+    my $resp = `$cli -e $tempdir/events -p /12.txt 127.0.0.1 $port 2> /dev/null`;
+    is $resp, "hello world\n";
+    my $events = slurp_file("$tempdir/events");
+    like $events, qr/"type":"receive",.*"first-octet":245.*\n.*"type":"stream-lost",.*"stream-id":-1,.*"off":0,/, "CH deemed lost in response to retry";
+};
 
 subtest "0-rtt" => sub {
     my $guard = spawn_server();
@@ -53,7 +60,7 @@ subtest "0-rtt" => sub {
 done_testing;
 
 sub spawn_server {
-    my @cmd = ($cli, "-k", "t/assets/server.key", "-c", "t/assets/server.crt", "127.0.0.1", $port);
+    my @cmd = ($cli, "-k", "t/assets/server.key", "-c", "t/assets/server.crt", @_, "127.0.0.1", $port);
     my $pid = fork;
     die "fork failed:$!"
         unless defined $pid;
