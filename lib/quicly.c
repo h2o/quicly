@@ -77,6 +77,8 @@
 #define QUICLY_EPOCH_HANDSHAKE 2
 #define QUICLY_EPOCH_1RTT 3
 
+#define QUICLY_MAX_TOKEN_LEN 512 /* maximum length of token that we would accept */
+
 /**
  * do not try to send frames that require ACK if the send window is below this value
  */
@@ -290,6 +292,10 @@ struct st_quicly_conn_t {
         quicly_linklist_t stream_fin_only;
         quicly_linklist_t stream_with_payload;
     } pending_link;
+    /**
+     * retry token
+     */
+    ptls_iovec_t token;
 };
 
 static int crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
@@ -312,8 +318,7 @@ const quicly_context_t quicly_default_context = {
         100,                                                 /* max_concurrent_streams_bidi */
         0                                                    /* max_concurrent_streams_uni */
     },
-    {0, NULL}, /* stateless_retry {enforce_use, key} */
-    0,         /* enforce_version_negotiation */
+    0, /* enforce_version_negotiation */
     quicly_default_alloc_packet,
     quicly_default_free_packet,
     quicly_default_alloc_stream,
@@ -388,6 +393,7 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
 
     packet->octets = ptls_iovec_init(src, len);
     packet->datagram_size = len;
+    packet->token = ptls_iovec_init(NULL, 0);
     ++src;
 
     if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
@@ -405,11 +411,22 @@ size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src,
         src += packet->cid.dest.len;
         packet->cid.src.base = (void *)src;
         src += packet->cid.src.len;
-        if (packet->version == 0) {
+        if (!(packet->version == QUICLY_PROTOCOL_VERSION ||
+              (packet->version & 0xffffff00) == 0xff000000 /* TODO remove this code that is used to test other draft versions */)) {
             /* version negotiation packet does not have the length field nor is ever coalesced */
             packet->encrypted_off = src - packet->octets.base;
+        } else if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_RETRY) {
+            /* retry */
+            size_t odcid_len = decode_cid_length(packet->octets.base[0] & 0xf);
+            packet->encrypted_off = src - packet->octets.base;
+            if (src_end - src < odcid_len)
+                goto Error;
+            src += odcid_len;
+            packet->token = ptls_iovec_init(src, src_end - src);
         } else {
+            /* coalescible long header packet */
             if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
+                /* initial has a token */
                 uint64_t token_len;
                 if ((token_len = quicly_decodev(&src, src_end)) == UINT64_MAX)
                     goto Error;
@@ -1002,6 +1019,7 @@ void quicly_free(quicly_conn_t *conn)
     free_handshake_space(&conn->handshake);
     free_application_space(&conn->application);
 
+    free(conn->token.base);
     free(conn->super.peer.sa);
     free(conn);
 }
@@ -1671,12 +1689,6 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
     conn->initial->cipher.egress = egress_cipher;
     egress_cipher = (struct st_quicly_cipher_context_t){NULL};
     conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
-    /* TODO should there be a way to set use of stateless reset per SNI or something? */
-    if (ctx->stateless_retry.enforce_use) {
-        conn->crypto.handshake_properties.server.enforce_retry = 1;
-        conn->crypto.handshake_properties.server.retry_uses_cookie = 1;
-    }
-    conn->crypto.handshake_properties.server.cookie.key = ctx->stateless_retry.key;
 
     ++conn->super.num_packets.received;
     assert(conn->initial->super.send_ack_at == INT64_MAX);
@@ -2099,8 +2111,12 @@ static int _do_allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context
         s->dst = emit_cid(s->dst, &conn->super.peer.cid);
         s->dst = emit_cid(s->dst, &conn->super.host.cid);
         /* token */
-        if (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL)
-            *s->dst++ = 0;
+        if (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL) {
+            s->dst = quicly_encodev(s->dst, conn->token.len);
+            assert(s->dst_end - s->dst > conn->token.len);
+            memcpy(s->dst, conn->token.base, conn->token.len);
+            s->dst += conn->token.len;
+        }
         /* payload length is filled laterwards (see commit_send_packet) */
         *s->dst++ = 0;
         *s->dst++ = 0;
@@ -2625,6 +2641,39 @@ quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct
     return packet;
 }
 
+quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen, ptls_iovec_t dcid,
+                                     ptls_iovec_t scid, ptls_iovec_t odcid, ptls_iovec_t token)
+{
+    quicly_datagram_t *packet;
+    uint8_t *dst;
+
+    if ((packet = ctx->alloc_packet(ctx, salen, ctx->max_packet_size)) == NULL)
+        return NULL;
+    packet->salen = salen;
+    memcpy(&packet->sa, sa, salen);
+    dst = packet->data.base;
+
+    *dst++ = QUICLY_PACKET_TYPE_RETRY | encode_cid_length(odcid.len);
+    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION);
+    *dst++ = (encode_cid_length(dcid.len) << 4) | encode_cid_length(scid.len);
+#define APPEND(x)                                                                                                                  \
+    do {                                                                                                                           \
+        if (x.len != 0) {                                                                                                          \
+            memcpy(dst, x.base, x.len);                                                                                            \
+            dst += x.len;                                                                                                          \
+        }                                                                                                                          \
+    } while (0)
+    APPEND(dcid);
+    APPEND(scid);
+    APPEND(odcid);
+    APPEND(token);
+#undef APPEND
+
+    packet->data.len = dst - packet->data.base;
+
+    return packet;
+}
+
 static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quicly_send_context_t *s)
 {
     struct st_quicly_pn_space_t *ack_space = NULL;
@@ -2758,9 +2807,6 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_SEND);
 
     switch (quicly_get_state(conn)) {
-    case QUICLY_STATE_SEND_RETRY:
-        assert(!"TODO");
-        return 0;
     case QUICLY_STATE_DRAINING:
         *num_packets = 0;
         return QUICLY_ERROR_CONNECTION_CLOSED;
@@ -3451,9 +3497,38 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 return handle_version_negotiation_packet(conn, packet);
         }
         switch (packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) {
-        case QUICLY_PACKET_TYPE_RETRY:
-            assert(!"FIXME");
-            return 0;
+        case QUICLY_PACKET_TYPE_RETRY: {
+            /* check the packet */
+            if (packet->token.len >= QUICLY_MAX_TOKEN_LEN) {
+                ret = QUICLY_ERROR_PACKET_IGNORED;
+                goto Exit;
+            }
+            ptls_iovec_t odcid = ptls_iovec_init(packet->octets.base + packet->encrypted_off,
+                                                 packet->token.base - (packet->octets.base + packet->encrypted_off));
+            ;
+            if (!quicly_cid_is_equal(&conn->super.peer.cid, odcid)) {
+                ret = QUICLY_ERROR_PACKET_IGNORED;
+                goto Exit;
+            }
+            /* do not accept a second token (TODO allow 0-RTT token to be replaced) */
+            if (conn->token.len != 0) {
+                ret = QUICLY_ERROR_PACKET_IGNORED;
+                goto Exit;
+            }
+            /* update ODCID and token */
+            memcpy(conn->super.peer.cid.cid, odcid.base, odcid.len);
+            conn->super.peer.cid.len = odcid.len;
+            if ((conn->token.base = malloc(packet->token.len)) == NULL) {
+                ret = PTLS_ERROR_NO_MEMORY;
+                goto Exit;
+            }
+            /* update DCID and token */
+            memcpy(conn->token.base, packet->token.base, packet->token.len);
+            conn->token.len = packet->token.len;
+            /* schedule retransmit */
+            ret = retire_acks_by_count(conn, SIZE_MAX);
+            goto Exit;
+        } break;
         case QUICLY_PACKET_TYPE_INITIAL:
             if (conn->initial == NULL || (header_protection = conn->initial->cipher.ingress.header_protection) == NULL) {
                 ret = QUICLY_ERROR_PACKET_IGNORED;
