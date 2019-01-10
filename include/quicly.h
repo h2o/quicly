@@ -211,13 +211,6 @@ struct st_quicly_context_t {
      */
     quicly_transport_parameters_t transport_params;
     /**
-     * stateless reset
-     */
-    struct {
-        unsigned enforce_use : 1;
-        const void *key;
-    } stateless_retry;
-    /**
      * client-only
      */
     unsigned enforce_version_negotiation : 1;
@@ -273,10 +266,6 @@ typedef enum {
      * before observing the first message from peer
      */
     QUICLY_STATE_FIRSTFLIGHT,
-    /**
-     * indicates that quicly_send will send a retry
-     */
-    QUICLY_STATE_SEND_RETRY,
     /**
      * while connected
      */
@@ -457,13 +446,36 @@ struct st_quicly_stream_t {
 };
 
 typedef struct st_quicly_decoded_packet_t {
+    /**
+     * octets of the entire packet
+     */
     ptls_iovec_t octets;
     struct {
-        ptls_iovec_t dest, src;
+        /**
+         * destination CID
+         */
+        ptls_iovec_t dest;
+        /**
+         * source CID; {NULL, 0} if is a short header packet
+         */
+        ptls_iovec_t src;
     } cid;
+    /**
+     * version; 0 if is a short header packet
+     */
     uint32_t version;
+    /**
+     * token if available; otherwise {NULL, 0}
+     */
     ptls_iovec_t token;
+    /**
+     * starting offset of data (i.e., version-dependent area of a long header packet (version numbers in case of VN), odcid (in case
+     * of retry), or encrypted PN)
+     */
     size_t encrypted_off;
+    /**
+     * size of the datagram
+     */
     size_t datagram_size;
 } quicly_decoded_packet_t;
 
@@ -556,6 +568,11 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn);
  */
 quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
                                                    ptls_iovec_t dest_cid, ptls_iovec_t src_cid);
+/**
+ *
+ */
+quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen, ptls_iovec_t dcid,
+                                     ptls_iovec_t scid, ptls_iovec_t odcid, ptls_iovec_t token);
 /**
  *
  */

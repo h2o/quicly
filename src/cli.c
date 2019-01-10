@@ -57,6 +57,7 @@ static ptls_handshake_properties_t hs_properties;
 static quicly_transport_parameters_t resumed_transport_params;
 static quicly_context_t ctx;
 static ptls_save_ticket_t save_ticket = {save_ticket_cb};
+static ptls_iovec_t retry_token;
 
 static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .get_time = &ptls_get_time,
@@ -522,6 +523,16 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 if (conn != NULL) {
                     /* existing connection */
                     quicly_receive(conn, &packet);
+                } else if (retry_token.len != 0 && !(packet.token.len == retry_token.len &&
+                                                     memcmp(packet.token.base, retry_token.base, retry_token.len) == 0)) {
+                    /* unbound connection; send a retry token unless the client has supplied the correct one, but not too many */
+                    if (off == 0) {
+                        quicly_datagram_t *rp =
+                            quicly_send_retry(&ctx, &sa, salen, packet.cid.src, packet.cid.dest, packet.cid.dest, retry_token);
+                        assert(rp != NULL);
+                        if (send_one(fd, rp) == -1)
+                            perror("sendmsg failed");
+                    }
                 } else {
                     /* new connection */
                     int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, NULL, &packet);
@@ -644,8 +655,8 @@ static void usage(const char *cmd)
            "  -l log-file          file to log traffic secrets\n"
            "  -n                   enforce version negotiation (client-only)\n"
            "  -p path              path to request (can be set multiple times)\n"
+           "  -R                   require Retry (server only)\n"
            "  -r [initial-rto]     initial RTO (in milliseconds)\n"
-           "  -S [secret]          use stateless retry protected by the secret\n"
            "  -s session-file      file to load / store the session ticket\n"
            "  -V                   verify peer using the default certificates\n"
            "  -v                   verbose mode (-vv emits packet dumps as well)\n"
@@ -669,7 +680,7 @@ int main(int argc, char **argv)
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
 
-    while ((ch = getopt(argc, argv, "a:c:k:e:l:np:r:S:s:Vvh")) != -1) {
+    while ((ch = getopt(argc, argv, "a:c:k:e:l:np:Rr:s:Vvh")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -701,18 +712,12 @@ int main(int argc, char **argv)
                 ;
             req_paths[i] = optarg;
         } break;
+        case 'R':
+            retry_token = ptls_iovec_init("please retry", 12);
+            break;
         case 'r':
             if (sscanf(optarg, "%" PRIu32, &ctx.loss->default_initial_rtt) != 1) {
                 fprintf(stderr, "invalid argument passed to `-r`\n");
-                exit(1);
-            }
-            break;
-        case 'S':
-            ctx.stateless_retry.enforce_use = 1;
-            ctx.stateless_retry.key = optarg;
-            if (strlen(ctx.stateless_retry.key) < ctx.tls->cipher_suites[0]->hash->digest_size) {
-                fprintf(stderr, "secret for stateless retry is too short (should be at least %zu bytes long)\n",
-                        ctx.tls->cipher_suites[0]->hash->digest_size);
                 exit(1);
             }
             break;
