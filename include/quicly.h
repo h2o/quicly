@@ -271,6 +271,10 @@ typedef enum {
      */
     QUICLY_STATE_CONNECTED,
     /**
+     * sending close, but haven't seen the peer sending close
+     */
+    QUICLY_STATE_CLOSING,
+    /**
      * we do not send CLOSE (at the moment), enter draining mode when receiving CLOSE
      */
     QUICLY_STATE_DRAINING
@@ -556,9 +560,15 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
  */
 static void **quicly_get_data(quicly_conn_t *conn);
 /**
- *
+ * destroys a connection object.
  */
 void quicly_free(quicly_conn_t *conn);
+/**
+ * closes the connection.  If `app_error_code` is not NULL, initiates a immediate close using the specified error code.  Otherwise,
+ * initiates a timeout close.  An application should continue calling quicly_recieve and quicly_send, until they return
+ * QUICLY_ERROR_FREE_CONNECTION.  At this point, it is should call quicly_free.
+ */
+int quicly_close(quicly_conn_t *conn, const uint16_t *app_error_code, const char *reason_phrase);
 /**
  *
  */

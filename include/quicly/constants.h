@@ -47,9 +47,8 @@
 
 /* internal errors */
 #define QUICLY_ERROR_PACKET_IGNORED 0xff01
-#define QUICLY_ERROR_FIN_CLOSED 0xff02
-#define QUICLY_ERROR_SENDBUF_FULL 0xff03
-#define QUICLY_ERROR_CONNECTION_CLOSED 0xff04
+#define QUICLY_ERROR_SENDBUF_FULL 0xff02    /* internal use only; the error code is never exposed to the application */
+#define QUICLY_ERROR_FREE_CONNECTION 0xff03 /* returned by quicly_send when the connection is freeable */
 
 #define QUICLY_BUILD_ASSERT(condition) ((void)sizeof(char[2 * !!(!__builtin_constant_p(condition) || (condition)) - 1]))
 

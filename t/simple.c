@@ -390,6 +390,53 @@ static void test_rst_during_loss(void)
     quic_ctx.transport_params.max_stream_data = max_stream_data_orig;
 }
 
+static void test_close(void)
+{
+    quicly_datagram_t *datagram;
+    size_t num_datagrams;
+    int64_t client_timeout, server_timeout;
+    int ret;
+
+    /* client sends close */
+    uint16_t error_code = 12345;
+    ret = quicly_close(client, &error_code, "good bye");
+    ok(ret == 0);
+    ok(quicly_get_state(client) == QUICLY_STATE_CLOSING);
+    ok(quicly_get_first_timeout(client) <= quic_now);
+    num_datagrams = 1;
+    ret = quicly_send(client, &datagram, &num_datagrams);
+    assert(num_datagrams == 1);
+    client_timeout = quicly_get_first_timeout(client);
+    ok(quic_now < client_timeout && client_timeout < quic_now + 1000); /* 3 pto or something */
+
+    { /* server receives close */
+        quicly_decoded_packet_t decoded;
+        decode_packets(&decoded, &datagram, 1, 8);
+        ret = quicly_receive(server, &decoded);
+        ok(ret == 0);
+        ok(quicly_get_state(server) == QUICLY_STATE_DRAINING);
+        server_timeout = quicly_get_first_timeout(server);
+        ok(quic_now < server_timeout && server_timeout < quic_now + 1000); /* 3 pto or something */
+    }
+
+    /* nothing sent by the server in response */
+    num_datagrams = 1;
+    ret = quicly_send(server, &datagram, &num_datagrams);
+    ok(ret == 0);
+    ok(num_datagrams == 0);
+
+    /* endpoints request discarding state after timeout */
+    quic_now = client_timeout < server_timeout ? server_timeout : client_timeout;
+    num_datagrams = 1;
+    ret = quicly_send(client, &datagram, &num_datagrams);
+    ok(ret == QUICLY_ERROR_FREE_CONNECTION);
+    quicly_free(client);
+    num_datagrams = 1;
+    ret = quicly_send(server, &datagram, &num_datagrams);
+    ok(ret == QUICLY_ERROR_FREE_CONNECTION);
+    quicly_free(server);
+}
+
 static void tiny_connection_window(void)
 {
     uint64_t max_data_orig = quic_ctx.transport_params.max_data;
@@ -465,5 +512,6 @@ void test_simple(void)
     subtest("reset-after-close", test_reset_after_close);
     subtest("tiny-stream-window", tiny_stream_window);
     subtest("rst-during-loss", test_rst_during_loss);
+    subtest("close", test_close);
     subtest("tiny-connection-window", tiny_connection_window);
 }
