@@ -46,6 +46,7 @@ void quicly_recvstate_init(quicly_recvstate_t *state);
 void quicly_recvstate_init_closed(quicly_recvstate_t *state);
 void quicly_recvstate_dispose(quicly_recvstate_t *state);
 static int quicly_recvstate_transfer_complete(quicly_recvstate_t *state);
+static size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state);
 int quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin);
 int quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t eos_at, uint64_t *bytes_missing);
 
@@ -54,6 +55,12 @@ int quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t eos_at, uint64_t 
 inline int quicly_recvstate_transfer_complete(quicly_recvstate_t *state)
 {
     return state->received.num_ranges == 0;
+}
+
+inline size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state)
+{
+    assert(state->data_off <= state->received.ranges[0].end);
+    return state->received.ranges[0].end - state->data_off;
 }
 
 #endif
