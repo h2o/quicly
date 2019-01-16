@@ -38,8 +38,23 @@ typedef struct st_quicly_sent_packet_t {
     uint16_t bytes_in_flight; /* number of bytes in-flight for the packet (0 if not ACK-eliciting or once deemed lost) */
 } quicly_sent_packet_t;
 
-typedef int (*quicly_sent_acked_cb)(struct st_quicly_conn_t *conn, int is_acked, const quicly_sent_packet_t *packet,
-                                    quicly_sent_t *data);
+typedef enum en_quicly_sentmap_event_t {
+    /**
+     * a packet (or a frame) has been acked
+     */
+    QUICLY_SENTMAP_EVENT_ACKED,
+    /**
+     * a packet (or a frame) is deemed lost
+     */
+    QUICLY_SENTMAP_EVENT_LOST,
+    /**
+     * a packet (or a frame) is being removed from the sentmap (e.g., after 3 pto, the epoch being discarded)
+     */
+    QUICLY_SENTMAP_EVENT_EXPIRED
+} quicly_sentmap_event_t;
+
+typedef int (*quicly_sent_acked_cb)(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *data,
+                                    quicly_sentmap_event_t event);
 
 struct st_quicly_sent_t {
     quicly_sent_acked_cb acked;
@@ -131,10 +146,6 @@ typedef struct st_quicly_sentmap_iter_t {
     struct st_quicly_sent_block_t **ref;
 } quicly_sentmap_iter_t;
 
-#define QUICLY_SENTMAP_UPDATE_LOST 1
-#define QUICLY_SENTMAP_UPDATE_ACKED 2
-#define QUICLY_SENTMAP_UPDATE_DISCARD 4
-
 extern const quicly_sent_t quicly_sentmap__end_iter;
 
 /**
@@ -174,11 +185,12 @@ void quicly_sentmap_skip(quicly_sentmap_iter_t *iter);
 /**
  * updates the state of the packet being pointed to by the iterator, _and advances to the next packet_
  */
-int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, unsigned flags, struct st_quicly_conn_t *conn);
+int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, quicly_sentmap_event_t event,
+                          struct st_quicly_conn_t *conn);
 
 struct st_quicly_sent_block_t *quicly_sentmap__new_block(quicly_sentmap_t *map);
-int quicly_sentmap__type_packet(struct st_quicly_conn_t *conn, int is_acked, const quicly_sent_packet_t *packet,
-                                quicly_sent_t *sent);
+int quicly_sentmap__type_packet(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                                quicly_sentmap_event_t event);
 
 /* inline definitions */
 
