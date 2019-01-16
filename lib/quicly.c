@@ -272,6 +272,10 @@ struct st_quicly_conn_t {
          * bit vector indicating if there's any pending handshake data at epoch 0,1,2
          */
         uint8_t pending_flows;
+        /**
+         * whether if the timer to discard the handshake contexts has been activated
+         */
+        uint8_t handshake_scheduled_for_discard;
     } crypto;
     /**
      *
@@ -802,6 +806,12 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
         *consumed = conn->ingress.max_data.bytes_consumed;
 }
 
+static void update_loss_alarm(quicly_conn_t *conn)
+{
+    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
+                             conn->egress.sentmap.bytes_in_flight != 0);
+}
+
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
 {
     quicly_stream_t *stream;
@@ -823,7 +833,6 @@ static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
     quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
     assert(stream != NULL);
     destroy_stream(stream);
-    retire_acks_by_ack_epoch(conn, epoch);
 }
 
 static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
@@ -975,6 +984,37 @@ static int setup_application_space_and_flow(quicly_conn_t *conn, int setup_0rtt)
             return ret;
     }
     return create_handshake_flow(conn, 3);
+}
+
+static int discard_initial_context(quicly_conn_t *conn)
+{
+    int ret;
+
+    if ((ret = retire_acks_by_ack_epoch(conn, QUICLY_EPOCH_INITIAL)) != 0)
+        return ret;
+    destroy_handshake_flow(conn, QUICLY_EPOCH_INITIAL);
+    free_handshake_space(&conn->initial);
+
+    return 0;
+}
+
+static int discard_handshake_context(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                                     quicly_sentmap_event_t event)
+{
+    if (event == QUICLY_SENTMAP_EVENT_EXPIRED) {
+        /* discard Handshake */
+        destroy_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE);
+        free_handshake_space(&conn->handshake);
+        /* discard 0-RTT receive context */
+        if (!quicly_is_client(conn) && conn->application->cipher.ingress.header_protection.zero_rtt != NULL) {
+            assert(conn->application->cipher.ingress.aead[0] != NULL);
+            ptls_cipher_free(conn->application->cipher.ingress.header_protection.zero_rtt);
+            conn->application->cipher.ingress.header_protection.zero_rtt = NULL;
+            ptls_aead_free(conn->application->cipher.ingress.aead[0]);
+            conn->application->cipher.ingress.aead[0] = NULL;
+        }
+    }
+    return 0;
 }
 
 static void apply_peer_transport_params(quicly_conn_t *conn)
@@ -2564,12 +2604,6 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     return 0;
 }
 
-static void update_loss_alarm(quicly_conn_t *conn)
-{
-    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
-                             conn->egress.sentmap.bytes_in_flight != 0);
-}
-
 static void open_id_blocked_streams(quicly_conn_t *conn, int uni)
 {
     uint64_t count;
@@ -2732,6 +2766,12 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
         if ((ret = send_stream_data(stream, s)) != 0)
             goto Exit;
         resched_stream_data(stream);
+    }
+
+    /* discard Initial key and space */
+    if (epoch == QUICLY_EPOCH_HANDSHAKE && quicly_is_client(conn) && conn->initial != NULL) {
+        if ((ret = discard_initial_context(conn)) != 0)
+            goto Exit;
     }
 
 Exit:
@@ -3603,6 +3643,32 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     if (*space != NULL) {
         if ((ret = record_receipt(conn, *space, pn, is_ack_only, epoch)) != 0)
             goto Exit;
+    }
+
+    if (epoch == QUICLY_EPOCH_HANDSHAKE) {
+        if (conn->initial != NULL && !quicly_is_client(conn)) {
+            if ((ret = discard_initial_context(conn)) != 0)
+                goto Exit;
+            update_loss_alarm(conn);
+        }
+        /* schedule the timer to discard contexts related to the handshake if we have received all handshake messages and all the
+         * messages we sent have been acked */
+        if (!conn->crypto.handshake_scheduled_for_discard && ptls_handshake_is_complete(conn->crypto.tls)) {
+            quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + 2));
+            assert(stream != NULL);
+            quicly_streambuf_t *buf = stream->data;
+            if (buf->egress.buf.off == 0) {
+                if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, QUICLY_EPOCH_HANDSHAKE)) != 0)
+                    goto Exit;
+                if (quicly_sentmap_allocate(&conn->egress.sentmap, discard_handshake_context) == NULL) {
+                    ret = PTLS_ERROR_NO_MEMORY;
+                    goto Exit;
+                }
+                quicly_sentmap_commit(&conn->egress.sentmap, 0);
+                ++conn->egress.packet_number;
+                conn->crypto.handshake_scheduled_for_discard = 1;
+            }
+        }
     }
 
 Exit:
