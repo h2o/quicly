@@ -848,8 +848,8 @@ static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
 static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
 {
     quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
-    assert(stream != NULL);
-    destroy_stream(stream);
+    if (stream != NULL)
+        destroy_stream(stream);
 }
 
 static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
@@ -3142,6 +3142,8 @@ static int enter_close(quicly_conn_t *conn, int host_is_initiating)
         conn->super.state = QUICLY_STATE_DRAINING;
         conn->egress.send_ack_at = now + get_sentmap_expiration_time(conn);
     }
+
+    update_loss_alarm(conn);
 
     return 0;
 }

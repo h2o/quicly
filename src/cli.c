@@ -232,7 +232,8 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
                     "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
                     ", bytes-sent: %" PRIu64 "\n",
                     num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
-            exit(0);
+            uint16_t error_code = QUICLY_ERROR_NONE;
+            quicly_close(stream->conn, &error_code, "");
         }
     }
 
@@ -289,8 +290,6 @@ static int send_pending(int fd, quicly_conn_t *conn)
                 ret = 0;
                 quicly_default_free_packet(&ctx, packets[i]);
             }
-        } else {
-            fprintf(stderr, "quicly_send returned %d\n", ret);
         }
     } while (ret == 0 && num_packets != 0);
 
@@ -412,10 +411,18 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
             }
             send_if_possible(conn);
         }
-        if (conn != NULL && send_pending(fd, conn) != 0) {
-            quicly_free(conn);
-            conn = NULL;
-            return 1;
+        if (conn != NULL) {
+            ret = send_pending(fd, conn);
+            if (ret != 0) {
+                quicly_free(conn);
+                conn = NULL;
+                if (ret == QUICLY_ERROR_FREE_CONNECTION) {
+                    return 0;
+                } else {
+                    fprintf(stderr, "quicly_send returned %d\n", ret);
+                    return 1;
+                }
+            }
         }
     }
 }
