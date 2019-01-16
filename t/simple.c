@@ -390,12 +390,26 @@ static void test_rst_during_loss(void)
     quic_ctx.transport_params.max_stream_data = max_stream_data_orig;
 }
 
+static uint16_t test_close_error_code;
+
+static void test_close_on_conn_close(quicly_conn_t *conn, uint16_t code, const uint64_t *frame_type, const char *reason,
+                                     size_t reason_len)
+{
+    test_close_error_code = code;
+    ok(frame_type == NULL);
+    ok(reason_len == 8);
+    ok(memcmp(reason, "good bye", 8) == 0);
+}
+
 static void test_close(void)
 {
+    quicly_conn_close_cb orig_conn_close_cb = quic_ctx.on_conn_close;
     quicly_datagram_t *datagram;
     size_t num_datagrams;
     int64_t client_timeout, server_timeout;
     int ret;
+
+    quic_ctx.on_conn_close = test_close_on_conn_close;
 
     /* client sends close */
     uint16_t error_code = 12345;
@@ -414,6 +428,7 @@ static void test_close(void)
         decode_packets(&decoded, &datagram, 1, 8);
         ret = quicly_receive(server, &decoded);
         ok(ret == 0);
+        ok(test_close_error_code == 12345);
         ok(quicly_get_state(server) == QUICLY_STATE_DRAINING);
         server_timeout = quicly_get_first_timeout(server);
         ok(quic_now < server_timeout && server_timeout < quic_now + 1000); /* 3 pto or something */
@@ -435,6 +450,10 @@ static void test_close(void)
     ret = quicly_send(server, &datagram, &num_datagrams);
     ok(ret == QUICLY_ERROR_FREE_CONNECTION);
     quicly_free(server);
+
+    client = NULL;
+    server = NULL;
+    quic_ctx.on_conn_close = orig_conn_close_cb;
 }
 
 static void tiny_connection_window(void)
