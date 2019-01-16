@@ -2962,7 +2962,7 @@ Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
     if (ret == 0) {
-        conn->egress.send_ack_at = INT64_MAX;
+        conn->egress.send_ack_at = INT64_MAX; /* we have send ACKs for every epoch */
         update_loss_alarm(conn);
         *num_packets = s.num_packets;
         if ((s.current.first_byte & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_RETRY)
