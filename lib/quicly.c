@@ -1001,7 +1001,12 @@ static int discard_initial_context(quicly_conn_t *conn)
 static int discard_handshake_context(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
                                      quicly_sentmap_event_t event)
 {
-    if (event == QUICLY_SENTMAP_EVENT_EXPIRED) {
+    switch (event) {
+    case QUICLY_SENTMAP_EVENT_ACKED:
+        return QUICLY_ERROR_PROTOCOL_VIOLATION;
+    case QUICLY_SENTMAP_EVENT_LOST:
+        break;
+    case QUICLY_SENTMAP_EVENT_EXPIRED:
         /* discard Handshake */
         destroy_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE);
         free_handshake_space(&conn->handshake);
@@ -1013,6 +1018,7 @@ static int discard_handshake_context(quicly_conn_t *conn, const quicly_sent_pack
             ptls_aead_free(conn->application->cipher.ingress.aead[0]);
             conn->application->cipher.ingress.aead[0] = NULL;
         }
+        break;
     }
     return 0;
 }
@@ -3653,7 +3659,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             assert(stream != NULL);
             quicly_streambuf_t *buf = stream->data;
             if (buf->egress.buf.off == 0) {
-                if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, QUICLY_EPOCH_HANDSHAKE)) != 0)
+                if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now,
+                                                  QUICLY_EPOCH_HANDSHAKE)) != 0)
                     goto Exit;
                 if (quicly_sentmap_allocate(&conn->egress.sentmap, discard_handshake_context) == NULL) {
                     ret = PTLS_ERROR_NO_MEMORY;
