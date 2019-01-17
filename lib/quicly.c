@@ -312,7 +312,7 @@ static const quicly_stream_callbacks_t crypto_stream_callbacks = {quicly_streamb
                                                                   quicly_streambuf_egress_emit, NULL, crypto_stream_receive};
 
 static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, int is_enc, size_t epoch, const void *secret);
-static int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch);
+static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
 const quicly_context_t quicly_default_context = {
     NULL,                      /* tls */
@@ -1007,7 +1007,7 @@ static int discard_initial_context(quicly_conn_t *conn)
 {
     int ret;
 
-    if ((ret = retire_acks_by_ack_epoch(conn, QUICLY_EPOCH_INITIAL)) != 0)
+    if ((ret = discard_sentmap_by_epoch(conn, 1u << QUICLY_EPOCH_INITIAL)) != 0)
         return ret;
     destroy_handshake_flow(conn, QUICLY_EPOCH_INITIAL);
     free_handshake_space(&conn->initial);
@@ -2514,7 +2514,7 @@ static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
         quicly_sentmap_update(&conn->egress.sentmap, iter, QUICLY_SENTMAP_EVENT_EXPIRED, conn);
 }
 
-int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch)
+int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs)
 {
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
@@ -2523,7 +2523,7 @@ int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch)
     init_acks_iter(conn, &iter);
 
     while ((sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
-        if (sent->ack_epoch == ack_epoch) {
+        if ((ack_epochs & (1u << sent->ack_epoch)) != 0) {
             if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_EXPIRED, conn)) != 0)
                 return ret;
         } else {
@@ -2537,7 +2537,7 @@ int retire_acks_by_ack_epoch(quicly_conn_t *conn, uint8_t ack_epoch)
 /**
  * Determine frames to be retransmitted on TLP and RTO.
  */
-static int retire_acks_by_count(quicly_conn_t *conn, size_t count)
+static int mark_packets_as_lost(quicly_conn_t *conn, size_t count)
 {
     quicly_sentmap_iter_t iter;
     int ret;
@@ -2864,7 +2864,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
             assert(conn->application->cipher.egress.aead != NULL);
             dispose_cipher(&conn->application->cipher.egress);
             conn->application->cipher.egress = (struct st_quicly_cipher_context_t){NULL};
-            retire_acks_by_ack_epoch(conn, 3); /* retire all packets with ack_epoch == 3; they are all 0-RTT packets */
+            discard_sentmap_by_epoch(
+                conn, 1u << QUICLY_EPOCH_1RTT); /* retire all packets with ack_epoch == 3; they are all 0-RTT packets */
         }
         if (conn->handshake == NULL && (ret = setup_handshake_space_and_flow(conn, 2)) != 0)
             return ret;
@@ -2954,7 +2955,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
                                  INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)));
             if (!ptls_handshake_is_complete(conn->crypto.tls)) {
-                if ((ret = retire_acks_by_count(conn, s.min_packets_to_send)) != 0)
+                if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
                     goto Exit;
             }
             break;
@@ -2968,7 +2969,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, cc_type),
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
                                  INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)));
-            if ((ret = retire_acks_by_count(conn, s.min_packets_to_send)) != 0)
+            if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
                 goto Exit;
         } break;
         default:
@@ -3132,7 +3133,7 @@ static int enter_close(quicly_conn_t *conn, int host_is_initiating)
     assert(conn->super.state < QUICLY_STATE_CLOSING);
 
     /* release all inflight info, register a close timeout */
-    if ((ret = retire_acks_by_count(conn, SIZE_MAX)) != 0)
+    if ((ret = discard_sentmap_by_epoch(conn, ~0u)) != 0)
         return ret;
     if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, QUICLY_EPOCH_INITIAL)) != 0)
         return ret;
@@ -3431,7 +3432,7 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH, INT_EVENT_ATTR(QUIC_VERSION, version));
 
     /* reschedule all the packets that have been sent for immediate resend */
-    return retire_acks_by_count(conn, SIZE_MAX);
+    return discard_sentmap_by_epoch(conn, ~0u);
 }
 
 static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
@@ -3705,7 +3706,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             memcpy(conn->token.base, packet->token.base, packet->token.len);
             conn->token.len = packet->token.len;
             /* schedule retransmit */
-            ret = retire_acks_by_count(conn, SIZE_MAX);
+            ret = discard_sentmap_by_epoch(conn, ~0u);
             goto Exit;
         } break;
         case QUICLY_PACKET_TYPE_INITIAL:

@@ -133,7 +133,7 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
                           struct st_quicly_conn_t *conn)
 {
     quicly_sent_packet_t packet;
-    int ret = 0;
+    int notify_lost = 0, ret = 0;
 
     assert(iter->p != &quicly_sentmap__end_iter);
     assert(iter->p->acked == quicly_sentmap__type_packet);
@@ -141,8 +141,10 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
     /* copy packet info */
     packet = iter->p->data.packet;
 
-    /* update packet-level metrics */
+    /* update packet-level metrics (make adjustments to notify the loss when discarding a packet that is still deemed inflight) */
     if (packet.bytes_in_flight != 0) {
+        if (event == QUICLY_SENTMAP_EVENT_EXPIRED)
+            notify_lost = 1;
         assert(map->bytes_in_flight >= packet.bytes_in_flight);
         map->bytes_in_flight -= packet.bytes_in_flight;
     }
@@ -153,6 +155,8 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
 
     /* iterate through the frames */
     for (next_entry(iter); iter->p->acked != quicly_sentmap__type_packet; next_entry(iter)) {
+        if (notify_lost && ret == 0)
+            ret = iter->p->acked(conn, &packet, iter->p, QUICLY_SENTMAP_EVENT_LOST);
         if (ret == 0)
             ret = iter->p->acked(conn, &packet, iter->p, event);
         if (event != QUICLY_SENTMAP_EVENT_LOST)
