@@ -291,7 +291,7 @@ static int send_pending(int fd, quicly_conn_t *conn)
                 quicly_default_free_packet(&ctx, packets[i]);
             }
         }
-    } while (ret == 0 && num_packets != 0);
+    } while (ret == 0 && num_packets == sizeof(packets) / sizeof(packets[0]));
 
     return ret;
 }
