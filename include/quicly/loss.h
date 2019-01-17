@@ -211,6 +211,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         }
     } else {
         r->alarm_at = INT64_MAX;
+        r->loss_time = INT64_MAX;
     }
 }
 
