@@ -1049,6 +1049,8 @@ static void apply_peer_transport_params(quicly_conn_t *conn)
 
 void quicly_free(quicly_conn_t *conn)
 {
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_FREE);
+
     destroy_all_streams(conn);
 
     quicly_maxsender_dispose(&conn->ingress.max_data.sender);
@@ -2819,6 +2821,10 @@ static int send_connection_close(quicly_conn_t *conn, struct st_quicly_send_cont
     memcpy(s->dst, conn->egress.connection_close.reason_phrase, reason_phrase_len);
     s->dst += reason_phrase_len;
 
+    LOG_CONNECTION_EVENT(
+        conn, QUICLY_EVENT_TYPE_CLOSE_SEND, INT_EVENT_ATTR(ERROR_CODE, conn->egress.connection_close.error_code),
+        INT_EVENT_ATTR(FRAME_TYPE, (int64_t)conn->egress.connection_close.frame_type),
+        VEC_EVENT_ATTR(REASON_PHRASE, ptls_iovec_init(conn->egress.connection_close.reason_phrase, reason_phrase_len)));
     return 0;
 }
 
@@ -2905,7 +2911,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     update_now(conn->super.ctx);
 
-    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_SEND);
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_SEND, INT_EVENT_ATTR(STATE, (int64_t)conn->super.state));
 
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
         /* check if the connection can be closed now (after 3 pto) */
@@ -3457,15 +3463,19 @@ int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid)
     return 0;
 }
 
-static int handle_close(quicly_conn_t *conn, uint16_t error_code, uint64_t *frame_type, ptls_iovec_t reason_phrase)
+static int handle_close(quicly_conn_t *conn, uint16_t error_code, uint64_t frame_type, ptls_iovec_t reason_phrase)
 {
     int ret;
+
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CLOSE_RECEIVE, INT_EVENT_ATTR(ERROR_CODE, error_code),
+                         INT_EVENT_ATTR(FRAME_TYPE, (int64_t)frame_type), VEC_EVENT_ATTR(REASON_PHRASE, reason_phrase));
 
     /* switch to closing state, notify the app (at this moment the streams are accessible), then destroy the streams */
     if ((ret = enter_close(conn, 0)) != 0)
         return ret;
     if (conn->super.ctx->on_conn_close != NULL)
-        conn->super.ctx->on_conn_close(conn, error_code, frame_type, (const char *)reason_phrase.base, reason_phrase.len);
+        conn->super.ctx->on_conn_close(conn, error_code, frame_type != UINT64_MAX ? &frame_type : NULL,
+                                       (const char *)reason_phrase.base, reason_phrase.len);
     destroy_all_streams(conn);
 
     return 0;
@@ -3487,14 +3497,14 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
             quicly_transport_close_frame_t frame;
             if ((ret = quicly_decode_transport_close_frame(&src, end, &frame)) != 0)
                 goto Exit;
-            if ((ret = handle_close(conn, frame.error_code, &frame.frame_type, frame.reason_phrase)) != 0)
+            if ((ret = handle_close(conn, frame.error_code, frame.frame_type, frame.reason_phrase)) != 0)
                 goto Exit;
         } break;
         case QUICLY_FRAME_TYPE_APPLICATION_CLOSE: {
             quicly_application_close_frame_t frame;
             if ((ret = quicly_decode_application_close_frame(&src, end, &frame)) != 0)
                 goto Exit;
-            if ((ret = handle_close(conn, frame.error_code, NULL, frame.reason_phrase)) != 0)
+            if ((ret = handle_close(conn, frame.error_code, UINT64_MAX, frame.reason_phrase)) != 0)
                 goto Exit;
         } break;
         case QUICLY_FRAME_TYPE_ACK:
@@ -4051,6 +4061,7 @@ const char *quicly_event_type_names[] = {"connect",
                                          "accept",
                                          "send",
                                          "receive",
+                                         "free",
                                          "packet-prepare",
                                          "packet-commit",
                                          "packet-acked",
@@ -4066,7 +4077,9 @@ const char *quicly_event_type_names[] = {"connect",
                                          "stream-receive",
                                          "stream-acked",
                                          "stream-lost",
-                                         "quic-version-switch"};
+                                         "quic-version-switch",
+                                         "close-send",
+                                         "close-receive"};
 
 const char *quicly_event_attribute_names[] = {NULL,
                                               "time",
@@ -4092,5 +4105,9 @@ const char *quicly_event_attribute_names[] = {NULL,
                                               "cc-exit-recovery",
                                               "acked-packets",
                                               "acked-bytes",
+                                              "state",
+                                              "error-code",
+                                              "frame-type",
                                               "dcid",
-                                              "scid"};
+                                              "scid",
+                                              "reason-phrase"};
