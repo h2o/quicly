@@ -1760,9 +1760,7 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
 {
     /* TODO log */
 
-    switch (event) {
-    case QUICLY_SENTMAP_EVENT_ACKED:
-    case QUICLY_SENTMAP_EVENT_EXPIRED: {
+    if (event == QUICLY_SENTMAP_EVENT_ACKED) {
         /* find the pn space */
         struct st_quicly_pn_space_t *space;
         switch (packet->ack_epoch) {
@@ -1785,9 +1783,6 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
                 space->unacked_count = 0;
             }
         }
-    } break;
-    default:
-        break;
     }
 
     return 0;
