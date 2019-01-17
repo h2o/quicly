@@ -86,7 +86,7 @@ void test_sentmap(void)
     assert(quicly_sentmap_get(&iter)->packet_number == 11);
     while (quicly_sentmap_get(&iter)->packet_number <= 40)
         quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_EXPIRED, NULL);
-    ok(on_acked_callcnt == 30 * 2);
+    ok(on_acked_callcnt == 30 * 4);
     ok(on_acked_ackcnt == 0);
 
     size_t cnt = 0;
