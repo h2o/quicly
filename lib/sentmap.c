@@ -129,7 +129,8 @@ void quicly_sentmap_skip(quicly_sentmap_iter_t *iter)
     } while (iter->p->acked != quicly_sentmap__type_packet);
 }
 
-int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, unsigned flags, struct st_quicly_conn_t *conn)
+int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, quicly_sentmap_event_t event,
+                          struct st_quicly_conn_t *conn)
 {
     quicly_sent_packet_t packet;
     int ret = 0;
@@ -145,30 +146,24 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, un
         assert(map->bytes_in_flight >= packet.bytes_in_flight);
         map->bytes_in_flight -= packet.bytes_in_flight;
     }
+    iter->p->data.packet.bytes_in_flight = 0;
 
-    /* release the packet info, or change bytes_in_flight to zero if it's been deemed lost (note that we'd still be passing the
-     * correct value to the acked callbacks) */
-    if ((flags & QUICLY_SENTMAP_UPDATE_DISCARD) != 0) {
-        /* the only case we can retire an entry without calling the acked callback is for ACK frames */
-        assert((flags & (QUICLY_SENTMAP_UPDATE_ACKED | QUICLY_SENTMAP_UPDATE_LOST)) != 0 || packet.bytes_in_flight == 0);
+    if (event != QUICLY_SENTMAP_EVENT_LOST)
         discard_entry(map, iter);
-    } else if ((flags & QUICLY_SENTMAP_UPDATE_LOST) != 0) {
-        iter->p->data.packet.bytes_in_flight = 0;
-    }
 
     /* iterate through the frames */
     for (next_entry(iter); iter->p->acked != quicly_sentmap__type_packet; next_entry(iter)) {
-        if (ret == 0 && (flags & (QUICLY_SENTMAP_UPDATE_LOST | QUICLY_SENTMAP_UPDATE_ACKED)) != 0)
-            ret = iter->p->acked(conn, (flags & QUICLY_SENTMAP_UPDATE_ACKED) != 0, &packet, iter->p);
-        if ((flags & QUICLY_SENTMAP_UPDATE_DISCARD) != 0)
+        if (ret == 0)
+            ret = iter->p->acked(conn, &packet, iter->p, event);
+        if (event != QUICLY_SENTMAP_EVENT_LOST)
             discard_entry(map, iter);
     }
 
     return ret;
 }
 
-int quicly_sentmap__type_packet(struct st_quicly_conn_t *conn, int is_acked, const quicly_sent_packet_t *packet,
-                                quicly_sent_t *sent)
+int quicly_sentmap__type_packet(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                                quicly_sentmap_event_t event)
 {
     assert(!"quicly_sentmap__type_packet cannot be called");
     return QUICLY_ERROR_INTERNAL;

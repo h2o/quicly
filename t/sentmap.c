@@ -24,10 +24,11 @@
 
 static int on_acked_callcnt, on_acked_ackcnt;
 
-static int on_acked(struct st_quicly_conn_t *conn, int is_ack, const quicly_sent_packet_t *packet, quicly_sent_t *sent)
+static int on_acked(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                    quicly_sentmap_event_t event)
 {
     ++on_acked_callcnt;
-    if (is_ack)
+    if (event == QUICLY_SENTMAP_EVENT_ACKED)
         ++on_acked_ackcnt;
     return 0;
 }
@@ -84,7 +85,7 @@ void test_sentmap(void)
         quicly_sentmap_skip(&iter);
     assert(quicly_sentmap_get(&iter)->packet_number == 11);
     while (quicly_sentmap_get(&iter)->packet_number <= 40)
-        quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_UPDATE_LOST | QUICLY_SENTMAP_UPDATE_DISCARD, NULL);
+        quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_EXPIRED, NULL);
     ok(on_acked_callcnt == 30 * 2);
     ok(on_acked_ackcnt == 0);
 
