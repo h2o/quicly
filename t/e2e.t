@@ -20,8 +20,13 @@ my $tempdir = tempdir(CLEANUP => 1);
 
 subtest "hello" => sub {
     my $guard = spawn_server();
-    my $resp = `$cli -p /12.txt 127.0.0.1 $port 2> /dev/null`;
+    my $resp = `$cli -e $tempdir/events -p /12.txt 127.0.0.1 $port 2> /dev/null`;
     is $resp, "hello world\n";
+    subtest "events" => sub {
+        my $events = slurp_file("$tempdir/events");
+        ok +($events =~ /"type":"close-send",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)"/s
+             and $1 eq "packet-commit" and $2 eq "send" and $3 eq "free");
+    };
 };
 
 subtest "version-negotiation" => sub {

@@ -390,6 +390,72 @@ static void test_rst_during_loss(void)
     quic_ctx.transport_params.max_stream_data = max_stream_data_orig;
 }
 
+static uint16_t test_close_error_code;
+
+static void test_close_on_conn_close(quicly_conn_t *conn, uint16_t code, const uint64_t *frame_type, const char *reason,
+                                     size_t reason_len)
+{
+    test_close_error_code = code;
+    ok(frame_type == NULL);
+    ok(reason_len == 8);
+    ok(memcmp(reason, "good bye", 8) == 0);
+}
+
+static void test_close(void)
+{
+    quicly_conn_close_cb orig_conn_close_cb = quic_ctx.on_conn_close;
+    quicly_datagram_t *datagram;
+    size_t num_datagrams;
+    int64_t client_timeout, server_timeout;
+    int ret;
+
+    quic_ctx.on_conn_close = test_close_on_conn_close;
+
+    /* client sends close */
+    uint16_t error_code = 12345;
+    ret = quicly_close(client, &error_code, "good bye");
+    ok(ret == 0);
+    ok(quicly_get_state(client) == QUICLY_STATE_CLOSING);
+    ok(quicly_get_first_timeout(client) <= quic_now);
+    num_datagrams = 1;
+    ret = quicly_send(client, &datagram, &num_datagrams);
+    assert(num_datagrams == 1);
+    client_timeout = quicly_get_first_timeout(client);
+    ok(quic_now < client_timeout && client_timeout < quic_now + 1000); /* 3 pto or something */
+
+    { /* server receives close */
+        quicly_decoded_packet_t decoded;
+        decode_packets(&decoded, &datagram, 1, 8);
+        ret = quicly_receive(server, &decoded);
+        ok(ret == 0);
+        ok(test_close_error_code == 12345);
+        ok(quicly_get_state(server) == QUICLY_STATE_DRAINING);
+        server_timeout = quicly_get_first_timeout(server);
+        ok(quic_now < server_timeout && server_timeout < quic_now + 1000); /* 3 pto or something */
+    }
+
+    /* nothing sent by the server in response */
+    num_datagrams = 1;
+    ret = quicly_send(server, &datagram, &num_datagrams);
+    ok(ret == 0);
+    ok(num_datagrams == 0);
+
+    /* endpoints request discarding state after timeout */
+    quic_now = client_timeout < server_timeout ? server_timeout : client_timeout;
+    num_datagrams = 1;
+    ret = quicly_send(client, &datagram, &num_datagrams);
+    ok(ret == QUICLY_ERROR_FREE_CONNECTION);
+    quicly_free(client);
+    num_datagrams = 1;
+    ret = quicly_send(server, &datagram, &num_datagrams);
+    ok(ret == QUICLY_ERROR_FREE_CONNECTION);
+    quicly_free(server);
+
+    client = NULL;
+    server = NULL;
+    quic_ctx.on_conn_close = orig_conn_close_cb;
+}
+
 static void tiny_connection_window(void)
 {
     uint64_t max_data_orig = quic_ctx.transport_params.max_data;
@@ -465,5 +531,6 @@ void test_simple(void)
     subtest("reset-after-close", test_reset_after_close);
     subtest("tiny-stream-window", tiny_stream_window);
     subtest("rst-during-loss", test_rst_during_loss);
+    subtest("close", test_close);
     subtest("tiny-connection-window", tiny_connection_window);
 }

@@ -64,6 +64,7 @@ typedef enum en_quicly_event_type_t {
     QUICLY_EVENT_TYPE_ACCEPT,
     QUICLY_EVENT_TYPE_SEND,
     QUICLY_EVENT_TYPE_RECEIVE,
+    QUICLY_EVENT_TYPE_FREE,
     QUICLY_EVENT_TYPE_PACKET_PREPARE,
     QUICLY_EVENT_TYPE_PACKET_COMMIT,
     QUICLY_EVENT_TYPE_PACKET_ACKED,
@@ -79,7 +80,9 @@ typedef enum en_quicly_event_type_t {
     QUICLY_EVENT_TYPE_STREAM_RECEIVE,
     QUICLY_EVENT_TYPE_STREAM_ACKED,
     QUICLY_EVENT_TYPE_STREAM_LOST,
-    QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH
+    QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH,
+    QUICLY_EVENT_TYPE_CLOSE_SEND,
+    QUICLY_EVENT_TYPE_CLOSE_RECEIVE
 } quicly_event_type_t;
 
 /**
@@ -113,10 +116,14 @@ typedef enum en_quicly_event_attribute_type_t {
     QUICLY_EVENT_ATTRIBUTE_CC_EXIT_RECOVERY,
     QUICLY_EVENT_ATTRIBUTE_ACKED_PACKETS,
     QUICLY_EVENT_ATTRIBUTE_ACKED_BYTES,
+    QUICLY_EVENT_ATTRIBUTE_STATE,
+    QUICLY_EVENT_ATTRIBUTE_ERROR_CODE,
+    QUICLY_EVENT_ATTRIBUTE_FRAME_TYPE,
     QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX,
     QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MIN = QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX,
     QUICLY_EVENT_ATTRIBUTE_DCID = QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MIN,
     QUICLY_EVENT_ATTRIBUTE_SCID,
+    QUICLY_EVENT_ATTRIBUTE_REASON_PHRASE,
     QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MAX
 } quicly_event_attribute_type_t;
 
@@ -270,6 +277,10 @@ typedef enum {
      * while connected
      */
     QUICLY_STATE_CONNECTED,
+    /**
+     * sending close, but haven't seen the peer sending close
+     */
+    QUICLY_STATE_CLOSING,
     /**
      * we do not send CLOSE (at the moment), enter draining mode when receiving CLOSE
      */
@@ -556,9 +567,15 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
  */
 static void **quicly_get_data(quicly_conn_t *conn);
 /**
- *
+ * destroys a connection object.
  */
 void quicly_free(quicly_conn_t *conn);
+/**
+ * closes the connection.  If `app_error_code` is not NULL, initiates a immediate close using the specified error code.  Otherwise,
+ * initiates a timeout close.  An application should continue calling quicly_recieve and quicly_send, until they return
+ * QUICLY_ERROR_FREE_CONNECTION.  At this point, it is should call quicly_free.
+ */
+int quicly_close(quicly_conn_t *conn, const uint16_t *app_error_code, const char *reason_phrase);
 /**
  *
  */

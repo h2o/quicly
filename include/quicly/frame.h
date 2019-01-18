@@ -54,8 +54,8 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_RETIRE_CONNECTION_ID 25
 #define QUICLY_FRAME_TYPE_PATH_CHALLENGE 26
 #define QUICLY_FRAME_TYPE_PATH_RESPONSE 27
-#define QUICLY_FRAME_TYPE_CONNECTION_CLOSE_TRANSPORT 28
-#define QUICLY_FRAME_TYPE_CONNECTION_CLOSE_APPLICATION 29
+#define QUICLY_FRAME_TYPE_TRANSPORT_CLOSE 28
+#define QUICLY_FRAME_TYPE_APPLICATION_CLOSE 29
 
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
 #define QUICLY_FRAME_TYPE_STREAM_BIT_OFF 0x4
@@ -108,13 +108,13 @@ typedef struct st_quicly_rst_stream_frame_t {
 
 static int quicly_decode_reset_stream_frame(const uint8_t **src, const uint8_t *end, quicly_reset_stream_frame_t *frame);
 
-typedef struct st_quicly_connection_close_frame_t {
+typedef struct st_quicly_transport_close_frame_t {
     uint16_t error_code;
     uint64_t frame_type;
     ptls_iovec_t reason_phrase;
-} quicly_connection_close_frame_t;
+} quicly_transport_close_frame_t;
 
-static int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_connection_close_frame_t *frame);
+static int quicly_decode_transport_close_frame(const uint8_t **src, const uint8_t *end, quicly_transport_close_frame_t *frame);
 
 typedef struct st_quicly_application_close_frame_t {
     uint16_t error_code;
@@ -465,7 +465,7 @@ Error:
     return QUICLY_ERROR_FRAME_ENCODING;
 }
 
-inline int quicly_decode_connection_close_frame(const uint8_t **src, const uint8_t *end, quicly_connection_close_frame_t *frame)
+inline int quicly_decode_transport_close_frame(const uint8_t **src, const uint8_t *end, quicly_transport_close_frame_t *frame)
 {
     uint64_t reason_len;
 
