@@ -2424,7 +2424,9 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
         }
     }
     { /* cap the capacity to the current range */
-        uint64_t range_capacity = stream->sendstate.pending.ranges[0].end - !stream->sendstate.is_open - off;
+        uint64_t range_capacity = stream->sendstate.pending.ranges[0].end - off;
+        if (stream->sendstate.pending.num_ranges == 1)
+            range_capacity -= !stream->sendstate.is_open;
         if (capacity > range_capacity)
             capacity = range_capacity;
     }
