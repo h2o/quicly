@@ -3669,6 +3669,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 
     switch (conn->super.state) {
     case QUICLY_STATE_CLOSING:
+        conn->super.state = QUICLY_STATE_DRAINING;
         conn->egress.send_ack_at = 0; /* send CONNECTION_CLOSE */
         ret = 0;
         goto Exit;
