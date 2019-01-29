@@ -194,6 +194,8 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         send_str(stream, "failed to parse HTTP request\n");
         goto Sent;
     }
+    if (!quicly_recvstate_transfer_complete(&stream->recvstate))
+        quicly_request_stop(stream, 0);
 
     if (path_is(path, "/logo.jpg") && send_file(stream, is_http1, "assets/logo.jpg", "image/jpeg"))
         goto Sent;
