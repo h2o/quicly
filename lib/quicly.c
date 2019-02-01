@@ -3720,6 +3720,10 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
+            if (quicly_cid_is_equal(&conn->super.peer.cid, packet->cid.src)) {
+                ret = QUICLY_ERROR_PACKET_IGNORED;
+                goto Exit;
+            }
             /* do not accept a second token (TODO allow 0-RTT token to be replaced) */
             if (conn->token.len != 0) {
                 ret = QUICLY_ERROR_PACKET_IGNORED;
