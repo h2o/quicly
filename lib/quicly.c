@@ -1641,7 +1641,7 @@ static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptl
     }
 
     /* AEAD */
-    *pn = quicly_determine_packet_number(pnbits, (uint32_t)UINT32_MAX >> (4 - pnlen), *next_expected_pn);
+    *pn = quicly_determine_packet_number(pnbits, (uint32_t)UINT32_MAX >> ((4 - pnlen) * 8), *next_expected_pn);
     size_t aead_off = packet->encrypted_off + pnlen, ptlen;
     if ((ptlen = ptls_aead_decrypt(aead[aead_index], packet->octets.base + aead_off, packet->octets.base + aead_off,
                                    packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
