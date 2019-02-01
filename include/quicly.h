@@ -160,6 +160,9 @@ typedef struct st_quicly_max_stream_data_t {
     uint64_t bidi_local, bidi_remote, uni;
 } quicly_max_stream_data_t;
 
+/**
+ * Transport Parameters; the struct contains "configuration parameters", ODCID is managed separately
+ */
 typedef struct st_quicly_transport_parameters_t {
     /**
      * in octets
@@ -605,12 +608,13 @@ int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid);
 /**
  *
  */
-int quicly_encode_transport_parameter_list(const quicly_transport_parameters_t *params, int is_client, ptls_buffer_t *buf);
+int quicly_encode_transport_parameter_list(const quicly_transport_parameters_t *params, const quicly_cid_t *odcid, int is_client,
+                                           ptls_buffer_t *buf);
 /**
  *
  */
-int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, int is_client, const uint8_t *src,
-                                           const uint8_t *end);
+int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, int is_client,
+                                           const uint8_t *src, const uint8_t *end);
 /**
  *
  */
@@ -620,8 +624,8 @@ int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *serv
 /**
  *
  */
-int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                  ptls_handshake_properties_t *handshake_properties, quicly_decoded_packet_t *packet);
+int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+                  quicly_decoded_packet_t *packet, ptls_iovec_t retry_odcid, ptls_handshake_properties_t *handshake_properties);
 /**
  *
  */
