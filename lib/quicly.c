@@ -35,9 +35,6 @@
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
 
-#define QUICLY_PROTOCOL_VERSION 0xff000011
-
-#define QUICLY_LONG_HEADER_BIT 0x80
 #define QUICLY_QUIC_BIT 0x40
 #define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
 #define QUICLY_SHORT_HEADER_RESERVED_BITS 0x18
@@ -48,8 +45,6 @@
 #define QUICLY_PACKET_TYPE_HANDSHAKE (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x20)
 #define QUICLY_PACKET_TYPE_RETRY (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x30)
 #define QUICLY_PACKET_TYPE_BITMASK 0xf0
-
-#define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
 
 #define QUICLY_MAX_PN_SIZE 4  /* maximum defined by the RFC used for calculating header protection sampling offset */
 #define QUICLY_SEND_PN_SIZE 2 /* size of PN used for sending */
@@ -1717,7 +1712,7 @@ int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr 
         goto Exit;
     }
     if (packet->version != QUICLY_PROTOCOL_VERSION) {
-        ret = QUICLY_ERROR_VERSION_NEGOTIATION;
+        ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
     if (packet->cid.dest.len < 8) {

@@ -44,6 +44,12 @@ extern "C" {
 #define QUICLY_DEBUG 0
 #endif
 
+/* invariants! */
+#define QUICLY_LONG_HEADER_BIT 0x80
+#define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
+
+#define QUICLY_PROTOCOL_VERSION 0xff000011
+
 typedef struct st_quicly_datagram_t {
     ptls_iovec_t data;
     socklen_t salen;

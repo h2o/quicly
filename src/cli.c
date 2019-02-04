@@ -526,6 +526,15 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 size_t plen = quicly_decode_packet(&packet, buf + off, rret - off, 8);
                 if (plen == SIZE_MAX)
                     break;
+                if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
+                    if (packet.version != QUICLY_PROTOCOL_VERSION) {
+                        quicly_datagram_t *rp = quicly_send_version_negotiation(&ctx, &sa, salen, packet.cid.src, packet.cid.dest);
+                        assert(rp != NULL);
+                        if (send_one(fd, rp) == -1)
+                            perror("sendmsg failed");
+                        break;
+                    }
+                }
                 quicly_conn_t *conn = NULL;
                 size_t i;
                 for (i = 0; i != num_conns; ++i) {
@@ -539,21 +548,22 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     quicly_receive(conn, &packet);
                 } else if (enforce_retry && packet.token.len == 0 && packet.cid.dest.len >= 8) {
                     /* unbound connection; send a retry token unless the client has supplied the correct one, but not too many */
-                    if (off == 0) {
-                        uint8_t new_server_cid[8];
-                        memcpy(new_server_cid, packet.cid.dest.base, sizeof(new_server_cid));
-                        new_server_cid[0] ^= 0xff;
-                        quicly_datagram_t *rp = quicly_send_retry(&ctx, &sa, salen, packet.cid.src,
-                                                                  ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
-                                                                  packet.cid.dest, packet.cid.dest);
-                        assert(rp != NULL);
-                        if (send_one(fd, rp) == -1)
-                            perror("sendmsg failed");
-                    }
+                    uint8_t new_server_cid[8];
+                    memcpy(new_server_cid, packet.cid.dest.base, sizeof(new_server_cid));
+                    new_server_cid[0] ^= 0xff;
+                    quicly_datagram_t *rp =
+                        quicly_send_retry(&ctx, &sa, salen, packet.cid.src, ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
+                                          packet.cid.dest, packet.cid.dest);
+                    assert(rp != NULL);
+                    if (send_one(fd, rp) == -1)
+                        perror("sendmsg failed");
+                    break;
                 } else {
                     /* new connection */
-                    int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, &packet,
-                                            enforce_retry ? packet.token : ptls_iovec_init(NULL, 0), NULL);
+                    int ret = quicly_accept(
+                        &conn, &ctx, &sa, mess.msg_namelen, &packet,
+                        enforce_retry ? packet.token /* a production server should validate the token */ : ptls_iovec_init(NULL, 0),
+                        NULL);
                     if (ret == 0) {
                         assert(conn != NULL);
                         conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
@@ -561,13 +571,6 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                         conns[num_conns++] = conn;
                     } else {
                         assert(conn == NULL);
-                        if (ret == QUICLY_ERROR_VERSION_NEGOTIATION) {
-                            quicly_datagram_t *rp =
-                                quicly_send_version_negotiation(&ctx, &sa, salen, packet.cid.src, packet.cid.dest);
-                            assert(rp != NULL);
-                            if (send_one(fd, rp) == -1)
-                                perror("sendmsg failed");
-                        }
                     }
                 }
                 off += plen;
