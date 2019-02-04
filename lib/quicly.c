@@ -1260,6 +1260,8 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
 
     /* set parameters to their default values */
     *params = (quicly_transport_parameters_t){{0}, 0, 0, 0, 0, 3, 25};
+    if (odcid != NULL)
+        odcid->len = 0;
 
     /* decode the parameters block */
     ptls_decode_block(src, end, 2, {
