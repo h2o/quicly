@@ -355,33 +355,33 @@ typedef struct st_quicly_stream_callbacks_t {
     /**
      * called when the stream is destroyed
      */
-    void (*destroy)(quicly_stream_t *stream);
+    void (*on_destroy)(quicly_stream_t *stream);
     /**
      * called whenever data can be retired from the send buffer, specifying the amount that can be newly removed
      */
-    void (*send_shift)(quicly_stream_t *stream, size_t delta);
+    void (*on_send_shift)(quicly_stream_t *stream, size_t delta);
     /**
      * asks the application to fill the frame payload.  `off` is the offset within the buffer (the beginning position of the buffer
-     * changes as `send_shift` is invoked). `len` is an in/out argument that specifies the size of the buffer / amount of data being
-     * written.  `wrote_all` is a boolean out parameter indicating if the application has written all the available data.  See also
-     * quicly_stream_sync_sendbuf.
+     * changes as `on_send_shift` is invoked). `len` is an in/out argument that specifies the size of the buffer / amount of data
+     * being written.  `wrote_all` is a boolean out parameter indicating if the application has written all the available data.  See
+     * also quicly_stream_sync_sendbuf.
      */
-    int (*send_emit)(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
+    int (*on_send_emit)(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
     /**
      * called when a STOP_SENDING frame is received.  Do not call `quicly_reset_stream` in response.  The stream will be
      * automatically reset by quicly.
      */
-    int (*send_stop)(quicly_stream_t *stream, uint16_t error_code);
+    int (*on_send_stop)(quicly_stream_t *stream, uint16_t error_code);
     /**
      * called when data is newly received.  `off` is the offset within the buffer (the beginning position changes as the application
      * calls `quicly_stream_sync_recvbuf`.  Applications should consult `quicly_stream_t::recvstate` to see if it has contiguous
      * input.
      */
-    int (*receive)(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+    int (*on_receive)(quicly_stream_t *stream, size_t off, const void *src, size_t len);
     /**
      * called when a RESET_STREAM frame is received
      */
-    int (*receive_reset)(quicly_stream_t *stream, uint16_t error_code);
+    int (*on_receive_reset)(quicly_stream_t *stream, uint16_t error_code);
 } quicly_stream_callbacks_t;
 
 struct st_quicly_stream_t {

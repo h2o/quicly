@@ -782,7 +782,7 @@ static void destroy_stream(quicly_stream_t *stream)
     quicly_conn_t *conn = stream->conn;
 
     if (stream->callbacks != NULL)
-        stream->callbacks->destroy(stream);
+        stream->callbacks->on_destroy(stream);
 
     khiter_t iter = kh_get(quicly_stream_t, conn->streams, stream->stream_id);
     assert(iter != kh_end(conn->streams));
@@ -1170,8 +1170,8 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 
     if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t buf_offset = frame->offset + frame->data.len - apply_len - stream->recvstate.data_off;
-        if ((ret = stream->callbacks->receive(stream, (size_t)buf_offset, frame->data.base + frame->data.len - apply_len,
-                                              apply_len)) != 0)
+        if ((ret = stream->callbacks->on_receive(stream, (size_t)buf_offset, frame->data.base + frame->data.len - apply_len,
+                                                 apply_len)) != 0)
             return ret;
     }
 
@@ -1860,7 +1860,7 @@ static int on_ack_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet
         if (stream_is_destroyable(stream)) {
             destroy_stream(stream);
         } else if (bytes_to_shift != 0) {
-            stream->callbacks->send_shift(stream, bytes_to_shift);
+            stream->callbacks->on_send_shift(stream, bytes_to_shift);
         }
     } else {
         /* FIXME handle rto error */
@@ -2457,8 +2457,8 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
     /* write payload */
     assert(capacity != 0);
     len = capacity;
-    if ((ret = stream->callbacks->send_emit(stream, (size_t)(off - stream->sendstate.acked.ranges[0].end), s->dst, &len,
-                                            &wrote_all)) != 0)
+    if ((ret = stream->callbacks->on_send_emit(stream, (size_t)(off - stream->sendstate.acked.ranges[0].end), s->dst, &len,
+                                               &wrote_all)) != 0)
         return ret;
     assert(len != 0);
     assert(len <= capacity);
@@ -3258,7 +3258,7 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, quicly_reset_stream_fr
         if ((ret = quicly_recvstate_reset(&stream->recvstate, frame->final_offset, &bytes_missing)) != 0)
             return ret;
         conn->ingress.max_data.bytes_consumed += bytes_missing;
-        if ((ret = stream->callbacks->receive_reset(stream, frame->app_error_code)) != 0)
+        if ((ret = stream->callbacks->on_receive_reset(stream, frame->app_error_code)) != 0)
             return ret;
         if (stream_is_destroyable(stream))
             destroy_stream(stream);
@@ -3434,7 +3434,7 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
     if (stream->sendstate.is_open) {
         /* reset the stream, then notify the application */
         quicly_reset_stream(stream, frame->app_error_code);
-        if ((ret = stream->callbacks->send_stop(stream, frame->app_error_code)) != 0)
+        if ((ret = stream->callbacks->on_send_stop(stream, frame->app_error_code)) != 0)
             return ret;
     }
 
