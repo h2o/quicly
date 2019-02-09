@@ -156,8 +156,7 @@ typedef quicly_stream_t *(*quicly_alloc_stream_cb)(quicly_context_t *ctx);
 typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_update_cb)(quicly_stream_t *stream);
-typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, uint16_t code, const uint64_t *frame_type, const char *reason,
-                                     size_t reason_len);
+typedef void (*quicly_conn_close_cb)(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason, size_t reason_len);
 typedef int64_t (*quicly_now_cb)(quicly_context_t *ctx);
 typedef void (*quicly_event_log_cb)(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
                                     size_t num_attributes);
@@ -580,11 +579,11 @@ static void **quicly_get_data(quicly_conn_t *conn);
  */
 void quicly_free(quicly_conn_t *conn);
 /**
- * closes the connection.  If `app_error_code` is not NULL, initiates a immediate close using the specified error code.  Otherwise,
- * initiates a timeout close.  An application should continue calling quicly_recieve and quicly_send, until they return
+ * closes the connection.  `err` is not the 16-bit error code sent on wire, it's one of the TLS alert codes (see picotls.h) or the
+ * QUICLY_ERROR_* codes.  An application should continue calling quicly_recieve and quicly_send, until they return
  * QUICLY_ERROR_FREE_CONNECTION.  At this point, it is should call quicly_free.
  */
-int quicly_close(quicly_conn_t *conn, const uint16_t *app_error_code, const char *reason_phrase);
+int quicly_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase);
 /**
  *
  */

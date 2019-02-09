@@ -1459,7 +1459,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     int ret;
 
     if (slots[0].type == UINT16_MAX) {
-        ret = 0; // allow abcense of the extension for the time being PTLS_ALERT_MISSING_EXTENSION;
+        ret = 0; // FIXME whether not seeing TP is a fatal error depends on the outcome of the VN design
         goto Exit;
     }
     assert(slots[0].type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS);
@@ -1516,7 +1516,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     }
 
 Exit:
-    return ret;
+    return ret; /* negative error codes used to transmit QUIC errors through picotls */
 }
 
 int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
@@ -1565,8 +1565,10 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         conn->crypto.handshake_properties.client.max_early_data_size = &max_early_data_size;
     ret = ptls_handle_message(conn->crypto.tls, &buf, epoch_offsets, 0, NULL, 0, &conn->crypto.handshake_properties);
     conn->crypto.handshake_properties.client.max_early_data_size = NULL;
-    if (ret != PTLS_ERROR_IN_PROGRESS)
+    if (ret != PTLS_ERROR_IN_PROGRESS) {
+        assert(ret > 0); /* no QUIC errors */
         goto Exit;
+    }
     write_crypto_data(conn, &buf, epoch_offsets);
     ptls_buffer_dispose(&buf);
 
@@ -1692,115 +1694,6 @@ static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptl
 
 Error:
     return ptls_iovec_init(NULL, 0);
-}
-
-int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                  quicly_decoded_packet_t *packet, ptls_iovec_t retry_odcid, ptls_handshake_properties_t *handshake_properties)
-{
-    quicly_conn_t *conn = NULL;
-    struct st_quicly_cipher_context_t ingress_cipher = {NULL}, egress_cipher = {NULL};
-    ptls_iovec_t payload;
-    uint64_t next_expected_pn, pn;
-    quicly_stream_frame_t frame;
-    int ret;
-
-    update_now(ctx);
-
-    /* process initials only */
-    if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) != QUICLY_PACKET_TYPE_INITIAL) {
-        ret = QUICLY_ERROR_PACKET_IGNORED;
-        goto Exit;
-    }
-    if (packet->version != QUICLY_PROTOCOL_VERSION) {
-        ret = QUICLY_ERROR_PACKET_IGNORED;
-        goto Exit;
-    }
-    if (packet->cid.dest.len < 8) {
-        ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
-        goto Exit;
-    }
-    if ((ret = setup_initial_encryption(&ingress_cipher, &egress_cipher, ctx->tls->cipher_suites, packet->cid.dest, 0)) != 0)
-        goto Exit;
-    next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
-    if ((payload = decrypt_packet(ingress_cipher.header_protection, &ingress_cipher.aead, &next_expected_pn, packet, &pn)).base ==
-        NULL) {
-        ret = QUICLY_ERROR_PACKET_IGNORED;
-        goto Exit;
-    }
-
-    {
-        const uint8_t *src = payload.base, *end = src + payload.len;
-        for (; src < end; ++src) {
-            if (*src != QUICLY_FRAME_TYPE_PADDING)
-                break;
-        }
-        if (src == end || *src++ != QUICLY_FRAME_TYPE_CRYPTO) {
-            ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
-            goto Exit;
-        }
-        if ((ret = quicly_decode_crypto_frame(&src, end, &frame)) != 0)
-            goto Exit;
-        if (frame.offset != 0) {
-            ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
-            goto Exit;
-        }
-        /* FIXME check packet size */
-        for (; src < end; ++src) {
-            if (*src != QUICLY_FRAME_TYPE_PADDING) {
-                ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
-                goto Exit;
-            }
-        }
-    }
-
-    if ((conn = create_connection(ctx, NULL, sa, salen, handshake_properties)) == NULL) {
-        ret = PTLS_ERROR_NO_MEMORY;
-        goto Exit;
-    }
-    set_cid(&conn->super.peer.cid, packet->cid.src);
-    /* TODO let the app set host cid after successful return from quicly_accept / quicly_connect */
-    ctx->tls->random_bytes(conn->super.host.cid.cid, 8);
-    conn->super.host.cid.len = 8;
-    set_cid(&conn->super.host.offered_cid, packet->cid.dest);
-    if (retry_odcid.len != 0)
-        set_cid(&conn->retry_odcid, retry_odcid);
-    if ((ret = setup_handshake_space_and_flow(conn, 0)) != 0)
-        goto Exit;
-    conn->initial->cipher.ingress = ingress_cipher;
-    ingress_cipher = (struct st_quicly_cipher_context_t){NULL};
-    conn->initial->cipher.egress = egress_cipher;
-    egress_cipher = (struct st_quicly_cipher_context_t){NULL};
-    conn->crypto.handshake_properties.collected_extensions = server_collected_extensions;
-
-    ++conn->super.num_packets.received;
-
-    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_ACCEPT, VEC_EVENT_ATTR(DCID, packet->cid.dest),
-                         VEC_EVENT_ATTR(SCID, packet->cid.src));
-    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CRYPTO_DECRYPT, INT_EVENT_ATTR(PACKET_NUMBER, pn),
-                         INT_EVENT_ATTR(LENGTH, payload.len));
-
-    /* TODO log cid */
-
-    if ((ret = record_receipt(conn, &conn->initial->super, pn, 0, QUICLY_EPOCH_INITIAL)) != 0)
-        goto Exit;
-    conn->initial->super.next_expected_packet_number = next_expected_pn;
-
-    if ((ret = apply_handshake_flow(conn, 0, &frame)) != 0)
-        goto Exit;
-
-    conn->super.state = QUICLY_STATE_CONNECTED;
-    *_conn = conn;
-
-Exit:
-    if (!(ret == 0 || ret == PTLS_ERROR_IN_PROGRESS)) {
-        if (conn != NULL)
-            quicly_free(conn);
-        if (ingress_cipher.aead != NULL)
-            dispose_cipher(&ingress_cipher);
-        if (egress_cipher.aead != NULL)
-            dispose_cipher(&egress_cipher);
-    }
-    return ret;
 }
 
 static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent, quicly_sentmap_event_t event)
@@ -3179,20 +3072,33 @@ static int enter_close(quicly_conn_t *conn, int host_is_initiating)
     return 0;
 }
 
-int quicly_close(quicly_conn_t *conn, const uint16_t *app_error_code, const char *reason_phrase)
+int quicly_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase)
 {
+    uint16_t quic_error_code;
+
+    if (conn->super.state >= QUICLY_STATE_CLOSING)
+        return 0;
+
     if (reason_phrase == NULL)
         reason_phrase = "";
-    if (app_error_code != NULL) {
-        conn->egress.connection_close.error_code = *app_error_code;
-        conn->egress.connection_close.frame_type = UINT64_MAX;
-        conn->egress.connection_close.reason_phrase = reason_phrase;
+
+    /* convert error code to QUIC error codes */
+    if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
+        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
+        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+        frame_type = UINT64_MAX;
+    } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_SELF_ALERT) {
+        quic_error_code = QUICLY_ERROR_TLS_ALERT_BASE + PTLS_ERROR_TO_ALERT(err);
+        frame_type = QUICLY_FRAME_TYPE_PADDING;
     } else {
-        conn->egress.connection_close.error_code = QUICLY_ERROR_NONE;
-        conn->egress.connection_close.frame_type = QUICLY_FRAME_TYPE_PADDING;
-        conn->egress.connection_close.reason_phrase = "idle timeout";
+        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_ERROR_INTERNAL);
+        frame_type = UINT64_MAX;
     }
-    conn->egress.send_ack_at = 0;
+
+    conn->egress.connection_close.error_code = quic_error_code;
+    conn->egress.connection_close.frame_type = frame_type;
+    conn->egress.connection_close.reason_phrase = reason_phrase;
     return enter_close(conn, 1);
 }
 
@@ -3500,9 +3406,11 @@ static int handle_close(quicly_conn_t *conn, uint16_t error_code, uint64_t frame
     /* switch to closing state, notify the app (at this moment the streams are accessible), then destroy the streams */
     if ((ret = enter_close(conn, 0)) != 0)
         return ret;
-    if (conn->super.ctx->on_conn_close != NULL)
-        conn->super.ctx->on_conn_close(conn, error_code, frame_type != UINT64_MAX ? &frame_type : NULL,
-                                       (const char *)reason_phrase.base, reason_phrase.len);
+    if (conn->super.ctx->on_conn_close != NULL) {
+        int err = frame_type != UINT64_MAX ? QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(error_code)
+                                           : QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(error_code);
+        conn->super.ctx->on_conn_close(conn, err, frame_type, (const char *)reason_phrase.base, reason_phrase.len);
+    }
     destroy_all_streams(conn);
 
     return 0;
@@ -3666,6 +3574,82 @@ Exit:
     return ret;
 }
 
+int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+                  quicly_decoded_packet_t *packet, ptls_iovec_t retry_odcid, ptls_handshake_properties_t *handshake_properties)
+{
+    struct st_quicly_cipher_context_t ingress_cipher = {NULL}, egress_cipher = {NULL};
+    ptls_iovec_t payload;
+    uint64_t next_expected_pn, pn;
+    int is_ack_only, ret;
+
+    *conn = NULL;
+
+    update_now(ctx);
+
+    /* process initials only */
+    if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) != QUICLY_PACKET_TYPE_INITIAL) {
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
+    if (packet->version != QUICLY_PROTOCOL_VERSION) {
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
+    if (packet->cid.dest.len < 8) {
+        ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
+        goto Exit;
+    }
+    if ((ret = setup_initial_encryption(&ingress_cipher, &egress_cipher, ctx->tls->cipher_suites, packet->cid.dest, 0)) != 0)
+        goto Exit;
+    next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
+    if ((payload = decrypt_packet(ingress_cipher.header_protection, &ingress_cipher.aead, &next_expected_pn, packet, &pn)).base ==
+        NULL) {
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
+
+    /* create connection */
+    if ((*conn = create_connection(ctx, NULL, sa, salen, handshake_properties)) == NULL) {
+        ret = PTLS_ERROR_NO_MEMORY;
+        goto Exit;
+    }
+    (*conn)->super.state = QUICLY_STATE_CONNECTED;
+    set_cid(&(*conn)->super.peer.cid, packet->cid.src);
+    /* TODO let the app set host cid after successful return from quicly_accept / quicly_connect */
+    ctx->tls->random_bytes((*conn)->super.host.cid.cid, 8);
+    (*conn)->super.host.cid.len = 8;
+    set_cid(&(*conn)->super.host.offered_cid, packet->cid.dest);
+    if (retry_odcid.len != 0)
+        set_cid(&(*conn)->retry_odcid, retry_odcid);
+    if ((ret = setup_handshake_space_and_flow(*conn, 0)) != 0)
+        goto Exit;
+    (*conn)->initial->super.next_expected_packet_number = next_expected_pn;
+    (*conn)->initial->cipher.ingress = ingress_cipher;
+    ingress_cipher = (struct st_quicly_cipher_context_t){NULL};
+    (*conn)->initial->cipher.egress = egress_cipher;
+    egress_cipher = (struct st_quicly_cipher_context_t){NULL};
+    (*conn)->crypto.handshake_properties.collected_extensions = server_collected_extensions;
+
+    LOG_CONNECTION_EVENT(*conn, QUICLY_EVENT_TYPE_ACCEPT, VEC_EVENT_ATTR(DCID, packet->cid.dest),
+                         VEC_EVENT_ATTR(SCID, packet->cid.src));
+    LOG_CONNECTION_EVENT(*conn, QUICLY_EVENT_TYPE_CRYPTO_DECRYPT, INT_EVENT_ATTR(PACKET_NUMBER, pn),
+                         INT_EVENT_ATTR(LENGTH, payload.len));
+
+    /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
+    ++(*conn)->super.num_packets.received;
+    if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, payload.base, payload.len, &is_ack_only)) != 0)
+        goto Exit;
+    if ((ret = record_receipt(*conn, &(*conn)->initial->super, pn, 0, QUICLY_EPOCH_INITIAL)) != 0)
+        goto Exit;
+
+Exit:
+    if (*conn != NULL && ret != 0) {
+        quicly_close(*conn, ret, QUICLY_FRAME_TYPE_PADDING /* FIXME */, "yayay");
+        ret = 0;
+    }
+    return ret;
+}
+
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
     ptls_cipher_context_t *header_protection;
@@ -3817,10 +3801,9 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
 
+    ++conn->super.num_packets.received;
     if ((ret = handle_payload(conn, epoch, payload.base, payload.len, &is_ack_only)) != 0)
         goto Exit;
-    ++conn->super.num_packets.received;
-
     if (*space != NULL) {
         if ((ret = record_receipt(conn, *space, pn, is_ack_only, epoch)) != 0)
             goto Exit;
@@ -3865,8 +3848,17 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
 Exit:
-    if (ret == 0)
+    switch (ret) {
+    case 0:
         assert_consistency(conn, 0);
+        break;
+    case QUICLY_ERROR_PACKET_IGNORED:
+        break;
+    default: /* close connection */
+        quicly_close(conn, ret, QUICLY_FRAME_TYPE_PADDING /* FIXME */, "yayay");
+        ret = 0;
+        break;
+    }
     return ret;
 }
 
