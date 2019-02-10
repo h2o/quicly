@@ -239,7 +239,7 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
                     "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
                     ", bytes-sent: %" PRIu64 "\n",
                     num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
-            quicly_close(stream->conn, QUICLY_ERROR_NONE, UINT64_MAX, "");
+            quicly_close(stream->conn, 0, "");
         }
     }
 

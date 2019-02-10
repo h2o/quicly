@@ -3072,7 +3072,7 @@ static int enter_close(quicly_conn_t *conn, int host_is_initiating)
     return 0;
 }
 
-int quicly_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase)
+static int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase)
 {
     uint16_t quic_error_code;
 
@@ -3099,6 +3099,13 @@ int quicly_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *
     conn->egress.connection_close.frame_type = frame_type;
     conn->egress.connection_close.reason_phrase = reason_phrase;
     return enter_close(conn, 1);
+}
+
+int quicly_close(quicly_conn_t *conn, int err, const char *reason_phrase)
+{
+    assert(err == 0 || QUICLY_ERROR_IS_QUIC_APPLICATION(err));
+
+    return initiate_close(conn, err, QUICLY_FRAME_TYPE_PADDING /* used when err == 0 */, reason_phrase);
 }
 
 static int get_stream_or_open_if_new(quicly_conn_t *conn, uint64_t stream_id, quicly_stream_t **stream)
@@ -3647,7 +3654,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
 Exit:
     if (*conn != NULL && ret != 0) {
-        quicly_close(*conn, ret, offending_frame_type, "");
+        initiate_close(*conn, ret, offending_frame_type, "");
         ret = 0;
     }
     return ret;
@@ -3858,7 +3865,7 @@ Exit:
     case QUICLY_ERROR_PACKET_IGNORED:
         break;
     default: /* close connection */
-        quicly_close(conn, ret, offending_frame_type, "");
+        initiate_close(conn, ret, offending_frame_type, "");
         ret = 0;
         break;
     }

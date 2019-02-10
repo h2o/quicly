@@ -412,7 +412,7 @@ static void test_close(void)
     quic_ctx.on_conn_close = test_close_on_conn_close;
 
     /* client sends close */
-    ret = quicly_close(client, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(12345), 0, "good bye");
+    ret = quicly_close(client, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(12345), "good bye");
     ok(ret == 0);
     ok(quicly_get_state(client) == QUICLY_STATE_CLOSING);
     ok(quicly_get_first_timeout(client) <= quic_now);
