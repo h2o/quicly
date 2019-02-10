@@ -239,8 +239,7 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
                     "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
                     ", bytes-sent: %" PRIu64 "\n",
                     num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
-            uint16_t error_code = QUICLY_ERROR_NONE;
-            quicly_close(stream->conn, &error_code, "");
+            quicly_close(stream->conn, 0, "");
         }
     }
 
@@ -257,10 +256,16 @@ static int on_stream_open(quicly_stream_t *stream)
     return 0;
 }
 
-static void on_conn_close(quicly_conn_t *conn, uint16_t code, const uint64_t *frame_type, const char *reason, size_t reason_len)
+static void on_conn_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason, size_t reason_len)
 {
-    fprintf(stderr, "%s close:0x%" PRIx16 ":%.*s\n", frame_type != NULL ? "connection" : "application", code, (int)reason_len,
-            reason);
+    assert(QUICLY_ERROR_IS_QUIC(err));
+    if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
+        fprintf(stderr, "transport close:code=0x%" PRIx16 ";frame=%" PRIu64 ";reason=%.*s\n", QUICLY_ERROR_GET_ERROR_CODE(err),
+                frame_type, (int)reason_len, reason);
+    } else {
+        fprintf(stderr, "application close:code=0x%" PRIx16 ";reason=%.*s\n", QUICLY_ERROR_GET_ERROR_CODE(err), (int)reason_len,
+                reason);
+    }
 }
 
 static int send_one(int fd, quicly_datagram_t *p)
