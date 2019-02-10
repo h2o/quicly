@@ -24,8 +24,8 @@ subtest "hello" => sub {
     is $resp, "hello world\n";
     subtest "events" => sub {
         my $events = slurp_file("$tempdir/events");
-        ok +($events =~ /"type":"close-send",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)"/s
-             and $1 eq "packet-commit" and $2 eq "send" and $3 eq "free");
+        ok +($events =~ /"type":"close-send",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)"/s
+             and $1 eq "packet-commit" and $2 eq "quictrace-sent" and $3 eq "send" and $4 eq "free");
     };
 };
 
