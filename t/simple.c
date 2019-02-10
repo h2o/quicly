@@ -44,7 +44,7 @@ static void test_handshake(void)
     /* receive CH, send handshake upto ServerFinished */
     num_decoded = decode_packets(decoded, packets, num_packets, 8);
     ok(num_decoded == 1);
-    ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, decoded);
+    ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, decoded, ptls_iovec_init(NULL, 0), NULL);
     ok(ret == 0);
     free_packets(packets, num_packets);
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
@@ -392,11 +392,11 @@ static void test_rst_during_loss(void)
 
 static uint16_t test_close_error_code;
 
-static void test_close_on_conn_close(quicly_conn_t *conn, uint16_t code, const uint64_t *frame_type, const char *reason,
-                                     size_t reason_len)
+static void test_close_on_conn_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason, size_t reason_len)
 {
-    test_close_error_code = code;
-    ok(frame_type == NULL);
+    ok(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
+    test_close_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+    ok(frame_type == UINT64_MAX);
     ok(reason_len == 8);
     ok(memcmp(reason, "good bye", 8) == 0);
 }
@@ -412,8 +412,7 @@ static void test_close(void)
     quic_ctx.on_conn_close = test_close_on_conn_close;
 
     /* client sends close */
-    uint16_t error_code = 12345;
-    ret = quicly_close(client, &error_code, "good bye");
+    ret = quicly_close(client, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(12345), "good bye");
     ok(ret == 0);
     ok(quicly_get_state(client) == QUICLY_STATE_CLOSING);
     ok(quicly_get_first_timeout(client) <= quic_now);
@@ -484,7 +483,7 @@ static void tiny_connection_window(void)
         ok(quicly_get_first_timeout(client) > quic_ctx.now(&quic_ctx));
         decode_packets(&decoded, &raw, 1, 8);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, NULL, &decoded);
+        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, ptls_iovec_init(NULL, 0), NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
     }
