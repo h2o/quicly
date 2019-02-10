@@ -29,9 +29,9 @@
 #define QUICLY_DELAYED_ACK_TIMEOUT 25 /* milliseconds */
 
 /* coexists with picotls error codes, assuming that int is at least 32-bits */
-#define QUICLY_ERROR_IS_QUIC(e) (((e)&0x30000) != 0)
-#define QUICLY_ERROR_IS_QUIC_TRANSPORT(e) (((e)&0x30000) == 0x20000)
-#define QUICLY_ERROR_IS_QUIC_APPLICATION(e) (((e)&0x30000) == 0x30000)
+#define QUICLY_ERROR_IS_QUIC(e) (((e) & ~0x1ffff) == 0x20000)
+#define QUICLY_ERROR_IS_QUIC_TRANSPORT(e) (((e) & ~0xffff) == 0x20000)
+#define QUICLY_ERROR_IS_QUIC_APPLICATION(e) (((e) & ~0xffff) == 0x30000)
 #define QUICLY_ERROR_GET_ERROR_CODE(e) ((uint16_t)(e))
 #define QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(e) ((uint16_t)(e) + 0x20000)
 #define QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(e) ((uint16_t)(e) + 0x30000)
@@ -51,7 +51,7 @@
 #define QUICLY_TRANSPORT_ERROR_INVALID_MIGRATION QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(0xc)
 #define QUICLY_TRANSPORT_ERROR_TLS_ALERT_BASE QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(0x100)
 
-/* internal errors */
+/* internal error codes, used purely for signaling status to the application */
 #define QUICLY_ERROR_PACKET_IGNORED 0xff01
 #define QUICLY_ERROR_SENDBUF_FULL 0xff02    /* internal use only; the error code is never exposed to the application */
 #define QUICLY_ERROR_FREE_CONNECTION 0xff03 /* returned by quicly_send when the connection is freeable */
