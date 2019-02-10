@@ -3090,7 +3090,6 @@ int quicly_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *
         frame_type = UINT64_MAX;
     } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_SELF_ALERT) {
         quic_error_code = QUICLY_ERROR_TLS_ALERT_BASE + PTLS_ERROR_TO_ALERT(err);
-        frame_type = QUICLY_FRAME_TYPE_PADDING;
     } else {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_ERROR_INTERNAL);
         frame_type = UINT64_MAX;
@@ -3416,16 +3415,18 @@ static int handle_close(quicly_conn_t *conn, uint16_t error_code, uint64_t frame
     return 0;
 }
 
-static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src, size_t _len, int *is_ack_only)
+static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src, size_t _len, uint64_t *offending_frame_type,
+                          int *is_ack_only)
 {
     const uint8_t *end = src + _len;
+    uint8_t frame_type;
     int ret = 0;
 
     *is_ack_only = 1;
 
     do {
-        uint8_t type_flags = *src++;
-        switch (type_flags) {
+        frame_type = *src++;
+        switch (frame_type) {
         case QUICLY_FRAME_TYPE_PADDING:
             break;
         case QUICLY_FRAME_TYPE_TRANSPORT_CLOSE: {
@@ -3445,7 +3446,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
         case QUICLY_FRAME_TYPE_ACK:
         case QUICLY_FRAME_TYPE_ACK_ECN: {
             quicly_ack_frame_t frame;
-            if ((ret = quicly_decode_ack_frame(&src, end, &frame, type_flags == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
+            if ((ret = quicly_decode_ack_frame(&src, end, &frame, frame_type == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
                 goto Exit;
             if ((ret = handle_ack_frame(conn, epoch, &frame)) != 0)
                 goto Exit;
@@ -3464,14 +3465,14 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 ret = QUICLY_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
-            if ((type_flags & ~QUICLY_FRAME_TYPE_STREAM_BITS) == QUICLY_FRAME_TYPE_STREAM_BASE) {
+            if ((frame_type & ~QUICLY_FRAME_TYPE_STREAM_BITS) == QUICLY_FRAME_TYPE_STREAM_BASE) {
                 quicly_stream_frame_t frame;
-                if ((ret = quicly_decode_stream_frame(type_flags, &src, end, &frame)) != 0)
+                if ((ret = quicly_decode_stream_frame(frame_type, &src, end, &frame)) != 0)
                     goto Exit;
                 if ((ret = handle_stream_frame(conn, &frame)) != 0)
                     goto Exit;
             } else {
-                switch (type_flags) {
+                switch (frame_type) {
                 case QUICLY_FRAME_TYPE_RESET_STREAM: {
                     quicly_reset_stream_frame_t frame;
                     if ((ret = quicly_decode_reset_stream_frame(&src, end, &frame)) != 0)
@@ -3498,7 +3499,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                     quicly_max_streams_frame_t frame;
                     if ((ret = quicly_decode_max_streams_frame(&src, end, &frame)) != 0)
                         goto Exit;
-                    if ((ret = handle_max_streams_frame(conn, type_flags == QUICLY_FRAME_TYPE_MAX_STREAMS_UNI, &frame)) != 0)
+                    if ((ret = handle_max_streams_frame(conn, frame_type == QUICLY_FRAME_TYPE_MAX_STREAMS_UNI, &frame)) != 0)
                         goto Exit;
                 } break;
                 case QUICLY_FRAME_TYPE_PING:
@@ -3524,7 +3525,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                     quicly_streams_blocked_frame_t frame;
                     if ((ret = quicly_decode_streams_blocked_frame(&src, end, &frame)) != 0)
                         goto Exit;
-                    quicly_maxsender_t *maxsender = type_flags == QUICLY_FRAME_TYPE_STREAMS_BLOCKED_UNI
+                    quicly_maxsender_t *maxsender = frame_type == QUICLY_FRAME_TYPE_STREAMS_BLOCKED_UNI
                                                         ? conn->ingress.max_streams.uni
                                                         : conn->ingress.max_streams.bidi;
                     if (maxsender != NULL)
@@ -3559,7 +3560,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                         goto Exit;
                 } break;
                 default:
-                    fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)type_flags);
+                    fprintf(stderr, "ignoring frame type:%02x\n", (unsigned)frame_type);
                     *is_ack_only = 0;
                     ret = QUICLY_ERROR_FRAME_ENCODING;
                     goto Exit;
@@ -3571,6 +3572,8 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
     } while (src != end);
 
 Exit:
+    if (ret != 0)
+        *offending_frame_type = frame_type;
     return ret;
 }
 
@@ -3579,7 +3582,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 {
     struct st_quicly_cipher_context_t ingress_cipher = {NULL}, egress_cipher = {NULL};
     ptls_iovec_t payload;
-    uint64_t next_expected_pn, pn;
+    uint64_t next_expected_pn, pn, offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
     int is_ack_only, ret;
 
     *conn = NULL;
@@ -3637,14 +3640,14 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
     ++(*conn)->super.num_packets.received;
-    if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, payload.base, payload.len, &is_ack_only)) != 0)
+    if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if ((ret = record_receipt(*conn, &(*conn)->initial->super, pn, 0, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
 
 Exit:
     if (*conn != NULL && ret != 0) {
-        quicly_close(*conn, ret, QUICLY_FRAME_TYPE_PADDING /* FIXME */, "yayay");
+        quicly_close(*conn, ret, offending_frame_type, "");
         ret = 0;
     }
     return ret;
@@ -3657,7 +3660,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     struct st_quicly_pn_space_t **space;
     size_t epoch;
     ptls_iovec_t payload;
-    uint64_t pn;
+    uint64_t pn, offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
     int is_ack_only, ret;
 
     update_now(conn->super.ctx);
@@ -3802,7 +3805,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         conn->super.state = QUICLY_STATE_CONNECTED;
 
     ++conn->super.num_packets.received;
-    if ((ret = handle_payload(conn, epoch, payload.base, payload.len, &is_ack_only)) != 0)
+    if ((ret = handle_payload(conn, epoch, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if (*space != NULL) {
         if ((ret = record_receipt(conn, *space, pn, is_ack_only, epoch)) != 0)
@@ -3855,7 +3858,7 @@ Exit:
     case QUICLY_ERROR_PACKET_IGNORED:
         break;
     default: /* close connection */
-        quicly_close(conn, ret, QUICLY_FRAME_TYPE_PADDING /* FIXME */, "yayay");
+        quicly_close(conn, ret, offending_frame_type, "");
         ret = 0;
         break;
     }
