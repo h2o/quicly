@@ -370,7 +370,7 @@ typedef struct st_quicly_stream_callbacks_t {
      * called when a STOP_SENDING frame is received.  Do not call `quicly_reset_stream` in response.  The stream will be
      * automatically reset by quicly.
      */
-    int (*on_send_stop)(quicly_stream_t *stream, uint16_t error_code);
+    int (*on_send_stop)(quicly_stream_t *stream, int err);
     /**
      * called when data is newly received.  `off` is the offset within the buffer (the beginning position changes as the application
      * calls `quicly_stream_sync_recvbuf`.  Applications should consult `quicly_stream_t::recvstate` to see if it has contiguous
@@ -380,7 +380,7 @@ typedef struct st_quicly_stream_callbacks_t {
     /**
      * called when a RESET_STREAM frame is received
      */
-    int (*on_receive_reset)(quicly_stream_t *stream, uint16_t error_code);
+    int (*on_receive_reset)(quicly_stream_t *stream, int err);
 } quicly_stream_callbacks_t;
 
 struct st_quicly_stream_t {
@@ -642,11 +642,11 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream, int unidir
 /**
  *
  */
-void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code);
+void quicly_reset_stream(quicly_stream_t *stream, int err);
 /**
  *
  */
-void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code);
+void quicly_request_stop(quicly_stream_t *stream, int err);
 /**
  *
  */

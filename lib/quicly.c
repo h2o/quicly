@@ -3170,7 +3170,8 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, quicly_reset_stream_fr
         if ((ret = quicly_recvstate_reset(&stream->recvstate, frame->final_offset, &bytes_missing)) != 0)
             return ret;
         conn->ingress.max_data.bytes_consumed += bytes_missing;
-        if ((ret = stream->callbacks->on_receive_reset(stream, frame->app_error_code)) != 0)
+        if ((ret = stream->callbacks->on_receive_reset(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame->app_error_code))) !=
+            0)
             return ret;
         if (stream_is_destroyable(stream))
             destroy_stream(stream);
@@ -3345,8 +3346,9 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, quicly_stop_sending_fr
 
     if (stream->sendstate.is_open) {
         /* reset the stream, then notify the application */
-        quicly_reset_stream(stream, frame->app_error_code);
-        if ((ret = stream->callbacks->on_send_stop(stream, frame->app_error_code)) != 0)
+        int err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame->app_error_code);
+        quicly_reset_stream(stream, err);
+        if ((ret = stream->callbacks->on_send_stop(stream, err)) != 0)
             return ret;
     }
 
@@ -3915,10 +3917,11 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
     return 0;
 }
 
-void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
+void quicly_reset_stream(quicly_stream_t *stream, int err)
 {
     assert(!(quicly_stream_is_unidirectional(stream->stream_id) &&
              quicly_stream_is_client_initiated(stream->stream_id) != quicly_is_client(stream->conn)));
+    assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     assert(stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE);
     assert(!quicly_sendstate_transfer_complete(&stream->sendstate));
 
@@ -3928,22 +3931,23 @@ void quicly_reset_stream(quicly_stream_t *stream, uint16_t error_code)
 
     /* setup RST_STREAM */
     stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
-    stream->_send_aux.rst.error_code = error_code;
+    stream->_send_aux.rst.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
 
     /* schedule for delivery */
     sched_stream_control(stream);
     resched_stream_data(stream);
 }
 
-void quicly_request_stop(quicly_stream_t *stream, uint16_t error_code)
+void quicly_request_stop(quicly_stream_t *stream, int err)
 {
     assert(!(quicly_stream_is_unidirectional(stream->stream_id) &&
              quicly_stream_is_client_initiated(stream->stream_id) == quicly_is_client(stream->conn)));
+    assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
 
     /* send STOP_SENDING if the incoming side of the stream is still open */
     if (stream->recvstate.eos == UINT64_MAX && stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {
         stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_SEND;
-        stream->_send_aux.stop_sending.error_code = error_code;
+        stream->_send_aux.stop_sending.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
         sched_stream_control(stream);
     }
 }

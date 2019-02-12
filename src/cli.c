@@ -68,8 +68,8 @@ static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .save_ticket = &save_ticket};
 static const char *req_paths[1024];
 
-static int on_stop_sending(quicly_stream_t *stream, uint16_t error_code);
-static int on_receive_reset(quicly_stream_t *stream, uint16_t error_code);
+static int on_stop_sending(quicly_stream_t *stream, int err);
+static int on_receive_reset(quicly_stream_t *stream, int err);
 static int server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 static int client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
@@ -165,15 +165,17 @@ static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_ht
     return 1;
 }
 
-static int on_stop_sending(quicly_stream_t *stream, uint16_t error_code)
+static int on_stop_sending(quicly_stream_t *stream, int err)
 {
-    fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", error_code);
+    assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
+    fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
     return 0;
 }
 
-static int on_receive_reset(quicly_stream_t *stream, uint16_t error_code)
+static int on_receive_reset(quicly_stream_t *stream, int err)
 {
-    fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", error_code);
+    assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
+    fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
     return 0;
 }
 
