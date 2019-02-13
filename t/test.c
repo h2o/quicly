@@ -121,6 +121,13 @@ int on_ingress_reset(quicly_stream_t *stream, int err)
     return 0;
 }
 
+const quicly_cid_plaintext_t *new_master_id(void)
+{
+    static quicly_cid_plaintext_t master = {UINT32_MAX};
+    ++master.master_id;
+    return &master;
+}
+
 int on_stream_open(quicly_stream_t *stream)
 {
     test_streambuf_t *sbuf;
@@ -216,8 +223,8 @@ static void test_vector(void)
     ptls_iovec_t payload;
     int ret;
 
-    ok(quicly_decode_packet(&packet, datagram, sizeof(datagram), 0) == sizeof(datagram));
-    ret = setup_initial_encryption(&ingress, &egress, ptls_openssl_cipher_suites, packet.cid.dest, 0);
+    ok(quicly_decode_packet(&quic_ctx, &packet, datagram, sizeof(datagram)) == sizeof(datagram));
+    ret = setup_initial_encryption(&ingress, &egress, ptls_openssl_cipher_suites, packet.cid.dest.encrypted, 0);
     ok(ret == 0);
     payload = decrypt_packet(ingress.header_protection, &ingress.aead, &next_expected_pn, &packet, &pn);
     ok(payload.base != NULL);
@@ -236,14 +243,14 @@ void free_packets(quicly_datagram_t **packets, size_t cnt)
         quicly_default_free_packet(&quic_ctx, packets[i]);
 }
 
-size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw, size_t cnt, size_t host_cidl)
+size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw, size_t cnt)
 {
     size_t ri, dc = 0;
 
     for (ri = 0; ri != cnt; ++ri) {
         size_t off = 0;
         do {
-            size_t dl = quicly_decode_packet(decoded + dc, raw[ri]->data.base + off, raw[ri]->data.len - off, host_cidl);
+            size_t dl = quicly_decode_packet(&quic_ctx, decoded + dc, raw[ri]->data.base + off, raw[ri]->data.len - off);
             assert(dl != SIZE_MAX);
             ++dc;
             off += dl;
@@ -270,7 +277,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     ok(ret == 0);
 
     if (num_datagrams != 0) {
-        size_t num_packets = decode_packets(decoded, datagrams, num_datagrams, quicly_is_client(dst) ? 0 : 8);
+        size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
         for (i = 0; i != num_packets; ++i) {
             ret = quicly_receive(dst, decoded + i);
             ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);

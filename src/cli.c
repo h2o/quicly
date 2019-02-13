@@ -56,6 +56,7 @@ static const char *ticket_file = NULL;
 static ptls_handshake_properties_t hs_properties;
 static quicly_transport_parameters_t resumed_transport_params;
 static quicly_context_t ctx;
+static quicly_cid_plaintext_t next_cid;
 static ptls_save_ticket_t save_ticket = {save_ticket_cb};
 static int enforce_retry;
 
@@ -371,8 +372,9 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
         perror("bind(2) failed");
         return 1;
     }
-    ret = quicly_connect(&conn, &ctx, host, sa, salen, &hs_properties, &resumed_transport_params);
+    ret = quicly_connect(&conn, &ctx, host, sa, salen, &next_cid, &hs_properties, &resumed_transport_params);
     assert(ret == 0);
+    ++next_cid.master_id;
     send_if_possible(conn);
     send_pending(fd, conn);
 
@@ -417,7 +419,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
             size_t off = 0;
             while (off != rret) {
                 quicly_decoded_packet_t packet;
-                size_t plen = quicly_decode_packet(&packet, buf + off, rret - off, 0);
+                size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
                 if (plen == SIZE_MAX)
                     break;
                 quicly_receive(conn, &packet);
@@ -448,15 +450,13 @@ static void on_signal(int signo)
 {
     size_t i;
     for (i = 0; i != num_conns; ++i) {
-        const quicly_cid_t *host_cid = quicly_get_host_cid(conns[i]);
-        char *host_cid_hex = quicly_hexdump(host_cid->cid, host_cid->len, SIZE_MAX);
+        const quicly_cid_plaintext_t *master_id = quicly_get_master_id(conns[i]);
         uint64_t num_received, num_sent, num_lost, num_ack_received, num_bytes_sent;
         quicly_get_packet_stats(conns[i], &num_received, &num_sent, &num_lost, &num_ack_received, &num_bytes_sent);
         fprintf(stderr,
-                "conn:%s: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
+                "conn:%08" PRIu32 ": received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
                 ", bytes-sent: %" PRIu64 "\n",
-                host_cid_hex, num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
-        free(host_cid_hex);
+                master_id->master_id, num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
     }
     if (signo == SIGINT)
         _exit(0);
@@ -530,12 +530,13 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
             size_t off = 0;
             while (off != rret) {
                 quicly_decoded_packet_t packet;
-                size_t plen = quicly_decode_packet(&packet, buf + off, rret - off, 8);
+                size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
                 if (plen == SIZE_MAX)
                     break;
                 if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
                     if (packet.version != QUICLY_PROTOCOL_VERSION) {
-                        quicly_datagram_t *rp = quicly_send_version_negotiation(&ctx, &sa, salen, packet.cid.src, packet.cid.dest);
+                        quicly_datagram_t *rp =
+                            quicly_send_version_negotiation(&ctx, &sa, salen, packet.cid.src, packet.cid.dest.encrypted);
                         assert(rp != NULL);
                         if (send_one(fd, rp) == -1)
                             perror("sendmsg failed");
@@ -545,7 +546,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 quicly_conn_t *conn = NULL;
                 size_t i;
                 for (i = 0; i != num_conns; ++i) {
-                    if (quicly_is_destination(conns[i], (packet.octets.base[0] & 0x80) == 0, packet.cid.dest)) {
+                    if (quicly_is_destination(conns[i], &sa, salen, &packet)) {
                         conn = conns[i];
                         break;
                     }
@@ -553,14 +554,14 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 if (conn != NULL) {
                     /* existing connection */
                     quicly_receive(conn, &packet);
-                } else if (enforce_retry && packet.token.len == 0 && packet.cid.dest.len >= 8) {
+                } else if (enforce_retry && packet.token.len == 0 && packet.cid.dest.encrypted.len >= 8) {
                     /* unbound connection; send a retry token unless the client has supplied the correct one, but not too many */
                     uint8_t new_server_cid[8];
-                    memcpy(new_server_cid, packet.cid.dest.base, sizeof(new_server_cid));
+                    memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
                     new_server_cid[0] ^= 0xff;
                     quicly_datagram_t *rp =
                         quicly_send_retry(&ctx, &sa, salen, packet.cid.src, ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
-                                          packet.cid.dest, packet.cid.dest);
+                                          packet.cid.dest.encrypted, packet.cid.dest.encrypted /* FIXME SMAC(odcid || sockaddr) */);
                     assert(rp != NULL);
                     if (send_one(fd, rp) == -1)
                         perror("sendmsg failed");
@@ -570,9 +571,10 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     int ret = quicly_accept(
                         &conn, &ctx, &sa, mess.msg_namelen, &packet,
                         enforce_retry ? packet.token /* a production server should validate the token */ : ptls_iovec_init(NULL, 0),
-                        NULL);
+                        &next_cid, NULL);
                     if (ret == 0) {
                         assert(conn != NULL);
+                        ++next_cid.master_id;
                         conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
                         assert(conns != NULL);
                         conns[num_conns++] = conn;
@@ -767,7 +769,9 @@ int main(int argc, char **argv)
             size_t i;
             for (i = 0; key_exchanges[i] != NULL; ++i)
                 ;
-#define MATCH(name) if (key_exchanges[i] == NULL && strcasecmp(optarg, #name) == 0) key_exchanges[i] = &ptls_openssl_##name
+#define MATCH(name)                                                                                                                \
+    if (key_exchanges[i] == NULL && strcasecmp(optarg, #name) == 0)                                                                \
+    key_exchanges[i] = &ptls_openssl_##name
             MATCH(secp256r1);
 #if PTLS_OPENSSL_HAVE_SECP384R1
             MATCH(secp384r1);
@@ -804,6 +808,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "-ck and -k options must be used together\n");
             exit(1);
         }
+        uint8_t cid_key[PTLS_BLOWFISH_KEY_SIZE];
+        tlsctx.random_bytes(cid_key, sizeof(cid_key));
+        quicly_default_cid_encryption_context = ptls_cipher_new(&ptls_openssl_bfecb, 1, cid_key);
+        ctx.encrypt_cid = quicly_default_encrypt_cid;
+        quicly_default_cid_decryption_context = ptls_cipher_new(&ptls_openssl_bfecb, 0, cid_key);
+        ctx.decrypt_cid = quicly_default_decrypt_cid;
     } else {
         /* client */
         if (ticket_file != NULL)
