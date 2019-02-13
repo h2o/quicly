@@ -2005,6 +2005,9 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_COMMIT, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
                          INT_EVENT_ATTR(LENGTH, s->target.packet->data.len), INT_EVENT_ATTR(ACK_ONLY, !s->target.ack_eliciting));
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_SEND, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
+                         INT_EVENT_ATTR(LENGTH, s->target.packet->data.len),
+                         INT_EVENT_ATTR(PACKET_TYPE, s->target.packet->data.base[0] & QUICLY_PACKET_TYPE_BITMASK));
 
     ++conn->egress.packet_number;
     ++conn->super.num_packets.sent;
@@ -2386,6 +2389,8 @@ static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_conte
     }
 
     LOG_STREAM_EVENT(stream->conn, stream->stream_id, QUICLY_EVENT_TYPE_STREAM_SEND, INT_EVENT_ATTR(OFFSET, off),
+                     INT_EVENT_ATTR(LENGTH, end_off - off), INT_EVENT_ATTR(FIN, is_fin));
+    LOG_STREAM_EVENT(stream->conn, stream->stream_id, QUICLY_EVENT_TYPE_QUICTRACE_SEND_STREAM, INT_EVENT_ATTR(OFFSET, off),
                      INT_EVENT_ATTR(LENGTH, end_off - off), INT_EVENT_ATTR(FIN, is_fin));
 
     /* set FIN bit if necessary (also adjusts end_off to include EOS byte) */
@@ -3201,6 +3206,8 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     while (1) {
         uint64_t block_length = frame->ack_block_lengths[gap_index];
         if (block_length != 0) {
+            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_RECV_ACK, INT_EVENT_ATTR(ACK_BLOCK_BEGIN, packet_number),
+                                 INT_EVENT_ATTR(ACK_BLOCK_END, packet_number + block_length - 1));
             while (quicly_sentmap_get(&iter)->packet_number < packet_number)
                 quicly_sentmap_skip(&iter);
             do {
@@ -3231,6 +3238,8 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
             break;
         packet_number += frame->gaps[gap_index];
     }
+
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_RECV_ACK, INT_EVENT_ATTR(ACK_DELAY, frame->ack_delay));
 
     /* OnPacketAcked */
     uint32_t latest_rtt = UINT32_MAX, ack_delay = 0;
@@ -3478,6 +3487,9 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 quicly_stream_frame_t frame;
                 if ((ret = quicly_decode_stream_frame(frame_type, &src, end, &frame)) != 0)
                     goto Exit;
+                LOG_STREAM_EVENT(conn, frame.stream_id, QUICLY_EVENT_TYPE_QUICTRACE_RECV_STREAM,
+                                 INT_EVENT_ATTR(OFFSET, frame.offset), INT_EVENT_ATTR(LENGTH, frame.data.len),
+                                 INT_EVENT_ATTR(FIN, frame.is_fin));
                 if ((ret = handle_stream_frame(conn, &frame)) != 0)
                     goto Exit;
             } else {
@@ -3646,6 +3658,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
                          VEC_EVENT_ATTR(SCID, packet->cid.src));
     LOG_CONNECTION_EVENT(*conn, QUICLY_EVENT_TYPE_CRYPTO_DECRYPT, INT_EVENT_ATTR(PACKET_NUMBER, pn),
                          INT_EVENT_ATTR(LENGTH, payload.len));
+    LOG_CONNECTION_EVENT(*conn, QUICLY_EVENT_TYPE_QUICTRACE_RECV, INT_EVENT_ATTR(PACKET_NUMBER, pn),
+                         INT_EVENT_ATTR(LENGTH, payload.len), INT_EVENT_ATTR(ENC_LEVEL, QUICLY_EPOCH_INITIAL));
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
     ++(*conn)->super.num_packets.received;
@@ -3809,6 +3823,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CRYPTO_DECRYPT, INT_EVENT_ATTR(PACKET_NUMBER, pn),
                          INT_EVENT_ATTR(LENGTH, payload.len));
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_RECV, INT_EVENT_ATTR(PACKET_NUMBER, pn),
+                         INT_EVENT_ATTR(LENGTH, payload.len), INT_EVENT_ATTR(ENC_LEVEL, epoch));
 
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
@@ -4135,12 +4151,20 @@ const char *quicly_event_type_names[] = {"connect",
                                          "stream-lost",
                                          "quic-version-switch",
                                          "close-send",
-                                         "close-receive"};
+                                         "close-receive",
+                                         "quictrace-sent",
+                                         "quictrace-recv",
+                                         "quictrace-lost",
+                                         "quictrace-send-stream",
+                                         "quictrace-recv-stream",
+                                         "quictrace-recv-ack"};
 
 const char *quicly_event_attribute_names[] = {NULL,
                                               "time",
                                               "epoch",
+                                              "packet-type",
                                               "pn",
+                                              "packet-size",
                                               "conn",
                                               "tls-error",
                                               "off",
@@ -4148,6 +4172,7 @@ const char *quicly_event_attribute_names[] = {NULL,
                                               "stream-id",
                                               "fin",
                                               "is-enc",
+                                              "encryptionLevel",
                                               "quic-version",
                                               "ack-only",
                                               "max-lost-pn",
@@ -4164,6 +4189,9 @@ const char *quicly_event_attribute_names[] = {NULL,
                                               "state",
                                               "error-code",
                                               "frame-type",
+                                              "ack-block-begin",
+                                              "ack-block-end",
+                                              "ack-delay",
                                               "dcid",
                                               "scid",
                                               "reason-phrase"};
