@@ -90,7 +90,13 @@ typedef enum en_quicly_event_type_t {
     QUICLY_EVENT_TYPE_STREAM_LOST,
     QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH,
     QUICLY_EVENT_TYPE_CLOSE_SEND,
-    QUICLY_EVENT_TYPE_CLOSE_RECEIVE
+    QUICLY_EVENT_TYPE_CLOSE_RECEIVE,
+    QUICLY_EVENT_TYPE_QUICTRACE_SEND,
+    QUICLY_EVENT_TYPE_QUICTRACE_RECV,
+    QUICLY_EVENT_TYPE_QUICTRACE_LOST,
+    QUICLY_EVENT_TYPE_QUICTRACE_SEND_STREAM,
+    QUICLY_EVENT_TYPE_QUICTRACE_RECV_STREAM,
+    QUICLY_EVENT_TYPE_QUICTRACE_RECV_ACK,
 } quicly_event_type_t;
 
 /**
@@ -103,7 +109,9 @@ typedef enum en_quicly_event_attribute_type_t {
     QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MIN,
     QUICLY_EVENT_ATTRIBUTE_TIME = QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MIN,
     QUICLY_EVENT_ATTRIBUTE_EPOCH,
+    QUICLY_EVENT_ATTRIBUTE_PACKET_TYPE,
     QUICLY_EVENT_ATTRIBUTE_PACKET_NUMBER,
+    QUICLY_EVENT_ATTRIBUTE_PACKET_SIZE,
     QUICLY_EVENT_ATTRIBUTE_CONNECTION,
     QUICLY_EVENT_ATTRIBUTE_TLS_ERROR,
     QUICLY_EVENT_ATTRIBUTE_OFFSET,
@@ -111,6 +119,7 @@ typedef enum en_quicly_event_attribute_type_t {
     QUICLY_EVENT_ATTRIBUTE_STREAM_ID,
     QUICLY_EVENT_ATTRIBUTE_FIN,
     QUICLY_EVENT_ATTRIBUTE_IS_ENC,
+    QUICLY_EVENT_ATTRIBUTE_ENC_LEVEL,
     QUICLY_EVENT_ATTRIBUTE_QUIC_VERSION,
     QUICLY_EVENT_ATTRIBUTE_ACK_ONLY,
     QUICLY_EVENT_ATTRIBUTE_MAX_LOST_PN,
@@ -127,6 +136,9 @@ typedef enum en_quicly_event_attribute_type_t {
     QUICLY_EVENT_ATTRIBUTE_STATE,
     QUICLY_EVENT_ATTRIBUTE_ERROR_CODE,
     QUICLY_EVENT_ATTRIBUTE_FRAME_TYPE,
+    QUICLY_EVENT_ATTRIBUTE_ACK_BLOCK_BEGIN,
+    QUICLY_EVENT_ATTRIBUTE_ACK_BLOCK_END,
+    QUICLY_EVENT_ATTRIBUTE_ACK_DELAY,
     QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX,
     QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MIN = QUICLY_EVENT_ATTRIBUTE_TYPE_INT_MAX,
     QUICLY_EVENT_ATTRIBUTE_DCID = QUICLY_EVENT_ATTRIBUTE_TYPE_VEC_MIN,
@@ -790,7 +802,7 @@ inline quicly_state_t quicly_get_state(quicly_conn_t *conn)
 inline uint32_t quicly_num_streams(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return 1 + c->host.bidi.num_streams + c->host.uni.num_streams + c->peer.bidi.num_streams + c->peer.uni.num_streams;
+    return c->host.bidi.num_streams + c->host.uni.num_streams + c->peer.bidi.num_streams + c->peer.uni.num_streams;
 }
 
 inline int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec)
