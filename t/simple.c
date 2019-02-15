@@ -393,7 +393,8 @@ static void test_rst_during_loss(void)
 
 static uint16_t test_close_error_code;
 
-static void test_close_on_conn_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason, size_t reason_len)
+static void test_closeed_by_peer(quicly_closed_by_peer_cb *self, quicly_conn_t *conn, int err, uint64_t frame_type,
+                                 const char *reason, size_t reason_len)
 {
     ok(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     test_close_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
@@ -404,13 +405,13 @@ static void test_close_on_conn_close(quicly_conn_t *conn, int err, uint64_t fram
 
 static void test_close(void)
 {
-    quicly_conn_close_cb orig_conn_close_cb = quic_ctx.on_conn_close;
+    quicly_closed_by_peer_cb closed_by_peer = {test_closeed_by_peer}, *orig_closed_by_peer = quic_ctx.closed_by_peer;
     quicly_datagram_t *datagram;
     size_t num_datagrams;
     int64_t client_timeout, server_timeout;
     int ret;
 
-    quic_ctx.on_conn_close = test_close_on_conn_close;
+    quic_ctx.closed_by_peer = &closed_by_peer;
 
     /* client sends close */
     ret = quicly_close(client, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(12345), "good bye");
@@ -453,7 +454,7 @@ static void test_close(void)
 
     client = NULL;
     server = NULL;
-    quic_ctx.on_conn_close = orig_conn_close_cb;
+    quic_ctx.closed_by_peer = orig_closed_by_peer;
 }
 
 static void tiny_connection_window(void)
@@ -481,7 +482,7 @@ static void tiny_connection_window(void)
         ret = quicly_send(client, &raw, &num_packets);
         ok(ret == 0);
         ok(num_packets == 1);
-        ok(quicly_get_first_timeout(client) > quic_ctx.now(&quic_ctx));
+        ok(quicly_get_first_timeout(client) > quic_ctx.now->cb(quic_ctx.now));
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, ptls_iovec_init(NULL, 0), new_master_id(), NULL);
