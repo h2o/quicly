@@ -3,11 +3,6 @@ import json
 import base64
 from pprint import pprint
 
-fields = {"streamId": "stream-id",
-          "fin": "fin",
-          "length": "len",
-          }
-
 def transform(inf, outf):
     start = -1
     cid = -1
@@ -102,6 +97,7 @@ def transform(inf, outf):
         packet["frames"] = rframes
         qtr["events"].append(packet)
 
+    # finished processing
     json.dump(qtr, outf)
 
 
