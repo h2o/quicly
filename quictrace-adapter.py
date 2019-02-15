@@ -1,5 +1,6 @@
 import sys
 import json
+import base64
 from pprint import pprint
 
 fields = {"streamId": "stream-id",
@@ -9,21 +10,34 @@ fields = {"streamId": "stream-id",
 
 def transform(inf, outf):
     start = -1
+    cid = -1
     qtr = {}
     qtr["protocolVersion"] = "AAAA"
     qtr["events"] = []
-    frames = []
+    sframes = []
+    rframes = []
     for line in inf:
         trace = json.loads(line)
-        if trace["type"][:9] != "quictrace": continue
+        if len(trace["type"]) < 9 or trace["type"][:9] != "quictrace": continue
 
-        # Use first connection that is seen as the CID for the trace.
-        # TODO: Make this a cmdline parameter if multiple CIDs in trace.
+        # use first connection that is seen as the CID for the trace.
+        # TODO: make this a cmdline parameter if multiple CIDs in trace.
         if cid == -1: 
             cid = trace["conn"]
-            qtr["destinationConnectionId"] = str(cid)
+            qtr["destinationConnectionId"] = base64.b64encode(str(cid))
 
-        # Packet sent
+        if trace["type"] == "quictrace-sent" or trace["type"] == "quictrace-recv":
+            # close out previous received packet if it's still open
+            if rframes:
+                packet = {}
+                packet["eventType"] = "PACKET_RECEIVED"
+                packet["timeUs"] = str((rtime - start) * 1000)
+                packet["packetNumber"] = str(rpn)
+                packet["frames"] = rframes
+                qtr["events"].append(packet)
+                rframes = []  # empty received frames list
+
+        # packet event
         if trace["type"] == "quictrace-sent":
             packet = {}
             packet["eventType"] = "PACKET_SENT"
@@ -32,11 +46,11 @@ def transform(inf, outf):
             packet["packetNumber"] = str(trace["pn"])
             packet["packetSize"] = str(trace["len"])
             packet["encryptionLevel"] = "ENCRYPTION_1RTT"
-            packet["frames"] = frames
+            packet["frames"] = sframes
             qtr["events"].append(packet)
-            frames = []  # empty frames list
+            sframes = []  # empty sent frames list
 
-        # Stream frame sent
+        # STREAM frame sent
         if trace["type"] == "quictrace-send-stream":
             info = {}
             info["streamId"] = str(trace["stream-id"])
@@ -48,11 +62,45 @@ def transform(inf, outf):
                 info["fin"] = True
             info["length"] = str(trace["len"])
             info["offset"] = str(trace["off"])
-            # Create and populate new frame
+            # create and populate new frame, add to frames list
             frame = {}
             frame["frameType"] = "STREAM"
             frame["streamFrameInfo"] = info
-            frames.append(frame)
+            sframes.append(frame)
+
+        # packet received
+        if trace["type"] == "quictrace-recv":
+            if start == -1: start = trace["time"]
+            rtime = trace["time"]
+            rpn = trace["pn"]
+            rframes = []
+            acked = []
+
+        # process ACK frame info
+        if trace["type"] == "quictrace-recv-ack":
+            if "ack-delay" not in trace:
+                # create ack block, add to list
+                block = {"firstPacket": str(trace["ack-block-begin"]), 
+                         "lastPacket": str(trace["ack-block-end"])}
+                acked.append(block)
+                continue
+            # close out ACK frame processing
+            ack_info = {}
+            ack_info["ackDelayUs"]  = str(trace["ack-delay"])
+            ack_info["ackedPackets"] = acked
+            frame = {}
+            frame["frameType"] = "ACK"
+            frame["ackInfo"] = ack_info
+            rframes.append(frame)
+
+    # close out last received packet if it's still open
+    if rframes:
+        packet = {}
+        packet["eventType"] = "PACKET_RECEIVED"
+        packet["timeUs"] = str((rtime - start) * 1000)
+        packet["packetNumber"] = str(rpn)
+        packet["frames"] = rframes
+        qtr["events"].append(packet)
 
     json.dump(qtr, outf)
 
