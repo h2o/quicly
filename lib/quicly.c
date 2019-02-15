@@ -82,8 +82,6 @@
 
 #define AEAD_BASE_LABEL "tls13 quic "
 
-#define STATELESS_RESET_TOKEN_SIZE 16
-
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
 #define INT_EVENT_ATTR(label, value) _int_event_attr(QUICLY_EVENT_ATTRIBUTE_##label, value)
@@ -1313,7 +1311,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN:
-                    if (!is_client || end - src != STATELESS_RESET_TOKEN_SIZE) {
+                    if (!is_client || end - src != QUICLY_STATELESS_RESET_TOKEN_LEN) {
                         ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                         goto Exit;
                     }

@@ -51,6 +51,7 @@ extern "C" {
 #define QUICLY_PROTOCOL_VERSION 0xff000011
 
 #define QUICLY_MAX_CID_LEN 18
+#define QUICLY_STATELESS_RESET_TOKEN_LEN 16
 
 typedef struct st_quicly_datagram_t {
     ptls_iovec_t data;
