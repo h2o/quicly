@@ -79,7 +79,7 @@ static void simple_http(void)
 
     quicly_streambuf_egress_write(client_stream, req, strlen(req));
     quicly_streambuf_egress_shutdown(client_stream);
-    ok(quicly_num_streams(client) == 2);
+    ok(quicly_num_streams(client) == 1);
 
     transmit(client, server);
 
@@ -91,21 +91,21 @@ static void simple_http(void)
     ok(buffer_is(&server_streambuf->super.ingress, req));
     quicly_streambuf_egress_write(server_stream, resp, strlen(resp));
     quicly_streambuf_egress_shutdown(server_stream);
-    ok(quicly_num_streams(server) == 2);
+    ok(quicly_num_streams(server) == 1);
 
     transmit(server, client);
 
     ok(client_streambuf->is_detached);
     ok(client_streambuf->error_received.reset_stream == -1);
     ok(buffer_is(&client_streambuf->super.ingress, resp));
-    ok(quicly_num_streams(client) == 1);
+    ok(quicly_num_streams(client) == 0);
     ok(!server_streambuf->is_detached);
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(client, server);
 
     ok(server_streambuf->is_detached);
-    ok(quicly_num_streams(server) == 1);
+    ok(quicly_num_streams(server) == 0);
 }
 
 static void test_rst_then_close(void)
@@ -126,7 +126,7 @@ static void test_rst_then_close(void)
     transmit(client, server);
 
     /* server sends RST_STREAM and ACKs to the packets received */
-    ok(quicly_num_streams(server) == 2);
+    ok(quicly_num_streams(server) == 1);
     server_stream = quicly_get_stream(server, stream_id);
     ok(server_stream != NULL);
     server_streambuf = server_stream->data;
@@ -142,13 +142,13 @@ static void test_rst_then_close(void)
     ok(client_streambuf->is_detached);
     ok(client_streambuf->error_received.stop_sending == -1);
     ok(client_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(54321));
-    ok(quicly_num_streams(client) == 1);
+    ok(quicly_num_streams(client) == 0);
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(client, server);
 
     ok(server_streambuf->is_detached);
-    ok(quicly_num_streams(server) == 1);
+    ok(quicly_num_streams(server) == 0);
 }
 
 static void test_send_then_close(void)
@@ -283,7 +283,7 @@ static void tiny_stream_window(void)
     transmit(client, server);
 
     /* client should have sent ACK(FIN),STOP_RESPONDING and waiting for response */
-    ok(quicly_num_streams(client) == 2);
+    ok(quicly_num_streams(client) == 1);
     ok(!server_streambuf->is_detached);
     ok(server_streambuf->error_received.stop_sending == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(12345));
     ok(quicly_sendstate_transfer_complete(&server_stream->sendstate));
@@ -294,15 +294,15 @@ static void tiny_stream_window(void)
     ok(client_streambuf->is_detached);
     ok(client_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(12345));
     ok(client_streambuf->error_received.stop_sending == -1);
-    ok(quicly_num_streams(client) == 1);
-    ok(quicly_num_streams(server) == 2);
+    ok(quicly_num_streams(client) == 0);
+    ok(quicly_num_streams(server) == 1);
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(client, server);
 
     /* server should have recieved ACK to the RST_STREAM it has sent */
     ok(server_streambuf->is_detached);
-    ok(quicly_num_streams(server) == 1);
+    ok(quicly_num_streams(server) == 0);
 
     ok(max_data_is_equal(client, server));
 
@@ -377,12 +377,12 @@ static void test_rst_during_loss(void)
     transmit(server, client);
     ok(client_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(54321));
     ok(client_streambuf->is_detached);
-    ok(quicly_num_streams(client) == 1);
-    ok(quicly_num_streams(server) == 2);
+    ok(quicly_num_streams(client) == 0);
+    ok(quicly_num_streams(server) == 1);
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(client, server);
     ok(server_streambuf->is_detached);
-    ok(quicly_num_streams(server) == 1);
+    ok(quicly_num_streams(server) == 0);
 
     quicly_get_max_data(server, NULL, NULL, &tmp);
     ok(tmp == max_data_at_start + 8);

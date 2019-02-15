@@ -724,7 +724,7 @@ inline quicly_state_t quicly_get_state(quicly_conn_t *conn)
 inline uint32_t quicly_num_streams(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return 1 + c->host.bidi.num_streams + c->host.uni.num_streams + c->peer.bidi.num_streams + c->peer.uni.num_streams;
+    return c->host.bidi.num_streams + c->host.uni.num_streams + c->peer.bidi.num_streams + c->peer.uni.num_streams;
 }
 
 inline int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec)
