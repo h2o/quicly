@@ -361,7 +361,7 @@ static inline uint8_t get_epoch(uint8_t first_byte) {
     switch (first_byte & QUICLY_PACKET_TYPE_BITMASK) {
     case QUICLY_PACKET_TYPE_INITIAL: return QUICLY_EPOCH_INITIAL;
     case QUICLY_PACKET_TYPE_HANDSHAKE: return QUICLY_EPOCH_HANDSHAKE;
-    case QUICLY_PACKET_TYPE_0RTT: return QUICLY_EPOCH_1RTT;
+    case QUICLY_PACKET_TYPE_0RTT: return QUICLY_EPOCH_0RTT;
     default: assert(!"FIXME");
     }
 }
@@ -2132,10 +2132,13 @@ static int _do_allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
     assert(s->dst_end - s->dst >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
 
-    /* register to sentmap */
-    if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now,
-                                      get_epoch(s->current.first_byte))) != 0)
-        return ret;
+    {
+        /* register to sentmap */
+        uint8_t ack_epoch = get_epoch(s->current.first_byte);
+        if (ack_epoch == QUICLY_EPOCH_0RTT) ack_epoch = QUICLY_EPOCH_1RTT;
+        if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, ack_epoch)) != 0)
+            return ret;
+    }
 
     /* add PING or empty CRYPTO for TLP, RTO packets so that last_retransmittable_sent_at changes */
     if (s->num_packets < s->min_packets_to_send) {

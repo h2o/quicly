@@ -3,6 +3,8 @@ import json
 import base64
 from pprint import pprint
 
+epoch = ["ENCRYPTION_INITIAL", "ENCRYPTION_0RTT", "ENCRYPTION_UNKNOWN", "ENCRYPTION_1RTT"]
+
 def transform(inf, outf):
     start = -1
     cid = -1
@@ -40,7 +42,7 @@ def transform(inf, outf):
             packet["timeUs"] = str((trace["time"] - start) * 1000)
             packet["packetNumber"] = str(trace["pn"])
             packet["packetSize"] = str(trace["len"])
-            packet["encryptionLevel"] = "ENCRYPTION_1RTT"
+            packet["encryptionLevel"] = epoch[trace["packet-type"]]
             packet["frames"] = sframes
             qtr["events"].append(packet)
             sframes = []  # empty sent frames list
