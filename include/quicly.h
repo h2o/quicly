@@ -285,7 +285,7 @@ struct st_quicly_context_t {
      */
     unsigned enforce_version_negotiation : 1;
     /**
-     * if inter-node routing is used (by utilising quicly_cid_plaintext_t::server_id)
+     * if inter-node routing is used (by utilising quicly_cid_plaintext_t::node_id)
      */
     unsigned is_clustered : 1;
     /**
