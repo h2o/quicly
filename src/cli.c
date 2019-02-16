@@ -622,7 +622,7 @@ int save_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src)
     /* build data (session ticket and transport parameters) */
     ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, src.base, src.len); });
     ptls_buffer_push_block(&buf, 2, {
-        if ((ret = quicly_encode_transport_parameter_list(quicly_get_peer_transport_parameters(conn), NULL, 1, &buf)) != 0)
+        if ((ret = quicly_encode_transport_parameter_list(&buf, 1, quicly_get_peer_transport_parameters(conn), NULL, NULL)) != 0)
             goto Exit;
     });
 
@@ -815,10 +815,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "-ck and -k options must be used together\n");
             exit(1);
         }
-        uint8_t cid_key[PTLS_BLOWFISH_KEY_SIZE];
+        uint8_t cid_key[16];
         tlsctx.random_bytes(cid_key, sizeof(cid_key));
-        ctx.encrypt_cid = quicly_new_default_encrypt_cid_cb(&ptls_openssl_bfecb, cid_key);
-        ctx.decrypt_cid = quicly_new_default_decrypt_cid_cb(&ptls_openssl_bfecb, cid_key);
+        ctx.encrypt_cid =
+            quicly_new_default_encrypt_cid_cb(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, sizeof(cid_key)));
+        ctx.decrypt_cid =
+            quicly_new_default_decrypt_cid_cb(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, sizeof(cid_key)));
     } else {
         /* client */
         if (ticket_file != NULL)

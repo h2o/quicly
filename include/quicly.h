@@ -186,9 +186,10 @@ QUICLY_CALLBACK_TYPE(quicly_datagram_t *, alloc_packet, socklen_t salen, size_t 
  */
 QUICLY_CALLBACK_TYPE(void, free_packet, quicly_datagram_t *packet);
 /**
- * encrypts CID
+ * encrypts CID and/or generates a stateless reset token
  */
-QUICLY_CALLBACK_TYPE(void, encrypt_cid, quicly_cid_t *encrypted, const quicly_cid_plaintext_t *plaintext);
+QUICLY_CALLBACK_TYPE(void, encrypt_cid, quicly_cid_t *encrypted, void *stateless_reset_token,
+                     const quicly_cid_plaintext_t *plaintext);
 /**
  * decrypts CID. plaintext->thread_id should contain a randomly distributed number when validation fails, so that the value can be
  * used for distributing load among the threads within the process.
@@ -395,6 +396,11 @@ struct _st_quicly_conn_public_t {
          * the SCID used in long header packets
          */
         quicly_cid_t src_cid;
+        /**
+         * stateless reset token announced by the host. We have only one token per connection. The token will cached in this
+         * variable when the generate_stateless_reset_token is non-NULL.
+         */
+        uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
         /**
          * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
          */
@@ -706,8 +712,8 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t sa
 /**
  *
  */
-int quicly_encode_transport_parameter_list(const quicly_transport_parameters_t *params, const quicly_cid_t *odcid, int is_client,
-                                           ptls_buffer_t *buf);
+int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
+                                           const quicly_cid_t *odcid, const void *stateless_reset_token);
 /**
  *
  */
@@ -775,7 +781,8 @@ extern quicly_free_packet_cb quicly_default_free_packet_cb;
 /**
  *
  */
-quicly_encrypt_cid_cb *quicly_new_default_encrypt_cid_cb(ptls_cipher_algorithm_t *algo, const void *key);
+quicly_encrypt_cid_cb *quicly_new_default_encrypt_cid_cb(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
+                                                         ptls_iovec_t key);
 /**
  *
  */
@@ -783,7 +790,8 @@ void quicly_free_default_encrypt_cid_cb(quicly_encrypt_cid_cb *self);
 /**
  *
  */
-quicly_decrypt_cid_cb *quicly_new_default_decrypt_cid_cb(ptls_cipher_algorithm_t *algo, const void *key);
+quicly_decrypt_cid_cb *quicly_new_default_decrypt_cid_cb(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
+                                                         ptls_iovec_t key);
 /**
  *
  */
