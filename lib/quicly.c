@@ -355,6 +355,17 @@ static void update_now(quicly_context_t *ctx)
         cc_ticks = new_ticks;
 }
 
+static inline uint8_t get_epoch(uint8_t first_byte) {
+    if (!QUICLY_PACKET_IS_LONG_HEADER(first_byte)) return QUICLY_EPOCH_1RTT;
+
+    switch (first_byte & QUICLY_PACKET_TYPE_BITMASK) {
+    case QUICLY_PACKET_TYPE_INITIAL: return QUICLY_EPOCH_INITIAL;
+    case QUICLY_PACKET_TYPE_HANDSHAKE: return QUICLY_EPOCH_HANDSHAKE;
+    case QUICLY_PACKET_TYPE_0RTT: return QUICLY_EPOCH_1RTT;
+    default: assert(!"FIXME");
+    }
+}
+
 static void set_cid(quicly_cid_t *dest, ptls_iovec_t src)
 {
     memcpy(dest->cid, src.base, src.len);
@@ -2007,7 +2018,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
                          INT_EVENT_ATTR(LENGTH, s->target.packet->data.len), INT_EVENT_ATTR(ACK_ONLY, !s->target.ack_eliciting));
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_SEND, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
                          INT_EVENT_ATTR(LENGTH, s->target.packet->data.len),
-                         INT_EVENT_ATTR(PACKET_TYPE, s->target.packet->data.base[0] & QUICLY_PACKET_TYPE_BITMASK));
+                         INT_EVENT_ATTR(PACKET_TYPE, get_epoch(s->target.packet->data.base[0])));
 
     ++conn->egress.packet_number;
     ++conn->super.num_packets.sent;
@@ -2121,27 +2132,10 @@ static int _do_allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
     assert(s->dst_end - s->dst >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
 
-    { /* register to sentmap */
-        uint8_t ack_epoch = QUICLY_EPOCH_1RTT;
-        if (QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
-            switch (s->current.first_byte & QUICLY_PACKET_TYPE_BITMASK) {
-            case QUICLY_PACKET_TYPE_INITIAL:
-                ack_epoch = QUICLY_EPOCH_INITIAL;
-                break;
-            case QUICLY_PACKET_TYPE_HANDSHAKE:
-                ack_epoch = QUICLY_EPOCH_HANDSHAKE;
-                break;
-            case QUICLY_PACKET_TYPE_0RTT:
-                ack_epoch = QUICLY_EPOCH_1RTT;
-                break;
-            default:
-                assert(!"FIXME");
-                break;
-            }
-        }
-        if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, ack_epoch)) != 0)
-            return ret;
-    }
+    /* register to sentmap */
+    if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now,
+                                      get_epoch(s->current.first_byte))) != 0)
+        return ret;
 
     /* add PING or empty CRYPTO for TLP, RTO packets so that last_retransmittable_sent_at changes */
     if (s->num_packets < s->min_packets_to_send) {
