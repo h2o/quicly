@@ -371,7 +371,7 @@ struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
     /**
-     * identifier of the assigned by the application. `path_id` stores the next value to be issued
+     * identifier assigned by the application. `path_id` stores the next value to be issued
      */
     quicly_cid_plaintext_t master_id;
     struct {
