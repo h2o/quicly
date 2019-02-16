@@ -257,7 +257,7 @@ struct st_quicly_cid_plaintext_t {
      */
     uint32_t thread_id : 24;
     /**
-     * for inter-node routing; available only when using a 16-bit cipher to encrypt CIDs, otherwise set to zero. See
+     * for inter-node routing; available only when using a 16-byte cipher to encrypt CIDs, otherwise set to zero. See
      * quicly_context_t::is_clustered.
      */
     uint64_t node_id;
