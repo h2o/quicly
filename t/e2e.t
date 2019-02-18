@@ -62,6 +62,30 @@ subtest "0-rtt" => sub {
     like $events, qr/"type":"cc-ack-received".*"pn":1,/m, "pn 1 acked";
 };
 
+subtest "stateless-reset" => sub {
+    my $guard = spawn_server(qw(-C deadbeef));
+    my $pid = fork;
+    die "fork failed:$!"
+        unless defined $pid;
+    if ($pid == 0) {
+        # child process
+        open STDOUT, '>', '/dev/null'
+            or die "failed to redirect stdout to /dev/null:$!";
+        exec $cli, '-e', "$tempdir/events", qw(-i 3000 127.0.0.1), $port;
+        die "failed to exec $cli:$!";
+    }
+    # parent process, let the client fetch the first response, then kill respawn the server using same CID encryption key
+    sleep 1;
+    undef $guard;
+    $guard = spawn_server(qw(-C deadbeef));
+    # wait for the child to die
+    while (waitpid($pid, 0) != $pid) {
+    }
+    # check that the stateless reset is logged
+    my $events = slurp_file("$tempdir/events");
+    like $events, qr/"type":"stateless-reset-receive",/m;
+};
+
 done_testing;
 
 sub spawn_server {
