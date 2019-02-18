@@ -343,21 +343,19 @@ static void set_alpn(ptls_handshake_properties_t *pro, const char *alpn_str)
     pro->client.negotiated_protocols.count = entries;
 }
 
-static void send_if_possible(quicly_conn_t *conn)
+static void enqueue_requests(quicly_conn_t *conn)
 {
+    size_t i;
     int ret;
 
-    if (quicly_connection_is_ready(conn) && quicly_get_next_stream_id(conn, 0) == 0) {
-        size_t i;
-        for (i = 0; req_paths[i] != NULL; ++i) {
-            char req[1024];
-            quicly_stream_t *stream;
-            ret = quicly_open_stream(conn, &stream, 0);
-            assert(ret == 0);
-            sprintf(req, "GET %s\r\n", req_paths[i]);
-            send_str(stream, req);
-            quicly_streambuf_egress_shutdown(stream);
-        }
+    for (i = 0; req_paths[i] != NULL; ++i) {
+        char req[1024];
+        quicly_stream_t *stream;
+        ret = quicly_open_stream(conn, &stream, 0);
+        assert(ret == 0);
+        sprintf(req, "GET %s\r\n", req_paths[i]);
+        send_str(stream, req);
+        quicly_streambuf_egress_shutdown(stream);
     }
 }
 
@@ -380,7 +378,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
     ret = quicly_connect(&conn, &ctx, host, sa, salen, &next_cid, &hs_properties, &resumed_transport_params);
     assert(ret == 0);
     ++next_cid.master_id;
-    send_if_possible(conn);
+    enqueue_requests(conn);
     send_pending(fd, conn);
 
     while (1) {
@@ -431,7 +429,6 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
                 quicly_receive(conn, &packet);
                 off += plen;
             }
-            send_if_possible(conn);
         }
         if (conn != NULL) {
             ret = send_pending(fd, conn);
