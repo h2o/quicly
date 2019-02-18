@@ -3529,13 +3529,17 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t sa
         }
     }
 
-    if (conn->super.master_id.master_id == decoded->cid.dest.plaintext.master_id &&
-        conn->super.master_id.thread_id == decoded->cid.dest.plaintext.thread_id &&
-        conn->super.master_id.node_id == decoded->cid.dest.plaintext.node_id)
-        return 1;
-
-    if (is_stateless_reset(conn, decoded))
-        return 1;
+    if (conn->super.ctx->encrypt_cid != NULL) {
+        if (conn->super.master_id.master_id == decoded->cid.dest.plaintext.master_id &&
+            conn->super.master_id.thread_id == decoded->cid.dest.plaintext.thread_id &&
+            conn->super.master_id.node_id == decoded->cid.dest.plaintext.node_id)
+            return 1;
+        if (is_stateless_reset(conn, decoded))
+            return 1;
+    } else {
+        if (compare_socket_address(conn->super.peer.sa, sa) == 0)
+            return 1;
+    }
 
     return 0;
 }
