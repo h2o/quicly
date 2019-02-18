@@ -684,6 +684,8 @@ static void usage(const char *cmd)
            "\n"
            "Options:\n"
            "  -a <alpn list>       a coma separated list of ALPN identifiers\n"
+           "  -C <cid-key>         CID encryption key (server-only). Randomly generated\n"
+           "                       if omitted.\n"
            "  -c certificate-file\n"
            "  -k key-file          specifies the credentials to be used for running the\n"
            "                       server. If omitted, the command runs as a client.\n"
@@ -705,7 +707,7 @@ static void usage(const char *cmd)
 
 int main(int argc, char **argv)
 {
-    const char *host, *port;
+    const char *host, *port, *cid_key = NULL;
     struct sockaddr_storage sa;
     socklen_t salen;
     int ch;
@@ -718,10 +720,13 @@ int main(int argc, char **argv)
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
 
-    while ((ch = getopt(argc, argv, "a:c:k:e:l:Nnp:Rr:s:Vvx:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:C:c:k:e:l:Nnp:Rr:s:Vvx:h")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
+            break;
+        case 'C':
+            cid_key = optarg;
             break;
         case 'c':
             load_certificate_chain(ctx.tls, optarg);
@@ -815,12 +820,15 @@ int main(int argc, char **argv)
             fprintf(stderr, "-ck and -k options must be used together\n");
             exit(1);
         }
-        uint8_t cid_key[16];
-        tlsctx.random_bytes(cid_key, sizeof(cid_key));
+        if (cid_key == NULL) {
+            static char random_key[17];
+            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
+            cid_key = random_key;
+        }
         ctx.encrypt_cid =
-            quicly_new_default_encrypt_cid_cb(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, sizeof(cid_key)));
+            quicly_new_default_encrypt_cid_cb(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
         ctx.decrypt_cid =
-            quicly_new_default_decrypt_cid_cb(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, sizeof(cid_key)));
+            quicly_new_default_decrypt_cid_cb(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
     } else {
         /* client */
         if (ticket_file != NULL)
