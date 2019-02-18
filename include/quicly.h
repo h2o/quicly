@@ -52,6 +52,7 @@ extern "C" {
 
 #define QUICLY_MAX_CID_LEN 18
 #define QUICLY_STATELESS_RESET_TOKEN_LEN 16
+#define QUICLY_STATELESS_RESET_PACKET_MIN_LEN 39
 
 typedef struct st_quicly_datagram_t {
     ptls_iovec_t data;
@@ -72,6 +73,7 @@ typedef enum en_quicly_event_type_t {
     QUICLY_EVENT_TYPE_CONNECT,
     QUICLY_EVENT_TYPE_ACCEPT,
     QUICLY_EVENT_TYPE_SEND,
+    QUICLY_EVENT_TYPE_SEND_STATELESS_RESET,
     QUICLY_EVENT_TYPE_RECEIVE,
     QUICLY_EVENT_TYPE_FREE,
     QUICLY_EVENT_TYPE_PACKET_PREPARE,
@@ -90,8 +92,11 @@ typedef enum en_quicly_event_type_t {
     QUICLY_EVENT_TYPE_STREAM_ACKED,
     QUICLY_EVENT_TYPE_STREAM_LOST,
     QUICLY_EVENT_TYPE_QUIC_VERSION_SWITCH,
-    QUICLY_EVENT_TYPE_CLOSE_SEND,
-    QUICLY_EVENT_TYPE_CLOSE_RECEIVE,
+    QUICLY_EVENT_TYPE_TRANSPORT_CLOSE_SEND,
+    QUICLY_EVENT_TYPE_APPLICATION_CLOSE_SEND,
+    QUICLY_EVENT_TYPE_TRANSPORT_CLOSE_RECEIVE,
+    QUICLY_EVENT_TYPE_APPLICATION_CLOSE_RECEIVE,
+    QUICLY_EVENT_TYPE_STATELESS_RESET_RECEIVE,
     QUICLY_EVENT_TYPE_QUICTRACE_SEND,
     QUICLY_EVENT_TYPE_QUICTRACE_RECV,
     QUICLY_EVENT_TYPE_QUICTRACE_LOST,
@@ -186,9 +191,10 @@ QUICLY_CALLBACK_TYPE(quicly_datagram_t *, alloc_packet, socklen_t salen, size_t 
  */
 QUICLY_CALLBACK_TYPE(void, free_packet, quicly_datagram_t *packet);
 /**
- * encrypts CID
+ * encrypts CID and/or generates a stateless reset token
  */
-QUICLY_CALLBACK_TYPE(void, encrypt_cid, quicly_cid_t *encrypted, const quicly_cid_plaintext_t *plaintext);
+QUICLY_CALLBACK_TYPE(void, encrypt_cid, quicly_cid_t *encrypted, void *stateless_reset_token,
+                     const quicly_cid_plaintext_t *plaintext);
 /**
  * decrypts CID. plaintext->thread_id should contain a randomly distributed number when validation fails, so that the value can be
  * used for distributing load among the threads within the process.
@@ -396,13 +402,25 @@ struct _st_quicly_conn_public_t {
          */
         quicly_cid_t src_cid;
         /**
+         * stateless reset token announced by the host. We have only one token per connection. The token will cached in this
+         * variable when the generate_stateless_reset_token is non-NULL.
+         */
+        uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
+        /**
          * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
          */
         quicly_cid_t offered_cid;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
     } host;
     struct {
+        /**
+         * CID used for emitting the packets
+         */
         quicly_cid_t cid;
+        /**
+         * stateless reset token corresponding to the CID
+         */
+        uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         struct sockaddr *sa;
         socklen_t salen;
@@ -594,6 +612,14 @@ typedef struct st_quicly_decoded_packet_t {
      * size of the datagram
      */
     size_t datagram_size;
+    /**
+     *
+     */
+    enum {
+        QUICLY__DECODED_PACKET_CACHED_MAYBE_STATELESS_RESET = 0,
+        QUICLY__DECODED_PACKET_CACHED_IS_STATELESS_RESET,
+        QUICLY__DECODED_PACKET_CACHED_NOT_STATELESS_RESET
+    } _is_stateless_reset_cached;
 } quicly_decoded_packet_t;
 
 extern const quicly_context_t quicly_default_context;
@@ -698,6 +724,11 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 /**
  *
  */
+quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+                                               const quicly_cid_plaintext_t *cid);
+/**
+ *
+ */
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet);
 /**
  *
@@ -706,13 +737,13 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t sa
 /**
  *
  */
-int quicly_encode_transport_parameter_list(const quicly_transport_parameters_t *params, const quicly_cid_t *odcid, int is_client,
-                                           ptls_buffer_t *buf);
+int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
+                                           const quicly_cid_t *odcid, const void *stateless_reset_token);
 /**
  *
  */
-int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, int is_client,
-                                           const uint8_t *src, const uint8_t *end);
+int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, void *stateless_reset_token,
+                                           int is_client, const uint8_t *src, const uint8_t *end);
 /**
  * Initiates a new connection.
  * @param new_cid the CID to be used for the connection. path_id is ignored.
@@ -775,7 +806,8 @@ extern quicly_free_packet_cb quicly_default_free_packet_cb;
 /**
  *
  */
-quicly_encrypt_cid_cb *quicly_new_default_encrypt_cid_cb(ptls_cipher_algorithm_t *algo, const void *key);
+quicly_encrypt_cid_cb *quicly_new_default_encrypt_cid_cb(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
+                                                         ptls_iovec_t key);
 /**
  *
  */
@@ -783,7 +815,8 @@ void quicly_free_default_encrypt_cid_cb(quicly_encrypt_cid_cb *self);
 /**
  *
  */
-quicly_decrypt_cid_cb *quicly_new_default_decrypt_cid_cb(ptls_cipher_algorithm_t *algo, const void *key);
+quicly_decrypt_cid_cb *quicly_new_default_decrypt_cid_cb(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
+                                                         ptls_iovec_t key);
 /**
  *
  */
