@@ -3086,6 +3086,7 @@ quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct soc
     dgram->data.base[0] = QUICLY_QUIC_BIT | (dgram->data.base[0] & ~QUICLY_LONG_HEADER_RESERVED_BITS);
     ctx->encrypt_cid->cb(ctx->encrypt_cid, NULL,
                          dgram->data.base + QUICLY_STATELESS_RESET_PACKET_MIN_LEN - QUICLY_STATELESS_RESET_TOKEN_LEN, cid);
+    dgram->data.len = QUICLY_STATELESS_RESET_PACKET_MIN_LEN;
 
     return dgram;
 }
@@ -4182,7 +4183,7 @@ static void default_encrypt_cid(quicly_encrypt_cid_cb *_self, quicly_cid_t *encr
     /* generate stateless reset token if requested */
     if (stateless_reset_token != NULL) {
         uint8_t md[PTLS_MAX_DIGEST_SIZE];
-        self->stateless_reset_token_ctx->update(self->stateless_reset_token_ctx, p - 1, p - 1 - buf); /* exclude path_id */
+        self->stateless_reset_token_ctx->update(self->stateless_reset_token_ctx, buf, p - 1 - buf); /* exclude path_id */
         self->stateless_reset_token_ctx->final(self->stateless_reset_token_ctx, md, PTLS_HASH_FINAL_MODE_RESET);
         memcpy(stateless_reset_token, md, QUICLY_STATELESS_RESET_TOKEN_LEN);
     }
