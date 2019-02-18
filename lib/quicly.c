@@ -3490,23 +3490,18 @@ static int is_stateless_reset(quicly_conn_t *conn, quicly_decoded_packet_t *deco
     }
 
     if (conn->application == NULL)
-        goto Not;
+        return 0;
     if (QUICLY_PACKET_IS_LONG_HEADER(decoded->octets.base[0]))
-        goto Not;
+        return 0;
     if ((decoded->octets.base[0] & QUICLY_QUIC_BIT) == 0)
-        goto Not;
+        return 0;
     if (decoded->octets.len < QUICLY_STATELESS_RESET_PACKET_MIN_LEN)
-        goto Not;
+        return 0;
     if (memcmp(decoded->octets.base + decoded->octets.len - QUICLY_STATELESS_RESET_TOKEN_LEN,
                conn->super.peer.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN) != 0)
-        goto Not;
+        return 0;
 
-    /* is a stateless reset */
-    decoded->_is_stateless_reset_cached = QUICLY__DECODED_PACKET_CACHED_IS_STATELESS_RESET;
     return 1;
-Not: /* is not */
-    decoded->_is_stateless_reset_cached = QUICLY__DECODED_PACKET_CACHED_NOT_STATELESS_RESET;
-    return 0;
 }
 
 int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t salen, quicly_decoded_packet_t *decoded)
@@ -3521,7 +3516,7 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t sa
             case QUICLY_PACKET_TYPE_INITIAL:
             case QUICLY_PACKET_TYPE_0RTT:
                 if (quicly_cid_is_equal(&conn->super.host.offered_cid, decoded->cid.dest.encrypted))
-                    return 1;
+                    goto Found;
                 break;
             default:
                 break;
@@ -3533,15 +3528,24 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t sa
         if (conn->super.master_id.master_id == decoded->cid.dest.plaintext.master_id &&
             conn->super.master_id.thread_id == decoded->cid.dest.plaintext.thread_id &&
             conn->super.master_id.node_id == decoded->cid.dest.plaintext.node_id)
-            return 1;
+            goto Found;
         if (is_stateless_reset(conn, decoded))
-            return 1;
+            goto Found_StatelessReset;
     } else {
         if (compare_socket_address(conn->super.peer.sa, sa) == 0)
-            return 1;
+            goto Found;
     }
 
+    /* not found */
     return 0;
+
+Found:
+    decoded->_is_stateless_reset_cached = QUICLY__DECODED_PACKET_CACHED_NOT_STATELESS_RESET;
+    return 1;
+
+Found_StatelessReset:
+    decoded->_is_stateless_reset_cached = QUICLY__DECODED_PACKET_CACHED_IS_STATELESS_RESET;
+    return 1;
 }
 
 static int handle_close(quicly_conn_t *conn, int err, uint64_t frame_type, ptls_iovec_t reason_phrase)
