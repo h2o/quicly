@@ -560,32 +560,43 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 if (conn != NULL) {
                     /* existing connection */
                     quicly_receive(conn, &packet);
-                } else if (enforce_retry && packet.token.len == 0 && packet.cid.dest.encrypted.len >= 8) {
-                    /* unbound connection; send a retry token unless the client has supplied the correct one, but not too many */
-                    uint8_t new_server_cid[8];
-                    memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
-                    new_server_cid[0] ^= 0xff;
-                    quicly_datagram_t *rp =
-                        quicly_send_retry(&ctx, &sa, salen, packet.cid.src, ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
-                                          packet.cid.dest.encrypted, packet.cid.dest.encrypted /* FIXME SMAC(odcid || sockaddr) */);
-                    assert(rp != NULL);
-                    if (send_one(fd, rp) == -1)
-                        perror("sendmsg failed");
-                    break;
-                } else {
-                    /* new connection */
-                    int ret = quicly_accept(
-                        &conn, &ctx, &sa, mess.msg_namelen, &packet,
-                        enforce_retry ? packet.token /* a production server should validate the token */ : ptls_iovec_init(NULL, 0),
-                        &next_cid, NULL);
-                    if (ret == 0) {
-                        assert(conn != NULL);
-                        ++next_cid.master_id;
-                        conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
-                        assert(conns != NULL);
-                        conns[num_conns++] = conn;
+                } else if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
+                    /* long header packet; potentially a new connection */
+                    if (enforce_retry && packet.token.len == 0 && packet.cid.dest.encrypted.len >= 8) {
+                        /* unbound connection; send a retry token unless the client has supplied the correct one, but not too many
+                         */
+                        uint8_t new_server_cid[8];
+                        memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
+                        new_server_cid[0] ^= 0xff;
+                        quicly_datagram_t *rp = quicly_send_retry(
+                            &ctx, &sa, salen, packet.cid.src, ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
+                            packet.cid.dest.encrypted, packet.cid.dest.encrypted /* FIXME SMAC(odcid || sockaddr) */);
+                        assert(rp != NULL);
+                        if (send_one(fd, rp) == -1)
+                            perror("sendmsg failed");
+                        break;
                     } else {
-                        assert(conn == NULL);
+                        /* new connection */
+                        int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, &packet,
+                                                enforce_retry ? packet.token /* a production server should validate the token */
+                                                              : ptls_iovec_init(NULL, 0),
+                                                &next_cid, NULL);
+                        if (ret == 0) {
+                            assert(conn != NULL);
+                            ++next_cid.master_id;
+                            conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
+                            assert(conns != NULL);
+                            conns[num_conns++] = conn;
+                        } else {
+                            assert(conn == NULL);
+                        }
+                    }
+                } else {
+                    /* short header packet; potentially a dead connection */
+                    if (packet.cid.dest.plaintext.node_id == 0 && packet.cid.dest.plaintext.thread_id == 0) {
+                        quicly_datagram_t *dgram = quicly_send_stateless_reset(&ctx, &sa, salen, &packet.cid.dest.plaintext);
+                        if (send_one(fd, dgram) == -1)
+                            perror("sendmsg failed");
                     }
                 }
                 off += plen;
@@ -668,7 +679,7 @@ static void load_ticket(void)
             src = end;
         });
         ptls_decode_block(src, end, 2, {
-            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, 1, src, end)) != 0)
+            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, 1, src, end)) != 0)
                 goto Exit;
             src = end;
         });
