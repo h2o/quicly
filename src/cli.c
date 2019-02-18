@@ -33,6 +33,7 @@
 #include "../deps/picotls/t/util.h"
 
 static unsigned verbosity = 0;
+static int64_t enqueue_requests_at = 0, request_interval = 0;
 
 static void hexdump(const char *title, const uint8_t *p, size_t l)
 {
@@ -236,13 +237,17 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         static size_t num_resp_received;
         ++num_resp_received;
         if (req_paths[num_resp_received] == NULL) {
-            uint64_t num_received, num_sent, num_lost, num_ack_received, num_bytes_sent;
-            quicly_get_packet_stats(stream->conn, &num_received, &num_sent, &num_lost, &num_ack_received, &num_bytes_sent);
-            fprintf(stderr,
-                    "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
-                    ", bytes-sent: %" PRIu64 "\n",
-                    num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
-            quicly_close(stream->conn, 0, "");
+            if (request_interval != 0) {
+                enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
+            } else {
+                uint64_t num_received, num_sent, num_lost, num_ack_received, num_bytes_sent;
+                quicly_get_packet_stats(stream->conn, &num_received, &num_sent, &num_lost, &num_ack_received, &num_bytes_sent);
+                fprintf(stderr,
+                        "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
+                        ", bytes-sent: %" PRIu64 "\n",
+                        num_received, num_sent, num_lost, num_ack_received, num_bytes_sent);
+                quicly_close(stream->conn, 0, "");
+            }
         }
     }
 
@@ -264,13 +269,16 @@ static quicly_stream_open_cb stream_open = {&on_stream_open};
 static void on_closed_by_peer(quicly_closed_by_peer_cb *self, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
                               size_t reason_len)
 {
-    assert(QUICLY_ERROR_IS_QUIC(err));
     if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
         fprintf(stderr, "transport close:code=0x%" PRIx16 ";frame=%" PRIu64 ";reason=%.*s\n", QUICLY_ERROR_GET_ERROR_CODE(err),
                 frame_type, (int)reason_len, reason);
-    } else {
+    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
         fprintf(stderr, "application close:code=0x%" PRIx16 ";reason=%.*s\n", QUICLY_ERROR_GET_ERROR_CODE(err), (int)reason_len,
                 reason);
+    } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
+        fprintf(stderr, "stateless reset\n");
+    } else {
+        fprintf(stderr, "unexpected close:code=%d\n", err);
     }
 }
 
@@ -357,6 +365,7 @@ static void enqueue_requests(quicly_conn_t *conn)
         send_str(stream, req);
         quicly_streambuf_egress_shutdown(stream);
     }
+    enqueue_requests_at = INT64_MAX;
 }
 
 static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
@@ -386,6 +395,8 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
         struct timeval *tv, tvbuf;
         do {
             int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
+            if (enqueue_requests_at < timeout_at)
+                timeout_at = enqueue_requests_at;
             if (timeout_at != INT64_MAX) {
                 quicly_context_t *ctx = quicly_get_context(conn);
                 int64_t delta = timeout_at - ctx->now->cb(ctx->now);
@@ -403,6 +414,8 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
             FD_ZERO(&readfds);
             FD_SET(fd, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
+        if (enqueue_requests_at <= ctx.now->cb(ctx.now))
+            enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
             uint8_t buf[4096];
             struct msghdr mess;
@@ -589,7 +602,9 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                         }
                     }
                 } else {
-                    /* short header packet; potentially a dead connection */
+                    /* short header packet; potentially a dead connection. No need to check the length of the incoming packet,
+                     * because loop is prevented by authenticating the CID (by checking node_id and thread_id). If the peer is also
+                     * sending a reset, then the next CID is highly likely to contain a non-authenticating CID, ... */
                     if (packet.cid.dest.plaintext.node_id == 0 && packet.cid.dest.plaintext.thread_id == 0) {
                         quicly_datagram_t *dgram = quicly_send_stateless_reset(&ctx, &sa, salen, &packet.cid.dest.plaintext);
                         if (send_one(fd, dgram) == -1)
@@ -698,6 +713,7 @@ static void usage(const char *cmd)
            "  -k key-file          specifies the credentials to be used for running the\n"
            "                       server. If omitted, the command runs as a client.\n"
            "  -e event-log-file    file to log events\n"
+           "  -i interval          interval to reissue requests (in milliseconds)\n"
            "  -l log-file          file to log traffic secrets\n"
            "  -N                   enforce HelloRetryRequest (client-only)\n"
            "  -n                   enforce version negotiation (client-only)\n"
@@ -728,7 +744,7 @@ int main(int argc, char **argv)
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
 
-    while ((ch = getopt(argc, argv, "a:C:c:k:e:l:Nnp:Rr:s:Vvx:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:C:c:k:e:i:l:Nnp:Rr:s:Vvx:h")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -752,6 +768,12 @@ int main(int argc, char **argv)
             ctx.event_log.mask = UINT64_MAX;
             ctx.event_log.cb = quicly_new_default_event_log_cb(fp);
         } break;
+        case 'i':
+            if (sscanf(optarg, "%" PRId64, &request_interval) != 1) {
+                fprintf(stderr, "failed to parse request interval: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'l':
             setup_log_secret(ctx.tls, optarg);
             break;
