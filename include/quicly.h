@@ -50,6 +50,9 @@ extern "C" {
 
 #define QUICLY_PROTOCOL_VERSION 0xff000011
 
+#define QUICLY_MAX_CID_LEN 18
+#define QUICLY_STATELESS_RESET_TOKEN_LEN 16
+
 typedef struct st_quicly_datagram_t {
     ptls_iovec_t data;
     socklen_t salen;
@@ -158,12 +161,26 @@ typedef struct st_quicly_event_attribute_t {
     } value;
 } quicly_event_attribute_t;
 
+typedef struct st_quicly_cid_t quicly_cid_t;
+typedef struct st_quicly_cid_plaintext_t quicly_cid_plaintext_t;
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 
 typedef quicly_datagram_t *(*quicly_alloc_packet_cb)(quicly_context_t *ctx, socklen_t salen, size_t payloadsize);
 typedef void (*quicly_free_packet_cb)(quicly_context_t *ctx, quicly_datagram_t *packet);
+/**
+ * encrypts CID.
+ */
+typedef void (*quicly_encrypt_cid_cb)(quicly_context_t *ctx, quicly_cid_t *encrypted, const quicly_cid_plaintext_t *plaintext);
+/**
+ * decrypts CID. plaintext->thread_id should contain a randomly distributed number when validation fails, so that the value can be
+ * used for distributing load among the threads within the process.
+ * @param len length of encrypted bytes if known, or 0 if unknown (short header packet)
+ * @return length of the CID, or SIZE_MAX if decryption failed
+ */
+typedef size_t (*quicly_decrypt_cid_cb)(quicly_context_t *ctx, quicly_cid_plaintext_t *plaintext, const void *encrypted,
+                                        size_t len);
 typedef quicly_stream_t *(*quicly_alloc_stream_cb)(quicly_context_t *ctx);
 typedef void (*quicly_free_stream_cb)(quicly_stream_t *stream);
 typedef int (*quicly_stream_open_cb)(quicly_stream_t *stream);
@@ -211,20 +228,46 @@ typedef struct st_quicly_transport_parameters_t {
     uint8_t max_ack_delay;
 } quicly_transport_parameters_t;
 
-typedef struct st_quicly_cid_t {
-    uint8_t cid[18];
+struct st_quicly_cid_t {
+    uint8_t cid[QUICLY_MAX_CID_LEN];
     uint8_t len;
-} quicly_cid_t;
+};
+
+/**
+ * Guard value. We would never send path_id of this value.
+ */
+#define QUICLY_MAX_PATH_ID UINT8_MAX
+
+/**
+ * The structure of CID issued by quicly.
+ *
+ * Authentication of the CID can be done by validating if server_id and thread_id contain correct values.
+ */
+struct st_quicly_cid_plaintext_t {
+    /**
+     * the internal "connection ID" unique to each connection (rather than QUIC's CID being unique to each path)
+     */
+    uint32_t master_id;
+    /**
+     * path ID of the connection; we issue up to 255 CIDs per connection (see QUICLY_MAX_PATH_ID)
+     */
+    uint32_t path_id : 8;
+    /**
+     * for intra-node routing
+     */
+    uint32_t thread_id : 24;
+    /**
+     * for inter-node routing; available only when using a 16-byte cipher to encrypt CIDs, otherwise set to zero. See
+     * quicly_context_t::is_clustered.
+     */
+    uint64_t node_id;
+};
 
 struct st_quicly_context_t {
     /**
      * tls context to use
      */
     ptls_context_t *tls;
-    /**
-     *
-     */
-    uint64_t next_master_id;
     /**
      * MTU
      */
@@ -242,6 +285,10 @@ struct st_quicly_context_t {
      */
     unsigned enforce_version_negotiation : 1;
     /**
+     * if inter-node routing is used (by utilising quicly_cid_plaintext_t::node_id)
+     */
+    unsigned is_clustered : 1;
+    /**
      * callback for allocating memory for raw packet
      */
     quicly_alloc_packet_cb alloc_packet;
@@ -249,6 +296,14 @@ struct st_quicly_context_t {
      * callback for freeing memory allocated by alloc_packet
      */
     quicly_free_packet_cb free_packet;
+    /**
+     *
+     */
+    quicly_encrypt_cid_cb encrypt_cid;
+    /**
+     *
+     */
+    quicly_decrypt_cid_cb decrypt_cid;
     /**
      * callback called to allocate memory for a new stream
      */
@@ -315,9 +370,15 @@ struct st_quicly_conn_streamgroup_state_t {
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
-    uint64_t master_id;
+    /**
+     * identifier assigned by the application. `path_id` stores the next value to be issued
+     */
+    quicly_cid_plaintext_t master_id;
     struct {
-        quicly_cid_t cid;
+        /**
+         * the SCID used in long header packets
+         */
+        quicly_cid_t src_cid;
         /**
          * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
          */
@@ -485,7 +546,16 @@ typedef struct st_quicly_decoded_packet_t {
         /**
          * destination CID
          */
-        ptls_iovec_t dest;
+        struct {
+            /**
+             * CID visible on wire
+             */
+            ptls_iovec_t encrypted;
+            /**
+             * the decrypted CID; note that the value is not authenticated
+             */
+            quicly_cid_plaintext_t plaintext;
+        } dest;
         /**
          * source CID; {NULL, 0} if is a short header packet
          */
@@ -512,11 +582,12 @@ typedef struct st_quicly_decoded_packet_t {
 
 extern const quicly_context_t quicly_default_context;
 extern FILE *quicly_default_event_log_fp;
+extern ptls_cipher_context_t *quicly_default_cid_encryption_context, *quicly_default_cid_decryption_context;
 
 /**
  *
  */
-size_t quicly_decode_packet(quicly_decoded_packet_t *packet, const uint8_t *src, size_t len, size_t host_cidl);
+size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len);
 /**
  *
  */
@@ -532,11 +603,7 @@ static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
 /**
  *
  */
-static uint64_t quicly_get_master_id(quicly_conn_t *conn);
-/**
- *
- */
-static const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn);
+static const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn);
 /**
  *
  */
@@ -621,7 +688,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet);
 /**
  *
  */
-int quicly_is_destination(quicly_conn_t *conn, int is_1rtt, ptls_iovec_t cid);
+int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t salen, quicly_decoded_packet_t *decoded);
 /**
  *
  */
@@ -633,16 +700,20 @@ int quicly_encode_transport_parameter_list(const quicly_transport_parameters_t *
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, int is_client,
                                            const uint8_t *src, const uint8_t *end);
 /**
- *
+ * Initiates a new connection.
+ * @param new_cid the CID to be used for the connection. path_id is ignored.
  */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                   ptls_handshake_properties_t *handshake_properties,
+                   const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties,
                    const quicly_transport_parameters_t *resumed_transport_params);
 /**
- *
+ * accepts a new connection
+ * @param new_cid the CID to be used for the connection. When an error is being returned, the application can reuse the CID provided
+ *                to the function.
  */
-int quicly_accept(quicly_conn_t **_conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                  quicly_decoded_packet_t *packet, ptls_iovec_t retry_odcid, ptls_handshake_properties_t *handshake_properties);
+int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+                  quicly_decoded_packet_t *packet, ptls_iovec_t retry_odcid, const quicly_cid_plaintext_t *new_cid,
+                  ptls_handshake_properties_t *handshake_properties);
 /**
  *
  */
@@ -687,6 +758,14 @@ quicly_datagram_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t 
  *
  */
 void quicly_default_free_packet(quicly_context_t *ctx, quicly_datagram_t *packet);
+/**
+ *
+ */
+void quicly_default_encrypt_cid(quicly_context_t *ctx, quicly_cid_t *encrypted, const quicly_cid_plaintext_t *plaintext);
+/**
+ *
+ */
+size_t quicly_default_decrypt_cid(quicly_context_t *ctx, quicly_cid_plaintext_t *plaintext, const void *encrypted, size_t len);
 /**
  *
  */
@@ -738,16 +817,10 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
     return c->ctx;
 }
 
-inline uint64_t quicly_get_master_id(quicly_conn_t *conn)
+inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return c->master_id;
-}
-
-inline const quicly_cid_t *quicly_get_host_cid(quicly_conn_t *conn)
-{
-    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->host.cid;
+    return &c->master_id;
 }
 
 inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)

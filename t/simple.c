@@ -33,7 +33,7 @@ static void test_handshake(void)
     int ret, i;
 
     /* send CH */
-    ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL, NULL);
+    ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), NULL, NULL);
     ok(ret == 0);
     num_packets = sizeof(packets) / sizeof(packets[0]);
     ret = quicly_send(client, packets, &num_packets);
@@ -42,9 +42,9 @@ static void test_handshake(void)
     ok(packets[0]->data.len == 1280);
 
     /* receive CH, send handshake upto ServerFinished */
-    num_decoded = decode_packets(decoded, packets, num_packets, 8);
+    num_decoded = decode_packets(decoded, packets, num_packets);
     ok(num_decoded == 1);
-    ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, decoded, ptls_iovec_init(NULL, 0), NULL);
+    ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, decoded, ptls_iovec_init(NULL, 0), new_master_id(), NULL);
     ok(ret == 0);
     free_packets(packets, num_packets);
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
@@ -55,7 +55,7 @@ static void test_handshake(void)
     ok(num_packets != 0);
 
     /* receive ServerFinished */
-    num_decoded = decode_packets(decoded, packets, num_packets, 0);
+    num_decoded = decode_packets(decoded, packets, num_packets);
     for (i = 0; i != num_decoded; ++i) {
         ret = quicly_receive(client, decoded + i);
         ok(ret == 0);
@@ -365,7 +365,7 @@ static void test_rst_during_loss(void)
 
     {
         quicly_decoded_packet_t decoded;
-        decode_packets(&decoded, &reordered_packet, 1, 8);
+        decode_packets(&decoded, &reordered_packet, 1);
         ret = quicly_receive(server, &decoded);
         ok(ret == 0);
     }
@@ -425,7 +425,7 @@ static void test_close(void)
 
     { /* server receives close */
         quicly_decoded_packet_t decoded;
-        decode_packets(&decoded, &datagram, 1, 8);
+        decode_packets(&decoded, &datagram, 1);
         ret = quicly_receive(server, &decoded);
         ok(ret == 0);
         ok(test_close_error_code == 12345);
@@ -475,16 +475,16 @@ static void tiny_connection_window(void)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, NULL, NULL);
+        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), NULL, NULL);
         ok(ret == 0);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);
         ok(ret == 0);
         ok(num_packets == 1);
         ok(quicly_get_first_timeout(client) > quic_ctx.now(&quic_ctx));
-        decode_packets(&decoded, &raw, 1, 8);
+        decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, ptls_iovec_init(NULL, 0), NULL);
+        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, ptls_iovec_init(NULL, 0), new_master_id(), NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
     }
