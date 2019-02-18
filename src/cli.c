@@ -249,7 +249,7 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
     return 0;
 }
 
-static int on_stream_open(quicly_stream_t *stream)
+static int on_stream_open(quicly_stream_open_cb *self, quicly_stream_t *stream)
 {
     int ret;
 
@@ -259,7 +259,10 @@ static int on_stream_open(quicly_stream_t *stream)
     return 0;
 }
 
-static void on_conn_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason, size_t reason_len)
+static quicly_stream_open_cb stream_open = {&on_stream_open};
+
+static void on_closed_by_peer(quicly_closed_by_peer_cb *self, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
+                              size_t reason_len)
 {
     assert(QUICLY_ERROR_IS_QUIC(err));
     if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
@@ -270,6 +273,8 @@ static void on_conn_close(quicly_conn_t *conn, int err, uint64_t frame_type, con
                 reason);
     }
 }
+
+static quicly_closed_by_peer_cb closed_by_peer = {&on_closed_by_peer};
 
 static int send_one(int fd, quicly_datagram_t *p)
 {
@@ -303,7 +308,7 @@ static int send_pending(int fd, quicly_conn_t *conn)
                 if ((ret = send_one(fd, packets[i])) == -1)
                     perror("sendmsg failed");
                 ret = 0;
-                quicly_default_free_packet(&ctx, packets[i]);
+                quicly_default_free_packet_cb.cb(&quicly_default_free_packet_cb, packets[i]);
             }
         }
     } while (ret == 0 && num_packets == sizeof(packets) / sizeof(packets[0]));
@@ -384,7 +389,8 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
         do {
             int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
             if (timeout_at != INT64_MAX) {
-                int64_t delta = timeout_at - quicly_get_context(conn)->now(quicly_get_context(conn));
+                quicly_context_t *ctx = quicly_get_context(conn);
+                int64_t delta = timeout_at - ctx->now->cb(ctx->now);
                 if (delta > 0) {
                     tvbuf.tv_sec = delta / 1000;
                     tvbuf.tv_usec = (delta % 1000) * 1000;
@@ -495,7 +501,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     timeout_at = conn_to;
             }
             if (timeout_at != INT64_MAX) {
-                int64_t delta = timeout_at - ctx.now(&ctx);
+                int64_t delta = timeout_at - ctx.now->cb(ctx.now);
                 if (delta > 0) {
                     tvbuf.tv_sec = delta / 1000;
                     tvbuf.tv_usec = (delta % 1000) * 1000;
@@ -588,7 +594,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
         {
             size_t i;
             for (i = 0; i != num_conns; ++i) {
-                if (quicly_get_first_timeout(conns[i]) <= ctx.now(&ctx)) {
+                if (quicly_get_first_timeout(conns[i]) <= ctx.now->cb(ctx.now)) {
                     if (send_pending(fd, conns[i]) != 0) {
                         quicly_free(conns[i]);
                         memmove(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(*conns));
@@ -706,8 +712,8 @@ int main(int argc, char **argv)
 
     ctx = quicly_default_context;
     ctx.tls = &tlsctx;
-    ctx.on_stream_open = on_stream_open;
-    ctx.on_conn_close = on_conn_close;
+    ctx.stream_open = &stream_open;
+    ctx.closed_by_peer = &closed_by_peer;
 
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
@@ -723,15 +729,16 @@ int main(int argc, char **argv)
         case 'k':
             load_private_key(ctx.tls, optarg);
             break;
-        case 'e':
-            if ((quicly_default_event_log_fp = fopen(optarg, "w")) == NULL) {
+        case 'e': {
+            FILE *fp;
+            if ((fp = fopen(optarg, "w")) == NULL) {
                 fprintf(stderr, "failed to open file:%s:%s\n", optarg, strerror(errno));
                 exit(1);
             }
-            setvbuf(quicly_default_event_log_fp, NULL, _IONBF, 0);
+            setvbuf(fp, NULL, _IONBF, 0);
             ctx.event_log.mask = UINT64_MAX;
-            ctx.event_log.cb = quicly_default_event_log;
-            break;
+            ctx.event_log.cb = quicly_new_default_event_log_cb(fp);
+        } break;
         case 'l':
             setup_log_secret(ctx.tls, optarg);
             break;
@@ -810,10 +817,8 @@ int main(int argc, char **argv)
         }
         uint8_t cid_key[PTLS_BLOWFISH_KEY_SIZE];
         tlsctx.random_bytes(cid_key, sizeof(cid_key));
-        quicly_default_cid_encryption_context = ptls_cipher_new(&ptls_openssl_bfecb, 1, cid_key);
-        ctx.encrypt_cid = quicly_default_encrypt_cid;
-        quicly_default_cid_decryption_context = ptls_cipher_new(&ptls_openssl_bfecb, 0, cid_key);
-        ctx.decrypt_cid = quicly_default_decrypt_cid;
+        ctx.encrypt_cid = quicly_new_default_encrypt_cid_cb(&ptls_openssl_bfecb, cid_key);
+        ctx.decrypt_cid = quicly_new_default_decrypt_cid_cb(&ptls_openssl_bfecb, cid_key);
     } else {
         /* client */
         if (ticket_file != NULL)

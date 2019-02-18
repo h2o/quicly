@@ -93,7 +93,7 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         quicly_event_type_t _type = (type);                                                                                        \
         if (LOG_IS_REQUIRED(_ctx, _type)) {                                                                                        \
             quicly_event_attribute_t attributes[] = {INT_EVENT_ATTR(TIME, now), __VA_ARGS__};                                      \
-            _ctx->event_log.cb(_ctx, _type, attributes, sizeof(attributes) / sizeof(attributes[0]));                               \
+            _ctx->event_log.cb->cb(_ctx->event_log.cb, _type, attributes, sizeof(attributes) / sizeof(attributes[0]));             \
         }                                                                                                                          \
     } while (0)
 
@@ -325,15 +325,13 @@ const quicly_context_t quicly_default_context = {
     },
     0, /* enforce_version_negotiation */
     0, /* is_clustered */
-    quicly_default_alloc_packet,
-    quicly_default_free_packet,
+    &quicly_default_alloc_packet_cb,
+    &quicly_default_free_packet_cb,
     NULL,
     NULL,
-    quicly_default_alloc_stream,
-    quicly_default_free_stream,
     NULL, /* on_stream_open */
     NULL, /* on_conn_close */
-    quicly_default_now,
+    &quicly_default_now_cb,
     {0, NULL}, /* event_log */
 };
 
@@ -346,7 +344,7 @@ static void update_now(quicly_context_t *ctx)
 {
     static __thread int64_t base;
 
-    now = ctx->now(ctx);
+    now = ctx->now->cb(ctx->now);
 
     assert(cc_hz == 100);
     if (base == 0)
@@ -435,7 +433,8 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
         packet->cid.dest.encrypted.base = (void *)src;
         src += packet->cid.dest.encrypted.len;
         if (ctx->decrypt_cid != NULL) {
-            ctx->decrypt_cid(ctx, &packet->cid.dest.plaintext, packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len);
+            ctx->decrypt_cid->cb(ctx->decrypt_cid, &packet->cid.dest.plaintext, packet->cid.dest.encrypted.base,
+                                 packet->cid.dest.encrypted.len);
         } else {
             packet->cid.dest.plaintext = (quicly_cid_plaintext_t){0};
         }
@@ -479,7 +478,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
         if (ctx->decrypt_cid != NULL) {
             if (src_end - src < QUICLY_MAX_CID_LEN)
                 goto Error;
-            size_t host_cidl = ctx->decrypt_cid(ctx, &packet->cid.dest.plaintext, src, 0);
+            size_t host_cidl = ctx->decrypt_cid->cb(ctx->decrypt_cid, &packet->cid.dest.plaintext, src, 0);
             if (host_cidl == SIZE_MAX)
                 goto Error;
             packet->cid.dest.encrypted = ptls_iovec_init(src, host_cidl);
@@ -772,7 +771,7 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint64_t stream_id, uin
 {
     quicly_stream_t *stream;
 
-    if ((stream = conn->super.ctx->alloc_stream(conn->super.ctx)) == NULL)
+    if ((stream = malloc(sizeof(*stream))) == NULL)
         return NULL;
     stream->conn = conn;
     stream->stream_id = stream_id;
@@ -819,7 +818,7 @@ static void destroy_stream(quicly_stream_t *stream)
     }
 
     dispose_stream_properties(stream);
-    conn->super.ctx->free_stream(stream);
+    free(stream);
 }
 
 static void destroy_all_streams(quicly_conn_t *conn)
@@ -1408,7 +1407,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->_.super.master_id = *new_cid;
     if (ctx->encrypt_cid != NULL) {
         conn->_.super.master_id.path_id = 0;
-        ctx->encrypt_cid(ctx, &conn->_.super.host.src_cid, &conn->_.super.master_id);
+        ctx->encrypt_cid->cb(ctx->encrypt_cid, &conn->_.super.host.src_cid, &conn->_.super.master_id);
         conn->_.super.master_id.path_id = 1;
     } else {
         conn->_.super.master_id.path_id = QUICLY_MAX_PATH_ID;
@@ -2109,8 +2108,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context
         s->send_window = round_send_window(s->send_window);
         if (ack_eliciting && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
-        if ((s->target.packet =
-                 conn->super.ctx->alloc_packet(conn->super.ctx, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
+        if ((s->target.packet = conn->super.ctx->alloc_packet->cb(conn->super.ctx->alloc_packet, conn->super.peer.salen,
+                                                                  conn->super.ctx->max_packet_size)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
         s->target.packet->salen = conn->super.peer.salen;
         memcpy(&s->target.packet->sa, conn->super.peer.sa, conn->super.peer.salen);
@@ -2623,7 +2622,7 @@ quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct
     quicly_datagram_t *packet;
     uint8_t *dst;
 
-    if ((packet = ctx->alloc_packet(ctx, salen, ctx->max_packet_size)) == NULL)
+    if ((packet = ctx->alloc_packet->cb(ctx->alloc_packet, salen, ctx->max_packet_size)) == NULL)
         return NULL;
     packet->salen = salen;
     memcpy(&packet->sa, sa, salen);
@@ -2661,7 +2660,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, struct sockaddr *sa,
 
     assert(!(scid.len == odcid.len && memcmp(scid.base, odcid.base, scid.len) == 0));
 
-    if ((packet = ctx->alloc_packet(ctx, salen, ctx->max_packet_size)) == NULL)
+    if ((packet = ctx->alloc_packet->cb(ctx->alloc_packet, salen, ctx->max_packet_size)) == NULL)
         return NULL;
     packet->salen = salen;
     memcpy(&packet->sa, sa, salen);
@@ -3153,7 +3152,7 @@ static int get_stream_or_open_if_new(quicly_conn_t *conn, uint64_t stream_id, qu
                     ret = PTLS_ERROR_NO_MEMORY;
                     goto Exit;
                 }
-                if ((ret = conn->super.ctx->on_stream_open(*stream)) != 0) {
+                if ((ret = conn->super.ctx->stream_open->cb(conn->super.ctx->stream_open, *stream)) != 0) {
                     *stream = NULL;
                     goto Exit;
                 }
@@ -3482,10 +3481,11 @@ static int handle_close(quicly_conn_t *conn, uint16_t error_code, uint64_t frame
     /* switch to closing state, notify the app (at this moment the streams are accessible), then destroy the streams */
     if ((ret = enter_close(conn, 0)) != 0)
         return ret;
-    if (conn->super.ctx->on_conn_close != NULL) {
+    if (conn->super.ctx->closed_by_peer != NULL) {
         int err = frame_type != UINT64_MAX ? QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(error_code)
                                            : QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(error_code);
-        conn->super.ctx->on_conn_close(conn, err, frame_type, (const char *)reason_phrase.base, reason_phrase.len);
+        conn->super.ctx->closed_by_peer->cb(conn->super.ctx->closed_by_peer, conn, err, frame_type,
+                                            (const char *)reason_phrase.base, reason_phrase.len);
     }
     destroy_all_streams(conn);
 
@@ -3984,7 +3984,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
     }
 
     /* application-layer initialization */
-    if ((ret = conn->super.ctx->on_stream_open(stream)) != 0)
+    if ((ret = conn->super.ctx->stream_open->cb(conn->super.ctx->stream_open, stream)) != 0)
         return ret;
 
     *_stream = stream;
@@ -4026,7 +4026,7 @@ void quicly_request_stop(quicly_stream_t *stream, int err)
     }
 }
 
-quicly_datagram_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t salen, size_t payloadsize)
+static quicly_datagram_t *default_alloc_packet(quicly_alloc_packet_cb *self, socklen_t salen, size_t payloadsize)
 {
     quicly_datagram_t *packet;
 
@@ -4038,20 +4038,26 @@ quicly_datagram_t *quicly_default_alloc_packet(quicly_context_t *ctx, socklen_t 
     return packet;
 }
 
-void quicly_default_free_packet(quicly_context_t *ctx, quicly_datagram_t *packet)
+quicly_alloc_packet_cb quicly_default_alloc_packet_cb = {default_alloc_packet};
+
+static void default_free_packet(quicly_free_packet_cb *self, quicly_datagram_t *packet)
 {
     free(packet);
 }
 
-ptls_cipher_context_t *quicly_default_cid_encryption_context, *quicly_default_cid_decryption_context;
+quicly_free_packet_cb quicly_default_free_packet_cb = {default_free_packet};
 
-void quicly_default_encrypt_cid(quicly_context_t *ctx, quicly_cid_t *encrypted, const quicly_cid_plaintext_t *plaintext)
+struct st_quicly_default_encrypt_cid_t {
+    quicly_encrypt_cid_cb super;
+    ptls_cipher_context_t *cipher;
+};
+
+static void default_encrypt_cid(quicly_encrypt_cid_cb *_self, quicly_cid_t *encrypted, const quicly_cid_plaintext_t *plaintext)
 {
+    struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
     uint8_t buf[16], *p;
 
-    assert(quicly_default_cid_encryption_context != NULL);
-
-    encrypted->len = quicly_default_cid_encryption_context->algo->block_size;
+    encrypted->len = self->cipher->algo->block_size;
 
     /* encode */
     p = buf;
@@ -4070,30 +4076,62 @@ void quicly_default_encrypt_cid(quicly_context_t *ctx, quicly_cid_t *encrypted, 
     assert(p - buf == encrypted->len);
 
     /* encrypt */
-    ptls_cipher_encrypt(quicly_default_cid_encryption_context, encrypted->cid, buf, encrypted->len);
+    ptls_cipher_encrypt(self->cipher, encrypted->cid, buf, encrypted->len);
 }
 
-size_t quicly_default_decrypt_cid(quicly_context_t *ctx, quicly_cid_plaintext_t *plaintext, const void *encrypted, size_t len)
+quicly_encrypt_cid_cb *quicly_new_default_encrypt_cid_cb(ptls_cipher_algorithm_t *algo, const void *key)
 {
+    struct st_quicly_default_encrypt_cid_t *self;
+
+    if ((self = malloc(sizeof(*self))) == NULL)
+        goto Error;
+    *self = (struct st_quicly_default_encrypt_cid_t){{default_encrypt_cid}};
+    if ((self->cipher = ptls_cipher_new(algo, 1, key)) == NULL)
+        goto Error;
+
+    return &self->super;
+
+Error:
+    if (self != NULL)
+        quicly_free_default_encrypt_cid_cb(&self->super);
+    return NULL;
+}
+
+void quicly_free_default_encrypt_cid_cb(quicly_encrypt_cid_cb *_self)
+{
+    struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
+
+    if (self->cipher != NULL)
+        ptls_cipher_free(self->cipher);
+    free(self);
+}
+
+struct st_quicly_default_decrypt_cid_t {
+    quicly_decrypt_cid_cb super;
+    ptls_cipher_context_t *cipher;
+};
+
+static size_t default_decrypt_cid(quicly_decrypt_cid_cb *_self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
+                                  size_t len)
+{
+    struct st_quicly_default_decrypt_cid_t *self = (void *)_self;
     uint8_t buf[16];
     const uint8_t *p;
     size_t cid_len;
 
-    assert(quicly_default_cid_decryption_context != NULL);
-    cid_len = quicly_default_cid_decryption_context->algo->block_size;
+    cid_len = self->cipher->algo->block_size;
 
     /* decrypt */
     if (len != 0 && len != cid_len) {
         /* normalize the input, so that we would get consistent routing */
-        size_t block_size = quicly_default_cid_decryption_context->algo->block_size;
-        if (len > block_size)
-            len = block_size;
-        memcpy(buf, encrypted, len);
-        if (len < block_size)
-            memset(buf + len, 0, block_size - len);
-        ptls_cipher_encrypt(quicly_default_cid_decryption_context, buf, buf, block_size);
+        if (len > cid_len)
+            len = cid_len;
+        memcpy(buf, encrypted, cid_len);
+        if (len < cid_len)
+            memset(buf + len, 0, cid_len - len);
+        ptls_cipher_encrypt(self->cipher, buf, buf, cid_len);
     } else {
-        ptls_cipher_encrypt(quicly_default_cid_decryption_context, buf, encrypted, cid_len);
+        ptls_cipher_encrypt(self->cipher, buf, encrypted, cid_len);
     }
 
     /* decode */
@@ -4111,6 +4149,33 @@ size_t quicly_default_decrypt_cid(quicly_context_t *ctx, quicly_cid_plaintext_t 
     return cid_len;
 }
 
+quicly_decrypt_cid_cb *quicly_new_default_decrypt_cid_cb(ptls_cipher_algorithm_t *algo, const void *key)
+{
+    struct st_quicly_default_decrypt_cid_t *self;
+
+    if ((self = malloc(sizeof(*self))) == NULL)
+        goto Error;
+    *self = (struct st_quicly_default_decrypt_cid_t){{default_decrypt_cid}};
+    if ((self->cipher = ptls_cipher_new(algo, 0, key)) == NULL)
+        goto Error;
+
+    return &self->super;
+
+Error:
+    if (self != NULL)
+        quicly_free_default_decrypt_cid_cb(&self->super);
+    return NULL;
+}
+
+void quicly_free_default_decrypt_cid_cb(quicly_decrypt_cid_cb *_self)
+{
+    struct st_quicly_default_decrypt_cid_t *self = (void *)_self;
+
+    if (self->cipher != NULL)
+        ptls_cipher_free(self->cipher);
+    free(self);
+}
+
 quicly_stream_t *quicly_default_alloc_stream(quicly_context_t *ctx)
 {
     return malloc(sizeof(quicly_stream_t));
@@ -4121,12 +4186,19 @@ void quicly_default_free_stream(quicly_stream_t *stream)
     free(stream);
 }
 
-int64_t quicly_default_now(quicly_context_t *ctx)
+static int64_t default_now(quicly_now_cb *self)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
+
+quicly_now_cb quicly_default_now_cb = {default_now};
+
+struct st_quicly_default_event_log_t {
+    quicly_event_log_cb super;
+    FILE *fp;
+};
 
 static void tohex(char *dst, uint8_t v)
 {
@@ -4134,11 +4206,10 @@ static void tohex(char *dst, uint8_t v)
     dst[1] = "0123456789abcdef"[v & 0xf];
 }
 
-FILE *quicly_default_event_log_fp;
-
-void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
+static void default_event_log(quicly_event_log_cb *_self, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
                               size_t num_attributes)
 {
+    struct st_quicly_default_event_log_t *self = (void *)_self;
     ptls_buffer_t buf;
     uint8_t smallbuf[256];
     size_t i, j;
@@ -4185,10 +4256,26 @@ void quicly_default_event_log(quicly_context_t *ctx, quicly_event_type_t type, c
 
 #undef EMIT
 
-    fwrite(buf.base, 1, buf.off, quicly_default_event_log_fp != NULL ? quicly_default_event_log_fp : stderr);
+    fwrite(buf.base, 1, buf.off, self->fp);
 
 Exit:
     ptls_buffer_dispose(&buf);
+}
+
+quicly_event_log_cb *quicly_new_default_event_log_cb(FILE *fp)
+{
+    struct st_quicly_default_event_log_t *self;
+
+    if ((self = malloc(sizeof(*self))) == NULL)
+        return NULL;
+    *self = (struct st_quicly_default_event_log_t){{default_event_log}, fp};
+    return &self->super;
+}
+
+void quicly_free_default_event_log_cb(quicly_event_log_cb *_self)
+{
+    struct st_quicly_default_event_log_t *self = (void *)_self;
+    free(self);
 }
 
 char *quicly_hexdump(const uint8_t *bytes, size_t len, size_t indent)
