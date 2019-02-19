@@ -354,14 +354,20 @@ static void update_now(quicly_context_t *ctx)
         cc_ticks = new_ticks;
 }
 
-static inline uint8_t get_epoch(uint8_t first_byte) {
-    if (!QUICLY_PACKET_IS_LONG_HEADER(first_byte)) return QUICLY_EPOCH_1RTT;
+static inline uint8_t get_epoch(uint8_t first_byte)
+{
+    if (!QUICLY_PACKET_IS_LONG_HEADER(first_byte))
+        return QUICLY_EPOCH_1RTT;
 
     switch (first_byte & QUICLY_PACKET_TYPE_BITMASK) {
-    case QUICLY_PACKET_TYPE_INITIAL: return QUICLY_EPOCH_INITIAL;
-    case QUICLY_PACKET_TYPE_HANDSHAKE: return QUICLY_EPOCH_HANDSHAKE;
-    case QUICLY_PACKET_TYPE_0RTT: return QUICLY_EPOCH_0RTT;
-    default: assert(!"FIXME");
+    case QUICLY_PACKET_TYPE_INITIAL:
+        return QUICLY_EPOCH_INITIAL;
+    case QUICLY_PACKET_TYPE_HANDSHAKE:
+        return QUICLY_EPOCH_HANDSHAKE;
+    case QUICLY_PACKET_TYPE_0RTT:
+        return QUICLY_EPOCH_0RTT;
+    default:
+        assert(!"FIXME");
     }
 }
 
@@ -2159,7 +2165,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context
     {
         /* register to sentmap */
         uint8_t ack_epoch = get_epoch(s->current.first_byte);
-        if (ack_epoch == QUICLY_EPOCH_0RTT) ack_epoch = QUICLY_EPOCH_1RTT;
+        if (ack_epoch == QUICLY_EPOCH_0RTT)
+            ack_epoch = QUICLY_EPOCH_1RTT;
         if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, ack_epoch)) != 0)
             return ret;
     }
