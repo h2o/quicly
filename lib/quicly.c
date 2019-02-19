@@ -436,9 +436,9 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
             goto Error;
         packet->cid.dest.encrypted.base = (void *)src;
         src += packet->cid.dest.encrypted.len;
-        if (ctx->encrypt_cid != NULL) {
-            ctx->encrypt_cid->decrypt_cid(ctx->encrypt_cid, &packet->cid.dest.plaintext, packet->cid.dest.encrypted.base,
-                                          packet->cid.dest.encrypted.len);
+        if (ctx->cid_encryptor != NULL) {
+            ctx->cid_encryptor->decrypt_cid(ctx->cid_encryptor, &packet->cid.dest.plaintext, packet->cid.dest.encrypted.base,
+                                            packet->cid.dest.encrypted.len);
         } else {
             packet->cid.dest.plaintext = (quicly_cid_plaintext_t){0};
         }
@@ -480,10 +480,10 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
         packet->_is_stateless_reset_cached = QUICLY__DECODED_PACKET_CACHED_NOT_STATELESS_RESET;
     } else {
         /* short header */
-        if (ctx->encrypt_cid != NULL) {
+        if (ctx->cid_encryptor != NULL) {
             if (src_end - src < QUICLY_MAX_CID_LEN)
                 goto Error;
-            size_t host_cidl = ctx->encrypt_cid->decrypt_cid(ctx->encrypt_cid, &packet->cid.dest.plaintext, src, 0);
+            size_t host_cidl = ctx->cid_encryptor->decrypt_cid(ctx->cid_encryptor, &packet->cid.dest.plaintext, src, 0);
             if (host_cidl == SIZE_MAX)
                 goto Error;
             packet->cid.dest.encrypted = ptls_iovec_init(src, host_cidl);
@@ -1413,10 +1413,10 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     memset(conn, 0, sizeof(*conn));
     conn->_.super.ctx = ctx;
     conn->_.super.master_id = *new_cid;
-    if (ctx->encrypt_cid != NULL) {
+    if (ctx->cid_encryptor != NULL) {
         conn->_.super.master_id.path_id = 0;
-        ctx->encrypt_cid->encrypt_cid(ctx->encrypt_cid, &conn->_.super.host.src_cid, &conn->_.super.host.stateless_reset_token,
-                                      &conn->_.super.master_id);
+        ctx->cid_encryptor->encrypt_cid(ctx->cid_encryptor, &conn->_.super.host.src_cid, &conn->_.super.host.stateless_reset_token,
+                                        &conn->_.super.master_id);
         conn->_.super.master_id.path_id = 1;
     } else {
         conn->_.super.master_id.path_id = QUICLY_MAX_PATH_ID;
@@ -1654,10 +1654,10 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     ptls_buffer_push32(&conn->crypto.transport_params.buf, QUICLY_PROTOCOL_VERSION);
     ptls_buffer_push_block(&conn->crypto.transport_params.buf, 1,
                            { ptls_buffer_push32(&conn->crypto.transport_params.buf, QUICLY_PROTOCOL_VERSION); });
-    if ((ret = quicly_encode_transport_parameter_list(&conn->crypto.transport_params.buf, 0, &conn->super.ctx->transport_params,
-                                                      conn->retry_odcid.len != 0 ? &conn->retry_odcid : NULL,
-                                                      conn->super.ctx->encrypt_cid != NULL ? conn->super.host.stateless_reset_token
-                                                                                           : NULL)) != 0)
+    if ((ret = quicly_encode_transport_parameter_list(
+             &conn->crypto.transport_params.buf, 0, &conn->super.ctx->transport_params,
+             conn->retry_odcid.len != 0 ? &conn->retry_odcid : NULL,
+             conn->super.ctx->cid_encryptor != NULL ? conn->super.host.stateless_reset_token : NULL)) != 0)
         goto Exit;
     properties->additional_extensions = conn->crypto.transport_params.ext;
     conn->crypto.transport_params.ext[0] =
@@ -3086,8 +3086,8 @@ quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct soc
     /* build stateless reset packet */
     ctx->tls->random_bytes(dgram->data.base, QUICLY_STATELESS_RESET_PACKET_MIN_LEN - QUICLY_STATELESS_RESET_TOKEN_LEN);
     dgram->data.base[0] = QUICLY_QUIC_BIT | (dgram->data.base[0] & ~QUICLY_LONG_HEADER_RESERVED_BITS);
-    ctx->encrypt_cid->encrypt_cid(ctx->encrypt_cid, NULL,
-                                  dgram->data.base + QUICLY_STATELESS_RESET_PACKET_MIN_LEN - QUICLY_STATELESS_RESET_TOKEN_LEN, cid);
+    ctx->cid_encryptor->encrypt_cid(
+        ctx->cid_encryptor, NULL, dgram->data.base + QUICLY_STATELESS_RESET_PACKET_MIN_LEN - QUICLY_STATELESS_RESET_TOKEN_LEN, cid);
     dgram->data.len = QUICLY_STATELESS_RESET_PACKET_MIN_LEN;
 
     return dgram;
@@ -3529,7 +3529,7 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t sa
         }
     }
 
-    if (conn->super.ctx->encrypt_cid != NULL) {
+    if (conn->super.ctx->cid_encryptor != NULL) {
         if (conn->super.master_id.master_id == decoded->cid.dest.plaintext.master_id &&
             conn->super.master_id.thread_id == decoded->cid.dest.plaintext.thread_id &&
             conn->super.master_id.node_id == decoded->cid.dest.plaintext.node_id)

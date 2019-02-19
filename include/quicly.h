@@ -333,7 +333,7 @@ struct st_quicly_context_t {
     /**
      *
      */
-    quicly_cid_encryptor_t *encrypt_cid;
+    quicly_cid_encryptor_t *cid_encryptor;
     /**
      * callback called when a new stream is opened by peer
      */

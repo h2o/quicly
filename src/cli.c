@@ -856,7 +856,7 @@ int main(int argc, char **argv)
             tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
             cid_key = random_key;
         }
-        ctx.encrypt_cid =
+        ctx.cid_encryptor =
             quicly_new_default_cid_encryptor(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
     } else {
         /* client */
