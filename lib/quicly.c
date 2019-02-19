@@ -329,7 +329,7 @@ const quicly_context_t quicly_default_context = {
     NULL,
     NULL, /* on_stream_open */
     NULL, /* on_conn_close */
-    &quicly_default_now_cb,
+    &quicly_default_now,
     {0, NULL}, /* event_log */
 };
 
@@ -4130,7 +4130,7 @@ void quicly_request_stop(quicly_stream_t *stream, int err)
     }
 }
 
-static quicly_datagram_t *default_alloc_packet(quicly_packet_allocator_cb *self, socklen_t salen, size_t payloadsize)
+static quicly_datagram_t *default_alloc_packet(quicly_packet_allocator_t *self, socklen_t salen, size_t payloadsize)
 {
     quicly_datagram_t *packet;
 
@@ -4142,12 +4142,12 @@ static quicly_datagram_t *default_alloc_packet(quicly_packet_allocator_cb *self,
     return packet;
 }
 
-static void default_free_packet(quicly_packet_allocator_cb *self, quicly_datagram_t *packet)
+static void default_free_packet(quicly_packet_allocator_t *self, quicly_datagram_t *packet)
 {
     free(packet);
 }
 
-quicly_packet_allocator_cb quicly_default_packet_allocator = {default_alloc_packet, default_free_packet};
+quicly_packet_allocator_t quicly_default_packet_allocator = {default_alloc_packet, default_free_packet};
 
 struct st_quicly_default_encrypt_cid_t {
     quicly_cid_encryptor_t super;
@@ -4235,8 +4235,8 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
     return cid_len;
 }
 
-quicly_cid_encryptor_t *quicly_new_default_encrypt_cid_cb(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
-                                                          ptls_iovec_t key)
+quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
+                                                         ptls_iovec_t key)
 {
     uint8_t cid_keybuf[PTLS_MAX_SECRET_SIZE], reset_keybuf[PTLS_MAX_DIGEST_SIZE];
     ptls_cipher_context_t *cid_encrypt_ctx = NULL, *cid_decrypt_ctx = NULL;
@@ -4274,7 +4274,7 @@ Exit:
     return &self->super;
 }
 
-void quicly_free_default_encrypt_cid_cb(quicly_cid_encryptor_t *_self)
+void quicly_free_default_cid_enncryptor(quicly_cid_encryptor_t *_self)
 {
     struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
 
@@ -4294,17 +4294,17 @@ void quicly_default_free_stream(quicly_stream_t *stream)
     free(stream);
 }
 
-static int64_t default_now(quicly_now_cb *self)
+static int64_t default_now(quicly_now_t *self)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-quicly_now_cb quicly_default_now_cb = {default_now};
+quicly_now_t quicly_default_now = {default_now};
 
 struct st_quicly_default_event_log_t {
-    quicly_event_log_cb super;
+    quicly_event_logger_t super;
     FILE *fp;
 };
 
@@ -4314,7 +4314,7 @@ static void tohex(char *dst, uint8_t v)
     dst[1] = "0123456789abcdef"[v & 0xf];
 }
 
-static void default_event_log(quicly_event_log_cb *_self, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
+static void default_event_log(quicly_event_logger_t *_self, quicly_event_type_t type, const quicly_event_attribute_t *attributes,
                               size_t num_attributes)
 {
     struct st_quicly_default_event_log_t *self = (void *)_self;
@@ -4370,7 +4370,7 @@ Exit:
     ptls_buffer_dispose(&buf);
 }
 
-quicly_event_log_cb *quicly_new_default_event_log_cb(FILE *fp)
+quicly_event_logger_t *quicly_new_default_event_logger(FILE *fp)
 {
     struct st_quicly_default_event_log_t *self;
 
@@ -4380,7 +4380,7 @@ quicly_event_log_cb *quicly_new_default_event_log_cb(FILE *fp)
     return &self->super;
 }
 
-void quicly_free_default_event_log_cb(quicly_event_log_cb *_self)
+void quicly_free_default_event_logger(quicly_event_logger_t *_self)
 {
     struct st_quicly_default_event_log_t *self = (void *)_self;
     free(self);
