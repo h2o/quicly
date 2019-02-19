@@ -185,11 +185,11 @@ typedef struct st_quicly_stream_t quicly_stream_t;
 /**
  * allocates a packet buffer
  */
-QUICLY_CALLBACK_TYPE(quicly_datagram_t *, alloc_packet, socklen_t salen, size_t payloadsize);
-/**
- * frees a packet buffer
- */
-QUICLY_CALLBACK_TYPE(void, free_packet, quicly_datagram_t *packet);
+typedef struct st_quicly_packet_allocator_cb {
+    quicly_datagram_t *(*alloc_packet)(struct st_quicly_packet_allocator_cb *self, socklen_t salen, size_t payloadsize);
+    void (*free_packet)(struct st_quicly_packet_allocator_cb *self, quicly_datagram_t *packet);
+} quicly_packet_allocator_cb;
+
 /**
  * CID encryption
  */
@@ -328,11 +328,7 @@ struct st_quicly_context_t {
     /**
      * callback for allocating memory for raw packet
      */
-    quicly_alloc_packet_cb *alloc_packet;
-    /**
-     * callback for freeing memory allocated by alloc_packet
-     */
-    quicly_free_packet_cb *free_packet;
+    quicly_packet_allocator_cb *packet_allocator;
     /**
      *
      */
@@ -801,11 +797,7 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
 /**
  *
  */
-extern quicly_alloc_packet_cb quicly_default_alloc_packet_cb;
-/**
- *
- */
-extern quicly_free_packet_cb quicly_default_free_packet_cb;
+extern quicly_packet_allocator_cb quicly_default_packet_allocator;
 /**
  *
  */

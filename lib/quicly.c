@@ -325,8 +325,7 @@ const quicly_context_t quicly_default_context = {
     },
     0, /* enforce_version_negotiation */
     0, /* is_clustered */
-    &quicly_default_alloc_packet_cb,
-    &quicly_default_free_packet_cb,
+    &quicly_default_packet_allocator,
     NULL,
     NULL, /* on_stream_open */
     NULL, /* on_conn_close */
@@ -2120,8 +2119,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context
         s->send_window = round_send_window(s->send_window);
         if (ack_eliciting && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
-        if ((s->target.packet = conn->super.ctx->alloc_packet->cb(conn->super.ctx->alloc_packet, conn->super.peer.salen,
-                                                                  conn->super.ctx->max_packet_size)) == NULL)
+        if ((s->target.packet = conn->super.ctx->packet_allocator->alloc_packet(
+                 conn->super.ctx->packet_allocator, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
         s->target.packet->salen = conn->super.peer.salen;
         memcpy(&s->target.packet->sa, conn->super.peer.sa, conn->super.peer.salen);
@@ -2635,7 +2634,7 @@ quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct
     quicly_datagram_t *packet;
     uint8_t *dst;
 
-    if ((packet = ctx->alloc_packet->cb(ctx->alloc_packet, salen, ctx->max_packet_size)) == NULL)
+    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, salen, ctx->max_packet_size)) == NULL)
         return NULL;
     packet->salen = salen;
     memcpy(&packet->sa, sa, salen);
@@ -2673,7 +2672,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, struct sockaddr *sa,
 
     assert(!(scid.len == odcid.len && memcmp(scid.base, odcid.base, scid.len) == 0));
 
-    if ((packet = ctx->alloc_packet->cb(ctx->alloc_packet, salen, ctx->max_packet_size)) == NULL)
+    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, salen, ctx->max_packet_size)) == NULL)
         return NULL;
     packet->salen = salen;
     memcpy(&packet->sa, sa, salen);
@@ -3079,7 +3078,7 @@ quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct soc
     quicly_datagram_t *dgram;
 
     /* allocate packet, set peer address */
-    if ((dgram = ctx->alloc_packet->cb(ctx->alloc_packet, salen, QUICLY_STATELESS_RESET_PACKET_MIN_LEN)) == NULL)
+    if ((dgram = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, salen, QUICLY_STATELESS_RESET_PACKET_MIN_LEN)) == NULL)
         return NULL;
     dgram->salen = salen;
     memcpy(&dgram->sa, sa, salen);
@@ -4131,7 +4130,7 @@ void quicly_request_stop(quicly_stream_t *stream, int err)
     }
 }
 
-static quicly_datagram_t *default_alloc_packet(quicly_alloc_packet_cb *self, socklen_t salen, size_t payloadsize)
+static quicly_datagram_t *default_alloc_packet(quicly_packet_allocator_cb *self, socklen_t salen, size_t payloadsize)
 {
     quicly_datagram_t *packet;
 
@@ -4143,14 +4142,12 @@ static quicly_datagram_t *default_alloc_packet(quicly_alloc_packet_cb *self, soc
     return packet;
 }
 
-quicly_alloc_packet_cb quicly_default_alloc_packet_cb = {default_alloc_packet};
-
-static void default_free_packet(quicly_free_packet_cb *self, quicly_datagram_t *packet)
+static void default_free_packet(quicly_packet_allocator_cb *self, quicly_datagram_t *packet)
 {
     free(packet);
 }
 
-quicly_free_packet_cb quicly_default_free_packet_cb = {default_free_packet};
+quicly_packet_allocator_cb quicly_default_packet_allocator = {default_alloc_packet, default_free_packet};
 
 struct st_quicly_default_encrypt_cid_t {
     quicly_cid_encryptor_t super;

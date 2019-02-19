@@ -243,7 +243,7 @@ void free_packets(quicly_datagram_t **packets, size_t cnt)
 {
     size_t i;
     for (i = 0; i != cnt; ++i)
-        quicly_default_free_packet_cb.cb(&quicly_default_free_packet_cb, packets[i]);
+        quic_ctx.packet_allocator->free_packet(quic_ctx.packet_allocator, packets[i]);
 }
 
 size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw, size_t cnt)

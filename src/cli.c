@@ -316,7 +316,8 @@ static int send_pending(int fd, quicly_conn_t *conn)
                 if ((ret = send_one(fd, packets[i])) == -1)
                     perror("sendmsg failed");
                 ret = 0;
-                quicly_default_free_packet_cb.cb(&quicly_default_free_packet_cb, packets[i]);
+                quicly_packet_allocator_cb *pa = quicly_get_context(conn)->packet_allocator;
+                pa->free_packet(pa, packets[i]);
             }
         }
     } while (ret == 0 && num_packets == sizeof(packets) / sizeof(packets[0]));
