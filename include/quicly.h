@@ -191,17 +191,24 @@ QUICLY_CALLBACK_TYPE(quicly_datagram_t *, alloc_packet, socklen_t salen, size_t 
  */
 QUICLY_CALLBACK_TYPE(void, free_packet, quicly_datagram_t *packet);
 /**
- * encrypts CID and/or generates a stateless reset token
+ * CID encryption
  */
-QUICLY_CALLBACK_TYPE(void, encrypt_cid, quicly_cid_t *encrypted, void *stateless_reset_token,
-                     const quicly_cid_plaintext_t *plaintext);
-/**
- * decrypts CID. plaintext->thread_id should contain a randomly distributed number when validation fails, so that the value can be
- * used for distributing load among the threads within the process.
- * @param len length of encrypted bytes if known, or 0 if unknown (short header packet)
- * @return length of the CID, or SIZE_MAX if decryption failed
- */
-QUICLY_CALLBACK_TYPE(size_t, decrypt_cid, quicly_cid_plaintext_t *plaintext, const void *encrypted, size_t len);
+typedef struct st_quicly_cid_encryptor_t {
+    /**
+     * encrypts CID and/or generates a stateless reset token
+     */
+    void (*encrypt_cid)(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
+                        const quicly_cid_plaintext_t *plaintext);
+    /**
+     * decrypts CID. plaintext->thread_id should contain a randomly distributed number when validation fails, so that the value can
+     * be used for distributing load among the threads within the process.
+     * @param len length of encrypted bytes if known, or 0 if unknown (short header packet)
+     * @return length of the CID, or SIZE_MAX if decryption failed
+     */
+    size_t (*decrypt_cid)(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
+                          size_t len);
+} quicly_cid_encryptor_t;
+
 /**
  * called when stream is being open. Application is expected to create it's corresponding state and tie it to stream->data.
  */
@@ -329,11 +336,7 @@ struct st_quicly_context_t {
     /**
      *
      */
-    quicly_encrypt_cid_cb *encrypt_cid;
-    /**
-     *
-     */
-    quicly_decrypt_cid_cb *decrypt_cid;
+    quicly_cid_encryptor_t *encrypt_cid;
     /**
      * callback called when a new stream is opened by peer
      */
@@ -806,21 +809,12 @@ extern quicly_free_packet_cb quicly_default_free_packet_cb;
 /**
  *
  */
-quicly_encrypt_cid_cb *quicly_new_default_encrypt_cid_cb(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
-                                                         ptls_iovec_t key);
+quicly_cid_encryptor_t *quicly_new_default_encrypt_cid_cb(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
+                                                          ptls_iovec_t key);
 /**
  *
  */
-void quicly_free_default_encrypt_cid_cb(quicly_encrypt_cid_cb *self);
-/**
- *
- */
-quicly_decrypt_cid_cb *quicly_new_default_decrypt_cid_cb(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
-                                                         ptls_iovec_t key);
-/**
- *
- */
-void quicly_free_default_decrypt_cid_cb(quicly_decrypt_cid_cb *self);
+void quicly_free_default_encrypt_cid_cb(quicly_cid_encryptor_t *self);
 /**
  *
  */
