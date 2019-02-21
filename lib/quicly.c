@@ -2584,6 +2584,37 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     return 0;
 }
 
+static int send_max_streams(quicly_conn_t *conn, int uni, struct st_quicly_send_context_t *s)
+{
+    quicly_maxsender_t *maxsender;
+    struct st_quicly_conn_streamgroup_state_t *group;
+    int ret;
+
+    if ((maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi) == NULL)
+        return 0;
+    group = uni ? &conn->super.peer.uni : &conn->super.peer.bidi;
+
+    if (!quicly_maxsender_should_update(maxsender, group->next_stream_id / 4, group->num_streams, 768))
+        return 0;
+
+    uint64_t new_count =
+        group->next_stream_id / 4 +
+        (uni ? conn->super.ctx->transport_params.max_streams_uni : conn->super.ctx->transport_params.max_streams_bidi) -
+        group->num_streams;
+
+    quicly_sent_t *sent;
+    if ((ret = allocate_ack_eliciting_frame(conn, s, QUICLY_MAX_STREAMS_FRAME_CAPACITY, &sent, on_ack_max_streams)) != 0)
+        return ret;
+    s->dst = quicly_encode_max_streams_frame(s->dst, uni, new_count);
+    sent->data.max_streams.uni = uni;
+    quicly_maxsender_record(maxsender, new_count, &sent->data.max_streams.args);
+
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_MAX_STREAMS_SEND, INT_EVENT_ATTR(LIMIT, new_count),
+                         INT_EVENT_ATTR(UNIDIRECTIONAL, uni));
+
+    return 0;
+}
+
 static int send_streams_blocked(quicly_conn_t *conn, int uni, struct st_quicly_send_context_t *s)
 {
     quicly_linklist_t *blocked_list = uni ? &conn->pending_link.streams_blocked.uni : &conn->pending_link.streams_blocked.bidi;
@@ -2606,6 +2637,9 @@ static int send_streams_blocked(quicly_conn_t *conn, int uni, struct st_quicly_s
     s->dst = quicly_encode_streams_blocked_frame(s->dst, uni, max_streams->count);
     sent->data.streams_blocked.uni = uni;
     quicly_maxsender_record(&max_streams->blocked_sender, max_streams->count, &sent->data.streams_blocked.args);
+
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_STREAMS_BLOCKED_SEND, INT_EVENT_ATTR(LIMIT, max_streams->count),
+                         INT_EVENT_ATTR(UNIDIRECTIONAL, uni));
 
     return 0;
 }
@@ -3009,24 +3043,11 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                 } while (conn->egress.path_challenge.head != NULL);
                 conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
             }
-/* send max_stream_id frames */
-#define SEND_MAX_STREAMS(label, is_uni)                                                                                            \
-    if (conn->ingress.max_streams.label != NULL) {                                                                                 \
-        if (quicly_maxsender_should_update(conn->ingress.max_streams.label, conn->super.peer.label.next_stream_id / 4,             \
-                                           conn->super.peer.label.num_streams, 768)) {                                             \
-            uint64_t new_count = conn->super.peer.label.next_stream_id / 4 +                                                       \
-                                 conn->super.ctx->transport_params.max_streams_##label - conn->super.peer.label.num_streams;       \
-            quicly_sent_t *sent;                                                                                                   \
-            if ((ret = allocate_ack_eliciting_frame(conn, &s, QUICLY_MAX_STREAMS_FRAME_CAPACITY, &sent, on_ack_max_streams)) != 0) \
-                goto Exit;                                                                                                         \
-            s.dst = quicly_encode_max_streams_frame(s.dst, is_uni, new_count);                                                     \
-            sent->data.max_streams.uni = is_uni;                                                                                   \
-            quicly_maxsender_record(conn->ingress.max_streams.label, new_count, &sent->data.max_streams.args);                     \
-        }                                                                                                                          \
-    }
-            SEND_MAX_STREAMS(uni, 1);
-            SEND_MAX_STREAMS(bidi, 0);
-#undef SEND_MAX_STREAMS
+            /* send max_streams frames */
+            if ((ret = send_max_streams(conn, 1, &s)) != 0)
+                goto Exit;
+            if ((ret = send_max_streams(conn, 0, &s)) != 0)
+                goto Exit;
             /* send connection-level flow control frame */
             if (quicly_maxsender_should_update(&conn->ingress.max_data.sender, conn->ingress.max_data.bytes_consumed,
                                                (uint32_t)conn->super.ctx->transport_params.max_data, 512)) {
@@ -3403,6 +3424,9 @@ static int handle_stream_data_blocked_frame(quicly_conn_t *conn, quicly_stream_d
 
 static int handle_max_streams_frame(quicly_conn_t *conn, int uni, quicly_max_streams_frame_t *frame)
 {
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_MAX_STREAMS_RECEIVE, INT_EVENT_ATTR(LIMIT, frame->count),
+                         INT_EVENT_ATTR(UNIDIRECTIONAL, uni));
+
     update_max_streams(uni ? &conn->egress.max_streams.uni : &conn->egress.max_streams.bidi, frame->count);
     open_blocked_streams(conn, uni);
 
@@ -3719,9 +3743,10 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                     quicly_streams_blocked_frame_t frame;
                     if ((ret = quicly_decode_streams_blocked_frame(&src, end, &frame)) != 0)
                         goto Exit;
-                    quicly_maxsender_t *maxsender = frame_type == QUICLY_FRAME_TYPE_STREAMS_BLOCKED_UNI
-                                                        ? conn->ingress.max_streams.uni
-                                                        : conn->ingress.max_streams.bidi;
+                    int uni = frame_type == QUICLY_FRAME_TYPE_STREAMS_BLOCKED_UNI;
+                    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_STREAMS_BLOCKED_RECEIVE, INT_EVENT_ATTR(LIMIT, frame.count),
+                                         INT_EVENT_ATTR(UNIDIRECTIONAL, uni));
+                    quicly_maxsender_t *maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;
                     if (maxsender != NULL)
                         quicly_maxsender_reset(maxsender, 0);
                     ret = 0;
@@ -4486,6 +4511,10 @@ const char *quicly_event_type_names[] = {"connect",
                                          "stream-receive",
                                          "stream-acked",
                                          "stream-lost",
+                                         "max-streams-send",
+                                         "max-streams-receive",
+                                         "streams-blocked-send",
+                                         "streams-blocked-receive",
                                          "quic-version-switch",
                                          "transport-close-send",
                                          "application-close-send",
@@ -4511,6 +4540,8 @@ const char *quicly_event_attribute_names[] = {NULL,
                                               "len",
                                               "stream-id",
                                               "fin",
+                                              "limit",
+                                              "unidirectional",
                                               "is-enc",
                                               "encryptionLevel",
                                               "quic-version",
