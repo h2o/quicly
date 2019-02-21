@@ -2584,7 +2584,32 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     return 0;
 }
 
-static void open_id_blocked_streams(quicly_conn_t *conn, int uni)
+static int send_streams_blocked(quicly_conn_t *conn, int uni, struct st_quicly_send_context_t *s)
+{
+    quicly_linklist_t *blocked_list = uni ? &conn->pending_link.streams_blocked.uni : &conn->pending_link.streams_blocked.bidi;
+    int ret;
+
+    if (!quicly_linklist_is_linked(blocked_list))
+        return 0;
+
+    struct st_quicly_max_streams_t *max_streams = uni ? &conn->egress.max_streams.uni : &conn->egress.max_streams.bidi;
+    quicly_stream_t *max_stream = (void *)((char *)blocked_list->prev - offsetof(quicly_stream_t, _send_aux.pending_link.control));
+
+    assert(max_streams->count == max_stream->stream_id / 4);
+    if (!quicly_maxsender_should_send_blocked(&max_streams->blocked_sender, max_stream->stream_id / 4))
+        return 0;
+
+    quicly_sent_t *sent;
+    if ((ret = allocate_ack_eliciting_frame(conn, s, QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY, &sent, on_ack_streams_blocked)) != 0)
+        return ret;
+    s->dst = quicly_encode_streams_blocked_frame(s->dst, uni, max_stream->stream_id / 4);
+    sent->data.streams_blocked.uni = uni;
+    quicly_maxsender_record(&max_streams->blocked_sender, max_stream->stream_id / 4, &sent->data.streams_blocked.args);
+
+    return 0;
+}
+
+static void open_blocked_streams(quicly_conn_t *conn, int uni)
 {
     uint64_t count;
     quicly_linklist_t *anchor;
@@ -2863,8 +2888,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
     if (epoch == QUICLY_EPOCH_1RTT && is_enc) {
         /* update states now that we have 1-RTT write key */
         conn->application->one_rtt_writable = 1;
-        open_id_blocked_streams(conn, 1);
-        open_id_blocked_streams(conn, 0);
+        open_blocked_streams(conn, 1);
+        open_blocked_streams(conn, 0);
     }
 
     return 0;
@@ -3011,26 +3036,11 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                 s.dst = quicly_encode_max_data_frame(s.dst, new_value);
                 quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &sent->data.max_data.args);
             }
-/* send streams_blocked frames */
-#define SEND_STREAMS_BLOCKED(label, is_uni)                                                                                        \
-    if (quicly_linklist_is_linked(&conn->pending_link.streams_blocked.label)) {                                                    \
-        struct st_quicly_max_streams_t *max_streams = &conn->egress.max_streams.label;                                             \
-        quicly_stream_t *max_stream = (void *)((char *)conn->pending_link.streams_blocked.label.prev -                             \
-                                               offsetof(quicly_stream_t, _send_aux.pending_link.control));                         \
-        assert(max_streams->count == max_stream->stream_id / 4);                                                                   \
-        if (quicly_maxsender_should_send_blocked(&max_streams->blocked_sender, max_stream->stream_id / 4)) {                       \
-            quicly_sent_t *sent;                                                                                                   \
-            if ((ret = allocate_ack_eliciting_frame(conn, &s, QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY, &sent,                        \
-                                                    on_ack_streams_blocked)) != 0)                                                 \
-                goto Exit;                                                                                                         \
-            s.dst = quicly_encode_streams_blocked_frame(s.dst, is_uni, max_stream->stream_id / 4);                                 \
-            sent->data.streams_blocked.uni = is_uni;                                                                               \
-            quicly_maxsender_record(&max_streams->blocked_sender, max_stream->stream_id / 4, &sent->data.streams_blocked.args);    \
-        }                                                                                                                          \
-    }
-            SEND_STREAMS_BLOCKED(uni, 1);
-            SEND_STREAMS_BLOCKED(bidi, 0);
-#undef SEND_STREAMS_BLOCKED
+            /* send streams_blocked frames */
+            if ((ret = send_streams_blocked(conn, 1, &s)) != 0)
+                goto Exit;
+            if ((ret = send_streams_blocked(conn, 0, &s)) != 0)
+                goto Exit;
         } else {
             s.current.first_byte = QUICLY_PACKET_TYPE_0RTT;
         }
@@ -3393,7 +3403,7 @@ static int handle_stream_data_blocked_frame(quicly_conn_t *conn, quicly_stream_d
 static int handle_max_streams_frame(quicly_conn_t *conn, int uni, quicly_max_streams_frame_t *frame)
 {
     update_max_streams(uni ? &conn->egress.max_streams.uni : &conn->egress.max_streams.bidi, frame->count);
-    open_id_blocked_streams(conn, uni);
+    open_blocked_streams(conn, uni);
 
     return 0;
 }
