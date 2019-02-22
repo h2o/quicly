@@ -813,6 +813,19 @@ static struct st_quicly_conn_streamgroup_state_t *get_streamgroup_state(quicly_c
     }
 }
 
+static int should_send_max_streams(quicly_conn_t *conn, int uni)
+{
+    quicly_maxsender_t *maxsender;
+    if ((maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi) == NULL)
+        return 0;
+
+    struct st_quicly_conn_streamgroup_state_t *group = uni ? &conn->super.peer.uni : &conn->super.peer.bidi;
+    if (!quicly_maxsender_should_update(maxsender, group->next_stream_id / 4, group->num_streams, 768))
+        return 0;
+
+    return 1;
+}
+
 static void destroy_stream(quicly_stream_t *stream, int err)
 {
     quicly_conn_t *conn = stream->conn;
@@ -834,6 +847,16 @@ static void destroy_stream(quicly_stream_t *stream, int err)
     }
 
     dispose_stream_properties(stream);
+
+    if (conn->application != NULL) {
+        /* The function is normally invoked when receiving a packet, therefore just setting send_ack_at to zero is sufficient to
+         * trigger the emission of the MAX_STREAMS frame. FWIW, the only case the function is invoked when not receiving a packet is
+         * when the connection is being closed. In such case, the change will not have any bad side effects.
+         */
+        if (should_send_max_streams(conn, quicly_stream_is_unidirectional(stream->stream_id)))
+            conn->egress.send_ack_at = 0;
+    }
+
     free(stream);
 }
 
@@ -2586,16 +2609,12 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
 
 static int send_max_streams(quicly_conn_t *conn, int uni, struct st_quicly_send_context_t *s)
 {
-    quicly_maxsender_t *maxsender;
-    struct st_quicly_conn_streamgroup_state_t *group;
+    if (!should_send_max_streams(conn, uni))
+        return 0;
+
+    quicly_maxsender_t *maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;
+    struct st_quicly_conn_streamgroup_state_t *group = uni ? &conn->super.peer.uni : &conn->super.peer.bidi;
     int ret;
-
-    if ((maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi) == NULL)
-        return 0;
-    group = uni ? &conn->super.peer.uni : &conn->super.peer.bidi;
-
-    if (!quicly_maxsender_should_update(maxsender, group->next_stream_id / 4, group->num_streams, 768))
-        return 0;
 
     uint64_t new_count =
         group->next_stream_id / 4 +
