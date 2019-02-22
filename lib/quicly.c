@@ -640,7 +640,7 @@ static void resched_stream_data(quicly_stream_t *stream)
         quicly_linklist_insert(target, &stream->_send_aux.pending_link.stream);
 }
 
-static int should_update_max_stream_data(quicly_stream_t *stream)
+static int should_send_max_stream_data(quicly_stream_t *stream)
 {
     if (stream->recvstate.eos != UINT64_MAX)
         return 0;
@@ -665,7 +665,7 @@ void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
 {
     stream->recvstate.data_off += shift_amount;
     if (stream->stream_id >= 0) {
-        if (should_update_max_stream_data(stream))
+        if (should_send_max_stream_data(stream))
             sched_stream_control(stream);
     }
 }
@@ -1234,7 +1234,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
             return ret;
     }
 
-    if (should_update_max_stream_data(stream))
+    if (should_send_max_stream_data(stream))
         sched_stream_control(stream);
 
     if (stream_is_destroyable(stream))
@@ -1852,7 +1852,7 @@ static int on_ack_max_stream_data(quicly_conn_t *conn, const quicly_sent_packet_
             quicly_maxsender_acked(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
         } else {
             quicly_maxsender_lost(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
-            if (should_update_max_stream_data(stream))
+            if (should_send_max_stream_data(stream))
                 sched_stream_control(stream);
         }
     }
@@ -2313,7 +2313,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
     }
 
     /* send MAX_STREAM_DATA if necessary */
-    if (should_update_max_stream_data(stream)) {
+    if (should_send_max_stream_data(stream)) {
         uint64_t new_value = stream->recvstate.data_off + stream->_recv_aux.window;
         quicly_sent_t *sent;
         /* prepare */
@@ -3434,7 +3434,7 @@ static int handle_stream_data_blocked_frame(quicly_conn_t *conn, quicly_stream_d
 
     if ((stream = quicly_get_stream(conn, frame->stream_id)) != NULL) {
         quicly_maxsender_reset(&stream->_send_aux.max_stream_data_sender, 0);
-        if (should_update_max_stream_data(stream))
+        if (should_send_max_stream_data(stream))
             sched_stream_control(stream);
     }
 
