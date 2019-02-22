@@ -3441,6 +3441,20 @@ static int handle_stream_data_blocked_frame(quicly_conn_t *conn, quicly_stream_d
     return 0;
 }
 
+static int handle_streams_blocked_frame(quicly_conn_t *conn, int uni, quicly_streams_blocked_frame_t *frame)
+{
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_STREAMS_BLOCKED_RECEIVE, INT_EVENT_ATTR(LIMIT, frame->count),
+                         INT_EVENT_ATTR(UNIDIRECTIONAL, uni));
+
+    quicly_maxsender_t *maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;
+    if (maxsender != NULL) {
+        quicly_maxsender_reset(maxsender, 0);
+        conn->egress.send_ack_at = 0;
+    }
+
+    return 0;
+}
+
 static int handle_max_streams_frame(quicly_conn_t *conn, int uni, quicly_max_streams_frame_t *frame)
 {
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_MAX_STREAMS_RECEIVE, INT_EVENT_ATTR(LIMIT, frame->count),
@@ -3762,13 +3776,9 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                     quicly_streams_blocked_frame_t frame;
                     if ((ret = quicly_decode_streams_blocked_frame(&src, end, &frame)) != 0)
                         goto Exit;
-                    int uni = frame_type == QUICLY_FRAME_TYPE_STREAMS_BLOCKED_UNI;
-                    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_STREAMS_BLOCKED_RECEIVE, INT_EVENT_ATTR(LIMIT, frame.count),
-                                         INT_EVENT_ATTR(UNIDIRECTIONAL, uni));
-                    quicly_maxsender_t *maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;
-                    if (maxsender != NULL)
-                        quicly_maxsender_reset(maxsender, 0);
-                    ret = 0;
+                    if ((ret = handle_streams_blocked_frame(conn, frame_type == QUICLY_FRAME_TYPE_STREAMS_BLOCKED_UNI, &frame)) !=
+                        0)
+                        goto Exit;
                 } break;
                 case QUICLY_FRAME_TYPE_NEW_CONNECTION_ID: {
                     quicly_new_connection_id_frame_t frame;
