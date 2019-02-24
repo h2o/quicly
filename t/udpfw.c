@@ -58,6 +58,7 @@ struct queue_t {
             struct connection_t *conn;
             uint8_t data[2048];
             size_t len;
+            int64_t arrival;
         } * elements;
     } ring;
     int64_t delay_usec; /* TODO: add propagation delay */
@@ -165,7 +166,7 @@ static void init_queue(struct queue_t *q)
     assert(q->ring.elements != NULL);
 }
 
-static void emit_queue(struct queue_t *q, int up, int64_t now)
+static void dequeue(struct queue_t *q, int up, int64_t now)
 {
     if (q->ring.head == q->ring.tail)
         return;
@@ -180,10 +181,14 @@ static void emit_queue(struct queue_t *q, int up, int64_t now)
     }
     fprintf(stderr, "%" PRId64 ":%zu:%c:forward\n", now, q->ring.elements[q->ring.head].conn->cid, up ? 'u' : 'd');
     q->ring.head = (q->ring.head + 1) % q->ring.depth;
-    q->congested_until = now + q->interval_usec;
+    if (q->ring.head == q->ring.tail)  // empty queue
+        return;
+    q->congested_until = now + q->interval_usec;  // next packet serialization delay
+    if (q->ring.elements[q->ring.head].arrival + q->delay_usec > now)
+        q->congested_until += q->ring.elements[q->ring.head].arrival + q->delay_usec - now;  // remainder of propagation delay
 }
 
-static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
+static int enqueue(struct queue_t *q, struct connection_t *conn, int64_t now)
 {
     ssize_t readlen;
     struct sockaddr_storage ss;
@@ -194,7 +199,7 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
                             sizeof(q->ring.elements[q->ring.tail].data), 0, downstream ? NULL : (void *)&ss,
                             downstream ? NULL : &sslen)) <= 0)
         return 0;
-
+    
     if (!downstream) {
         conn = find_or_create_connection((void *)&ss, sslen);
     }
@@ -215,17 +220,24 @@ static int read_queue(struct queue_t *q, struct connection_t *conn, int64_t now)
 
     q->ring.elements[q->ring.tail].len = readlen;
     q->ring.elements[q->ring.tail].conn = conn;
+    q->ring.elements[q->ring.tail].arrival = now;
+    
     size_t next_tail = (q->ring.tail + 1) % q->ring.depth;
     fprintf(stderr, "%" PRId64 ":%zu:%c:", now, q->ring.elements[q->ring.tail].conn->cid, downstream ? 'd' : 'u');
 
-    if (next_tail != q->ring.head) {
-        q->ring.tail = next_tail;
-        ++q->num_forwarded;
-        fprintf(stderr, "queue\n");
-    } else {
+    if (next_tail == q->ring.head) {
         ++q->num_dropped;
         fprintf(stderr, "drop\n");
+        return 1;
     }
+
+    /* if head queued, dequeue after full propagation and serialization delay */
+    if (q->ring.head == q->ring.tail)
+        q->congested_until = now + q->delay_usec + q->interval_usec;
+
+    q->ring.tail = next_tail;
+    ++q->num_forwarded;
+    fprintf(stderr, "queue\n");
 
     return 1;
 }
@@ -378,16 +390,16 @@ int main(int argc, char **argv)
             FD_ZERO(&fds);
         now = gettime();
         /* write */
-        emit_queue(&up, 1, now);
-        emit_queue(&down, 0, now);
+        dequeue(&up, 1, now);
+        dequeue(&down, 0, now);
         /* read from sockets */
         if (FD_ISSET(listen_fd, &fds)) {
-            while (read_queue(&up, NULL, now))
+            while (enqueue(&up, NULL, now))
                 ;
         }
         for (c = connections.next; c != &connections; c = c->next) {
             if (FD_ISSET(c->up_fd, &fds)) {
-                while (read_queue(&down, c, now))
+                while (enqueue(&down, c, now))
                     ;
             } else {
                 /* close idle connections */
