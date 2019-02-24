@@ -61,14 +61,14 @@ struct queue_t {
             int64_t arrival;
         } * elements;
     } ring;
-    int64_t delay_usec; /* TODO: add propagation delay */
-    int64_t interval_usec;
+    int64_t delay_usec; /* propagation delay */
+    int64_t interval_usec;  /* serialization delay */
     int64_t congested_until; /* in usec */
     uint64_t num_forwarded;
     uint64_t num_dropped;
-    uint16_t drops[MAXDROPS];
     uint16_t num_drops;
-} up = {{16}, 10}, down = {{16}, 10};
+    uint16_t drops[MAXDROPS];
+} up = {{16}, 0, 10, 0, 0, 0, 0}, down = {{16}, 0, 10, 0, 0, 0, 0};
 
 static int listen_fd = -1;
 static struct addrinfo *server_addr = NULL;
@@ -85,6 +85,8 @@ static void usage(const char *cmd, int exit_status)
            "                  upstream (default: 10)\n"
            "  -I <interval>   delay (in microseconds) to insert after sending one packet\n"
            "                  downstream (default: 10)\n"
+           "  -p <interval>   propagation delay (in microseconds) upstream (default: 0)\n"
+           "  -P <interval>   propagation delay (in microseconds) downstream (default: 0)\n"
            "  -l <port>       port number to which the command binds\n"
            "  -d <packetnum>  packet number in connection to drop upstream\n"
            "  -D <packetnum>  packet number in connection to drop downstream\n"
@@ -234,11 +236,9 @@ static int enqueue(struct queue_t *q, struct connection_t *conn, int64_t now)
     /* if head queued, dequeue after full propagation and serialization delay */
     if (q->ring.head == q->ring.tail)
         q->congested_until = now + q->delay_usec + q->interval_usec;
-
     q->ring.tail = next_tail;
     ++q->num_forwarded;
     fprintf(stderr, "queue\n");
-
     return 1;
 }
 
@@ -263,7 +263,7 @@ int main(int argc, char **argv)
     signal(SIGINT, on_signal);
     signal(SIGHUP, on_signal);
 
-    while ((ch = getopt(argc, argv, "b:B:i:I:l:d:D:h")) != -1) {
+    while ((ch = getopt(argc, argv, "b:B:i:I:p:P:l:d:D:h")) != -1) {
         switch (ch) {
         case 'b': /* size of the upstream buffer */
             if (sscanf(optarg, "%zu", &up.ring.depth) != 1 || up.ring.depth == 0) {
@@ -286,6 +286,18 @@ int main(int argc, char **argv)
         case 'I': /* interval (microseconds) between every packet being forwarded */
             if (sscanf(optarg, "%" PRId64, &down.interval_usec) != 1) {
                 fprintf(stderr, "argument to `-i` must be an unsigned number\n");
+                exit(1);
+            }
+            break;
+        case 'p': /* propagation delay (microseconds) */
+            if (sscanf(optarg, "%" PRId64, &up.delay_usec) != 1) {
+                fprintf(stderr, "argument to `-p` must be an unsigned number\n");
+                exit(1);
+            }
+            break;
+        case 'P': /* propagation delay (microseconds) */
+            if (sscanf(optarg, "%" PRId64, &down.delay_usec) != 1) {
+                fprintf(stderr, "argument to `-P` must be an unsigned number\n");
                 exit(1);
             }
             break;
