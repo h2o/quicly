@@ -29,12 +29,13 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include "khash.h"
 #include "cc.h"
+#include "khash.h"
 #include "quicly.h"
 #include "quicly/sentmap.h"
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
+#include "quicly/cc.h"
 
 #define QUICLY_QUIC_BIT 0x40
 #define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
@@ -254,6 +255,7 @@ struct st_quicly_conn_t {
         /**
          *
          */
+        struct ccstate ccs;
         struct {
             struct cc_var ccv;
             uint64_t end_of_recovery;
@@ -314,7 +316,7 @@ static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
 const quicly_context_t quicly_default_context = {
     NULL,                      /* tls */
-    1280,                      /* max_packet_size */
+    QUICLY_MAX_PACKET_SIZE,    /* max_packet_size */
     &quicly_loss_default_conf, /* loss */
     {
         {1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
@@ -1499,9 +1501,11 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
     conn->_.egress.send_ack_at = INT64_MAX;
+    // cc-remove
     cc_init(&conn->_.egress.cc.ccv, &newreno_cc_algo, 1280 * 8, 1280);
     conn->_.egress.cc.ccv.ccvc.ccv.snd_scale = 14; /* FIXME */
     conn->_.egress.cc.end_of_recovery = UINT64_MAX;
+    cc_init2(&conn->_.egress.ccs);
     conn->_.crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -1972,6 +1976,7 @@ static ssize_t round_send_window(ssize_t window)
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
+    // if (cc_can_send(ccs)) {
     if (round_send_window((ssize_t)cc_get_cwnd(&conn->egress.cc.ccv) - (ssize_t)conn->egress.sentmap.bytes_in_flight) > 0) {
         if (conn->crypto.pending_flows != 0 || quicly_linklist_is_linked(&conn->pending_link.control) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_fin_only) ||
@@ -2040,7 +2045,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     /* the last packet of first-flight datagrams is padded to become 1280 bytes */
     if (!coalesced && (s->target.packet->data.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
         conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
-        const size_t max_size = 1264; /* max UDP packet size excluding aead tag */
+        const size_t max_size = QUICLY_MAX_PACKET_SIZE - QUICLY_AEAD_TAG_SIZE;
         assert(quicly_is_client(conn));
         assert(s->dst - s->target.packet->data.base <= max_size);
         memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->target.packet->data.base + max_size - s->dst);
@@ -2579,6 +2584,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
             if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = sent->packet_number;
+                // kazuho: does this sentmap entry have the bytes in flight for the entire packet?
+                cc_on_lost(&conn->egress.ccs, sent->bytes_in_flight, sent->packet_number, conn->egress.packet_number);
                 LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_LOST, INT_EVENT_ATTR(PACKET_NUMBER, largest_newly_lost_pn));
                 LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_LOST, INT_EVENT_ATTR(PACKET_NUMBER, largest_newly_lost_pn));
             }
