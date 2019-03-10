@@ -845,7 +845,7 @@ static void destroy_stream(quicly_stream_t *stream, int err)
 
     if (stream->stream_id < 0) {
         size_t epoch = -(1 + stream->stream_id);
-        if (epoch <= 2)
+        if (epoch <= QUICLY_EPOCH_HANDSHAKE)
             stream->conn->crypto.pending_flows &= ~(uint8_t)(1 << epoch);
     } else {
         struct st_quicly_conn_streamgroup_state_t *group = get_streamgroup_state(conn, stream->stream_id);
@@ -1037,7 +1037,7 @@ Exit:
 
 static int setup_handshake_space_and_flow(quicly_conn_t *conn, size_t epoch)
 {
-    struct st_quicly_handshake_space_t **space = epoch == 0 ? &conn->initial : &conn->handshake;
+    struct st_quicly_handshake_space_t **space = epoch == QUICLY_EPOCH_INITIAL ? &conn->initial : &conn->handshake;
     if ((*space = (void *)alloc_pn_space(sizeof(struct st_quicly_handshake_space_t))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     return create_handshake_flow(conn, epoch);
@@ -1067,10 +1067,10 @@ static int setup_application_space_and_flow(quicly_conn_t *conn, int setup_0rtt)
         return PTLS_ERROR_NO_MEMORY;
     if (setup_0rtt) {
         int ret;
-        if ((ret = create_handshake_flow(conn, 1)) != 0)
+        if ((ret = create_handshake_flow(conn, QUICLY_EPOCH_0RTT)) != 0)
             return ret;
     }
-    return create_handshake_flow(conn, 3);
+    return create_handshake_flow(conn, QUICLY_EPOCH_1RTT);
 }
 
 static int discard_initial_context(quicly_conn_t *conn)
@@ -1618,7 +1618,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
                          VEC_EVENT_ATTR(SCID, ptls_iovec_init(conn->super.host.src_cid.cid, conn->super.host.src_cid.len)),
                          INT_EVENT_ATTR(QUIC_VERSION, conn->super.version));
 
-    if ((ret = setup_handshake_space_and_flow(conn, 0)) != 0)
+    if ((ret = setup_handshake_space_and_flow(conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
     if ((ret = setup_initial_encryption(&conn->initial->cipher.ingress, &conn->initial->cipher.egress, ctx->tls->cipher_suites,
                                         ptls_iovec_init(server_cid->cid, server_cid->len), 1)) != 0)
@@ -2918,7 +2918,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
             discard_sentmap_by_epoch(
                 conn, 1u << QUICLY_EPOCH_1RTT); /* retire all packets with ack_epoch == 3; they are all 0-RTT packets */
         }
-        if (conn->handshake == NULL && (ret = setup_handshake_space_and_flow(conn, 2)) != 0)
+        if (conn->handshake == NULL && (ret = setup_handshake_space_and_flow(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
             return ret;
         SELECT_CIPHER_CONTEXT(is_enc ? &conn->handshake->cipher.egress : &conn->handshake->cipher.ingress);
         break;
@@ -3320,7 +3320,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     size_t segs_acked = 0, bytes_acked = 0;
     int ret;
 
-    if (epoch == 1)
+    if (epoch == QUICLY_EPOCH_0RTT)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     init_acks_iter(conn, &iter);
@@ -3737,7 +3737,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
         } break;
         default:
             /* 0-rtt, 1-rtt only frames */
-            if (!(epoch == 1 || epoch == 3)) {
+            if (!(epoch == QUICLY_EPOCH_0RTT || epoch == QUICLY_EPOCH_1RTT)) {
                 ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
             }
@@ -3898,7 +3898,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     set_cid(&(*conn)->super.host.offered_cid, packet->cid.dest.encrypted);
     if (retry_odcid.len != 0)
         set_cid(&(*conn)->retry_odcid, retry_odcid);
-    if ((ret = setup_handshake_space_and_flow(*conn, 0)) != 0)
+    if ((ret = setup_handshake_space_and_flow(*conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
     (*conn)->initial->super.next_expected_packet_number = next_expected_pn;
     (*conn)->initial->cipher.ingress = ingress_cipher;
