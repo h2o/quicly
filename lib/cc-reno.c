@@ -32,42 +32,33 @@ void cc_init2(struct ccstate *ccs) {
     ccs->ssthresh = UINT32_MAX;
 }
 
-int cc_can_send(struct ccstate *ccs) {
-    return ccs->inflight < ccs->cwnd;
-}
-
-void cc_on_sent(struct ccstate *ccs, uint32_t bytes) {
-    ccs->inflight += bytes;
+int cc_can_send(struct ccstate *ccs, uint32_t inflight) {
+    return inflight < ccs->cwnd;
 }
 
 // TODO: Avoid increase if sender was application limited
-void cc_on_acked(struct ccstate *ccs, uint32_t bytes, uint64_t acked_pn) {
-    assert(ccs->inflight >= bytes);
-    if (acked_pn < ccs->recovery_end) {
-        // no increases while in recovery
-        ccs->inflight -= bytes;
+void cc_on_acked(struct ccstate *ccs, uint32_t bytes, uint64_t largest_acked, uint32_t inflight) {
+    assert(inflight >= bytes);
+    // no increases while in recovery
+    if (largest_acked < ccs->recovery_end)
         return;
-    }
 
     // slow start
-    if (ccs->inflight > ccs->ssthresh)
+    if (inflight > ccs->ssthresh) {
         ccs->cwnd += bytes;
-    else {
-        // congestion avoidance
-        ccs->stash += bytes;
-        if (ccs->stash >= ccs->cwnd) {
-            // increase cwnd by 1 MSS per cwnd acked
-            uint32_t count = ccs->stash / ccs->cwnd;
-            ccs->stash -= count * ccs->cwnd;
-            ccs->cwnd +=  count * QUICLY_MAX_PACKET_SIZE;
-        }
+        return;
     }
-    ccs->inflight -= bytes;
+    // congestion avoidance
+    ccs->stash += bytes;
+    if (ccs->stash < ccs->cwnd)
+        return;
+    // increase cwnd by 1 MSS per cwnd acked
+    uint32_t count = ccs->stash / ccs->cwnd;
+    ccs->stash -= count * ccs->cwnd;
+    ccs->cwnd +=  count * QUICLY_MAX_PACKET_SIZE;
 }
 
 void cc_on_lost(struct ccstate *ccs, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn) {
-    assert(ccs->inflight >= bytes);
-    ccs->inflight -= bytes;
     // nothing to do if loss is in recovery window
     if (lost_pn < ccs->recovery_end)
         return;

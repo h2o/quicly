@@ -12,7 +12,6 @@
 struct ccstate {
     uint32_t cwnd;
     uint32_t ssthresh;
-    uint32_t inflight;
     uint32_t stash;
     uint8_t recovery_end;
 };
@@ -21,15 +20,11 @@ void cc_init2(struct ccstate *ccs);
 
 /* Called to query the controller whether data can be sent. Returns 1 if yes, 0 otherwise.
  */
-int cc_can_send(struct ccstate *ccs);
-
-/* Called after a packet is sent, to inform the controller about sent data.
- */
-void cc_on_sent(struct ccstate *ccs, uint32_t bytes);
+int cc_can_send(struct ccstate *ccs, uint32_t inflight);
 
 /* Called when a packet is newly acknowledged.
  */
-void cc_on_acked(struct ccstate *ccs, uint32_t bytes, uint64_t acked_pn);
+void cc_on_acked(struct ccstate *ccs, uint32_t bytes, uint64_t largest_acked, uint32_t inflight);
 
 /* Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
  * used for setting the recovery window.
