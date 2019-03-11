@@ -65,9 +65,9 @@ def transform(inf, outf):
         # transport state after loss
         if event == "cc-lost" and "eventType" in packet and packet["eventType"] == "PACKET_LOST":
             state = {}
-            state["minRttUs"] = str(trace["min_rtt"] * 1000)
-            state["smoothedRttUs"] = str(trace["smoothed_rtt"] * 1000)
-            state["lastRttUs"] = str(trace["latest_rtt"] * 1000)
+            state["minRttUs"] = str(trace["min-rtt"] * 1000)
+            state["smoothedRttUs"] = str(trace["smoothed-rtt"] * 1000)
+            state["lastRttUs"] = str(trace["latest-rtt"] * 1000)
             state["inFlightBytes"] = str(trace["inflight"])
             state["cwndBytes"] = str(trace["cwnd"])
             # post last lost packet with state
@@ -137,9 +137,9 @@ def transform(inf, outf):
 
         if event == "cc-ack":
             state = {}
-            state["minRttUs"] = str(trace["min_rtt"] * 1000)
-            state["smoothedRttUs"] = str(trace["smoothed_rtt"] * 1000)
-            state["lastRttUs"] = str(trace["latest_rtt"] * 1000)
+            state["minRttUs"] = str(trace["min-rtt"] * 1000)
+            state["smoothedRttUs"] = str(trace["smoothed-rtt"] * 1000)
+            state["lastRttUs"] = str(trace["latest-rtt"] * 1000)
             state["inFlightBytes"] = str(trace["inflight"])
             state["cwndBytes"] = str(trace["cwnd"])
             # state["pacingRateBps"] = str(trace[""])
