@@ -44,7 +44,7 @@ void cc_on_acked(struct ccstate *ccs, uint32_t bytes, uint64_t largest_acked, ui
         return;
 
     // slow start
-    if (inflight > ccs->ssthresh) {
+    if (ccs->cwnd < ccs->ssthresh) {
         ccs->cwnd += bytes;
         return;
     }
