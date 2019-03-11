@@ -2085,7 +2085,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
                          INT_EVENT_ATTR(LENGTH, s->target.packet->data.len), INT_EVENT_ATTR(ACK_ONLY, !s->target.ack_eliciting));
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_SEND, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
                          INT_EVENT_ATTR(LENGTH, s->target.packet->data.len),
-                         INT_EVENT_ATTR(PACKET_TYPE, get_epoch(s->target.packet->data.base[0])));
+                         INT_EVENT_ATTR(PACKET_TYPE, get_epoch(*s->target.first_byte_at)));
 
     ++conn->egress.packet_number;
     ++conn->super.num_packets.sent;
@@ -2599,6 +2599,12 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
                                  INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)));
         }
+        LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_LOST,
+                             INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
+                             INT_EVENT_ATTR(SMOOTHED_RTT, conn->egress.loss.rtt.smoothed),
+                             INT_EVENT_ATTR(LATEST_RTT, conn->egress.loss.rtt.latest),
+                             INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)),
+                             INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight));
     }
 
     /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
@@ -3401,6 +3407,13 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                          INT_EVENT_ATTR(CC_TYPE, cc_type), INT_EVENT_ATTR(CC_EXIT_RECOVERY, exit_recovery),
                          INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)),
                          INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight));
+    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_ACK,
+                         INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
+                         INT_EVENT_ATTR(SMOOTHED_RTT, conn->egress.loss.rtt.smoothed),
+                         INT_EVENT_ATTR(LATEST_RTT, conn->egress.loss.rtt.latest),
+                         INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)),
+                         INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight));
+
     if (exit_recovery)
         conn->egress.cc.end_of_recovery = UINT64_MAX;
 
@@ -4596,7 +4609,9 @@ const char *quicly_event_type_names[] = {"connect",
                                          "quictrace-lost",
                                          "quictrace-send-stream",
                                          "quictrace-recv-stream",
-                                         "quictrace-recv-ack"};
+                                         "quictrace-recv-ack",
+                                         "quictrace-cc-ack",
+                                         "quictrace-cc-lost"};
 
 const char *quicly_event_attribute_names[] = {NULL,
                                               "time",
@@ -4618,7 +4633,7 @@ const char *quicly_event_attribute_names[] = {NULL,
                                               "ack-only",
                                               "max-lost-pn",
                                               "end-of-recovery",
-                                              "bytes-in-flight",
+                                              "inflight",
                                               "cwnd",
                                               "newly-acked",
                                               "first-octet",
@@ -4627,6 +4642,9 @@ const char *quicly_event_attribute_names[] = {NULL,
                                               "cc-exit-recovery",
                                               "acked-packets",
                                               "acked-bytes",
+                                              "min-rtt",
+                                              "smoothed-rtt",
+                                              "latest-rtt",
                                               "state",
                                               "error-code",
                                               "frame-type",
