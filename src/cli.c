@@ -777,7 +777,7 @@ int main(int argc, char **argv)
             }
             break;
         case 'l':
-            setup_log_secret(ctx.tls, optarg);
+            setup_log_event(ctx.tls, optarg);
             break;
         case 'N':
             hs_properties.client.negotiate_before_key_exchange = 1;

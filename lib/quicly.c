@@ -2885,16 +2885,26 @@ static int send_connection_close(quicly_conn_t *conn, struct st_quicly_send_cont
     return 0;
 }
 
-static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, int is_enc, size_t epoch, const void *secret)
+static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, int is_enc, size_t epoch, const void *secret)
 {
-    quicly_conn_t *conn = *ptls_get_data_ptr(_tls);
-    ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
+    quicly_conn_t *conn = *ptls_get_data_ptr(tls);
+    ptls_context_t *tlsctx = ptls_get_context(tls);
+    ptls_cipher_suite_t *cipher = ptls_get_cipher(tls);
     ptls_cipher_context_t **hp_slot;
     ptls_aead_context_t **aead_slot;
     int ret;
+    static const char *log_labels[2][4] = {
+        {NULL, "QUIC_CLIENT_EARLY_TRAFFIC_SECRET", "QUIC_CLIENT_HANDSHAKE_TRAFFIC_SECRET", "QUIC_CLIENT_TRAFFIC_SECRET_0"},
+        {NULL, NULL, "QUIC_SERVER_HANDSHAKE_TRAFFIC_SECRET", "QUIC_SERVER_TRAFFIC_SECRET_0"}};
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CRYPTO_UPDATE_SECRET, INT_EVENT_ATTR(IS_ENC, is_enc),
                          INT_EVENT_ATTR(EPOCH, epoch));
+
+    if (tlsctx->log_event != NULL) {
+        char hexbuf[PTLS_MAX_DIGEST_SIZE * 2 + 1];
+        ptls_hexdump(hexbuf, secret, cipher->hash->digest_size);
+        tlsctx->log_event->cb(tlsctx->log_event, tls, log_labels[ptls_is_server(tls) == is_enc][epoch], "%s", hexbuf);
+    }
 
 #define SELECT_CIPHER_CONTEXT(p)                                                                                                   \
     do {                                                                                                                           \
