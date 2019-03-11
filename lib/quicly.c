@@ -2894,9 +2894,11 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *_tls, 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CRYPTO_UPDATE_SECRET, INT_EVENT_ATTR(IS_ENC, is_enc),
                          INT_EVENT_ATTR(EPOCH, epoch));
 
-    if (ctx->log_secret != NULL)
-        ctx->log_secret->cb(ctx->log_secret, _tls, log_labels[ptls_is_server(_tls) == is_enc][epoch],
-                            ptls_iovec_init(secret, cipher->hash->digest_size));
+    if (ctx->log_event != NULL) {
+        char hexbuf[PTLS_MAX_DIGEST_SIZE * 2 + 1];
+        ptls_hexdump(hexbuf, secret, cipher->hash->digest_size);
+        ctx->log_event->cb(ctx->log_event, _tls, log_labels[ptls_is_server(_tls) == is_enc][epoch], "%s", hexbuf);
+    }
 
 #define SELECT_CIPHER_CONTEXT(p)                                                                                                   \
     do {                                                                                                                           \
