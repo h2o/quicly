@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Fastly, Janardhan Iyengar
+ * Copyright (c) 2019 Fastly, Janardhan Iyengar
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -26,50 +26,50 @@
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.8
 
-void cc_init2(struct ccstate *ccs) {
-    memset(ccs, 0, sizeof(struct ccstate));
-    ccs->cwnd = QUICLY_INITIAL_WINDOW * QUICLY_MAX_PACKET_SIZE;
-    ccs->ssthresh = UINT32_MAX;
+void quicly_cc_init(quicly_cc_t *cc) {
+    memset(cc, 0, sizeof(quicly_cc_t));
+    cc->cwnd = QUICLY_INITIAL_WINDOW * QUICLY_MAX_PACKET_SIZE;
+    cc->ssthresh = UINT32_MAX;
 }
 
-int cc_can_send(struct ccstate *ccs, uint32_t inflight) {
-    return inflight < ccs->cwnd;
+int quicly_cc_can_send(quicly_cc_t *cc, uint32_t inflight) {
+    return inflight < cc->cwnd;
 }
 
 // TODO: Avoid increase if sender was application limited
-void cc_on_acked(struct ccstate *ccs, uint32_t bytes, uint64_t largest_acked, uint32_t inflight) {
+void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked, uint32_t inflight) {
     assert(inflight >= bytes);
     // no increases while in recovery
-    if (largest_acked < ccs->recovery_end)
+    if (largest_acked < cc->recovery_end)
         return;
 
     // slow start
-    if (ccs->cwnd < ccs->ssthresh) {
-        ccs->cwnd += bytes;
+    if (cc->cwnd < cc->ssthresh) {
+        cc->cwnd += bytes;
         return;
     }
     // congestion avoidance
-    ccs->stash += bytes;
-    if (ccs->stash < ccs->cwnd)
+    cc->stash += bytes;
+    if (cc->stash < cc->cwnd)
         return;
     // increase cwnd by 1 MSS per cwnd acked
-    uint32_t count = ccs->stash / ccs->cwnd;
-    ccs->stash -= count * ccs->cwnd;
-    ccs->cwnd +=  count * QUICLY_MAX_PACKET_SIZE;
+    uint32_t count = cc->stash / cc->cwnd;
+    cc->stash -= count * cc->cwnd;
+    cc->cwnd +=  count * QUICLY_MAX_PACKET_SIZE;
 }
 
-void cc_on_lost(struct ccstate *ccs, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn) {
+void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn) {
     // nothing to do if loss is in recovery window
-    if (lost_pn < ccs->recovery_end)
+    if (lost_pn < cc->recovery_end)
         return;
     // set end of recovery window
-    ccs->recovery_end = next_pn;
-    ccs->cwnd *= QUICLY_RENO_BETA;
-    if (ccs->cwnd < QUICLY_MIN_CWND * QUICLY_MAX_PACKET_SIZE)
-        ccs->cwnd = QUICLY_MIN_CWND * QUICLY_MAX_PACKET_SIZE;
-    ccs->ssthresh = ccs->cwnd;
+    cc->recovery_end = next_pn;
+    cc->cwnd *= QUICLY_RENO_BETA;
+    if (cc->cwnd < QUICLY_MIN_CWND * QUICLY_MAX_PACKET_SIZE)
+        cc->cwnd = QUICLY_MIN_CWND * QUICLY_MAX_PACKET_SIZE;
+    cc->ssthresh = cc->cwnd;
 }
 
-void cc_on_persistent_congestion(struct ccstate *ccs) {
+void quicly_cc_on_persistent_congestion(quicly_cc_t *cc) {
     // TODO
 }
