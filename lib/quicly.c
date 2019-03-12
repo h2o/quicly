@@ -30,11 +30,11 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include "khash.h"
-#include "cc.h"
 #include "quicly.h"
 #include "quicly/sentmap.h"
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
+#include "quicly/cc.h"
 
 #define QUICLY_QUIC_BIT 0x40
 #define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
@@ -254,11 +254,7 @@ struct st_quicly_conn_t {
         /**
          *
          */
-        struct {
-            struct cc_var ccv;
-            uint64_t end_of_recovery;
-            unsigned in_first_rto : 1;
-        } cc;
+        quicly_cc_t cc;
     } egress;
     /**
      * crypto data
@@ -314,7 +310,7 @@ static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
 const quicly_context_t quicly_default_context = {
     NULL,                      /* tls */
-    1280,                      /* max_packet_size */
+    QUICLY_MAX_PACKET_SIZE,    /* max_packet_size */
     &quicly_loss_default_conf, /* loss */
     {
         {1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
@@ -343,13 +339,8 @@ static void update_now(quicly_context_t *ctx)
     static __thread int64_t base;
 
     now = ctx->now->cb(ctx->now);
-
-    assert(cc_hz == 100);
     if (base == 0)
         base = now;
-    int new_ticks = (int)((now - base) / 10);
-    if (cc_ticks != new_ticks)
-        cc_ticks = new_ticks;
 }
 
 static inline uint8_t get_epoch(uint8_t first_byte)
@@ -1133,7 +1124,6 @@ void quicly_free(quicly_conn_t *conn)
         conn->egress.path_challenge.head = pending->next;
         free(pending);
     }
-    cc_destroy(&conn->egress.cc.ccv);
     quicly_sentmap_dispose(&conn->egress.sentmap);
 
     kh_destroy(quicly_stream_t, conn->streams);
@@ -1499,9 +1489,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
     conn->_.egress.send_ack_at = INT64_MAX;
-    cc_init(&conn->_.egress.cc.ccv, &newreno_cc_algo, 1280 * 8, 1280);
-    conn->_.egress.cc.ccv.ccvc.ccv.snd_scale = 14; /* FIXME */
-    conn->_.egress.cc.end_of_recovery = UINT64_MAX;
+    quicly_cc_init(&conn->_.egress.cc);
     conn->_.crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -1972,7 +1960,7 @@ static ssize_t round_send_window(ssize_t window)
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
-    if (round_send_window((ssize_t)cc_get_cwnd(&conn->egress.cc.ccv) - (ssize_t)conn->egress.sentmap.bytes_in_flight) > 0) {
+    if (quicly_cc_can_send(&conn->egress.cc, conn->egress.sentmap.bytes_in_flight)) {
         if (conn->crypto.pending_flows != 0 || quicly_linklist_is_linked(&conn->pending_link.control) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_fin_only) ||
             quicly_linklist_is_linked(&conn->pending_link.stream_with_payload))
@@ -2040,7 +2028,7 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
     /* the last packet of first-flight datagrams is padded to become 1280 bytes */
     if (!coalesced && (s->target.packet->data.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
         conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
-        const size_t max_size = 1264; /* max UDP packet size excluding aead tag */
+        const size_t max_size = QUICLY_MAX_PACKET_SIZE - QUICLY_AEAD_TAG_SIZE;
         assert(quicly_is_client(conn));
         assert(s->dst - s->target.packet->data.base <= max_size);
         memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->target.packet->data.base + max_size - s->dst);
@@ -2579,6 +2567,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
             if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.num_packets.lost;
                 largest_newly_lost_pn = sent->packet_number;
+                quicly_cc_on_lost(&conn->egress.cc, sent->bytes_in_flight, sent->packet_number, conn->egress.packet_number);
                 LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_LOST, INT_EVENT_ATTR(PACKET_NUMBER, largest_newly_lost_pn));
                 LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_LOST, INT_EVENT_ATTR(PACKET_NUMBER, largest_newly_lost_pn));
             }
@@ -2591,20 +2580,13 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     }
     if (largest_newly_lost_pn != UINT64_MAX) {
         conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
-        conn->egress.cc.end_of_recovery = conn->egress.packet_number - 1;
-        if (is_loss && conn->egress.loss.rto_count == 0) {
-            cc_cong_signal(&conn->egress.cc.ccv, CC_ECN, (uint32_t)conn->egress.sentmap.bytes_in_flight);
-            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_CONGESTION, INT_EVENT_ATTR(MAX_LOST_PN, conn->egress.max_lost_pn),
-                                 INT_EVENT_ATTR(END_OF_RECOVERY, conn->egress.cc.end_of_recovery),
-                                 INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
-                                 INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)));
-        }
-        LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_LOST,
-                             INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
+        LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_LOST, INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
                              INT_EVENT_ATTR(SMOOTHED_RTT, conn->egress.loss.rtt.smoothed),
-                             INT_EVENT_ATTR(LATEST_RTT, conn->egress.loss.rtt.latest),
-                             INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)),
+                             INT_EVENT_ATTR(LATEST_RTT, conn->egress.loss.rtt.latest), INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd),
                              INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight));
+        LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_CONGESTION, INT_EVENT_ATTR(MAX_LOST_PN, conn->egress.max_lost_pn),
+                             INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
+                             INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
     }
 
     /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
@@ -3020,7 +3002,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         case 1: /* TLP (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
             LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_TLP,
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
-                                 INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)));
+                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
             if (!ptls_handshake_is_complete(conn->crypto.tls)) {
                 if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
                     goto Exit;
@@ -3028,14 +3010,9 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             break;
         case 2: /* RTO */ {
             uint32_t cc_type = 0;
-            if (!conn->egress.cc.in_first_rto) {
-                cc_type = CC_FIRST_RTO;
-                cc_cong_signal(&conn->egress.cc.ccv, cc_type, (uint32_t)conn->egress.sentmap.bytes_in_flight);
-                conn->egress.cc.in_first_rto = 1;
-            }
             LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, cc_type),
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
-                                 INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)));
+                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
             if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
                 goto Exit;
         } break;
@@ -3044,8 +3021,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         }
     }
 
+    // TODO (jri): The following two blocks not need to be done. Extend the CC API to allow additional packets when TLP or RTO
+    // fires.
     { /* calculate send window */
-        uint32_t cwnd = cc_get_cwnd(&conn->egress.cc.ccv);
+        uint32_t cwnd = conn->egress.cc.cwnd;
         if (conn->egress.sentmap.bytes_in_flight < cwnd)
             s.send_window = cwnd - conn->egress.sentmap.bytes_in_flight;
     }
@@ -3394,38 +3373,24 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay,
         0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
     /* OnPacketAckedCC */
-    uint32_t cc_type = 0;
     /* TODO (jri): this function should be called for every packet newly acked. (kazuho) I do not think so;
      * quicly_loss_on_packet_acked is NOT OnPacketAcked */
-    if (smallest_newly_acked != UINT64_MAX) {
-        if (quicly_loss_on_packet_acked(&conn->egress.loss, smallest_newly_acked)) {
-            cc_type = CC_RTO;
-            conn->egress.cc.in_first_rto = 0;
-        } else if (conn->egress.cc.in_first_rto) {
-            cc_type = CC_RTO_ERR;
-            conn->egress.cc.in_first_rto = 0;
-        }
+    if (smallest_newly_acked != UINT64_MAX)
+        quicly_loss_on_packet_acked(&conn->egress.loss, smallest_newly_acked);
+
+    if (bytes_acked > 0) {
+        quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame->largest_acknowledged,
+                           conn->egress.sentmap.bytes_in_flight + bytes_acked);
+        LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_ACK, INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
+                             INT_EVENT_ATTR(SMOOTHED_RTT, conn->egress.loss.rtt.smoothed),
+                             INT_EVENT_ATTR(LATEST_RTT, conn->egress.loss.rtt.latest), INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd),
+                             INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight));
     }
-    if (cc_type != 0)
-        cc_cong_signal(&conn->egress.cc.ccv, cc_type, (uint32_t)(conn->egress.sentmap.bytes_in_flight + bytes_acked));
-    int exit_recovery = frame->largest_acknowledged >= conn->egress.cc.end_of_recovery;
-    cc_ack_received(&conn->egress.cc.ccv, CC_ACK, (uint32_t)(conn->egress.sentmap.bytes_in_flight + bytes_acked),
-                    (uint16_t)segs_acked, (uint32_t)bytes_acked,
-                    conn->egress.loss.rtt.smoothed / 10 /* TODO better way of converting to cc_ticks */, exit_recovery);
+
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_ACK_RECEIVED, INT_EVENT_ATTR(PACKET_NUMBER, frame->largest_acknowledged),
                          INT_EVENT_ATTR(ACKED_PACKETS, segs_acked), INT_EVENT_ATTR(ACKED_BYTES, bytes_acked),
-                         INT_EVENT_ATTR(CC_TYPE, cc_type), INT_EVENT_ATTR(CC_EXIT_RECOVERY, exit_recovery),
-                         INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)),
+                         INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd),
                          INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight));
-    LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_ACK,
-                         INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
-                         INT_EVENT_ATTR(SMOOTHED_RTT, conn->egress.loss.rtt.smoothed),
-                         INT_EVENT_ATTR(LATEST_RTT, conn->egress.loss.rtt.latest),
-                         INT_EVENT_ATTR(CWND, cc_get_cwnd(&conn->egress.cc.ccv)),
-                         INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight));
-
-    if (exit_recovery)
-        conn->egress.cc.end_of_recovery = UINT64_MAX;
 
     /* loss-detection  */
     quicly_loss_detect_loss(&conn->egress.loss, frame->largest_acknowledged, do_detect_loss);
