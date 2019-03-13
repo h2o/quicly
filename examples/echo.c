@@ -82,7 +82,8 @@ static void usage(const char *progname)
            "  -h           prints this help\n"
            "\n"
            "When both `-c` and `-k` is specified, runs as a server.  Otherwise, runs as a\n"
-           "client connecting to host:port.  If omitted, host defaults to 127.0.0.1.\n", progname);
+           "client connecting to host:port.  If omitted, host defaults to 127.0.0.1.\n",
+           progname);
     exit(0);
 }
 
@@ -295,12 +296,9 @@ static int run_client(int fd, const char *host, struct sockaddr *sa, socklen_t s
 
 static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
-    static const quicly_stream_callbacks_t stream_callbacks = {quicly_streambuf_destroy,
-                                                               quicly_streambuf_egress_shift,
-                                                               quicly_streambuf_egress_emit,
-                                                               on_stop_sending,
-                                                               on_receive,
-                                                               on_receive_reset};
+    static const quicly_stream_callbacks_t stream_callbacks = {
+        quicly_streambuf_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_stop_sending, on_receive,
+        on_receive_reset};
     int ret;
 
     if ((ret = quicly_streambuf_create(stream, sizeof(quicly_streambuf_t))) != 0)
@@ -312,10 +310,11 @@ static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 int main(int argc, char **argv)
 {
     ptls_openssl_sign_certificate_t sign_certificate;
-    ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
-     .get_time = &ptls_get_time,
-     .key_exchanges = ptls_openssl_key_exchanges,
-     .cipher_suites = ptls_openssl_cipher_suites,
+    ptls_context_t tlsctx = {
+        .random_bytes = ptls_openssl_random_bytes,
+        .get_time = &ptls_get_time,
+        .key_exchanges = ptls_openssl_key_exchanges,
+        .cipher_suites = ptls_openssl_cipher_suites,
     };
     quicly_stream_open_t stream_open = {on_stream_open};
     char *host = "127.0.0.1", *port = "4433";
