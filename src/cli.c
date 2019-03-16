@@ -722,6 +722,8 @@ static void usage(const char *cmd)
            "  -e event-log-file    file to log events\n"
            "  -i interval          interval to reissue requests (in milliseconds)\n"
            "  -l log-file          file to log traffic secrets\n"
+           "  -M <bytes>           max stream data (in bytes; default: 1MB)\n"
+           "  -m <bytes>           max data (in bytes; default: 16MB)\n"
            "  -N                   enforce HelloRetryRequest (client-only)\n"
            "  -n                   enforce version negotiation (client-only)\n"
            "  -p path              path to request (can be set multiple times)\n"
@@ -752,7 +754,7 @@ int main(int argc, char **argv)
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
 
-    while ((ch = getopt(argc, argv, "a:C:c:k:e:i:l:Nnp:Rr:s:Vvx:X:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:C:c:k:e:i:l:M:m:Nnp:Rr:s:Vvx:X:h")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -784,6 +786,22 @@ int main(int argc, char **argv)
             break;
         case 'l':
             setup_log_event(ctx.tls, optarg);
+            break;
+        case 'M': {
+            uint64_t v;
+            if (sscanf(optarg, "%" PRIu64, &v) != 1) {
+                fprintf(stderr, "failed to parse max stream data:%s\n", optarg);
+                exit(1);
+            }
+            ctx.transport_params.max_stream_data.bidi_local = v;
+            ctx.transport_params.max_stream_data.bidi_remote = v;
+            ctx.transport_params.max_stream_data.uni = v;
+        } break;
+        case 'm':
+            if (sscanf(optarg, "%" PRIu64, &ctx.transport_params.max_data) != 1) {
+                fprintf(stderr, "failed to parse max data:%s\n", optarg);
+                exit(1);
+            }
             break;
         case 'N':
             hs_properties.client.negotiate_before_key_exchange = 1;
