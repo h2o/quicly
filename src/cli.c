@@ -153,11 +153,17 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
 
 static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_http1)
 {
-    unsigned size;
     if (!(path.len > 5 && path.base[0] == '/' && memcmp(path.base + path.len - 4, ".txt", 4) == 0))
         return 0;
-    if (sscanf((const char *)path.base + 1, "%u", &size) != 1)
-        return 0;
+    unsigned size = 0;
+    {
+        const char *p;
+        for (p = (const char *)path.base + 1; *p != '.'; ++p) {
+            if (!('0' <= *p && *p <= '9'))
+                return 0;
+            size = size * 10 + (*p - '0');
+        }
+    }
 
     send_header(stream, is_http1, 200, "text/plain; charset=utf-8");
     for (; size >= 12; size -= 12)
