@@ -214,7 +214,7 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
     if (send_sized_text(stream, path, is_http1))
         goto Sent;
 
-    if (!stream->sendstate.is_open)
+    if (!quicly_sendstate_is_open(&stream->sendstate))
         return 0;
 
     send_header(stream, is_http1, 404, "text/plain; charset=utf-8");
