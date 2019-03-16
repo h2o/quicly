@@ -551,10 +551,6 @@ struct st_quicly_stream_t {
          */
         uint64_t max_stream_data;
         /**
-         * 1 + maximum offset of data that has been sent at least once (NOT counting eos)
-         */
-        uint64_t max_sent;
-        /**
          *
          */
         struct {
