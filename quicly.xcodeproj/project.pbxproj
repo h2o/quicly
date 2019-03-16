@@ -28,6 +28,9 @@
 		E98041C422383C5C008B9745 /* cc.h in Headers */ = {isa = PBXBuildFile; fileRef = E98041C322383C5C008B9745 /* cc.h */; };
 		E98041C622383C62008B9745 /* cc-reno.c in Sources */ = {isa = PBXBuildFile; fileRef = E98041C522383C62008B9745 /* cc-reno.c */; };
 		E98041C722383C7A008B9745 /* cc-reno.c in Sources */ = {isa = PBXBuildFile; fileRef = E98041C522383C62008B9745 /* cc-reno.c */; };
+		E980422B223DABF3008B9745 /* dump.h in Headers */ = {isa = PBXBuildFile; fileRef = E980422A223DABF2008B9745 /* dump.h */; };
+		E980422D223DAC8C008B9745 /* dump.c in Sources */ = {isa = PBXBuildFile; fileRef = E980422C223DAC8C008B9745 /* dump.c */; };
+		E980422E223DCAB0008B9745 /* dump.c in Sources */ = {isa = PBXBuildFile; fileRef = E980422C223DAC8C008B9745 /* dump.c */; };
 		E984482C1EA48D1200390927 /* picotls.h in Headers */ = {isa = PBXBuildFile; fileRef = E984482B1EA48D1200390927 /* picotls.h */; };
 		E984483A1EA48D7A00390927 /* libquicly.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E98448171EA48BD400390927 /* libquicly.a */; };
 		E984483B1EA48DD300390927 /* openssl.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448271EA48D0000390927 /* openssl.c */; };
@@ -105,6 +108,8 @@
 		E93E54BC1F6CA76C001C50FE /* loss.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E98041C322383C5C008B9745 /* cc.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = cc.h; sourceTree = "<group>"; };
 		E98041C522383C62008B9745 /* cc-reno.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "cc-reno.c"; sourceTree = "<group>"; };
+		E980422A223DABF2008B9745 /* dump.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = dump.h; sourceTree = "<group>"; };
+		E980422C223DAC8C008B9745 /* dump.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = dump.c; sourceTree = "<group>"; };
 		E98448171EA48BD400390927 /* libquicly.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libquicly.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		E98448271EA48D0000390927 /* openssl.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = openssl.c; sourceTree = "<group>"; };
 		E98448281EA48D0000390927 /* picotls.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = picotls.c; sourceTree = "<group>"; };
@@ -205,6 +210,7 @@
 			isa = PBXGroup;
 			children = (
 				E98041C522383C62008B9745 /* cc-reno.c */,
+				E980422C223DAC8C008B9745 /* dump.c */,
 				E99F8C251F4E9EBF00C26B3D /* frame.c */,
 				E93E54BC1F6CA76C001C50FE /* loss.c */,
 				E98448411EA490A500390927 /* quicly.c */,
@@ -311,6 +317,7 @@
 			children = (
 				E98041C322383C5C008B9745 /* cc.h */,
 				E920D2201F44047C00799777 /* constants.h */,
+				E980422A223DABF2008B9745 /* dump.h */,
 				E99F8C231F4E863200C26B3D /* frame.h */,
 				E9056C071F56965300E2B96C /* linklist.h */,
 				E93E54BA1F69B750001C50FE /* loss.h */,
@@ -331,6 +338,7 @@
 			isa = PBXHeadersBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E980422B223DABF3008B9745 /* dump.h in Headers */,
 				E98041C422383C5C008B9745 /* cc.h in Headers */,
 				E9CC44111EB85E0B00DC7D3E /* khash.h in Headers */,
 				E920D2231F4536CB00799777 /* maxsender.h in Headers */,
@@ -468,6 +476,7 @@
 				E9F6A42E1F41375B0083F0B2 /* sendstate.c in Sources */,
 				E93E54BD1F6CA76C001C50FE /* loss.c in Sources */,
 				E99F8C261F4E9EBF00C26B3D /* frame.c in Sources */,
+				E980422D223DAC8C008B9745 /* dump.c in Sources */,
 				E984483E1EA48E7200390927 /* cli.c in Sources */,
 				E98448421EA490A500390927 /* quicly.c in Sources */,
 				E920D22B1F49533800799777 /* sentmap.c in Sources */,
@@ -499,6 +508,7 @@
 			files = (
 				E99F8C291F4EAEF800C26B3D /* frame.c in Sources */,
 				E98041C722383C7A008B9745 /* cc-reno.c in Sources */,
+				E980422E223DCAB0008B9745 /* dump.c in Sources */,
 				E920D22C1F49533800799777 /* sentmap.c in Sources */,
 				E920D2301F49EE0B00799777 /* loss.c in Sources */,
 				E93E54BE1F6CA76C001C50FE /* loss.c in Sources */,
