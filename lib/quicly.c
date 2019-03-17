@@ -508,16 +508,15 @@ Error:
     return SIZE_MAX;
 }
 
-uint64_t quicly_determine_packet_number(uint32_t bits, uint32_t mask, uint64_t next_expected)
+uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uint64_t expected)
 {
-    uint64_t actual = (next_expected & ~(uint64_t)mask) + bits;
+    uint64_t win = (uint64_t)1 << num_bits, candidate = (expected & ~(win - 1)) | truncated;
 
-    if (((bits - (uint32_t)next_expected) & mask) > (mask >> 1)) {
-        if (actual >= (uint64_t)mask + 1)
-            actual -= (uint64_t)mask + 1;
-    }
-
-    return actual;
+    if (candidate + win / 2 <= expected)
+        return candidate + win;
+    if (candidate > expected + win / 2 && candidate > win)
+        return candidate - win;
+    return candidate;
 }
 
 static void assert_consistency(quicly_conn_t *conn, int run_timers)
@@ -1738,7 +1737,7 @@ static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptl
     }
 
     /* AEAD */
-    *pn = quicly_determine_packet_number(pnbits, (uint32_t)UINT32_MAX >> ((4 - pnlen) * 8), *next_expected_pn);
+    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
     size_t aead_off = packet->encrypted_off + pnlen, ptlen;
     if ((ptlen = ptls_aead_decrypt(aead[aead_index], packet->octets.base + aead_off, packet->octets.base + aead_off,
                                    packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
