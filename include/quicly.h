@@ -654,7 +654,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
 /**
  *
  */
-uint64_t quicly_determine_packet_number(uint32_t bits, uint32_t mask, uint64_t next_expected);
+uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uint64_t expected);
 /**
  *
  */
