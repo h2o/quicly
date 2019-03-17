@@ -2974,6 +2974,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     update_now(conn->super.ctx);
 
+    /* bail out if there's nothing is scheduled to be sent */
+    if (now < quicly_get_first_timeout(conn)) {
+        *num_packets = 0;
+        return 0;
+    }
+
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_SEND, INT_EVENT_ATTR(STATE, (int64_t)conn->super.state));
 
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
