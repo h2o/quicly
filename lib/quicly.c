@@ -31,10 +31,11 @@
 #include <sys/time.h>
 #include "khash.h"
 #include "quicly.h"
-#include "quicly/sentmap.h"
-#include "quicly/frame.h"
-#include "quicly/streambuf.h"
 #include "quicly/cc.h"
+#include "quicly/dump.h"
+#include "quicly/frame.h"
+#include "quicly/sentmap.h"
+#include "quicly/streambuf.h"
 
 #define QUICLY_QUIC_BIT 0x40
 #define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
@@ -4227,6 +4228,183 @@ void quicly_request_stop(quicly_stream_t *stream, int err)
         stream->_send_aux.stop_sending.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
         sched_stream_control(stream);
     }
+}
+
+int quicly_dump_connection(quicly_conn_t *conn, ptls_buffer_t *buf)
+{
+#define DUMP_STREAMGROUP_STATE(_state)                                                                                             \
+    do {                                                                                                                           \
+        struct st_quicly_conn_streamgroup_state_t *state = (_state);                                                               \
+        QUICLY_DUMPF("{\"num_streams\": %" PRIu32 ", \"next_stream_id\": %" PRId64 "}", state->num_streams,                        \
+                     state->next_stream_id);                                                                                       \
+    } while (0)
+
+#define DUMP_AEAD(aead) QUICLY_DUMPF((aead) != NULL ? "true" : "null")
+#define DUMP_CIPHER(cipher) QUICLY_DUMPF((cipher) != NULL ? "true" : "null")
+
+#define DUMP_CIPHER_CONTEXT(_ctx)                                                                                                  \
+    do {                                                                                                                           \
+        struct st_quicly_cipher_context_t *ctx = (_ctx);                                                                           \
+        QUICLY_DUMPF("{\"aead\": ");                                                                                               \
+        DUMP_AEAD(ctx->aead);                                                                                                      \
+        QUICLY_DUMPF(", \"header_protection\": ");                                                                                 \
+        DUMP_CIPHER(ctx->header_protection);                                                                                       \
+        QUICLY_DUMPF("}");                                                                                                         \
+    } while (0)
+
+#define DUMP_PN_SPACE(_space)                                                                                                      \
+    do {                                                                                                                           \
+        struct st_quicly_pn_space_t *ps = (_space);                                                                                \
+        QUICLY_DUMPF("\"ack_queue\": ");                                                                                           \
+        QUICLY_DUMP_RANGES(&ps->ack_queue);                                                                                        \
+        QUICLY_DUMPF(", \"largest_pn_received_at\": %" PRId64 ", \"next_expected_packet_number\": %" PRIu64                        \
+                     ", \"unacked_count\": %" PRIu32,                                                                              \
+                     ps->largest_pn_received_at, ps->next_expected_packet_number, ps->unacked_count);                              \
+    } while (0)
+
+#define DUMP_HANDSHAKE_SPACE(_space)                                                                                               \
+    do {                                                                                                                           \
+        struct st_quicly_handshake_space_t *hs = (_space);                                                                         \
+        if (hs != NULL) {                                                                                                          \
+            QUICLY_DUMPF("{");                                                                                                     \
+            DUMP_PN_SPACE(&hs->super);                                                                                             \
+            QUICLY_DUMPF(", \"cipher\": {\"ingress\": ");                                                                          \
+            DUMP_CIPHER_CONTEXT(&hs->cipher.ingress);                                                                              \
+            QUICLY_DUMPF(", \"egress\": ");                                                                                        \
+            DUMP_CIPHER_CONTEXT(&hs->cipher.egress);                                                                               \
+            QUICLY_DUMPF("}}");                                                                                                    \
+        } else {                                                                                                                   \
+            QUICLY_DUMPF("null");                                                                                                  \
+        }                                                                                                                          \
+    } while (0)
+
+    int ret;
+
+    QUICLY_DUMPF("{\"ctx\": \"%p\", \"state\": %u, \"master-id\": ", conn->super.ctx, conn->super.state);
+    QUICLY_DUMP_CID_PLAINTEXT(&conn->super.master_id);
+    QUICLY_DUMPF(", \"host\": {\"src_cid\": ");
+    QUICLY_DUMPHEX(conn->super.host.src_cid.cid, conn->super.host.src_cid.len);
+    QUICLY_DUMPF(", \"stateless_reset_token\": ");
+    QUICLY_DUMPHEX(conn->super.host.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
+    QUICLY_DUMPF(", \"offered_cid\": ");
+    QUICLY_DUMPHEX(conn->super.host.offered_cid.cid, conn->super.host.offered_cid.len);
+    QUICLY_DUMPF(", \"bidi\": ");
+    DUMP_STREAMGROUP_STATE(&conn->super.host.bidi);
+    QUICLY_DUMPF(", \"uni\": ");
+    DUMP_STREAMGROUP_STATE(&conn->super.host.uni);
+    QUICLY_DUMPF("}, \"peer\": {\"cid\": ");
+    QUICLY_DUMPHEX(conn->super.peer.cid.cid, conn->super.peer.cid.len);
+    QUICLY_DUMPF(", \"stateless_reset_token\": ");
+    QUICLY_DUMPHEX(conn->super.peer.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
+    QUICLY_DUMPF(", \"bidi\": ");
+    DUMP_STREAMGROUP_STATE(&conn->super.peer.bidi);
+    QUICLY_DUMPF(", \"uni\": ");
+    DUMP_STREAMGROUP_STATE(&conn->super.peer.uni);
+    QUICLY_DUMPF(", \"sa\": ");
+    QUICLY_DUMP_SOCKADDR(conn->super.peer.sa);
+    QUICLY_DUMPF(", \"transport_params:\": \"TBD\"}, \"num_packets\": {\"received\": %" PRIu64 ", \"sent\": %" PRIu64
+                 ", \"lost\": %" PRIu64 ", \"ack_received\": %" PRIu64 "}, \"num_bytes_sent\": %" PRIu64 ", \"version\": %" PRIu32
+                 ", \"data\": \"%p\", \"initial\": ",
+                 conn->super.num_packets.received, conn->super.num_packets.sent, conn->super.num_packets.lost,
+                 conn->super.num_packets.ack_received, conn->super.num_bytes_sent, conn->super.version, conn->super.data);
+    DUMP_HANDSHAKE_SPACE(conn->initial);
+    QUICLY_DUMPF(", \"handshake\": ");
+    DUMP_HANDSHAKE_SPACE(conn->handshake);
+    QUICLY_DUMPF(", \"application\": ");
+    if (conn->application != NULL) {
+        QUICLY_DUMPF("{");
+        DUMP_PN_SPACE(&conn->application->super);
+        QUICLY_DUMPF(", \"cipher\": {\"ingress\": {\"header_protection\": {\"zero_rtt\": ");
+        DUMP_CIPHER(conn->application->cipher.ingress.header_protection.zero_rtt);
+        QUICLY_DUMPF(", \"one_rtt\": ");
+        DUMP_CIPHER(conn->application->cipher.ingress.header_protection.one_rtt);
+        QUICLY_DUMPF("}, \"aead\": [");
+        DUMP_AEAD(conn->application->cipher.ingress.aead[0]);
+        QUICLY_DUMPF(", ");
+        DUMP_AEAD(conn->application->cipher.ingress.aead[0]);
+        QUICLY_DUMPF("]}, \"egress\": ");
+        DUMP_CIPHER_CONTEXT(&conn->application->cipher.egress);
+        QUICLY_DUMPF("}, \"one_rtt_writable\": %d}", conn->application->one_rtt_writable);
+    } else {
+        QUICLY_DUMPF("null");
+    }
+    QUICLY_DUMPF(", \"streams\": [");
+    {
+        int is_first = 1;
+        quicly_stream_t *stream;
+        kh_foreach_value(conn->streams, stream, {
+            if (is_first) {
+                is_first = 0;
+            } else {
+                QUICLY_DUMPF(", ");
+            }
+            if ((ret = quicly_dump_stream(stream, buf)) != 0)
+                goto Exit;
+        });
+    }
+    QUICLY_DUMPF("], \"ingress\": {\"max_data\": {\"bytes_consumed\": %" PRIu64 ", \"max_sender\": ",
+                 conn->ingress.max_data.bytes_consumed);
+    QUICLY_DUMP_MAXSENDER(&conn->ingress.max_data.sender);
+    QUICLY_DUMPF("}, \"max_streams\": {\"uni\": ");
+    QUICLY_DUMP_MAXSENDER(conn->ingress.max_streams.uni);
+    QUICLY_DUMPF(", \"bidi\": ");
+    QUICLY_DUMP_MAXSENDER(conn->ingress.max_streams.bidi);
+    QUICLY_DUMPF("}}, \"egress\": { \"sentmap\": ");
+    QUICLY_DUMP_SENTMAP(&conn->egress.sentmap);
+    QUICLY_DUMPF(", \"max_lost_pn\": %" PRIu64 ", \"loss\": \"TBD\", \"packet_number\": %" PRIu64
+                 ", \"connection_close\": {\"error_code\": %" PRIu16 ", \"frame_type\": %" PRIu64 ", \"reason-phrase\": ",
+                 conn->egress.max_lost_pn, conn->egress.packet_number, conn->egress.connection_close.error_code,
+                 conn->egress.connection_close.frame_type);
+    QUICLY_DUMPSTR(conn->egress.connection_close.reason_phrase);
+    QUICLY_DUMPF("}, \"max_data\": {\"permitted\": %" PRIu64 ", \"sent\": %" PRIu64
+                 "}, \"max_streams\": {\"uni\": {\"count\": %" PRIu64 ", \"blocked_sender\": ",
+                 conn->egress.max_data.permitted, conn->egress.max_data.sent, conn->egress.max_streams.uni.count);
+    QUICLY_DUMP_MAXSENDER(&conn->egress.max_streams.uni.blocked_sender);
+    QUICLY_DUMPF("}, \"bidi\": {\"count\": %" PRIu64 ", \"blocked_sender\": ", conn->egress.max_streams.bidi.count);
+    QUICLY_DUMP_MAXSENDER(&conn->egress.max_streams.bidi.blocked_sender);
+    QUICLY_DUMPF("}}, \"path_challenge\": \"TBD\", \"last_retransmittable_sent_at\": %" PRId64 ", \"send_ack_at\": %" PRId64
+                 ", \"cc\": \"TBD\"}, \"crypto\": {\"pending_flows\": %" PRIu8 ", \"handshake_scheduled_for_discard\": %" PRIu8
+                 "}, \"pending_link\": \"TBD\", \"token\": ",
+                 conn->egress.last_retransmittable_sent_at, conn->egress.send_ack_at, conn->crypto.pending_flows,
+                 conn->crypto.handshake_scheduled_for_discard);
+    QUICLY_DUMPHEX(conn->token.base, conn->token.len);
+    QUICLY_DUMPF(", \"retry_odcid\": ");
+    QUICLY_DUMPHEX(conn->retry_odcid.cid, conn->retry_odcid.len);
+    QUICLY_DUMPF("}\n");
+
+Exit:
+    return ret;
+
+#undef DUMP_STREAMGROUP_STATE
+#undef DUMP_AEAD
+#undef DUMP_CIPHER
+#undef DUMP_CIPHER_CONTEXT
+#undef DUMP_PN_SPACE
+#undef DUMP_HANDSHAKE_STATE
+}
+
+int quicly_dump_stream(quicly_stream_t *stream, ptls_buffer_t *buf)
+{
+    int ret;
+
+    QUICLY_DUMPF("{\"stream_id\": %" PRId64 ", \"callbacks\": \"TBD\", \"sendstate\": ", stream->stream_id);
+    QUICLY_DUMP_SENDSTATE(&stream->sendstate);
+    QUICLY_DUMPF(", \"recvstate\": ");
+    QUICLY_DUMP_RECVSTATE(&stream->recvstate);
+    QUICLY_DUMPF(", \"data\": \"%p\", \"streams_blocked\": %u, \"_send_aux\": {\"max_stream_data\": %" PRIu64
+                 ", \"stop_sending\": {\"sender_state\": ",
+                 stream->data, stream->streams_blocked, stream->_send_aux.max_stream_data);
+    QUICLY_DUMP_SENDER_STATE(&stream->_send_aux.stop_sending.sender_state);
+    QUICLY_DUMPF(", \"error_code\": %" PRIu16 "}, \"rst\": {\"sender_state\": ", stream->_send_aux.stop_sending.error_code);
+    QUICLY_DUMP_SENDER_STATE(&stream->_send_aux.rst.sender_state);
+    QUICLY_DUMPF(", \"error_code\": %" PRIu16 "}, \"max_stream_data_sender\": ", stream->_send_aux.rst.error_code);
+    QUICLY_DUMP_MAXSENDER(&stream->_send_aux.max_stream_data_sender);
+    QUICLY_DUMPF(", \"pending_link\": {\"control\": %s, \"stream\": %s}}, \"_recv_aux\": {\"window\": %" PRIu32 "}}",
+                 quicly_linklist_is_linked(&stream->_send_aux.pending_link.control) ? "true" : "false",
+                 quicly_linklist_is_linked(&stream->_send_aux.pending_link.stream) ? "true" : "false", stream->_recv_aux.window);
+
+Exit:
+    return 0;
 }
 
 static quicly_datagram_t *default_alloc_packet(quicly_packet_allocator_t *self, socklen_t salen, size_t payloadsize)

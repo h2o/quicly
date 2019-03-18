@@ -820,6 +820,14 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
 /**
  *
  */
+int quicly_dump_connection(quicly_conn_t *conn, ptls_buffer_t *buf);
+/**
+ *
+ */
+int quicly_dump_stream(quicly_stream_t *stream, ptls_buffer_t *buf);
+/**
+ *
+ */
 extern quicly_packet_allocator_t quicly_default_packet_allocator;
 /**
  *
