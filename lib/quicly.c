@@ -1057,15 +1057,10 @@ static void free_application_space(struct st_quicly_application_space_t **space)
     }
 }
 
-static int setup_application_space_and_flow(quicly_conn_t *conn, int setup_0rtt)
+static int setup_application_space(quicly_conn_t *conn)
 {
     if ((conn->application = (void *)alloc_pn_space(sizeof(struct st_quicly_application_space_t))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    if (setup_0rtt) {
-        int ret;
-        if ((ret = create_handshake_flow(conn, QUICLY_EPOCH_0RTT)) != 0)
-            return ret;
-    }
     return create_handshake_flow(conn, QUICLY_EPOCH_1RTT);
 }
 
@@ -2809,12 +2804,6 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
         s->current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
         ack_space = &conn->initial->super;
         break;
-    case QUICLY_EPOCH_0RTT:
-        if (conn->application == NULL || conn->application->one_rtt_writable ||
-            (s->current.cipher = &conn->application->cipher.egress)->aead == NULL)
-            return 0;
-        s->current.first_byte = QUICLY_PACKET_TYPE_0RTT;
-        break;
     case QUICLY_EPOCH_HANDSHAKE:
         if (conn->handshake == NULL || (s->current.cipher = &conn->handshake->cipher.egress)->aead == NULL)
             return 0;
@@ -2910,7 +2899,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
     switch (epoch) {
     case QUICLY_EPOCH_0RTT:
         assert(is_enc == quicly_is_client(conn));
-        if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 1)) != 0)
+        if (conn->application == NULL && (ret = setup_application_space(conn)) != 0)
             return ret;
         if (is_enc) {
             SELECT_CIPHER_CONTEXT(&conn->application->cipher.egress);
@@ -2936,7 +2925,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
     case QUICLY_EPOCH_1RTT:
         if (is_enc)
             apply_peer_transport_params(conn);
-        if (conn->application == NULL && (ret = setup_application_space_and_flow(conn, 0)) != 0)
+        if (conn->application == NULL && (ret = setup_application_space(conn)) != 0)
             return ret;
         if (is_enc) {
             if (conn->application->cipher.egress.aead != NULL)
@@ -3055,12 +3044,11 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             s.send_window = s.min_packets_to_send * conn->super.ctx->max_packet_size;
     }
 
-    { /* send handshake flows */
-        size_t epoch;
-        for (epoch = 0; epoch <= 2; ++epoch)
-            if ((ret = send_handshake_flow(conn, epoch, &s)) != 0)
-                goto Exit;
-    }
+    /* send handshake flows */
+    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, &s)) != 0)
+        goto Exit;
+    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, &s)) != 0)
+        goto Exit;
 
     /* send encrypted frames */
     if (conn->application != NULL && (s.current.cipher = &conn->application->cipher.egress)->header_protection != NULL) {
@@ -3734,14 +3722,19 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
             if ((ret = handle_ack_frame(conn, epoch, &frame)) != 0)
                 goto Exit;
         } break;
-        case QUICLY_FRAME_TYPE_CRYPTO: {
-            quicly_stream_frame_t frame;
-            if ((ret = quicly_decode_crypto_frame(&src, end, &frame)) != 0)
+        case QUICLY_FRAME_TYPE_CRYPTO:
+            if (epoch != QUICLY_EPOCH_0RTT) {
+                quicly_stream_frame_t frame;
+                if ((ret = quicly_decode_crypto_frame(&src, end, &frame)) != 0)
+                    goto Exit;
+                if ((ret = apply_handshake_flow(conn, epoch, &frame)) != 0)
+                    goto Exit;
+                *is_ack_only = 0;
+            } else {
+                ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
                 goto Exit;
-            if ((ret = apply_handshake_flow(conn, epoch, &frame)) != 0)
-                goto Exit;
-            *is_ack_only = 0;
-        } break;
+            }
+            break;
         default:
             /* 0-rtt, 1-rtt only frames */
             if (!(epoch == QUICLY_EPOCH_0RTT || epoch == QUICLY_EPOCH_1RTT)) {
