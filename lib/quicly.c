@@ -4110,6 +4110,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         if (quicly_is_client(conn) && conn->handshake != NULL && conn->handshake->cipher.egress.aead != NULL) {
             if ((ret = discard_initial_context(conn)) != 0)
                 goto Exit;
+            update_loss_alarm(conn);
         }
         break;
     case QUICLY_EPOCH_HANDSHAKE:
