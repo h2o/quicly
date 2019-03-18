@@ -3003,29 +3003,31 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= now) {
-        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1, conn->egress.loss.largest_acked_packet,
-                                        do_detect_loss, &s.min_packets_to_send)) != 0)
-            goto Exit;
-        switch (s.min_packets_to_send) {
-        case 1: /* TLP (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
-            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_TLP,
-                                 INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
-                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
-            if (!ptls_handshake_is_complete(conn->crypto.tls)) {
-                if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
-                    goto Exit;
-            }
-            break;
-        case 2: /* RTO */ {
-            uint32_t cc_type = 0;
-            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, cc_type),
-                                 INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
-                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
+        if (!ptls_handshake_is_complete(conn->crypto.tls)) {
+            /* crypto retransmission timeout */
             if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
                 goto Exit;
-        } break;
-        default:
-            break;
+        } else {
+            if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1, conn->egress.loss.largest_acked_packet,
+                                            do_detect_loss, &s.min_packets_to_send)) != 0)
+                goto Exit;
+            switch (s.min_packets_to_send) {
+            case 1: /* TLP (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
+                LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_TLP,
+                                     INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
+                                     INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
+                break;
+            case 2: /* RTO */ {
+                uint32_t cc_type = 0;
+                LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, cc_type),
+                                     INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
+                                     INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
+                if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
+                    goto Exit;
+            } break;
+            default:
+                break;
+            }
         }
     }
 
