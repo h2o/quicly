@@ -1607,7 +1607,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    conn->super.peer.addr_validated = 1;
+    conn->super.peer.address_validation.validated = 1;
+    conn->super.peer.address_validation.send_probe = 1;
     server_cid = quicly_get_peer_cid(conn);
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CONNECT, VEC_EVENT_ATTR(DCID, ptls_iovec_init(server_cid->cid, server_cid->len)),
@@ -1968,7 +1969,7 @@ static ssize_t round_send_window(ssize_t window)
 
 static size_t calc_send_window(quicly_conn_t *conn)
 {
-    if (!conn->super.peer.addr_validated) {
+    if (!conn->super.peer.address_validation.validated) {
         uint64_t window = conn->super.stats.num_bytes.received * 3;
         if (window <= conn->super.stats.num_bytes.sent)
             return 0;
@@ -3060,7 +3061,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     s.send_window = calc_send_window(conn);
 
     /* before address validation, nothing can be sent when the window size is zero */
-    if (s.send_window == 0 && !conn->super.peer.addr_validated) {
+    if (s.send_window == 0 && !conn->super.peer.address_validation.validated) {
         ret = 0;
         goto Exit;
     }
@@ -3353,8 +3354,15 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     size_t segs_acked = 0, bytes_acked = 0;
     int ret;
 
-    if (epoch == QUICLY_EPOCH_0RTT)
+    switch (epoch) {
+    case QUICLY_EPOCH_0RTT:
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+    case QUICLY_EPOCH_HANDSHAKE:
+        conn->super.peer.address_validation.send_probe = 0;
+        break;
+    default:
+        break;
+    }
 
     init_acks_iter(conn, &iter);
 
@@ -4155,7 +4163,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 conn->crypto.handshake_scheduled_for_discard = 1;
             }
         }
-        conn->super.peer.addr_validated = 1;
+        conn->super.peer.address_validation.validated = 1;
         break;
     case QUICLY_EPOCH_1RTT:
         if (!is_ack_only && should_send_max_data(conn))

@@ -461,7 +461,10 @@ struct _st_quicly_conn_public_t {
         struct sockaddr *sa;
         socklen_t salen;
         quicly_transport_parameters_t transport_params;
-        unsigned addr_validated : 1;
+        struct {
+            unsigned validated : 1;
+            unsigned send_probe : 1;
+        } address_validation;
     } peer;
     quicly_stats_t stats;
     uint32_t version;
