@@ -1966,9 +1966,23 @@ static ssize_t round_send_window(ssize_t window)
     return window;
 }
 
+static size_t calc_send_window(quicly_conn_t *conn)
+{
+    if (!conn->super.peer.addr_validated) {
+        uint64_t window = conn->super.stats.num_bytes.received * 3;
+        if (window <= conn->super.stats.num_bytes.sent)
+            return 0;
+        return window - conn->super.stats.num_bytes.sent;
+    }
+
+    if (conn->egress.cc.cwnd <= conn->egress.sentmap.bytes_in_flight)
+        return 0;
+    return conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
+}
+
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
-    if (quicly_cc_can_send(&conn->egress.cc, conn->egress.sentmap.bytes_in_flight)) {
+    if (calc_send_window(conn) > 0) {
         if (conn->crypto.pending_flows != 0)
             return 0;
         if (quicly_linklist_is_linked(&conn->pending_link.control))
@@ -3041,12 +3055,14 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         }
     }
 
-    // TODO (jri): The following two blocks not need to be done. Extend the CC API to allow additional packets when TLP or RTO
-    // fires.
-    { /* calculate send window */
-        uint32_t cwnd = conn->egress.cc.cwnd;
-        if (conn->egress.sentmap.bytes_in_flight < cwnd)
-            s.send_window = cwnd - conn->egress.sentmap.bytes_in_flight;
+    /* TODO (jri): The following three blocks not need to be done. Extend the CC API to allow additional packets when TLP or RTO
+     * fires (NOTE (kazuho): the change might need to go into calc_send_window. */
+    s.send_window = calc_send_window(conn);
+
+    /* before address validation, nothing can be sent when the window size is zero */
+    if (s.send_window == 0 && !conn->super.peer.addr_validated) {
+        ret = 0;
+        goto Exit;
     }
 
     /* If TLP or RTO, ensure there's enough send_window to send */
@@ -3055,6 +3071,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if (s.send_window < s.min_packets_to_send * conn->super.ctx->max_packet_size)
             s.send_window = s.min_packets_to_send * conn->super.ctx->max_packet_size;
     }
+
 
     { /* send handshake flows */
         size_t epoch;
@@ -3147,7 +3164,7 @@ Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
     if (ret == 0) {
-        conn->egress.send_ack_at = INT64_MAX; /* we have send ACKs for every epoch */
+        conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         update_loss_alarm(conn);
         *num_packets = s.num_packets;
     }
