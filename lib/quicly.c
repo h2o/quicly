@@ -2090,10 +2090,10 @@ static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context
                          INT_EVENT_ATTR(PACKET_TYPE, get_epoch(*s->target.first_byte_at)));
 
     ++conn->egress.packet_number;
-    ++conn->super.num_packets.sent;
-    conn->super.num_bytes_sent += s->target.packet->data.len;
+    ++conn->super.stats.num_packets.sent;
 
     if (!coalesced) {
+        conn->super.stats.num_bytes.sent += s->target.packet->data.len;
         s->packets[s->num_packets++] = s->target.packet;
         s->target.packet = NULL;
         s->target.cipher = NULL;
@@ -2573,7 +2573,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_pn && sent->sent_at <= sent_before) {
         if (sent->bytes_in_flight != 0 && conn->egress.max_lost_pn <= sent->packet_number) {
             if (sent->packet_number != largest_newly_lost_pn) {
-                ++conn->super.num_packets.lost;
+                ++conn->super.stats.num_packets.lost;
                 largest_newly_lost_pn = sent->packet_number;
                 quicly_cc_on_lost(&conn->egress.cc, sent->bytes_in_flight, sent->packet_number, conn->egress.packet_number);
                 LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_LOST, INT_EVENT_ATTR(PACKET_NUMBER, largest_newly_lost_pn));
@@ -3351,7 +3351,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
             do {
                 const quicly_sent_packet_t *sent;
                 if ((sent = quicly_sentmap_get(&iter))->packet_number == packet_number) {
-                    ++conn->super.num_packets.ack_received;
+                    ++conn->super.stats.num_packets.ack_received;
                     if (epoch == sent->ack_epoch) {
                         largest_newly_acked.packet_number = packet_number;
                         largest_newly_acked.sent_at = sent->sent_at;
@@ -3922,7 +3922,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
                          INT_EVENT_ATTR(LENGTH, payload.len), INT_EVENT_ATTR(ENC_LEVEL, QUICLY_EPOCH_INITIAL));
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
-    ++(*conn)->super.num_packets.received;
+    (*conn)->super.stats.num_packets.received += 1;
+    (*conn)->super.stats.num_bytes.received += packet->octets.len;
     if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if ((ret = record_receipt(*conn, &(*conn)->initial->super, pn, 0, QUICLY_EPOCH_INITIAL)) != 0)
@@ -4094,7 +4095,8 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
 
-    ++conn->super.num_packets.received;
+    conn->super.stats.num_packets.received += 1;
+    conn->super.stats.num_bytes.received += packet->octets.len;
     if ((ret = handle_payload(conn, epoch, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if (*space != NULL) {

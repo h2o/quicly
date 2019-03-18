@@ -412,6 +412,19 @@ struct st_quicly_conn_streamgroup_state_t {
     quicly_stream_id_t next_stream_id;
 };
 
+typedef struct st_quicly_stats_t {
+    struct {
+        uint64_t received;
+        uint64_t sent;
+        uint64_t lost;
+        uint64_t ack_received;
+    } num_packets;
+    struct {
+        uint64_t received;
+        uint64_t sent;
+    } num_bytes;
+} quicly_stats_t;
+
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
@@ -449,10 +462,7 @@ struct _st_quicly_conn_public_t {
         socklen_t salen;
         quicly_transport_parameters_t transport_params;
     } peer;
-    struct {
-        uint64_t received, sent, lost, ack_received;
-    } num_packets;
-    uint64_t num_bytes_sent;
+    quicly_stats_t stats;
     uint32_t version;
     void *data;
 };
@@ -706,8 +716,7 @@ static void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
 /**
  *
  */
-static void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received, uint64_t *num_sent, uint64_t *num_lost,
-                                    uint64_t *num_ack_received, uint64_t *num_bytes_sent);
+static quicly_stats_t *quicly_get_stats(quicly_conn_t *conn);
 /**
  *
  */
@@ -944,15 +953,10 @@ inline int quicly_stream_is_self_initiated(quicly_stream_t *stream)
     return quicly_stream_is_client_initiated(stream->stream_id) == quicly_is_client(stream->conn);
 }
 
-inline void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received, uint64_t *num_sent, uint64_t *num_lost,
-                                    uint64_t *num_ack_received, uint64_t *num_bytes_sent)
+inline quicly_stats_t *quicly_get_stats(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    *num_received = c->num_packets.received;
-    *num_sent = c->num_packets.sent;
-    *num_lost = c->num_packets.lost;
-    *num_ack_received = c->num_packets.ack_received;
-    *num_bytes_sent = c->num_bytes_sent;
+    return &c->stats;
 }
 
 #ifdef __cplusplus
