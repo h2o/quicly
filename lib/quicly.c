@@ -4305,13 +4305,14 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
 
     /* decrypt */
     if (len != 0 && len != cid_len) {
+        uint8_t ebuf[16];
         /* normalize the input, so that we would get consistent routing */
         if (len > cid_len)
             len = cid_len;
-        memcpy(buf, encrypted, cid_len);
+        memcpy(ebuf, encrypted, cid_len);
         if (len < cid_len)
-            memset(buf + len, 0, cid_len - len);
-        ptls_cipher_encrypt(self->cid_decrypt_ctx, buf, buf, cid_len);
+            memset(ebuf + len, 0, cid_len - len);
+        ptls_cipher_encrypt(self->cid_decrypt_ctx, buf, ebuf, cid_len);
     } else {
         ptls_cipher_encrypt(self->cid_decrypt_ctx, buf, encrypted, cid_len);
     }
