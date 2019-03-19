@@ -119,7 +119,7 @@ static int on_receive(quicly_stream_t *stream, size_t off, const void *src, size
 
     if (is_server()) {
         /* server: echo back to the client */
-        if (stream->sendstate.is_open) {
+        if (quicly_sendstate_is_open(&stream->sendstate)) {
             quicly_streambuf_egress_write(stream, input.base, input.len);
             /* shutdown the stream after echoing all data */
             if (quicly_recvstate_transfer_complete(&stream->recvstate))
@@ -261,7 +261,7 @@ static int read_stdin(quicly_conn_t *conn)
     char buf[4096];
     size_t rret;
 
-    if ((stream0 = quicly_get_stream(conn, 0)) == NULL || !stream0->sendstate.is_open)
+    if ((stream0 = quicly_get_stream(conn, 0)) == NULL || !quicly_sendstate_is_open(&stream0->sendstate))
         return 0;
 
     while ((rret = read(0, buf, sizeof(buf))) == -1 && errno == EINTR)
