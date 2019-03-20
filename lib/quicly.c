@@ -2555,7 +2555,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     const quicly_sent_packet_t *sent;
     int64_t sent_before = now - delay_until_lost;
     uint64_t largest_newly_lost_pn = UINT64_MAX;
-    int is_loss = 0, ret;
+    int ret;
 
     *loss_time = INT64_MAX;
 
@@ -2576,7 +2576,6 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
             }
             if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_LOST, conn)) != 0)
                 return ret;
-            is_loss = 1;
         } else {
             quicly_sentmap_skip(&iter);
         }
