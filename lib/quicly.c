@@ -289,9 +289,8 @@ struct st_quicly_conn_t {
         quicly_linklist_t control;
         struct {
             quicly_linklist_t new_data;
-            quicly_linklist_t retransmit;
-            quicly_linklist_t fin_only;
-        } stream;
+            quicly_linklist_t non_new_data; /* either retransmits or FIN-only */
+        } default_stream_scheduler;
     } pending_link;
     /**
      * retry token
@@ -327,6 +326,7 @@ const quicly_context_t quicly_default_context = {
     &quicly_default_packet_allocator,
     NULL,
     NULL, /* on_stream_open */
+    &quicly_default_stream_scheduler,
     NULL, /* on_conn_close */
     &quicly_default_now,
     {0, NULL}, /* event_log */
@@ -598,8 +598,6 @@ static void sched_stream_control(quicly_stream_t *stream)
 
 static void resched_stream_data(quicly_stream_t *stream)
 {
-    quicly_linklist_t *target = NULL;
-
     if (stream->stream_id < 0 && -3 <= stream->stream_id) {
         uint8_t mask = 1 << -(1 + stream->stream_id);
         if (stream->sendstate.pending.num_ranges != 0) {
@@ -614,27 +612,26 @@ static void resched_stream_data(quicly_stream_t *stream)
     if (stream->streams_blocked)
         return;
 
-    /* unlink so that we would round-robin the streams */
-    if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.stream))
-        quicly_linklist_unlink(&stream->_send_aux.pending_link.stream);
+    quicly_stream_scheduler_t *scheduler = stream->conn->super.ctx->stream_scheduler;
 
     if (stream->sendstate.pending.num_ranges != 0) {
         if (!quicly_sendstate_is_open(&stream->sendstate) &&
             stream->sendstate.pending.ranges[0].start >= stream->sendstate.final_size) {
             /* fin is the only thing to be sent, and it can be sent if window size is zero */
             assert(stream->sendstate.pending.ranges[0].start == stream->sendstate.final_size);
-            target = &stream->conn->pending_link.stream.fin_only;
+            scheduler->set_non_new_data(scheduler, stream);
+            goto Scheduling_Done;
         } else if (stream->sendstate.pending.ranges[0].start < stream->_send_aux.max_stream_data) {
             if (stream->sendstate.pending.ranges[0].start == stream->sendstate.size_inflight) {
-                target = &stream->conn->pending_link.stream.new_data;
+                scheduler->set_new_data(scheduler, stream);
             } else {
-                target = &stream->conn->pending_link.stream.retransmit;
+                scheduler->set_non_new_data(scheduler, stream);
             }
+            goto Scheduling_Done;
         }
     }
-
-    if (target != NULL)
-        quicly_linklist_insert(target, &stream->_send_aux.pending_link.stream);
+    scheduler->clear(scheduler, stream);
+Scheduling_Done:;
 }
 
 static int should_send_max_data(quicly_conn_t *conn)
@@ -770,7 +767,7 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     stream->_send_aux.rst.error_code = 0;
     quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender, initial_max_stream_data_local);
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
-    quicly_linklist_init(&stream->_send_aux.pending_link.stream);
+    quicly_linklist_init(&stream->_send_aux.pending_link.default_scheduler);
 
     stream->_recv_aux.window = initial_max_stream_data_local;
 }
@@ -781,7 +778,7 @@ static void dispose_stream_properties(quicly_stream_t *stream)
     quicly_recvstate_dispose(&stream->recvstate);
     quicly_maxsender_dispose(&stream->_send_aux.max_stream_data_sender);
     quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
-    quicly_linklist_unlink(&stream->_send_aux.pending_link.stream);
+    quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
 }
 
 static quicly_stream_t *open_stream(quicly_conn_t *conn, uint64_t stream_id, uint32_t initial_max_stream_data_local,
@@ -1131,9 +1128,8 @@ void quicly_free(quicly_conn_t *conn)
     assert(!quicly_linklist_is_linked(&conn->pending_link.streams_blocked.uni));
     assert(!quicly_linklist_is_linked(&conn->pending_link.streams_blocked.bidi));
     assert(!quicly_linklist_is_linked(&conn->pending_link.control));
-    assert(!quicly_linklist_is_linked(&conn->pending_link.stream.new_data));
-    assert(!quicly_linklist_is_linked(&conn->pending_link.stream.retransmit));
-    assert(!quicly_linklist_is_linked(&conn->pending_link.stream.fin_only));
+    assert(!quicly_linklist_is_linked(&conn->pending_link.default_stream_scheduler.new_data));
+    assert(!quicly_linklist_is_linked(&conn->pending_link.default_stream_scheduler.non_new_data));
 
     free_handshake_space(&conn->initial);
     free_handshake_space(&conn->handshake);
@@ -1504,9 +1500,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_linklist_init(&conn->_.pending_link.streams_blocked.uni);
     quicly_linklist_init(&conn->_.pending_link.streams_blocked.bidi);
     quicly_linklist_init(&conn->_.pending_link.control);
-    quicly_linklist_init(&conn->_.pending_link.stream.new_data);
-    quicly_linklist_init(&conn->_.pending_link.stream.retransmit);
-    quicly_linklist_init(&conn->_.pending_link.stream.fin_only);
+    quicly_linklist_init(&conn->_.pending_link.default_stream_scheduler.new_data);
+    quicly_linklist_init(&conn->_.pending_link.default_stream_scheduler.non_new_data);
 
     if (set_peeraddr(&conn->_, sa, salen) != 0) {
         quicly_free(&conn->_);
@@ -1967,12 +1962,8 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
             return 0;
         if (quicly_linklist_is_linked(&conn->pending_link.control))
             return 0;
-        if (conn->egress.max_data.sent < conn->egress.max_data.permitted &&
-            quicly_linklist_is_linked(&conn->pending_link.stream.new_data))
-            return 0;
-        if (quicly_linklist_is_linked(&conn->pending_link.stream.retransmit))
-            return 0;
-        if (quicly_linklist_is_linked(&conn->pending_link.stream.fin_only))
+        int flow_controlled = conn->egress.max_data.sent >= conn->egress.max_data.permitted;
+        if (conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, flow_controlled))
             return 0;
     }
 
@@ -2344,7 +2335,16 @@ static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_
     return 0;
 }
 
-static int send_stream_data(quicly_stream_t *stream, struct st_quicly_send_context_t *s)
+int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s, int new_data)
+{
+    if (s->num_packets == s->max_packets)
+        return 0;
+    if (new_data && !(conn->egress.max_data.sent < conn->egress.max_data.permitted))
+        return 0;
+    return 1;
+}
+
+int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 {
     uint64_t off = stream->sendstate.pending.ranges[0].start, end_off;
     quicly_sent_t *sent;
@@ -2690,37 +2690,6 @@ static void open_blocked_streams(quicly_conn_t *conn, int uni)
     }
 }
 
-static int send_stream_frames(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
-{
-#define SEND_ONE(anchor)                                                                                                           \
-    do {                                                                                                                           \
-        quicly_stream_t *stream = (void *)((char *)(anchor)->next - offsetof(quicly_stream_t, _send_aux.pending_link.stream));     \
-        if ((ret = send_stream_data(stream, s)) != 0)                                                                              \
-            goto Exit;                                                                                                             \
-        resched_stream_data(stream);                                                                                               \
-    } while (0)
-
-    int ret = 0;
-
-    /* fin-only STREAM frames */
-    while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending_link.stream.fin_only))
-        SEND_ONE(&conn->pending_link.stream.fin_only);
-    /* STREAMS with data (note: it's the reposibility of a more sophisticated, prioritized sender to schedule between new data and
-       retransmits) */
-    while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending_link.stream.retransmit))
-        SEND_ONE(&conn->pending_link.stream.retransmit);
-    while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending_link.stream.new_data)) {
-        if (!(conn->egress.max_data.sent < conn->egress.max_data.permitted))
-            break;
-        SEND_ONE(&conn->pending_link.stream.new_data);
-    }
-
-Exit:
-    return ret;
-
-#undef SEND_ONE
-}
-
 quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
                                                    ptls_iovec_t dest_cid, ptls_iovec_t src_cid)
 {
@@ -2824,7 +2793,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quic
     while ((conn->crypto.pending_flows & (uint8_t)(1 << epoch)) != 0) {
         quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
         assert(stream != NULL);
-        if ((ret = send_stream_data(stream, s)) != 0)
+        if ((ret = quicly_send_stream(stream, s)) != 0)
             goto Exit;
         resched_stream_data(stream);
     }
@@ -3103,7 +3072,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
         }
         /* send STREAM frames */
-        if ((ret = send_stream_frames(conn, &s)) != 0)
+        if ((ret = conn->super.ctx->stream_scheduler->do_send(conn->super.ctx->stream_scheduler, conn, &s)) != 0)
             goto Exit;
     }
 
@@ -4400,6 +4369,70 @@ void quicly_free_default_cid_enncryptor(quicly_cid_encryptor_t *_self)
     self->stateless_reset_token_ctx->final(self->stateless_reset_token_ctx, NULL, PTLS_HASH_FINAL_MODE_FREE);
     free(self);
 }
+
+static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, quicly_conn_t *conn, int flow_controlled)
+{
+    if (!flow_controlled && quicly_linklist_is_linked(&conn->pending_link.default_stream_scheduler.new_data))
+        return 1;
+    if (quicly_linklist_is_linked(&conn->pending_link.default_stream_scheduler.non_new_data))
+        return 1;
+    return 0;
+}
+
+static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, quicly_conn_t *conn, quicly_send_context_t *s)
+{
+#define SEND_ONE(anchor)                                                                                                           \
+    do {                                                                                                                           \
+        quicly_stream_t *stream =                                                                                                  \
+            (void *)((char *)(anchor)->next - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler));                \
+        if ((ret = quicly_send_stream(stream, s)) != 0)                                                                            \
+            goto Exit;                                                                                                             \
+        resched_stream_data(stream);                                                                                               \
+    } while (0)
+
+    int ret = 0;
+
+    /* retransmits and fin-only STREAM frames */
+    while (quicly_can_send_stream_data(conn, s, 0) &&
+           quicly_linklist_is_linked(&conn->pending_link.default_stream_scheduler.non_new_data))
+        SEND_ONE(&conn->pending_link.default_stream_scheduler.non_new_data);
+    /* STREAMS with data */
+    while (quicly_can_send_stream_data(conn, s, 1) &&
+           quicly_linklist_is_linked(&conn->pending_link.default_stream_scheduler.new_data)) {
+        SEND_ONE(&conn->pending_link.default_stream_scheduler.new_data);
+    }
+
+Exit:
+    return ret;
+
+#undef SEND_ONE
+}
+
+static void default_stream_scheduler_clear(quicly_stream_scheduler_t *self, quicly_stream_t *stream)
+{
+    quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
+}
+
+static void schedule_to_slot(quicly_linklist_t *slot, quicly_stream_t *stream)
+{
+    if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler))
+        quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
+    quicly_linklist_insert(slot, &stream->_send_aux.pending_link.default_scheduler);
+}
+
+static void default_stream_scheduler_set_new_data(quicly_stream_scheduler_t *self, quicly_stream_t *stream)
+{
+    schedule_to_slot(&stream->conn->pending_link.default_stream_scheduler.new_data, stream);
+}
+
+static void default_stream_scheduler_set_non_new_data(quicly_stream_scheduler_t *self, quicly_stream_t *stream)
+{
+    schedule_to_slot(&stream->conn->pending_link.default_stream_scheduler.non_new_data, stream);
+}
+
+quicly_stream_scheduler_t quicly_default_stream_scheduler = {default_stream_scheduler_can_send, default_stream_scheduler_do_send,
+                                                             default_stream_scheduler_clear, default_stream_scheduler_set_new_data,
+                                                             default_stream_scheduler_set_non_new_data};
 
 quicly_stream_t *quicly_default_alloc_stream(quicly_context_t *ctx)
 {

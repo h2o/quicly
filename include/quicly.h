@@ -190,6 +190,7 @@ typedef struct st_quicly_cid_plaintext_t quicly_cid_plaintext_t;
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
+typedef struct st_quicly_send_context_t quicly_send_context_t;
 
 #define QUICLY_CALLBACK_TYPE0(ret, name)                                                                                           \
     typedef struct st_quicly_##name##_t {                                                                                          \
@@ -231,6 +232,32 @@ typedef struct st_quicly_cid_encryptor_t {
      */
     int (*generate_stateless_reset_token)(struct st_quicly_cid_encryptor_t *self, void *token, const void *cid);
 } quicly_cid_encryptor_t;
+
+/**
+ * stream scheduler
+ */
+typedef struct st_quicly_stream_scheduler_t {
+    /**
+     *
+     */
+    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int flow_controlled);
+    /**
+     *
+     */
+    int (*do_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s);
+    /**
+     *
+     */
+    void (*clear)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
+    /**
+     *
+     */
+    void (*set_new_data)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
+    /**
+     *
+     */
+    void (*set_non_new_data)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
+} quicly_stream_scheduler_t;
 
 /**
  * called when stream is being open. Application is expected to create it's corresponding state and tie it to stream->data.
@@ -361,6 +388,10 @@ struct st_quicly_context_t {
      * callback called when a new stream is opened by peer
      */
     quicly_stream_open_t *stream_open;
+    /**
+     * callbacks for scheduling stream data
+     */
+    quicly_stream_scheduler_t *stream_scheduler;
     /**
      * callback called when a connection is closed by peer
      */
@@ -576,7 +607,7 @@ struct st_quicly_stream_t {
          */
         struct {
             quicly_linklist_t control; /* links to conn_t::control (or to conn_t::streams_blocked if the blocked flag is set) */
-            quicly_linklist_t stream;
+            quicly_linklist_t default_scheduler;
         } pending_link;
     } _send_aux;
     /**
@@ -731,6 +762,15 @@ int quicly_close(quicly_conn_t *conn, int err, const char *reason_phrase);
  */
 int64_t quicly_get_first_timeout(quicly_conn_t *conn);
 /**
+ * checks if quicly_send_stream can be invoked
+ */
+int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s, int new_data);
+/**
+ * sends data of given stream. Called by stream scheduler.  Prior to calling the function each time, the scheduler should call
+ * `quicly_can_send_stream_data` to see if stream-level data can be sent.
+ */
+int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s);
+/**
  *
  */
 quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
@@ -830,6 +870,10 @@ quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t
  *
  */
 void quicly_free_default_cid_enncryptor(quicly_cid_encryptor_t *self);
+/**
+ *
+ */
+extern quicly_stream_scheduler_t quicly_default_stream_scheduler;
 /**
  *
  */
