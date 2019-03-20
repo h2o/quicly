@@ -30,52 +30,68 @@ void quicly_sendstate_init(quicly_sendstate_t *state)
 {
     quicly_ranges_init_with_range(&state->acked, 0, 0);
     quicly_ranges_init(&state->pending);
-    state->size_committed = 0;
-    state->is_open = 1;
+    state->size_inflight = 0;
+    state->final_size = UINT64_MAX;
 }
 
 void quicly_sendstate_init_closed(quicly_sendstate_t *state)
 {
     quicly_sendstate_init(state);
-    state->is_open = 0;
+    state->acked.ranges[0].end = 1;
+    state->final_size = 0;
 }
 
 void quicly_sendstate_dispose(quicly_sendstate_t *state)
 {
     quicly_ranges_clear(&state->acked);
     quicly_ranges_clear(&state->pending);
-    state->size_committed = 0;
-    state->is_open = 0;
+    state->final_size = 0;
+    state->size_inflight = 0;
 }
 
 int quicly_sendstate_activate(quicly_sendstate_t *state)
 {
-    uint64_t end_off = state->is_open ? UINT64_MAX : state->size_committed;
+    uint64_t end_off = state->final_size;
+
+    /* take EOS position into account */
+    if (end_off != UINT64_MAX)
+        ++end_off;
 
     /* do nothing if already active */
     if (state->pending.num_ranges != 0 && state->pending.ranges[state->pending.num_ranges - 1].end == end_off)
         return 0;
 
-    return quicly_ranges_add(&state->pending, state->size_committed, end_off);
+    return quicly_ranges_add(&state->pending, state->size_inflight, end_off);
 }
 
-int quicly_sendstate_shutdown(quicly_sendstate_t *state, uint64_t end_off)
+int quicly_sendstate_shutdown(quicly_sendstate_t *state, uint64_t final_size)
 {
     int ret;
 
-    assert(state->is_open);
-    assert(state->size_committed <= end_off);
+    assert(quicly_sendstate_is_open(state));
+    assert(state->size_inflight <= final_size);
 
     if (state->pending.num_ranges != 0 && state->pending.ranges[state->pending.num_ranges - 1].end == UINT64_MAX) {
-        state->pending.ranges[state->pending.num_ranges - 1].end = end_off + 1;
+        state->pending.ranges[state->pending.num_ranges - 1].end = final_size + 1;
     } else {
-        if ((ret = quicly_ranges_add(&state->pending, state->size_committed, end_off + 1)) != 0)
+        if ((ret = quicly_ranges_add(&state->pending, state->size_inflight, final_size + 1)) != 0)
             return ret;
     }
 
-    state->size_committed = end_off + 1;
-    state->is_open = 0;
+    state->final_size = final_size;
     return 0;
+}
+
+void quicly_sendstate_reset(quicly_sendstate_t *state)
+{
+    int ret;
+
+    if (state->final_size == UINT64_MAX)
+        state->final_size = state->size_inflight;
+
+    ret = quicly_ranges_add(&state->acked, 0, state->final_size + 1);
+    assert(ret == 0 && "guaranteed to succeed, because the numebr of ranges never increases");
+    quicly_ranges_clear(&state->pending);
 }
 
 int quicly_sendstate_acked(quicly_sendstate_t *state, quicly_sendstate_sent_t *args, int is_active, size_t *bytes_to_shift)
@@ -95,8 +111,11 @@ int quicly_sendstate_acked(quicly_sendstate_t *state, quicly_sendstate_sent_t *a
     /* calculate number of bytes that can be retired from the send buffer */
     if (prev_sent_upto != state->acked.ranges[0].end) {
         uint64_t sent_upto = state->acked.ranges[0].end;
-        if (!state->is_open && state->pending.num_ranges == 0)
-            sent_upto -= 1;
+        if (sent_upto > state->final_size) {
+            /* adjust EOS position */
+            assert(sent_upto == state->final_size + 1);
+            --sent_upto;
+        }
         *bytes_to_shift = sent_upto - prev_sent_upto;
     } else {
         *bytes_to_shift = 0;

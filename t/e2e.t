@@ -4,11 +4,25 @@ use strict;
 use warnings;
 use Digest::MD5 qw(md5_hex);
 use File::Temp qw(tempdir);
+use JSON;
 use Net::EmptyPort qw(empty_port);
 use POSIX ":sys_wait_h";
 use Scope::Guard qw(scope_guard);
 use Test::More;
 use Time::HiRes qw(sleep);
+
+sub complex ($$;$) {
+    my $s = shift;
+    my $cb = shift;
+    local $Test::Builder::Level = $Test::Builder::Level + 1;
+    local $_ = $s;
+    if ($cb->()) {
+        &pass;
+    } else {
+        &fail;
+        diag($s);
+    }
+}
 
 $ENV{BINARY_DIR} ||= ".";
 my $cli = "$ENV{BINARY_DIR}/cli";
@@ -24,8 +38,10 @@ subtest "hello" => sub {
     is $resp, "hello world\n";
     subtest "events" => sub {
         my $events = slurp_file("$tempdir/events");
-        ok +($events =~ /"type":"transport-close-send",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)"/s
-             and $1 eq "packet-commit" and $2 eq "quictrace-sent" and $3 eq "send" and $4 eq "free");
+        complex $events, sub {
+            $_ =~ /"type":"transport-close-send",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)"/s
+                and $1 eq 'packet-commit' and $2 eq 'quictrace-sent' and $3 eq 'send' and $4 eq 'free';
+        };
     };
 };
 
@@ -96,6 +112,27 @@ subtest "blocked-streams" => sub {
     is $resp, "hello world\nhello world\nhello world\nhello world\n";
 };
 
+subtest "max-data-crapped" => sub {
+    my $guard = spawn_server('-e', "$tempdir/events");
+    my $resp = `$cli -m 10 -p /12.txt 127.0.0.1 $port 2> /dev/null`;
+    is $resp, "hello world\n";
+    undef $guard;
+    # build list of filtered events
+    open my $fh, "<", "$tempdir/events"
+        or die "failed to open file $tempdir/events:$!";
+    my $events = ":";
+    while (my $line = <$fh>) {
+        my $event = from_json($line);
+        if ($event->{type} =~ /^(send|receive|max-data-receive)$/) {
+            $events .= "$event->{type}:";
+        } elsif ($event->{type} eq 'stream-send') {
+            $events .= "stream-send\@$event->{'stream-id'}:";
+        }
+    }
+    # check that events are happening in expected order, without a busy loop to quicly_send
+    like $events, qr/:send:stream-send\@0:receive:max-data-receive:send:stream-send\@0:/;
+};
+
 done_testing;
 
 sub spawn_server {
@@ -128,3 +165,5 @@ sub slurp_file {
         <$fh>;
     };
 }
+
+1;
