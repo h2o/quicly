@@ -4302,28 +4302,27 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
                                   size_t len)
 {
     struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
-    uint8_t buf[16];
+    uint8_t ptbuf[16], tmpbuf[16];
     const uint8_t *p;
     size_t cid_len;
 
     cid_len = self->cid_decrypt_ctx->algo->block_size;
 
-    /* decrypt */
+    /* normalize the input, so that we would get consistent routing */
     if (len != 0 && len != cid_len) {
-        uint8_t ebuf[16];
-        /* normalize the input, so that we would get consistent routing */
         if (len > cid_len)
             len = cid_len;
-        memcpy(ebuf, encrypted, cid_len);
+        memcpy(tmpbuf, encrypted, cid_len);
         if (len < cid_len)
-            memset(ebuf + len, 0, cid_len - len);
-        ptls_cipher_encrypt(self->cid_decrypt_ctx, buf, ebuf, cid_len);
-    } else {
-        ptls_cipher_encrypt(self->cid_decrypt_ctx, buf, encrypted, cid_len);
+            memset(tmpbuf + len, 0, cid_len - len);
+        encrypted = tmpbuf;
     }
 
+    /* decrypt */
+    ptls_cipher_encrypt(self->cid_decrypt_ctx, ptbuf, encrypted, cid_len);
+
     /* decode */
-    p = buf;
+    p = ptbuf;
     if (cid_len == 16) {
         plaintext->node_id = quicly_decode64(&p);
     } else {
@@ -4332,7 +4331,7 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
     plaintext->master_id = quicly_decode32(&p);
     plaintext->thread_id = quicly_decode24(&p);
     plaintext->path_id = *p++;
-    assert(p - buf == cid_len);
+    assert(p - ptbuf == cid_len);
 
     return cid_len;
 }
