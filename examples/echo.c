@@ -36,6 +36,7 @@
 #include "picotls.h"
 #include "picotls/openssl.h"
 #include "quicly.h"
+#include "quicly/defaults.h"
 #include "quicly/streambuf.h"
 
 /**
