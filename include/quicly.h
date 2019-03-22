@@ -238,23 +238,27 @@ typedef struct st_quicly_cid_encryptor_t {
  */
 typedef struct st_quicly_stream_scheduler_t {
     /**
-     *
+     * returns if there's any data to send.  When `including_new_data` is set to true, the scheduler returns if there is any stream
+     * that have been registered.  When set to false, the scheduler should return if there is any stream registered by the
+     * `set_non_new_data` callback.
      */
-    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int flow_controlled);
+    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int including_new_data);
     /**
-     *
+     * Called by quicly to emit stream data.  The scheduler should repeatedly choose a stream and call `quicly_send_stream` until
+     * `quicly_can_send_stream` returns false.
      */
     int (*do_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s);
     /**
-     *
+     * Called by quicly to unregister a stream from the scheduler when there's nothing to be sent immediately on that stream.
      */
     void (*clear)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
     /**
-     *
+     * Called by quicly to notify the scheduler that the stream has new data to be sent.
      */
     void (*set_new_data)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
     /**
-     *
+     * Called by quicly to notify the scheduler that the stream has something other than new data to be sent (i.e. retransmits or
+     * FIN-only).
      */
     void (*set_non_new_data)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
 } quicly_stream_scheduler_t;

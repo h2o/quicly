@@ -1936,8 +1936,8 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
             return 0;
         if (quicly_linklist_is_linked(&conn->pending_link.control))
             return 0;
-        int flow_controlled = conn->egress.max_data.sent >= conn->egress.max_data.permitted;
-        if (conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, flow_controlled))
+        int including_new_data = conn->egress.max_data.sent < conn->egress.max_data.permitted;
+        if (conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, including_new_data))
             return 0;
     }
 

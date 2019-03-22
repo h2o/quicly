@@ -216,11 +216,13 @@ void quicly_free_default_cid_enncryptor(quicly_cid_encryptor_t *_self)
     free(self);
 }
 
-static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, quicly_conn_t *_conn, int flow_controlled)
+static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, quicly_conn_t *_conn, int including_new_data)
 {
     struct _st_quicly_conn_public_t *conn = (struct _st_quicly_conn_public_t *)_conn;
-    if (!flow_controlled && quicly_linklist_is_linked(&conn->_default_scheduler.new_data))
-        return 1;
+    if (including_new_data) {
+        if (quicly_linklist_is_linked(&conn->_default_scheduler.new_data))
+            return 1;
+    }
     if (quicly_linklist_is_linked(&conn->_default_scheduler.non_new_data))
         return 1;
     return 0;
