@@ -22,6 +22,10 @@
 #ifndef quicly_defaults_h
 #define quicly_defaults_h
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "quicly.h"
 
 extern const quicly_context_t quicly_default_context;
@@ -55,5 +59,9 @@ quicly_event_logger_t *quicly_new_default_event_logger(FILE *fp);
  *
  */
 void quicly_free_default_event_logger(quicly_event_logger_t *self);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

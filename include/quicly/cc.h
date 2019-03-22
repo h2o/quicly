@@ -26,6 +26,10 @@
 #ifndef quicly_cc_h
 #define quicly_cc_h
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
@@ -60,5 +64,9 @@ void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64
  * Called when persistent congestion is observed.
  */
 void quicly_cc_on_persistent_congestion(quicly_cc_t *cc);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
