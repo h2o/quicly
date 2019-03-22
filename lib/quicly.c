@@ -2013,7 +2013,7 @@ struct st_quicly_send_context_t {
     uint8_t *dst_payload_from;
 };
 
-static int commit_send_packet(quicly_conn_t *conn, struct st_quicly_send_context_t *s, int coalesced)
+static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
 {
     size_t packet_bytes_in_flight;
 
@@ -2098,7 +2098,7 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
-static int _do_allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space, int ack_eliciting)
+static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, int ack_eliciting)
 {
     int coalescible, ret;
 
@@ -2215,13 +2215,13 @@ TargetReady:
     return 0;
 }
 
-static int allocate_frame(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space)
+static int allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space)
 {
     return _do_allocate_frame(conn, s, min_space, 0);
 }
 
-static int allocate_ack_eliciting_frame(quicly_conn_t *conn, struct st_quicly_send_context_t *s, size_t min_space,
-                                        quicly_sent_t **sent, quicly_sent_acked_cb acked)
+static int allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, quicly_sent_t **sent,
+                                        quicly_sent_acked_cb acked)
 {
     int ret;
 
@@ -2234,7 +2234,7 @@ static int allocate_ack_eliciting_frame(quicly_conn_t *conn, struct st_quicly_se
     return ret;
 }
 
-static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, struct st_quicly_send_context_t *s)
+static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, quicly_send_context_t *s)
 {
     uint64_t ack_delay;
     int ret;
@@ -2279,7 +2279,7 @@ Emit:
     return ret;
 }
 
-static int prepare_stream_state_sender(quicly_stream_t *stream, quicly_sender_state_t *sender, struct st_quicly_send_context_t *s,
+static int prepare_stream_state_sender(quicly_stream_t *stream, quicly_sender_state_t *sender, quicly_send_context_t *s,
                                        size_t min_space, quicly_sent_acked_cb ack_cb)
 {
     quicly_sent_t *sent;
@@ -2293,7 +2293,7 @@ static int prepare_stream_state_sender(quicly_stream_t *stream, quicly_sender_st
     return 0;
 }
 
-static int send_stream_control_frames(quicly_stream_t *stream, struct st_quicly_send_context_t *s)
+static int send_stream_control_frames(quicly_stream_t *stream, quicly_send_context_t *s)
 {
     int ret;
 
@@ -2605,7 +2605,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
     return 0;
 }
 
-static int send_max_streams(quicly_conn_t *conn, int uni, struct st_quicly_send_context_t *s)
+static int send_max_streams(quicly_conn_t *conn, int uni, quicly_send_context_t *s)
 {
     if (!should_send_max_streams(conn, uni))
         return 0;
@@ -2632,7 +2632,7 @@ static int send_max_streams(quicly_conn_t *conn, int uni, struct st_quicly_send_
     return 0;
 }
 
-static int send_streams_blocked(quicly_conn_t *conn, int uni, struct st_quicly_send_context_t *s)
+static int send_streams_blocked(quicly_conn_t *conn, int uni, quicly_send_context_t *s)
 {
     quicly_linklist_t *blocked_list = uni ? &conn->pending_link.streams_blocked.uni : &conn->pending_link.streams_blocked.bidi;
     int ret;
@@ -2761,7 +2761,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, struct sockaddr *sa,
     return packet;
 }
 
-static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, struct st_quicly_send_context_t *s)
+static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s)
 {
     struct st_quicly_pn_space_t *ack_space = NULL;
     int ret = 0;
@@ -2802,7 +2802,7 @@ Exit:
     return ret;
 }
 
-static int send_connection_close(quicly_conn_t *conn, struct st_quicly_send_context_t *s)
+static int send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     uint8_t frame_header_buf[1 + 2 + 8 + 8], *p;
     size_t reason_phrase_len = strlen(conn->egress.connection_close.reason_phrase);
@@ -2927,7 +2927,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 
 int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_packets)
 {
-    struct st_quicly_send_context_t s = {{NULL, -1}, {NULL, NULL, NULL}, packets, *num_packets};
+    quicly_send_context_t s = {{NULL, -1}, {NULL, NULL, NULL}, packets, *num_packets};
     int ret;
 
     update_now(conn->super.ctx);
