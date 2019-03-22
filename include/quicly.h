@@ -481,6 +481,10 @@ struct _st_quicly_conn_public_t {
         quicly_transport_parameters_t transport_params;
     } peer;
     struct {
+        quicly_linklist_t new_data;
+        quicly_linklist_t non_new_data;
+    } _default_scheduler;
+    struct {
         uint64_t received, sent, lost, ack_received;
     } num_packets;
     uint64_t num_bytes_sent;
@@ -676,8 +680,6 @@ typedef struct st_quicly_decoded_packet_t {
     } _is_stateless_reset_cached;
 } quicly_decoded_packet_t;
 
-extern const quicly_context_t quicly_default_context;
-
 /**
  *
  */
@@ -860,36 +862,11 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
 /**
  *
  */
-extern quicly_packet_allocator_t quicly_default_packet_allocator;
-/**
- *
- */
-quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
-                                                         ptls_iovec_t key);
-/**
- *
- */
-void quicly_free_default_cid_enncryptor(quicly_cid_encryptor_t *self);
-/**
- *
- */
-extern quicly_stream_scheduler_t quicly_default_stream_scheduler;
-/**
- *
- */
-extern quicly_now_t quicly_default_now;
-/**
- *
- */
-quicly_event_logger_t *quicly_new_default_event_logger(FILE *fp);
-/**
- *
- */
-void quicly_free_default_event_logger(quicly_event_logger_t *self);
-/**
- *
- */
 void quicly_amend_ptls_context(ptls_context_t *ptls);
+/**
+ *
+ */
+static void quicly_byte_to_hex(char *dst, uint8_t v);
 /**
  *
  */
@@ -997,6 +974,12 @@ inline void quicly_get_packet_stats(quicly_conn_t *conn, uint64_t *num_received,
     *num_lost = c->num_packets.lost;
     *num_ack_received = c->num_packets.ack_received;
     *num_bytes_sent = c->num_bytes_sent;
+}
+
+inline void quicly_byte_to_hex(char *dst, uint8_t v)
+{
+    dst[0] = "0123456789abcdef"[v >> 4];
+    dst[1] = "0123456789abcdef"[v & 0xf];
 }
 
 #ifdef __cplusplus
