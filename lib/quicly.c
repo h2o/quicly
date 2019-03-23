@@ -2522,7 +2522,7 @@ static int mark_packets_as_lost(quicly_conn_t *conn, size_t count)
     quicly_sentmap_iter_t iter;
     int ret;
 
-    assert(count != 0);
+    assert(count != 0 || !ptls_handshake_is_complete(conn->crypto.tls));
 
     init_acks_iter(conn, &iter);
 
@@ -2539,7 +2539,7 @@ static int mark_packets_as_lost(quicly_conn_t *conn, size_t count)
         if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_LOST, conn)) != 0)
             return ret;
         conn->egress.max_lost_pn = pn + 1;
-    } while (--count != 0);
+    } while (!ptls_handshake_is_complete(conn->crypto.tls) || --count != 0);  // FIXME: Resolve with #111.
 
     return 0;
 }
@@ -3004,8 +3004,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= now) {
         if (!ptls_handshake_is_complete(conn->crypto.tls)) {
-            /* crypto retransmission timeout */
-            if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
+            /* crypto retransmission timeout. Setting num_packets to 0, implying no limit (FIXME: Resolve with #111.) */
+            if ((ret = mark_packets_as_lost(conn, 0)) != 0)
                 goto Exit;
         } else {
             if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1, conn->egress.loss.largest_acked_packet,
