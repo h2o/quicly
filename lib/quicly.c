@@ -2123,6 +2123,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
 
     /* allocate packet */
     if (coalescible) {
+        s->dst_end += s->target.cipher->aead->algo->tag_size; /* restore the AEAD tag size (tag size can differ bet. epochs) */
         s->target.cipher = s->current.cipher;
     } else {
         if (s->num_packets >= s->max_packets)
