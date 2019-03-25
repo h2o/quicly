@@ -2054,7 +2054,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_COMMIT, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
-                         INT_EVENT_ATTR(LENGTH, s->target.packet->data.len), INT_EVENT_ATTR(ACK_ONLY, !s->target.ack_eliciting));
+                         INT_EVENT_ATTR(LENGTH, s->dst - s->target.first_byte_at),
+                         INT_EVENT_ATTR(ACK_ONLY, !s->target.ack_eliciting));
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_SEND, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
                          INT_EVENT_ATTR(LENGTH, s->target.packet->data.len),
                          INT_EVENT_ATTR(PACKET_TYPE, get_epoch(*s->target.first_byte_at)));
@@ -2123,6 +2124,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
 
     /* allocate packet */
     if (coalescible) {
+        s->dst_end += s->target.cipher->aead->algo->tag_size; /* restore the AEAD tag size (tag size can differ bet. epochs) */
         s->target.cipher = s->current.cipher;
     } else {
         if (s->num_packets >= s->max_packets)
