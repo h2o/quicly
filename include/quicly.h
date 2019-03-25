@@ -862,6 +862,14 @@ static int quicly_stream_is_unidirectional(quicly_stream_id_t stream_id);
 /**
  *
  */
+static int quicly_stream_has_send_side(int is_client, quicly_stream_id_t stream_id);
+/**
+ *
+ */
+static int quicly_stream_has_receive_side(int is_client, quicly_stream_id_t stream_id);
+/**
+ *
+ */
 static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
 /**
  *
@@ -962,6 +970,20 @@ inline int quicly_stream_is_unidirectional(quicly_stream_id_t stream_id)
     if (stream_id < 0)
         return 0;
     return (stream_id & 2) != 0;
+}
+
+inline int quicly_stream_has_send_side(int is_client, quicly_stream_id_t stream_id)
+{
+    if (!quicly_stream_is_unidirectional(stream_id))
+        return 1;
+    return is_client == quicly_stream_is_client_initiated(stream_id);
+}
+
+inline int quicly_stream_has_receive_side(int is_client, quicly_stream_id_t stream_id)
+{
+    if (!quicly_stream_is_unidirectional(stream_id))
+        return 1;
+    return is_client != quicly_stream_is_client_initiated(stream_id);
 }
 
 inline int quicly_stream_is_self_initiated(quicly_stream_t *stream)
