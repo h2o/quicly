@@ -730,15 +730,14 @@ Exit:
 static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max_stream_data_local,
                                    uint64_t initial_max_stream_data_remote)
 {
-    int uni = quicly_stream_is_unidirectional(stream->stream_id),
-        self_initiated = quicly_stream_is_client_initiated(stream->stream_id) == quicly_is_client(stream->conn);
+    int is_client = quicly_is_client(stream->conn);
 
-    if (!uni || self_initiated) {
+    if (quicly_stream_has_send_side(is_client, stream->stream_id)) {
         quicly_sendstate_init(&stream->sendstate);
     } else {
         quicly_sendstate_init_closed(&stream->sendstate);
     }
-    if (!uni || !self_initiated) {
+    if (quicly_stream_has_receive_side(is_client, stream->stream_id)) {
         quicly_recvstate_init(&stream->recvstate);
     } else {
         quicly_recvstate_init_closed(&stream->recvstate);
@@ -2071,7 +2070,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_COMMIT, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
-                         INT_EVENT_ATTR(LENGTH, s->target.packet->data.len), INT_EVENT_ATTR(ACK_ONLY, !s->target.ack_eliciting));
+                         INT_EVENT_ATTR(LENGTH, s->dst - s->target.first_byte_at),
+                         INT_EVENT_ATTR(ACK_ONLY, !s->target.ack_eliciting));
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_SEND, INT_EVENT_ATTR(PACKET_NUMBER, conn->egress.packet_number),
                          INT_EVENT_ATTR(LENGTH, s->target.packet->data.len),
                          INT_EVENT_ATTR(PACKET_TYPE, get_epoch(*s->target.first_byte_at)));
@@ -2140,6 +2140,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
 
     /* allocate packet */
     if (coalescible) {
+        s->dst_end += s->target.cipher->aead->algo->tag_size; /* restore the AEAD tag size (tag size can differ bet. epochs) */
         s->target.cipher = s->current.cipher;
     } else {
         if (s->num_packets >= s->max_packets)
@@ -3389,11 +3390,10 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, quicly_max_stream_d
 {
     quicly_stream_t *stream;
 
-    LOG_STREAM_EVENT(conn, frame->stream_id, QUICLY_EVENT_TYPE_MAX_STREAM_DATA_RECEIVE, INT_EVENT_ATTR(STREAM_ID, frame->stream_id),
+    LOG_STREAM_EVENT(conn, frame->stream_id, QUICLY_EVENT_TYPE_MAX_STREAM_DATA_RECEIVE,
                      INT_EVENT_ATTR(LIMIT, frame->max_stream_data));
 
-    if (quicly_stream_is_unidirectional(frame->stream_id) &&
-        quicly_stream_is_client_initiated(frame->stream_id) == quicly_is_client(conn))
+    if (!quicly_stream_has_send_side(quicly_is_client(conn), frame->stream_id))
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
     if ((stream = quicly_get_stream(conn, frame->stream_id)) == NULL)
@@ -3427,8 +3427,7 @@ static int handle_stream_data_blocked_frame(quicly_conn_t *conn, quicly_stream_d
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_STREAM_DATA_BLOCKED_RECEIVE, INT_EVENT_ATTR(STREAM_ID, frame->stream_id),
                          INT_EVENT_ATTR(LIMIT, frame->offset));
 
-    if (quicly_stream_is_unidirectional(frame->stream_id) &&
-        quicly_stream_is_client_initiated(frame->stream_id) != quicly_is_client(conn))
+    if (!quicly_stream_has_receive_side(quicly_is_client(conn), frame->stream_id))
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
     if ((stream = quicly_get_stream(conn, frame->stream_id)) != NULL) {
@@ -4179,8 +4178,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
 
 void quicly_reset_stream(quicly_stream_t *stream, int err)
 {
-    assert(!(quicly_stream_is_unidirectional(stream->stream_id) &&
-             quicly_stream_is_client_initiated(stream->stream_id) != quicly_is_client(stream->conn)));
+    assert(quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id));
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     assert(stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE);
     assert(!quicly_sendstate_transfer_complete(&stream->sendstate));
@@ -4199,8 +4197,7 @@ void quicly_reset_stream(quicly_stream_t *stream, int err)
 
 void quicly_request_stop(quicly_stream_t *stream, int err)
 {
-    assert(!(quicly_stream_is_unidirectional(stream->stream_id) &&
-             quicly_stream_is_client_initiated(stream->stream_id) == quicly_is_client(stream->conn)));
+    assert(quicly_stream_has_receive_side(quicly_is_client(stream->conn), stream->stream_id));
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
 
     /* send STOP_SENDING if the incoming side of the stream is still open */
