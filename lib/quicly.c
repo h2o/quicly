@@ -2198,6 +2198,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
             return ret;
     }
 
+#if 0
     /* add PING or empty CRYPTO for TLP, RTO packets so that last_retransmittable_sent_at changes */
     if (s->num_packets < s->min_packets_to_send) {
         if (QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
@@ -2208,6 +2209,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         }
         ack_eliciting = 1;
     }
+#endif
 
 TargetReady:
     if (ack_eliciting) {
@@ -2539,10 +2541,12 @@ static int mark_packets_as_lost(quicly_conn_t *conn, size_t count)
             assert(conn->egress.sentmap.bytes_in_flight == 0);
             break;
         }
+        if (sent->bytes_in_flight != 0)
+            --count;
         if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_LOST, conn)) != 0)
             return ret;
         conn->egress.max_lost_pn = pn + 1;
-    } while (--count != 0);
+    } while (count != 0);
 
     return 0;
 }
@@ -2800,11 +2804,15 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
     }
 
     /* send probe if requested */
-    if (send_probe && s->num_packets == 0 && s->target.packet == NULL) {
+    if (send_probe) {
         assert(quicly_is_client(conn));
-        if ((ret = allocate_frame(conn, s, 1)) != 0)
-            goto Exit;
-        *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
+        if (s->num_packets == 0 && s->target.packet == NULL) {
+            if ((ret = allocate_frame(conn, s, 1)) != 0)
+                goto Exit;
+            *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
+        }
+        /* probes require us to set the timer regardless of if we have sent something retransmittable */
+        conn->egress.last_retransmittable_sent_at = now;
     }
 
 Exit:
@@ -2980,7 +2988,13 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_TLP,
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
                                  INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
-            if (!ptls_handshake_is_complete(conn->crypto.tls)) {
+            if (ptls_handshake_is_complete(conn->crypto.tls) &&
+                conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn,
+                                                            conn->egress.max_data.sent < conn->egress.max_data.permitted)) {
+                /* we have something to send (TODO we might want to make sure that we emit something even when the stream scheduler
+                 * in fact sends nothing) */
+            } else {
+                /* mark something inflight as lost */
                 if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
                     goto Exit;
             }
@@ -3002,11 +3016,13 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
      * fires (NOTE (kazuho): the change might need to go into calc_send_window. */
     s.send_window = calc_send_window(conn);
 
+#if 0
     /* before address validation, nothing can be sent when the window size is zero */
     if (s.send_window == 0 && !conn->super.peer.address_validation.validated) {
         ret = 0;
         goto Exit;
     }
+#endif
 
     /* If TLP or RTO, ensure there's enough send_window to send */
     if (s.min_packets_to_send != 0) {
@@ -3081,25 +3097,6 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     if (s.target.packet != NULL)
         commit_send_packet(conn, &s, 0);
-
-    /* TLP (TODO use these packets to retransmit data) */
-    if (s.min_packets_to_send != 0) {
-        if (QUICLY_PACKET_IS_LONG_HEADER(s.current.first_byte)) {
-            if (conn->handshake != NULL && (s.current.cipher = &conn->handshake->cipher.egress)->aead != NULL) {
-                s.current.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
-            } else {
-                s.current.cipher = &conn->initial->cipher.egress;
-                s.current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
-            }
-        }
-        while (s.num_packets < s.min_packets_to_send) {
-            if ((ret = allocate_frame(conn, &s, 1)) != 0)
-                goto Exit;
-            assert(s.target.ack_eliciting);
-            commit_send_packet(conn, &s, 0);
-        }
-        assert(conn->egress.last_retransmittable_sent_at == now);
-    }
 
     ret = 0;
 Exit:

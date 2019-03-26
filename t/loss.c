@@ -136,7 +136,7 @@ static void test_even(void)
     /* server resends the contents of all the packets (in cleartext) */
     ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
     ok(ret == 0);
-    ok(num_sent == 2);
+    ok(num_sent == 1);
     ok(num_received == 1);
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
     ok(!quicly_connection_is_ready(client));
@@ -267,10 +267,6 @@ Fail:
 
 static void test_downstream_core(void)
 {
-    if (0 && test_is_at(9, 2, 43, 1, 0)) {
-        quic_ctx.event_log.cb = quicly_new_default_event_logger(stdout);
-        quic_ctx.event_log.mask = UINT64_MAX;
-    }
     loss_core(1);
 }
 
