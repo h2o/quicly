@@ -21,6 +21,7 @@
  */
 #include <string.h>
 #include "picotls/openssl.h"
+#include "quicly/defaults.h"
 #include "test.h"
 
 static quicly_conn_t *client, *server;
@@ -142,10 +143,11 @@ static void test_even(void)
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
-    /* client sends delayed-ack that gets accepted */
+    /* client arms the retransmit timer (even when there's nothing to send using Handshake packets). That triggers TLP, and at the
+     * moment we try to _always_ send 2 packets */
     ret = transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
     ok(ret == 0);
-    ok(num_sent == 1);
+    ok(num_sent == 2);
     ok(num_received == 1);
 
     quic_now += 1000;
@@ -265,6 +267,10 @@ Fail:
 
 static void test_downstream_core(void)
 {
+    if (0 && test_is_at(9, 2, 43, 1, 0)) {
+        quic_ctx.event_log.cb = quicly_new_default_event_logger(stdout);
+        quic_ctx.event_log.mask = UINT64_MAX;
+    }
     loss_core(1);
 }
 

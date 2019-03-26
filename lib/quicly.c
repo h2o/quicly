@@ -874,7 +874,7 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
 static void update_loss_alarm(quicly_conn_t *conn)
 {
     quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
-                             conn->egress.sentmap.bytes_in_flight != 0);
+                             conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -2762,7 +2762,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, struct sockaddr *sa,
     return packet;
 }
 
-static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s)
+static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s, int send_probe)
 {
     struct st_quicly_pn_space_t *ack_space = NULL;
     int ret = 0;
@@ -2796,6 +2796,14 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
         assert(stream != NULL);
         if ((ret = quicly_send_stream(stream, s)) != 0)
             goto Exit;
+    }
+
+    /* send probe if requested */
+    if (send_probe && s->num_packets == 0 && s->target.packet == NULL) {
+        assert(quicly_is_client(conn));
+        if ((ret = allocate_frame(conn, s, 1)) != 0)
+            goto Exit;
+        *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
     }
 
 Exit:
@@ -3007,9 +3015,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     }
 
     /* send handshake flows */
-    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, &s)) != 0)
+    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, &s,
+                                   conn->super.peer.address_validation.send_probe && conn->handshake == NULL)) != 0)
         goto Exit;
-    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, &s)) != 0)
+    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, &s, conn->super.peer.address_validation.send_probe)) != 0)
         goto Exit;
 
     /* send encrypted frames */
