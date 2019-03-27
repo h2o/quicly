@@ -1965,6 +1965,8 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         int including_new_data = conn->egress.max_data.sent < conn->egress.max_data.permitted;
         if (conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, including_new_data))
             return 0;
+    } else if (!conn->super.peer.address_validation.validated) {
+        return INT64_MAX;
     }
 
     int64_t at = conn->egress.loss.alarm_at;
@@ -3003,13 +3005,11 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
      * fires (NOTE (kazuho): the change might need to go into calc_send_window. */
     s.send_window = calc_send_window(conn);
 
-#if 0
     /* before address validation, nothing can be sent when the window size is zero */
     if (s.send_window == 0 && !conn->super.peer.address_validation.validated) {
         ret = 0;
         goto Exit;
     }
-#endif
 
     /* If TLP or RTO, ensure there's enough send_window to send */
     if (s.min_packets_to_send != 0) {
@@ -4105,6 +4105,12 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 Exit:
     switch (ret) {
     case 0:
+        /* Avoid time in the past being emitted by quicly_get_first_timeout. We hit the condition below when retransmission is
+         * suspended by the 3x limit (in which case we have loss.alarm_at set but return INT64_MAX from quicly_get_first_timeout
+         * until we receive something from the client).
+         */
+        if (conn->egress.loss.alarm_at < now)
+            conn->egress.loss.alarm_at = now;
         assert_consistency(conn, 0);
         break;
     case QUICLY_ERROR_PACKET_IGNORED:
