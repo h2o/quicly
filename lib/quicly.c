@@ -2198,19 +2198,6 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
             return ret;
     }
 
-#if 0
-    /* add PING or empty CRYPTO for TLP, RTO packets so that last_retransmittable_sent_at changes */
-    if (s->num_packets < s->min_packets_to_send) {
-        if (QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
-            size_t payload_len = 0;
-            s->dst = quicly_encode_crypto_frame_header(s->dst, s->dst_end, 0, &payload_len);
-        } else {
-            *s->dst++ = QUICLY_FRAME_TYPE_PING;
-        }
-        ack_eliciting = 1;
-    }
-#endif
-
 TargetReady:
     if (ack_eliciting) {
         s->target.ack_eliciting = 1;
