@@ -199,7 +199,7 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_
     }
     /* PTO */
     if (r->pto_count == 0)
-    ++r->pto_count;
+        ++r->pto_count;
     *num_packets_to_send = 2;
     return 0;
 }
