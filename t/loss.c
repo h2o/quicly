@@ -143,16 +143,32 @@ static void test_even(void)
 
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
-    /* client arms the retransmit timer (even when there's nothing to send using Handshake packets). That triggers TLP, and at the
-     * moment we try to _always_ send 2 packets */
+    /* client arms the retransmit timer */
     ret = transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
     ok(ret == 0);
-    ok(num_sent == 2);
+    ok(num_sent == 1);
     ok(num_received == 1);
 
     quic_now += 1000;
 
     /* server resends the contents of all the packets (in cleartext) */
+    ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ok(ret == 0);
+    ok(num_sent == 1);
+    ok(num_received == 0);
+
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(!quicly_connection_is_ready(client));
+
+    /* client sends a probe, that gets lost */
+    ret = transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ok(ret == 0);
+    ok(num_sent == 1);
+    ok(num_received == 0);
+
+    quic_now += 1000;
+
+    /* server retransmits the handshake packets */
     ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
     ok(ret == 0);
     ok(num_sent == 1);
