@@ -145,7 +145,7 @@ subtest "0-rtt-vs-hrr" => sub {
     like $resp, qr/^hello world\n/s;
     undef $guard;
     $guard = spawn_server(qw(-x secp256r1));
-    my $resp = `$cli -x x25519 -x secp256r1 -s $tempdir/session -p /12.txt 127.0.0.1 $port 2> $tempdir/stderr.log; cat $tempdir/stderr.log`;
+    $resp = `$cli -x x25519 -x secp256r1 -s $tempdir/session -p /12.txt 127.0.0.1 $port 2> $tempdir/stderr.log; cat $tempdir/stderr.log`;
     like $resp, qr/^hello world\n/s;
 };
 
