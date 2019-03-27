@@ -68,7 +68,7 @@ typedef struct quicly_loss_t {
     /**
      * pointer to transport parameter containing max_ack_delay
      */
-    uint8_t *max_ack_delay;
+    uint16_t *max_ack_delay;
     /**
      * The number of consecutive PTOs (PTOs that have fired without receiving an ack).
      */
@@ -97,7 +97,7 @@ typedef struct quicly_loss_t {
 
 typedef int (*quicly_loss_do_detect_cb)(quicly_loss_t *r, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time);
 
-static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint8_t *max_ack_delay);
+static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay);
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding);
 static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked, uint32_t latest_rtt, uint32_t ack_delay,
                                         int is_ack_only);
@@ -143,7 +143,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t _latest_rtt, uint32_t 
     assert(rtt->smoothed != 0);
 }
 
-inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint8_t *max_ack_delay)
+inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay)
 {
     *r = (quicly_loss_t){conf, max_ack_delay, 0, 0, 0, INT64_MAX, INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);

@@ -1375,10 +1375,9 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                     if ((ret = quicly_tls_decode_varint(&v, &src, end)) != 0)
                         goto Exit;
                     /* FIXME do we have a maximum? */
-                    if (v > 255)
-                        v = 255;
-                    // @@@@
-                    params->ack_delay_exponent = (uint8_t)v;
+                    if (v >= 16384)
+                        v = QUICLY_DEFAULT_MAX_ACK_DELAY;
+                    params->max_ack_delay = (uint16_t)v;
                 } break;
                 default:
                     src = end;

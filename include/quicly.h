@@ -317,7 +317,7 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      * in milliseconds; quicly ignores the value set for quicly_context_t::transport_parameters
      */
-    uint8_t max_ack_delay;
+    uint16_t max_ack_delay;
 } quicly_transport_parameters_t;
 
 struct st_quicly_cid_t {
