@@ -87,7 +87,6 @@ static void test_even(void)
     size_t num_sent, num_received;
     int ret;
 
-    lossconf.max_tlps = 0;
     quic_ctx.loss = &lossconf;
 
     quic_now = 0;

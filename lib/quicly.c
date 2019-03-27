@@ -307,7 +307,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
 static const quicly_transport_parameters_t transport_params_before_handshake = {
-    {0, 0, 0}, 0, 0, 0, 0, 3, QUICLY_DELAYED_ACK_TIMEOUT};
+    {0, 0, 0}, 0, 0, 0, 0, 3, QUICLY_DEFAULT_MAX_ACK_DELAY};
 
 static __thread int64_t now;
 
@@ -1274,6 +1274,7 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
                                      { pushv(buf, params->max_streams_uni); });
         }
         PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT, { pushv(buf, QUICLY_ACK_DELAY_EXPONENT); });
+        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { pushv(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
     });
 #undef pushv
 
@@ -1376,6 +1377,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                     /* FIXME do we have a maximum? */
                     if (v > 255)
                         v = 255;
+                    // @@@@
                     params->ack_delay_exponent = (uint8_t)v;
                 } break;
                 default:
@@ -2464,6 +2466,7 @@ UpdateState:
 static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
 {
     /* TODO reconsider this (maybe 3 PTO? also not sure why we need to add ack-delay twice) */
+    /* TODO (jri): The timeouts used here should be entirely the peer's */
     return (conn->egress.loss.rtt.smoothed + conn->egress.loss.rtt.variance) * 4 + conn->super.peer.transport_params.max_ack_delay +
            QUICLY_DELAYED_ACK_TIMEOUT;
 }
@@ -2501,7 +2504,7 @@ int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs)
 }
 
 /**
- * Determine frames to be retransmitted on TLP and RTO.
+ * Determine frames to be retransmitted on crypto timeout or PTO.
  */
 static int mark_packets_as_lost(quicly_conn_t *conn, size_t count)
 {
@@ -2950,38 +2953,27 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1, conn->egress.loss.largest_acked_packet,
                                         do_detect_loss, &s.min_packets_to_send)) != 0)
             goto Exit;
-        switch (s.min_packets_to_send) {
-        case 1: /* TLP (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
-            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_TLP,
+        if (s.min_packets_to_send > 0) {
+            /* PTO  (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
+            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, 0),
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
                                  INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
+            /* TODO (jri): if r->pto_count > MAX_PTO, close connection */
             if (!ptls_handshake_is_complete(conn->crypto.tls)) {
                 if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
                     goto Exit;
             }
-            break;
-        case 2: /* RTO */ {
-            uint32_t cc_type = 0;
-            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, cc_type),
-                                 INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
-                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
-            if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
-                goto Exit;
-        } break;
-        default:
-            break;
         }
     }
 
-    // TODO (jri): The following two blocks not need to be done. Extend the CC API to allow additional packets when TLP or RTO
-    // fires.
+    // TODO (jri): The following two blocks not need to be done. Extend the CC API to allow additional packets when PTO fires.
     { /* calculate send window */
         uint32_t cwnd = conn->egress.cc.cwnd;
         if (conn->egress.sentmap.bytes_in_flight < cwnd)
             s.send_window = cwnd - conn->egress.sentmap.bytes_in_flight;
     }
 
-    /* If TLP or RTO, ensure there's enough send_window to send */
+    /* If PTO, ensure there's enough send_window to send */
     if (s.min_packets_to_send != 0) {
         assert(s.min_packets_to_send <= s.max_packets);
         if (s.send_window < s.min_packets_to_send * conn->super.ctx->max_packet_size)
@@ -3054,7 +3046,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     if (s.target.packet != NULL)
         commit_send_packet(conn, &s, 0);
 
-    /* TLP (TODO use these packets to retransmit data) */
+    /* PTO (TODO use these packets to retransmit data) */
     if (s.min_packets_to_send != 0) {
         if (QUICLY_PACKET_IS_LONG_HEADER(s.current.first_byte)) {
             if (conn->handshake != NULL && (s.current.cipher = &conn->handshake->cipher.egress)->aead != NULL) {
@@ -3327,10 +3319,8 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     /* OnPacketAckedCC */
     /* TODO (jri): this function should be called for every packet newly acked. (kazuho) I do not think so;
      * quicly_loss_on_packet_acked is NOT OnPacketAcked */
-    if (smallest_newly_acked != UINT64_MAX)
-        quicly_loss_on_packet_acked(&conn->egress.loss, smallest_newly_acked);
-
     if (bytes_acked > 0) {
+        conn->egress.loss.pto_count = 0;
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame->largest_acknowledged,
                            conn->egress.sentmap.bytes_in_flight + bytes_acked);
         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_ACK, INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
