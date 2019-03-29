@@ -3266,7 +3266,6 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         uint64_t packet_number;
         int64_t sent_at;
     } largest_newly_acked = {UINT64_MAX, INT64_MAX};
-    uint64_t smallest_newly_acked = UINT64_MAX;
     size_t segs_acked = 0, bytes_acked = 0;
     int ret;
 
@@ -3297,8 +3296,6 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                     if (epoch == sent->ack_epoch) {
                         largest_newly_acked.packet_number = packet_number;
                         largest_newly_acked.sent_at = sent->sent_at;
-                        if (smallest_newly_acked == UINT64_MAX)
-                            smallest_newly_acked = packet_number;
                         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_ACKED, INT_EVENT_ATTR(PACKET_NUMBER, packet_number),
                                              INT_EVENT_ATTR(NEWLY_ACKED, 1));
                         if (sent->bytes_in_flight != 0) {
@@ -3324,25 +3321,23 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     /* OnPacketAcked */
     uint32_t latest_rtt = UINT32_MAX, ack_delay = 0;
     if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
+        uint64_t ack_delay_microsecs = frame->ack_delay << conn->super.peer.transport_params.ack_delay_exponent;
+        ack_delay = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
+        /* Ignore samples where ack_delay is larger than max_ack_delay.  Note: This is a departure from the recovery
+         * draft which uses this RTT sample, but limiting the ack_delay to min(ack_delay, max_ack_delay). This departure
+         * allows us to not ignore RTT samples where the largest acked is in fact not ack-eliciting, since we simply ignore 
+         * the sample where ack_delay is too large for such a packet. */
+        if (ack_delay > conn->super.peer.transport_params.max_ack_delay)
+            return;
         int64_t t = now - largest_newly_acked.sent_at;
-        if (0 <= t && t < 100000) { /* ignore RTT above 100 seconds */
-            latest_rtt = (uint32_t)t;
-            uint64_t ack_delay_microsecs = frame->ack_delay << conn->super.peer.transport_params.ack_delay_exponent;
-            ack_delay = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
-        }
+        latest_rtt = (uint32_t)t;
     }
 
-    quicly_loss_on_ack_received(
-        &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay,
-        0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
+    quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay);
 
-    if (smallest_newly_acked != UINT64_MAX)
-        quicly_loss_on_newly_acked(&conn->egress.loss);
-
-    /* OnPacketAckedCC */
-    /* TODO (jri): this function should be called for every packet newly acked. (kazuho) I do not think so;
-     * quicly_loss_on_packet_acked is NOT OnPacketAcked */
+    /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
+        quicly_loss_on_newly_acked(&conn->egress.loss);
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame->largest_acknowledged,
                            conn->egress.sentmap.bytes_in_flight + bytes_acked);
         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_ACK, INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),

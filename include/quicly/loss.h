@@ -188,11 +188,11 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
     }
 }
 
-inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked, uint32_t latest_rtt, uint32_t ack_delay,
-                                        int is_ack_only)
+inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked, uint32_t latest_rtt, uint32_t ack_delay)
 {
-    if (r->largest_acked_packet < largest_acked)
-        r->largest_acked_packet = largest_acked;
+    if (r->largest_acked_packet > largest_acked)
+        return;
+    r->largest_acked_packet = largest_acked;
     if (latest_rtt != UINT32_MAX)
         quicly_rtt_update(&r->rtt, latest_rtt, ack_delay);
 }
