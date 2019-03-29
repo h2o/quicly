@@ -3325,7 +3325,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         ack_delay = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
         /* Ignore samples where ack_delay is larger than max_ack_delay.  Note: This is a departure from the recovery
          * draft which uses this RTT sample, but limiting the ack_delay to min(ack_delay, max_ack_delay). This departure
-         * allows us to not ignore RTT samples where the largest acked is in fact not ack-eliciting, since we simply ignore 
+         * allows us to not ignore RTT samples where the largest acked is in fact not ack-eliciting, since we simply ignore
          * the sample where ack_delay is too large for such a packet. */
         if (ack_delay > conn->super.peer.transport_params.max_ack_delay)
             return;
