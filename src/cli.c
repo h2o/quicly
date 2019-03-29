@@ -880,7 +880,7 @@ int main(int argc, char **argv)
     if (ctx.tls->certificates.count != 0 || ctx.tls->sign_certificate != NULL) {
         /* server */
         if (ctx.tls->certificates.count == 0 || ctx.tls->sign_certificate == NULL) {
-            fprintf(stderr, "-ck and -k options must be used together\n");
+            fprintf(stderr, "-c and -k options must be used together\n");
             exit(1);
         }
         if (cid_key == NULL) {
