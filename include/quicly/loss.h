@@ -152,6 +152,7 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
 inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding)
 {
     if (has_outstanding) {
+        assert(last_retransmittable_sent_at != INT64_MAX);
         int64_t alarm_duration;
         if (r->loss_time != INT64_MAX) {
             /* time-threshold loss detection */
