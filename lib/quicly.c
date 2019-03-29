@@ -3328,9 +3328,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
          * allows us to not ignore RTT samples where the largest acked is in fact not ack-eliciting, since we simply ignore
          * the sample where ack_delay is too large for such a packet. */
         if (ack_delay > conn->super.peer.transport_params.max_ack_delay)
-            return;
-        int64_t t = now - largest_newly_acked.sent_at;
-        latest_rtt = (uint32_t)t;
+                latest_rtt = (uint32_t)(now - largest_newly_acked.sent_at);
     }
 
     quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay);

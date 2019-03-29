@@ -101,8 +101,7 @@ static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
 
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding);
 
-static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked, uint32_t latest_rtt, uint32_t ack_delay,
-                                        int is_ack_only);
+static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked, uint32_t latest_rtt, uint32_t ack_delay);
 
 /* called every time an ACK is received that newly acks a packet
  */
