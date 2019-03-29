@@ -3331,14 +3331,18 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
             ack_delay = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
         }
     }
+
     quicly_loss_on_ack_received(
         &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay,
         0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
+
+    if (smallest_newly_acked != UINT64_MAX)
+        quicly_loss_on_newly_acked(&conn->egress.loss);
+
     /* OnPacketAckedCC */
     /* TODO (jri): this function should be called for every packet newly acked. (kazuho) I do not think so;
      * quicly_loss_on_packet_acked is NOT OnPacketAcked */
     if (bytes_acked > 0) {
-        conn->egress.loss.pto_count = 0;
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame->largest_acknowledged,
                            conn->egress.sentmap.bytes_in_flight + bytes_acked);
         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_ACK, INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),

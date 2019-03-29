@@ -98,11 +98,24 @@ typedef struct quicly_loss_t {
 typedef int (*quicly_loss_do_detect_cb)(quicly_loss_t *r, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time);
 
 static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay);
+
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding);
+
 static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked, uint32_t latest_rtt, uint32_t ack_delay,
                                         int is_ack_only);
+
+/* called every time an ACK is received that newly acks a packet
+ */
+static void quicly_loss_on_newly_acked(quicly_loss_t *r);
+
+/* This function updates the early retransmit timer and indicates to the caller how many packets should be sent.
+ * After calling this function, app should:
+ *  * if num_packets_to_send is zero, send things normally
+ *  * if num_packets_to_send is non-zero, send the specfied number of packets immmediately
+ * and then call quicly_loss_update_alarm and update the alarm */
 static int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect,
                                 size_t *num_packets_to_send);
+
 static int quicly_loss_detect_loss(quicly_loss_t *r, uint64_t largest_pn, quicly_loss_do_detect_cb do_detect);
 
 /* inline definitions */
@@ -184,11 +197,11 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_acked
         quicly_rtt_update(&r->rtt, latest_rtt, ack_delay);
 }
 
-/* This function updates the early retransmit timer and indicates to the caller how many packets should be sent.
- * After calling this function, app should:
- *  * if num_packets_to_send is zero, send things normally
- *  * if num_packets_to_send is non-zero, send the specfied number of packets immmediately
- * and then call quicly_loss_update_alarm and update the alarm */
+inline void quicly_loss_on_newly_acked(quicly_loss_t *r)
+{
+    r->pto_count = 0;
+}
+
 inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect,
                                 size_t *num_packets_to_send)
 {
