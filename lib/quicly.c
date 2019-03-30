@@ -1270,7 +1270,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
                                      { pushv(buf, params->max_streams_uni); });
         }
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT, { pushv(buf, QUICLY_LOCAL_ACK_DELAY_EXPONENT); });
+        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT,
+                                 { pushv(buf, QUICLY_LOCAL_ACK_DELAY_EXPONENT); });
         PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { pushv(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
     });
 #undef pushv
@@ -1465,8 +1466,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_sentmap_init(&conn->_.egress.sentmap);
     quicly_loss_init(&conn->_.egress.loss, conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
-                     &conn->_.super.peer.transport_params.max_ack_delay,
-                     &conn->_.super.peer.transport_params.ack_delay_exponent);
+                     &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
@@ -2236,8 +2236,8 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
 
     /* calc ack_delay */
     if (space->largest_pn_received_at < now) {
-        /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_LOCAL_ACK_DELAY_EXPONENT is 10. It's considered a non-issue
-         * because our time measurement is at millisecond granurality anyways. */
+        /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_LOCAL_ACK_DELAY_EXPONENT is 10. It's considered a
+         * non-issue because our time measurement is at millisecond granurality anyways. */
         ack_delay = ((now - space->largest_pn_received_at) * 1000) >> QUICLY_LOCAL_ACK_DELAY_EXPONENT;
     } else {
         ack_delay = 0;
@@ -3318,7 +3318,8 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_RECV_ACK, INT_EVENT_ATTR(ACK_DELAY, frame->ack_delay));
 
     /* update loss detection engine on ack */
-    quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.packet_number, now, largest_newly_acked.sent_at, frame->ack_delay, bytes_acked);
+    quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.packet_number, now, largest_newly_acked.sent_at,
+                                frame->ack_delay, bytes_acked);
 
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {

@@ -35,7 +35,7 @@ extern "C" {
 #define QUICLY_LOCAL_MAX_ACK_DELAY 25   /* milliseconds */
 #define QUICLY_DEFAULT_ACK_DELAY_EXPONENT 3
 #define QUICLY_LOCAL_ACK_DELAY_EXPONENT 10
-#define QUICLY_DEFAULT_MIN_PTO 1        /* milliseconds */
+#define QUICLY_DEFAULT_MIN_PTO 1 /* milliseconds */
 #define QUICLY_DEFAULT_INITIAL_RTT 100
 #define QUICLY_MAX_PTO_COUNT 16 /* 65 seconds under 1ms granurality */
 

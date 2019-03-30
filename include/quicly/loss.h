@@ -101,13 +101,15 @@ typedef struct quicly_loss_t {
 
 typedef int (*quicly_loss_do_detect_cb)(quicly_loss_t *r, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time);
 
-    static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay, uint8_t *ack_delay_exponent);
+static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
+                             uint8_t *ack_delay_exponent);
 
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding);
 
 /* called when an ACK is received
  */
-static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at, uint32_t ack_delay, size_t bytes_acked);
+static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
+                                        uint32_t ack_delay, size_t bytes_acked);
 
 /* This function updates the early retransmit timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
@@ -137,7 +139,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     /* update minimum */
     if (rtt->latest < rtt->minimum)
         rtt->minimum = rtt->latest;
-    
+
     /* use ack_delay if it's a plausible value */
     if (rtt->latest > rtt->minimum + ack_delay)
         rtt->latest -= ack_delay;
@@ -153,7 +155,8 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     assert(rtt->smoothed != 0);
 }
 
-inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay, uint8_t *ack_delay_exponent)
+inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
+                             uint8_t *ack_delay_exponent)
 {
     *r = (quicly_loss_t){conf, max_ack_delay, ack_delay_exponent, 0, 0, 0, INT64_MAX, INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
@@ -185,7 +188,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
     }
 }
 
-inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at, uint32_t ack_delay, size_t bytes_acked)
+inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
+                                        uint32_t ack_delay, size_t bytes_acked)
 {
     if (largest_newly_acked != UINT64_MAX)
         r->pto_count = 0;
