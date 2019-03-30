@@ -3333,9 +3333,11 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 
     quicly_loss_on_ack_received(&conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay);
 
+    if (largest_newly_acked.packet_number != UINT64_MAX)
+        quicly_loss_on_newly_acked(&conn->egress.loss);
+
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
-        quicly_loss_on_newly_acked(&conn->egress.loss);
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame->largest_acknowledged,
                            conn->egress.sentmap.bytes_in_flight + bytes_acked);
         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_ACK, INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
