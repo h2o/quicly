@@ -860,6 +860,11 @@ quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, quicly_stream_id_t strea
     return NULL;
 }
 
+ptls_t *quicly_get_tls(quicly_conn_t *conn)
+{
+    return conn->crypto.tls;
+}
+
 void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed)
 {
     if (send_permitted != NULL)

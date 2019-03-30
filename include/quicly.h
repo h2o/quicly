@@ -843,6 +843,10 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 /**
  *
  */
+ptls_t *quicly_get_tls(quicly_conn_t *conn);
+/**
+ *
+ */
 quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, quicly_stream_id_t stream_id);
 /**
  *
