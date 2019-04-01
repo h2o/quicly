@@ -195,7 +195,7 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
         r->pto_count = 0;
 
     /* Only use RTT samples for new largest acked */
-    if (r->largest_acked_packet >= largest_newly_acked)
+    if (largest_newly_acked == UINT64_MAX || r->largest_acked_packet >= largest_newly_acked)
         return;
     r->largest_acked_packet = largest_newly_acked;
 
