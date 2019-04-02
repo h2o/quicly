@@ -1507,8 +1507,10 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     quicly_conn_t *conn = (void *)((char *)properties - offsetof(quicly_conn_t, crypto.handshake_properties));
     int ret;
 
+    assert(properties->client.early_data_acceptance != PTLS_EARLY_DATA_ACCEPTANCE_UNKNOWN);
+
     if (slots[0].type == UINT16_MAX) {
-        ret = 0; // FIXME whether not seeing TP is a fatal error depends on the outcome of the VN design
+        ret = PTLS_ALERT_MISSING_EXTENSION;
         goto Exit;
     }
     assert(slots[0].type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS);
@@ -1550,18 +1552,20 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
             ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
             goto Exit;
         }
-#define VALIDATE(x)                                                                                                                \
+        if (properties->client.early_data_acceptance == PTLS_EARLY_DATA_ACCEPTED) {
+#define ZERORTT_VALIDATE(x)                                                                                                        \
     if (params.x < conn->super.peer.transport_params.x) {                                                                          \
         ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;                                                                          \
         goto Exit;                                                                                                                 \
     }
-        VALIDATE(max_data);
-        VALIDATE(max_stream_data.bidi_local);
-        VALIDATE(max_stream_data.bidi_remote);
-        VALIDATE(max_stream_data.uni);
-        VALIDATE(max_streams_bidi);
-        VALIDATE(max_streams_uni);
-#undef VALIDATE
+            ZERORTT_VALIDATE(max_data);
+            ZERORTT_VALIDATE(max_stream_data.bidi_local);
+            ZERORTT_VALIDATE(max_stream_data.bidi_remote);
+            ZERORTT_VALIDATE(max_stream_data.uni);
+            ZERORTT_VALIDATE(max_streams_bidi);
+            ZERORTT_VALIDATE(max_streams_uni);
+#undef ZERORTT_VALIDATE
+        }
         conn->super.peer.transport_params = params;
     }
 
@@ -1647,7 +1651,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     int ret;
 
     if (slots[0].type == UINT16_MAX) {
-        ret = 0; // allow abcense of the extension for the time being PTLS_ALERT_MISSING_EXTENSION;
+        ret = PTLS_ALERT_MISSING_EXTENSION;
         goto Exit;
     }
     assert(slots[0].type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS);
