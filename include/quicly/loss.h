@@ -109,7 +109,7 @@ static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 /* called when an ACK is received
  */
 static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
-                                        uint32_t ack_delay, size_t bytes_acked);
+                                        uint64_t ack_delay_encoded, size_t bytes_acked);
 
 /* This function updates the early retransmit timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
@@ -189,7 +189,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 }
 
 inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
-                                        uint32_t ack_delay, size_t bytes_acked)
+                                        uint64_t ack_delay_encoded, size_t bytes_acked)
 {
     if (largest_newly_acked != UINT64_MAX)
         r->pto_count = 0;
@@ -199,8 +199,8 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
         return;
     r->largest_acked_packet = largest_newly_acked;
 
-    uint64_t ack_delay_microsecs = ack_delay << *r->ack_delay_exponent;
-    ack_delay = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
+    uint64_t ack_delay_microsecs = ack_delay_encoded << *r->ack_delay_exponent;
+    uint32_t ack_delay_millisecs = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
     /* Use min(ack_delay, max_ack_delay) for an ACK that acknowledges one or more ack-eliciting packets.
      * This makes it so that persistent late ACKs from the peer increase the SRTT.
      * OTOH, when the ACK does not acknowledge any ack-eliciting packets, the ack_delay can be large. In such cases,
@@ -210,9 +210,9 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
      * an ack-eliciting packet is acked but was previously marked as lost. We expect this to be a slight aberration, but rare enough
      * to not matter.
      */
-    if (ack_delay > *r->max_ack_delay && bytes_acked > 0)
-        ack_delay = *r->max_ack_delay;
-    quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay);
+    if (ack_delay_millisecs > *r->max_ack_delay && bytes_acked > 0)
+        ack_delay_millisecs = *r->max_ack_delay;
+    quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
 }
 
 inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect,
