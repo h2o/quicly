@@ -3317,8 +3317,8 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_RECV_ACK, INT_EVENT_ATTR(ACK_DELAY, frame->ack_delay));
 
-    /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked so far.
-     * So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
+    /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
+     * so far. So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
     quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.packet_number, now, largest_newly_acked.sent_at,
                                 frame->ack_delay, bytes_acked);
 
