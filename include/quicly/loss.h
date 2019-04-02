@@ -205,6 +205,10 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
      * This makes it so that persistent late ACKs from the peer increase the SRTT.
      * OTOH, when the ACK does not acknowledge any ack-eliciting packets, the ack_delay can be large. In such cases,
      * allow for the ack_delay to be arbitrarily large (effectively bounded by the lifetime of these packets in the sent_map).
+     *
+     * Note also that we assume that bytes_acked is greater than 0 when ack-eliciting packets are acked. This is not true if
+     * an ack-eliciting packet is acked but was previously marked as lost. We expect this to be a slight aberration, but rare enough
+     * to not matter.
      */
     if (ack_delay > *r->max_ack_delay && bytes_acked > 0)
         ack_delay = *r->max_ack_delay;
