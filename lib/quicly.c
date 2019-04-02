@@ -66,8 +66,6 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_MIGRATION 12
 #define QUICLY_TRANSPORT_PARAMETER_ID_PREFERRED_ADDRESS 13
 
-#define QUICLY_ACK_DELAY_EXPONENT 10
-
 #define QUICLY_EPOCH_INITIAL 0
 #define QUICLY_EPOCH_0RTT 1
 #define QUICLY_EPOCH_HANDSHAKE 2
@@ -307,7 +305,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
 static const quicly_transport_parameters_t transport_params_before_handshake = {
-    {0, 0, 0}, 0, 0, 0, 0, 3, QUICLY_DEFAULT_MAX_ACK_DELAY};
+    {0, 0, 0}, 0, 0, 0, 0, QUICLY_DEFAULT_ACK_DELAY_EXPONENT, QUICLY_DEFAULT_MAX_ACK_DELAY};
 
 static __thread int64_t now;
 
@@ -1277,7 +1275,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
                                      { pushv(buf, params->max_streams_uni); });
         }
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT, { pushv(buf, QUICLY_ACK_DELAY_EXPONENT); });
+        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT,
+                                 { pushv(buf, QUICLY_LOCAL_ACK_DELAY_EXPONENT); });
         PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { pushv(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
     });
 #undef pushv
@@ -1472,7 +1471,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_sentmap_init(&conn->_.egress.sentmap);
     quicly_loss_init(&conn->_.egress.loss, conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
-                     &conn->_.super.peer.transport_params.max_ack_delay);
+                     &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
@@ -2242,9 +2241,9 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
 
     /* calc ack_delay */
     if (space->largest_pn_received_at < now) {
-        /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_ACK_DELAY_EXPONENT is 10. It's considered a non-issue
-         * because our time measurement is at millisecond granurality anyways. */
-        ack_delay = ((now - space->largest_pn_received_at) * 1000) >> QUICLY_ACK_DELAY_EXPONENT;
+        /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_LOCAL_ACK_DELAY_EXPONENT is 10. It's considered a
+         * non-issue because our time measurement is at millisecond granurality anyways. */
+        ack_delay = ((now - space->largest_pn_received_at) * 1000) >> QUICLY_LOCAL_ACK_DELAY_EXPONENT;
     } else {
         ack_delay = 0;
     }
@@ -3271,7 +3270,6 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
         uint64_t packet_number;
         int64_t sent_at;
     } largest_newly_acked = {UINT64_MAX, INT64_MAX};
-    uint64_t smallest_newly_acked = UINT64_MAX;
     size_t segs_acked = 0, bytes_acked = 0;
     int ret;
 
@@ -3302,8 +3300,6 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                     if (epoch == sent->ack_epoch) {
                         largest_newly_acked.packet_number = packet_number;
                         largest_newly_acked.sent_at = sent->sent_at;
-                        if (smallest_newly_acked == UINT64_MAX)
-                            smallest_newly_acked = packet_number;
                         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_ACKED, INT_EVENT_ATTR(PACKET_NUMBER, packet_number),
                                              INT_EVENT_ATTR(NEWLY_ACKED, 1));
                         if (sent->bytes_in_flight != 0) {
@@ -3326,27 +3322,12 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
 
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_RECV_ACK, INT_EVENT_ATTR(ACK_DELAY, frame->ack_delay));
 
-    /* OnPacketAcked */
-    uint32_t latest_rtt = UINT32_MAX, ack_delay = 0;
-    if (largest_newly_acked.packet_number == frame->largest_acknowledged) {
-        int64_t t = now - largest_newly_acked.sent_at;
-        if (0 <= t && t < 100000) { /* ignore RTT above 100 seconds */
-            latest_rtt = (uint32_t)t;
-            uint64_t ack_delay_microsecs = frame->ack_delay << conn->super.peer.transport_params.ack_delay_exponent;
-            ack_delay = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
-        }
-    }
+    /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
+     * so far. So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
+    quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.packet_number, now, largest_newly_acked.sent_at,
+                                frame->ack_delay, bytes_acked);
 
-    quicly_loss_on_ack_received(
-        &conn->egress.loss, frame->largest_acknowledged, latest_rtt, ack_delay,
-        0 /* this relies on the fact that we do not (yet) retransmit ACKs and therefore latest_rtt becoming UINT32_MAX */);
-
-    if (smallest_newly_acked != UINT64_MAX)
-        quicly_loss_on_newly_acked(&conn->egress.loss);
-
-    /* OnPacketAckedCC */
-    /* TODO (jri): this function should be called for every packet newly acked. (kazuho) I do not think so;
-     * quicly_loss_on_packet_acked is NOT OnPacketAcked */
+    /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame->largest_acknowledged,
                            conn->egress.sentmap.bytes_in_flight + bytes_acked);
