@@ -201,13 +201,13 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
 
     uint64_t ack_delay_microsecs = ack_delay << *r->ack_delay_exponent;
     ack_delay = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
-    /* Ignore samples where peer's ack_delay is larger than its max_ack_delay AND no ack-eliciting packets are acked.  Note: This is
-     * a departure from the recovery draft which allows us to include RTT samples where acked packets are not ack-eliciting. */
-    if (ack_delay > *r->max_ack_delay) {
-        if (bytes_acked == 0)
-            return;
+    /* Use min(ack_delay, max_ack_delay) for an ACK that acknowledges one or more ack-eliciting packets.
+     * This makes it so that persistent late ACKs from the peer increase the SRTT.
+     * OTOH, when the ACK does not acknowledge any ack-eliciting packets, the ack_delay can be large. In such cases,
+     * allow for the ack_delay to be arbitrarily large (effectively bounded by the lifetime of these packets in the sent_map).
+     */
+    if (ack_delay > *r->max_ack_delay && bytes_acked > 0)
         ack_delay = *r->max_ack_delay;
-    }
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay);
 }
 
