@@ -1271,13 +1271,14 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
         if (params->max_streams_bidi != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI,
                                      { pushv(buf, params->max_streams_bidi); });
-        if (params->max_streams_uni != 0) {
+        if (params->max_streams_uni != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
                                      { pushv(buf, params->max_streams_uni); });
-        }
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT,
-                                 { pushv(buf, QUICLY_LOCAL_ACK_DELAY_EXPONENT); });
-        PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { pushv(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
+        if (QUICLY_LOCAL_ACK_DELAY_EXPONENT != QUICLY_DEFAULT_ACK_DELAY_EXPONENT)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT,
+                                     { pushv(buf, QUICLY_LOCAL_ACK_DELAY_EXPONENT); });
+        if (QUICLY_LOCAL_MAX_ACK_DELAY != QUICLY_DEFAULT_MAX_ACK_DELAY)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { pushv(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
     });
 #undef pushv
 
@@ -1506,8 +1507,10 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     quicly_conn_t *conn = (void *)((char *)properties - offsetof(quicly_conn_t, crypto.handshake_properties));
     int ret;
 
+    assert(properties->client.early_data_acceptance != PTLS_EARLY_DATA_ACCEPTANCE_UNKNOWN);
+
     if (slots[0].type == UINT16_MAX) {
-        ret = 0; // FIXME whether not seeing TP is a fatal error depends on the outcome of the VN design
+        ret = PTLS_ALERT_MISSING_EXTENSION;
         goto Exit;
     }
     assert(slots[0].type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS);
@@ -1549,18 +1552,20 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
             ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
             goto Exit;
         }
-#define VALIDATE(x)                                                                                                                \
+        if (properties->client.early_data_acceptance == PTLS_EARLY_DATA_ACCEPTED) {
+#define ZERORTT_VALIDATE(x)                                                                                                        \
     if (params.x < conn->super.peer.transport_params.x) {                                                                          \
         ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;                                                                          \
         goto Exit;                                                                                                                 \
     }
-        VALIDATE(max_data);
-        VALIDATE(max_stream_data.bidi_local);
-        VALIDATE(max_stream_data.bidi_remote);
-        VALIDATE(max_stream_data.uni);
-        VALIDATE(max_streams_bidi);
-        VALIDATE(max_streams_uni);
-#undef VALIDATE
+            ZERORTT_VALIDATE(max_data);
+            ZERORTT_VALIDATE(max_stream_data.bidi_local);
+            ZERORTT_VALIDATE(max_stream_data.bidi_remote);
+            ZERORTT_VALIDATE(max_stream_data.uni);
+            ZERORTT_VALIDATE(max_streams_bidi);
+            ZERORTT_VALIDATE(max_streams_uni);
+#undef ZERORTT_VALIDATE
+        }
         conn->super.peer.transport_params = params;
     }
 
@@ -1646,7 +1651,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     int ret;
 
     if (slots[0].type == UINT16_MAX) {
-        ret = 0; // allow abcense of the extension for the time being PTLS_ALERT_MISSING_EXTENSION;
+        ret = PTLS_ALERT_MISSING_EXTENSION;
         goto Exit;
     }
     assert(slots[0].type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS);
@@ -3332,7 +3337,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame->largest_acknowledged,
-                           conn->egress.sentmap.bytes_in_flight + bytes_acked);
+                           (uint32_t)(conn->egress.sentmap.bytes_in_flight + bytes_acked));
         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_CC_ACK, INT_EVENT_ATTR(MIN_RTT, conn->egress.loss.rtt.minimum),
                              INT_EVENT_ATTR(SMOOTHED_RTT, conn->egress.loss.rtt.smoothed),
                              INT_EVENT_ATTR(LATEST_RTT, conn->egress.loss.rtt.latest), INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd),
