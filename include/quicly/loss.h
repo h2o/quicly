@@ -109,7 +109,7 @@ static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 /* called when an ACK is received
  */
 static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
-                                        uint64_t ack_delay_encoded, size_t bytes_acked);
+                                        uint64_t ack_delay_encoded, int ack_eliciting);
 
 /* This function updates the early retransmit timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
@@ -189,7 +189,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 }
 
 inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
-                                        uint64_t ack_delay_encoded, size_t bytes_acked)
+                                        uint64_t ack_delay_encoded, int ack_eliciting)
 {
     if (largest_newly_acked != UINT64_MAX)
         r->pto_count = 0;
@@ -204,13 +204,8 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     /* Use min(ack_delay, max_ack_delay) for an ACK that acknowledges one or more ack-eliciting packets.
      * This makes it so that persistent late ACKs from the peer increase the SRTT.
      * OTOH, when the ACK does not acknowledge any ack-eliciting packets, the ack_delay can be large. In such cases,
-     * allow for the ack_delay to be arbitrarily large (effectively bounded by the lifetime of these packets in the sent_map).
-     *
-     * Note also that we assume that bytes_acked is greater than 0 when ack-eliciting packets are acked. This is not true if
-     * an ack-eliciting packet is acked but was previously marked as lost. We expect this to be a slight aberration, but rare enough
-     * to not matter.
-     */
-    if (ack_delay_millisecs > *r->max_ack_delay && bytes_acked > 0)
+     * allow for the ack_delay to be arbitrarily large (effectively bounded by the lifetime of these packets in the sent_map). */
+    if (ack_delay_millisecs > *r->max_ack_delay && ack_eliciting)
         ack_delay_millisecs = *r->max_ack_delay;
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
 }
