@@ -3305,8 +3305,7 @@ static int handle_ack_frame(quicly_conn_t *conn, size_t epoch, quicly_ack_frame_
                     if (epoch == sent->ack_epoch) {
                         largest_newly_acked.packet_number = packet_number;
                         largest_newly_acked.sent_at = sent->sent_at;
-                        if (sent->ack_eliciting)
-                            includes_ack_eliciting = 1;
+                        includes_ack_eliciting |= sent->ack_eliciting;
                         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PACKET_ACKED, INT_EVENT_ATTR(PACKET_NUMBER, packet_number),
                                              INT_EVENT_ATTR(NEWLY_ACKED, 1));
                         if (sent->bytes_in_flight != 0) {
