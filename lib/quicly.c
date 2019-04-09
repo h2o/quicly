@@ -3045,6 +3045,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             }
         }
     } else if (conn->idle_timeout.at <= now) {
+        LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_IDLE_TIMEOUT);
         conn->super.state = QUICLY_STATE_DRAINING;
         destroy_all_streams(conn, 0);
         return QUICLY_ERROR_FREE_CONNECTION;
@@ -4305,6 +4306,7 @@ const char *quicly_event_type_names[] = {"connect",
                                          "send-stateless-reset",
                                          "receive",
                                          "free",
+                                         "idle-timeout",
                                          "packet-prepare",
                                          "packet-commit",
                                          "packet-acked",
