@@ -294,6 +294,17 @@ struct st_quicly_conn_t {
      * len=0 if not used
      */
     quicly_cid_t retry_odcid;
+    struct {
+        /**
+         * The moment when the idle timeout fires (including the additional 3 PTO). The value is set to INT64_MAX while the
+         * handshake is in progress.
+         */
+        int64_t at;
+        /**
+         * idle timeout
+         */
+        uint8_t should_rearm_on_send : 1;
+    } idle_timeout;
 };
 
 static int crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
@@ -871,6 +882,36 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
         *sent = conn->egress.max_data.sent;
     if (consumed != NULL)
         *consumed = conn->ingress.max_data.bytes_consumed;
+}
+
+static uint32_t calc_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay)
+{
+    return rtt->smoothed + (rtt->variance != 0 ? rtt->variance * 4 : 1) + max_ack_delay;
+}
+
+static void update_idle_timeout(quicly_conn_t *conn, int is_in_send)
+{
+    if (is_in_send && !conn->idle_timeout.should_rearm_on_send)
+        return;
+
+    if (conn->initial != NULL || conn->handshake != NULL)
+        return;
+
+    int64_t idle_msec = INT64_MAX;
+    if (conn->super.peer.transport_params.idle_timeout != 0)
+        idle_msec = conn->super.peer.transport_params.idle_timeout;
+    if (conn->super.ctx->transport_params.idle_timeout != 0 && conn->super.ctx->transport_params.idle_timeout < idle_msec)
+        idle_msec = conn->super.ctx->transport_params.idle_timeout;
+
+    if (idle_msec == INT64_MAX)
+        return;
+
+    conn->idle_timeout.at = now + idle_msec + 3 * calc_pto(&conn->egress.loss.rtt, conn->super.ctx->transport_params.max_ack_delay);
+    if (is_in_send) {
+        conn->idle_timeout.should_rearm_on_send = 0;
+    } else {
+        conn->idle_timeout.should_rearm_on_send = 1;
+    }
 }
 
 static void update_loss_alarm(quicly_conn_t *conn)
@@ -1491,6 +1532,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_linklist_init(&conn->_.pending_link.streams_blocked.uni);
     quicly_linklist_init(&conn->_.pending_link.streams_blocked.bidi);
     quicly_linklist_init(&conn->_.pending_link.control);
+    conn->_.idle_timeout.at = INT64_MAX;
 
     if (set_peeraddr(&conn->_, sa, salen) != 0) {
         quicly_free(&conn->_);
@@ -1975,12 +2017,15 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         if (conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, including_new_data))
             return 0;
     } else if (!conn->super.peer.address_validation.validated) {
+        /* TODO timeout? */
         return INT64_MAX;
     }
 
     int64_t at = conn->egress.loss.alarm_at;
     if (conn->egress.send_ack_at < at)
         at = conn->egress.send_ack_at;
+    if (conn->idle_timeout.at < at)
+        at = conn->idle_timeout.at;
 
     return at;
 }
@@ -2999,6 +3044,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                     goto Exit;
             }
         }
+    } else if (conn->idle_timeout.at <= now) {
+        conn->super.state = QUICLY_STATE_DRAINING;
+        destroy_all_streams(conn, 0);
+        return QUICLY_ERROR_FREE_CONNECTION;
     }
 
     /* TODO (jri): The following three blocks not need to be done. Extend the CC API to allow additional packets when PTO fires.
@@ -3093,6 +3142,8 @@ Exit:
         conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         update_loss_alarm(conn);
         *num_packets = s.num_packets;
+        if (*num_packets != 0)
+            update_idle_timeout(conn, 1);
     }
     if (ret == 0)
         assert_consistency(conn, 1);
@@ -4080,6 +4131,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         conn->super.peer.address_validation.validated = 1;
         break;
     case QUICLY_EPOCH_1RTT:
+        update_idle_timeout(conn, 0);
         if (!is_ack_only && should_send_max_data(conn))
             conn->egress.send_ack_at = 0;
         break;
