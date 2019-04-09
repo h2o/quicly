@@ -206,7 +206,7 @@ Exit:
     return &self->super;
 }
 
-void quicly_free_default_cid_enncryptor(quicly_cid_encryptor_t *_self)
+void quicly_free_default_cid_encryptor(quicly_cid_encryptor_t *_self)
 {
     struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
 
