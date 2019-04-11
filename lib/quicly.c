@@ -510,7 +510,7 @@ static void assert_consistency(quicly_conn_t *conn, int run_timers)
         assert(conn->egress.loss.loss_time == INT64_MAX);
     }
     if (run_timers)
-        assert(now < conn->egress.loss.alarm_at);
+        assert(now < conn->egress.loss.alarm_at || !conn->super.peer.address_validation.validated);
 }
 
 static void init_max_streams(struct st_quicly_max_streams_t *m)
