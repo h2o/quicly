@@ -2004,7 +2004,6 @@ static size_t calc_send_window(quicly_conn_t *conn)
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
-    /* return "now" if we can and have something to send */
     if (calc_send_window(conn) > 0) {
         if (conn->crypto.pending_flows != 0)
             return 0;
@@ -2013,20 +2012,13 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         int including_new_data = conn->egress.max_data.sent < conn->egress.max_data.permitted;
         if (conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, including_new_data))
             return 0;
+    } else if (!conn->super.peer.address_validation.validated) {
+        return conn->idle_timeout.at;
     }
 
-    int64_t at;
-
-    /* consult retransmission timer or ACK timer */
-    if (conn->super.peer.address_validation.validated) {
-        at = conn->egress.loss.alarm_at;
-        if (conn->egress.send_ack_at < at)
-            at = conn->egress.send_ack_at;
-    } else {
-        at = INT64_MAX;
-    }
-
-    /* idle timer */
+    int64_t at = conn->egress.loss.alarm_at;
+    if (conn->egress.send_ack_at < at)
+        at = conn->egress.send_ack_at;
     if (conn->idle_timeout.at < at)
         at = conn->idle_timeout.at;
 
