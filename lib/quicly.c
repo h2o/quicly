@@ -884,11 +884,6 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
         *consumed = conn->ingress.max_data.bytes_consumed;
 }
 
-static uint32_t calc_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay)
-{
-    return rtt->smoothed + (rtt->variance != 0 ? rtt->variance * 4 : 1) + max_ack_delay;
-}
-
 static void update_idle_timeout(quicly_conn_t *conn, int is_in_send)
 {
     if (is_in_send && !conn->idle_timeout.should_rearm_on_send)
@@ -906,7 +901,8 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_send)
     if (idle_msec == INT64_MAX)
         return;
 
-    conn->idle_timeout.at = now + idle_msec + 3 * calc_pto(&conn->egress.loss.rtt, conn->super.ctx->transport_params.max_ack_delay);
+    conn->idle_timeout.at =
+        now + idle_msec + 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.ctx->transport_params.max_ack_delay);
     if (is_in_send) {
         conn->idle_timeout.should_rearm_on_send = 0;
     } else {
