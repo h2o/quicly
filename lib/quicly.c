@@ -889,11 +889,10 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_send)
     if (is_in_send && !conn->idle_timeout.should_rearm_on_send)
         return;
 
-    if (conn->initial != NULL || conn->handshake != NULL)
-        return;
-
     int64_t idle_msec = INT64_MAX;
-    if (conn->super.peer.transport_params.idle_timeout != 0)
+    /* TODO reconsider how to refer to peer's idle-timeout value after https://github.com/quicwg/base-drafts/issues/2602 gets
+     * resolved */
+    if (conn->initial == NULL && conn->handshake == NULL && conn->super.peer.transport_params.idle_timeout != 0)
         idle_msec = conn->super.peer.transport_params.idle_timeout;
     if (conn->super.ctx->transport_params.idle_timeout != 0 && conn->super.ctx->transport_params.idle_timeout < idle_msec)
         idle_msec = conn->super.ctx->transport_params.idle_timeout;
@@ -1529,6 +1528,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_linklist_init(&conn->_.pending_link.streams_blocked.bidi);
     quicly_linklist_init(&conn->_.pending_link.control);
     conn->_.idle_timeout.at = INT64_MAX;
+    conn->_.idle_timeout.should_rearm_on_send = 1;
 
     if (set_peeraddr(&conn->_, sa, salen) != 0) {
         quicly_free(&conn->_);
@@ -2004,6 +2004,7 @@ static size_t calc_send_window(quicly_conn_t *conn)
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
+    /* return "now" if we can and have something to send */
     if (calc_send_window(conn) > 0) {
         if (conn->crypto.pending_flows != 0)
             return 0;
@@ -2012,14 +2013,20 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         int including_new_data = conn->egress.max_data.sent < conn->egress.max_data.permitted;
         if (conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, including_new_data))
             return 0;
-    } else if (!conn->super.peer.address_validation.validated) {
-        /* TODO timeout? */
-        return INT64_MAX;
     }
 
-    int64_t at = conn->egress.loss.alarm_at;
-    if (conn->egress.send_ack_at < at)
-        at = conn->egress.send_ack_at;
+    int64_t at;
+
+    /* consult retransmission timer or ACK timer */
+    if (conn->super.peer.address_validation.validated) {
+        at = conn->egress.loss.alarm_at;
+        if (conn->egress.send_ack_at < at)
+            at = conn->egress.send_ack_at;
+    } else {
+        at = INT64_MAX;
+    }
+
+    /* idle timer */
     if (conn->idle_timeout.at < at)
         at = conn->idle_timeout.at;
 
@@ -4128,13 +4135,14 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         conn->super.peer.address_validation.validated = 1;
         break;
     case QUICLY_EPOCH_1RTT:
-        update_idle_timeout(conn, 0);
         if (!is_ack_only && should_send_max_data(conn))
             conn->egress.send_ack_at = 0;
         break;
     default:
         break;
     }
+
+    update_idle_timeout(conn, 0);
 
 Exit:
     switch (ret) {
