@@ -59,6 +59,7 @@ typedef struct quicly_rtt_t {
 
 static void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, uint32_t initial_rtt);
 static void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay);
+static uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay);
 
 typedef struct quicly_loss_t {
     /**
@@ -153,6 +154,11 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
         rtt->smoothed = (rtt->smoothed * 7 + rtt->latest) / 8;
     }
     assert(rtt->smoothed != 0);
+}
+
+inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay)
+{
+    return rtt->smoothed + (rtt->variance != 0 ? rtt->variance * 4 : 1) + max_ack_delay;
 }
 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
