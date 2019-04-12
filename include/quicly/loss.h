@@ -151,8 +151,8 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
         rtt->smoothed = rtt->latest;
     } else {
         uint32_t absdiff = rtt->smoothed >= rtt->latest ? rtt->smoothed - rtt->latest : rtt->latest - rtt->smoothed;
-        rtt->smoothed = (rtt->smoothed * 7 + rtt->latest) / 8;
         rtt->variance = (rtt->variance * 3 + absdiff) / 4;
+        rtt->smoothed = (rtt->smoothed * 7 + rtt->latest) / 8;
     }
     assert(rtt->smoothed != 0);
 }
