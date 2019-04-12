@@ -137,7 +137,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     assert(latest_rtt != UINT32_MAX);
     rtt->latest = latest_rtt != 0 ? latest_rtt : 1; /* Force minimum RTT sample to 1ms */
 
-    /* update minimum */
+    /* update min_rtt */
     if (rtt->latest < rtt->minimum)
         rtt->minimum = rtt->latest;
 
@@ -145,13 +145,14 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     if (rtt->latest > rtt->minimum + ack_delay)
         rtt->latest -= ack_delay;
 
-    /* smoothed and variance */
+    /* update smoothed_rtt and rttvar */
     if (rtt->smoothed == 0) {
+        /* first RTT sample */
         rtt->smoothed = rtt->latest;
     } else {
         uint32_t absdiff = rtt->smoothed >= rtt->latest ? rtt->smoothed - rtt->latest : rtt->latest - rtt->smoothed;
-        rtt->variance = (rtt->variance * 3 + absdiff) / 4;
         rtt->smoothed = (rtt->smoothed * 7 + rtt->latest) / 8;
+        rtt->variance = (rtt->variance * 3 + absdiff) / 4;
     }
     assert(rtt->smoothed != 0);
 }
@@ -185,7 +186,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         alarm_duration = 2 * r->rtt.latest; /* should contain initial rtt */
     } else {
         /* PTO alarm */
-        alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance + *r->max_ack_delay;
+        alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay);
         if (alarm_duration < r->conf->min_pto)
             alarm_duration = r->conf->min_pto;
         alarm_duration <<= r->pto_count < QUICLY_MAX_PTO_COUNT ? r->pto_count : QUICLY_MAX_PTO_COUNT;
@@ -198,21 +199,24 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
                                         uint64_t ack_delay_encoded, int ack_eliciting)
 {
+    /* Reset PTO count if anything is newly acked */
     if (largest_newly_acked != UINT64_MAX)
         r->pto_count = 0;
 
-    /* Only use RTT samples for new largest acked */
+    /* If largest newly acked is not larger than before, skip RTT sample */
     if (largest_newly_acked == UINT64_MAX || r->largest_acked_packet >= largest_newly_acked)
         return;
     r->largest_acked_packet = largest_newly_acked;
 
+    /* If ack does not acknowledge any ack-eliciting packet, skip RTT sample */
+    if (!ack_eliciting)
+        return;
+
+    /* Decode ack delay */
     uint64_t ack_delay_microsecs = ack_delay_encoded << *r->ack_delay_exponent;
     uint32_t ack_delay_millisecs = (uint32_t)((ack_delay_microsecs * 2 + 1000) / 2000);
-    /* Use min(ack_delay, max_ack_delay) for an ACK that acknowledges one or more ack-eliciting packets.
-     * This makes it so that persistent late ACKs from the peer increase the SRTT.
-     * OTOH, when the ACK does not acknowledge any ack-eliciting packets, the ack_delay can be large. In such cases,
-     * allow for the ack_delay to be arbitrarily large (effectively bounded by the lifetime of these packets in the sent_map). */
-    if (ack_delay_millisecs > *r->max_ack_delay && ack_eliciting)
+    /* use min(ack_delay, max_ack_delay) as the ack delay */
+    if (ack_delay_millisecs > *r->max_ack_delay)
         ack_delay_millisecs = *r->max_ack_delay;
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
 }
