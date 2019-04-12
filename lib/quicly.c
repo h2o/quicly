@@ -3023,7 +3023,6 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, 0),
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
                                  INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
-            /* TODO (jri): if r->pto_count > MAX_PTO, close connection */
             if (ptls_handshake_is_complete(conn->crypto.tls) &&
                 conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn,
                                                             conn->egress.max_data.sent < conn->egress.max_data.permitted)) {

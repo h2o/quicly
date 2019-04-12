@@ -37,7 +37,7 @@ typedef struct quicly_loss_conf_t {
      */
     unsigned time_reordering_percentile;
     /**
-     * Minimum time in the future a PTO alarm may be set for.
+     * Minimum time in the future a PTO alarm may be set for. Typically set to alarm granularity.
      */
     uint32_t min_pto;
     /**
@@ -170,28 +170,29 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
 
 inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding)
 {
-    if (has_outstanding) {
-        assert(last_retransmittable_sent_at != INT64_MAX);
-        int64_t alarm_duration;
-        if (r->loss_time != INT64_MAX) {
-            /* time-threshold loss detection */
-            alarm_duration = r->loss_time - last_retransmittable_sent_at;
-        } else if (r->rtt.smoothed == 0) {
-            alarm_duration = 2 * r->rtt.latest; /* should contain initial rtt */
-        } else {
-            /* PTO alarm (FIXME observe and use max_ack_delay) */
-            alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance + *r->max_ack_delay;
-            if (alarm_duration < r->conf->min_pto)
-                alarm_duration = r->conf->min_pto;
-            alarm_duration <<= r->pto_count < QUICLY_MAX_PTO_COUNT ? r->pto_count : QUICLY_MAX_PTO_COUNT;
-        }
-        r->alarm_at = last_retransmittable_sent_at + alarm_duration;
-        if (r->alarm_at < now)
-            r->alarm_at = now;
-    } else {
+    if (!has_outstanding) {
+        /* Do not set alarm if there's no data oustanding */
         r->alarm_at = INT64_MAX;
         r->loss_time = INT64_MAX;
+        return;
     }
+    assert(last_retransmittable_sent_at != INT64_MAX);
+    int64_t alarm_duration;
+    if (r->loss_time != INT64_MAX) {
+        /* time-threshold loss detection */
+        alarm_duration = r->loss_time - last_retransmittable_sent_at;
+    } else if (r->rtt.smoothed == 0) {
+        alarm_duration = 2 * r->rtt.latest; /* should contain initial rtt */
+    } else {
+        /* PTO alarm */
+        alarm_duration = r->rtt.smoothed + 4 * r->rtt.variance + *r->max_ack_delay;
+        if (alarm_duration < r->conf->min_pto)
+            alarm_duration = r->conf->min_pto;
+        alarm_duration <<= r->pto_count < QUICLY_MAX_PTO_COUNT ? r->pto_count : QUICLY_MAX_PTO_COUNT;
+    }
+    r->alarm_at = last_retransmittable_sent_at + alarm_duration;
+    if (r->alarm_at < now)
+        r->alarm_at = now;
 }
 
 inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
