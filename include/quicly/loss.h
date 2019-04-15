@@ -189,7 +189,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay);
         if (alarm_duration < r->conf->min_pto)
             alarm_duration = r->conf->min_pto;
-        alarm_duration <<= r->pto_count < QUICLY_MAX_PTO_COUNT ? r->pto_count : QUICLY_MAX_PTO_COUNT;
+        alarm_duration <<= r->pto_count;
     }
     r->alarm_at = last_retransmittable_sent_at + alarm_duration;
     if (r->alarm_at < now)
@@ -231,7 +231,7 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_
         return quicly_loss_detect_loss(r, largest_acked, do_detect);
     }
     /* PTO */
-    if (r->pto_count == 0)
+    if (r->pto_count < QUICLY_MAX_PTO_COUNT)
         ++r->pto_count;
     *num_packets_to_send = 2;
     return 0;
