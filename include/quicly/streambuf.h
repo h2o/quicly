@@ -44,12 +44,14 @@ typedef struct st_quicly_streambuf_t {
     ptls_buffer_t ingress;
 } quicly_streambuf_t;
 
+quicly_streambuf_t *quicly_streambuf(quicly_stream_t *stream);
 int quicly_streambuf_create(quicly_stream_t *stream, size_t sz);
 void quicly_streambuf_destroy(quicly_stream_t *stream, int err);
 void quicly_streambuf_egress_shift(quicly_stream_t *stream, size_t delta);
 int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
 int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len);
 int quicly_streambuf_egress_shutdown(quicly_stream_t *stream);
+size_t quicly_streambuf_egress_avail(quicly_stream_t *stream);
 void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta);
 ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream);
 int quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);

@@ -31,6 +31,11 @@ static void shift_bytes(ptls_buffer_t *buf, size_t delta)
     memmove(buf->base, buf->base + delta, buf->off);
 }
 
+quicly_streambuf_t *quicly_streambuf(quicly_stream_t *stream)
+{
+    return stream->data;
+}
+
 int quicly_streambuf_create(quicly_stream_t *stream, size_t sz)
 {
     quicly_streambuf_t *sbuf;
@@ -106,6 +111,12 @@ int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
     quicly_streambuf_t *sbuf = stream->data;
     quicly_sendstate_shutdown(&stream->sendstate, sbuf->egress.max_stream_data);
     return quicly_stream_sync_sendbuf(stream, 1);
+}
+
+size_t quicly_streambuf_egress_avail(quicly_stream_t *stream)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+    return sbuf->egress.buf.off;
 }
 
 void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta)

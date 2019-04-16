@@ -76,9 +76,17 @@ static int on_receive_reset(quicly_stream_t *stream, int err);
 static int server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 static int client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
+typedef struct st_server_streambuf_t {
+    quicly_streambuf_t sbuf;
+    size_t dynamic_avail;
+} server_streambuf_t;
+
+static void server_egress_shift(quicly_stream_t *stream, size_t delta);
+static int server_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
+
 static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streambuf_destroy,
-                                                                  quicly_streambuf_egress_shift,
-                                                                  quicly_streambuf_egress_emit,
+                                                                  server_egress_shift,
+                                                                  server_egress_emit,
                                                                   on_stop_sending,
                                                                   server_on_receive,
                                                                   on_receive_reset},
@@ -154,6 +162,8 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
 
 static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_http1)
 {
+    server_streambuf_t *server_sbuf = (server_streambuf_t *) quicly_streambuf(stream);
+
     if (!(path.len > 5 && path.base[0] == '/' && memcmp(path.base + path.len - 4, ".txt", 4) == 0))
         return 0;
     unsigned size = 0;
@@ -167,10 +177,7 @@ static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_ht
     }
 
     send_header(stream, is_http1, 200, "text/plain; charset=utf-8");
-    for (; size >= 12; size -= 12)
-        quicly_streambuf_egress_write(stream, "hello world\n", 12);
-    if (size != 0)
-        quicly_streambuf_egress_write(stream, "hello world", size);
+    server_sbuf->dynamic_avail = size;
     return 1;
 }
 
@@ -186,6 +193,55 @@ static int on_receive_reset(quicly_stream_t *stream, int err)
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
     return 0;
+}
+
+static void server_egress_shift(quicly_stream_t *stream, size_t delta)
+{
+    server_streambuf_t *server_sbuf = (server_streambuf_t *) quicly_streambuf(stream);
+    size_t static_avail = quicly_streambuf_egress_avail(stream);
+
+    if (static_avail > 0) {
+        size_t static_delta = MIN(delta, static_avail);
+        delta -= static_delta;
+        quicly_streambuf_egress_shift(stream, static_delta);
+    }
+    assert(server_sbuf->dynamic_avail >= delta);
+    server_sbuf->dynamic_avail -= delta;
+}
+
+static int server_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
+{
+    server_streambuf_t *server_sbuf = (server_streambuf_t *) quicly_streambuf(stream);
+    size_t avail = quicly_streambuf_egress_avail(stream) + server_sbuf->dynamic_avail;
+    size_t capacity = *len, written = 0;
+
+    assert(avail > 0);
+
+    if (quicly_streambuf_egress_avail(stream) > 0) {
+        quicly_streambuf_egress_emit(stream, off, dst, len, wrote_all);
+        written = *len;
+        capacity -= written;
+    }
+
+    if (capacity > 0 && server_sbuf->dynamic_avail > 0) {
+        ssize_t n = MIN(capacity, server_sbuf->dynamic_avail);
+        memset((dst + written), 'q', n);
+        written += n;
+    }
+
+    *len = written;
+    *wrote_all = (avail == written? 1 : 0);
+
+    return 0;
+}
+
+static int server_egress_shutdown(quicly_stream_t *stream)
+{
+    server_streambuf_t *server_sbuf = (server_streambuf_t *) quicly_streambuf(stream);
+    uint64_t final_size = quicly_streambuf_egress_avail(stream) + server_sbuf->dynamic_avail;
+
+    quicly_sendstate_shutdown(&stream->sendstate, final_size);
+    return quicly_stream_sync_sendbuf(stream, 1);
 }
 
 static int server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
@@ -221,7 +277,7 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
     send_header(stream, is_http1, 404, "text/plain; charset=utf-8");
     send_str(stream, "not found\n");
 Sent:
-    quicly_streambuf_egress_shutdown(stream);
+    server_egress_shutdown(stream);
     quicly_streambuf_ingress_shift(stream, len);
     return 0;
 }
@@ -263,12 +319,14 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
 
 static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
-    int ret;
+    size_t sz = sizeof(quicly_streambuf_t);
+    stream->callbacks = &client_stream_callbacks;
 
-    if ((ret = quicly_streambuf_create(stream, sizeof(quicly_streambuf_t))) != 0)
-        return ret;
-    stream->callbacks = ctx.tls->certificates.count != 0 ? &server_stream_callbacks : &client_stream_callbacks;
-    return 0;
+    if (ctx.tls->certificates.count != 0) {
+        stream->callbacks = &server_stream_callbacks;
+        sz = sizeof(server_streambuf_t);
+    }
+    return quicly_streambuf_create(stream, sz);
 }
 
 static quicly_stream_open_t stream_open = {&on_stream_open};
