@@ -37,7 +37,6 @@ extern "C" {
 #define QUICLY_LOCAL_ACK_DELAY_EXPONENT 10
 #define QUICLY_DEFAULT_MIN_PTO 1 /* milliseconds */
 #define QUICLY_DEFAULT_INITIAL_RTT 100
-#define QUICLY_MAX_PTO_COUNT 16 /* 65 seconds under 1ms granurality */
 
 #define QUICLY_MAX_PACKET_SIZE 1280 /* must be >= 1200 bytes */
 #define QUICLY_AEAD_TAG_SIZE 16
