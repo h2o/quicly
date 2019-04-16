@@ -83,9 +83,9 @@ typedef struct quicly_loss_t {
      */
     int64_t time_of_last_packet_sent;
     /**
-     * The largest packet number acknowledged in an ack frame.
+     * The largest packet number acknowledged in an ack frame, added by one (so that zero can mean "below any PN").
      */
-    uint64_t largest_acked_packet;
+    uint64_t largest_acked_packet_plus1;
     /**
      * The time at which the next packet will be considered lost based on exceeding the reordering window in time.
      */
@@ -207,9 +207,9 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
         r->pto_count = 0;
 
     /* If largest newly acked is not larger than before, skip RTT sample */
-    if (largest_newly_acked == UINT64_MAX || r->largest_acked_packet >= largest_newly_acked)
+    if (largest_newly_acked == UINT64_MAX || r->largest_acked_packet_plus1 > largest_newly_acked)
         return;
-    r->largest_acked_packet = largest_newly_acked;
+    r->largest_acked_packet_plus1 = largest_newly_acked + 1;
 
     /* If ack does not acknowledge any ack-eliciting packet, skip RTT sample */
     if (!ack_eliciting)
