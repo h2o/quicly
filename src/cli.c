@@ -78,7 +78,9 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
 
 typedef struct st_server_streambuf_t {
     quicly_streambuf_t sbuf;
-    size_t dynamic_avail;
+    // dynamically generated data
+    size_t off;
+    size_t size;
 } server_streambuf_t;
 
 static void server_egress_shift(quicly_stream_t *stream, size_t delta);
@@ -177,7 +179,8 @@ static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_ht
     }
 
     send_header(stream, is_http1, 200, "text/plain; charset=utf-8");
-    server_sbuf->dynamic_avail = size;
+    server_sbuf->off = 0;
+    server_sbuf->size = size;
     return 1;
 }
 
@@ -205,14 +208,18 @@ static void server_egress_shift(quicly_stream_t *stream, size_t delta)
         delta -= static_delta;
         quicly_streambuf_egress_shift(stream, static_delta);
     }
-    assert(server_sbuf->dynamic_avail >= delta);
-    server_sbuf->dynamic_avail -= delta;
+    assert(server_sbuf->off + delta <= server_sbuf->size);
+    server_sbuf->off += delta;
 }
+
+static const char dynamic_text[] = "hello world\n";
+static const size_t dynamic_text_size = 12;
 
 static int server_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
 {
     server_streambuf_t *server_sbuf = (server_streambuf_t *) quicly_streambuf(stream);
-    size_t avail = quicly_streambuf_egress_avail(stream) + server_sbuf->dynamic_avail;
+    size_t dynamic_avail = server_sbuf->size - server_sbuf->off;
+    size_t avail = quicly_streambuf_egress_avail(stream) + dynamic_avail;
     size_t capacity = *len, written = 0;
 
     assert(avail > 0);
@@ -221,12 +228,25 @@ static int server_egress_emit(quicly_stream_t *stream, size_t off, void *dst, si
         quicly_streambuf_egress_emit(stream, off, dst, len, wrote_all);
         written = *len;
         capacity -= written;
+        dst += written;
     }
 
-    if (capacity > 0 && server_sbuf->dynamic_avail > 0) {
-        ssize_t n = MIN(capacity, server_sbuf->dynamic_avail);
-        memset((dst + written), 'q', n);
-        written += n;
+    if (capacity > 0 && dynamic_avail > 0) {
+        ssize_t size = MIN(capacity, dynamic_avail);
+        size_t text_off = (server_sbuf->off + off) % dynamic_text_size;
+
+        written += size;
+
+        memcpy(dst, dynamic_text + text_off, dynamic_text_size - text_off);
+        dst += dynamic_text_size - text_off;
+
+        while (size >= dynamic_text_size) {
+            memcpy(dst, dynamic_text, dynamic_text_size);
+            size -= dynamic_text_size;
+            dst += dynamic_text_size;
+        }
+        if (size != 0)
+            memcpy(dst, dynamic_text, size);
     }
 
     *len = written;
@@ -238,7 +258,7 @@ static int server_egress_emit(quicly_stream_t *stream, size_t off, void *dst, si
 static int server_egress_shutdown(quicly_stream_t *stream)
 {
     server_streambuf_t *server_sbuf = (server_streambuf_t *) quicly_streambuf(stream);
-    uint64_t final_size = quicly_streambuf_egress_avail(stream) + server_sbuf->dynamic_avail;
+    uint64_t final_size = quicly_streambuf_egress_avail(stream) + server_sbuf->size;
 
     quicly_sendstate_shutdown(&stream->sendstate, final_size);
     return quicly_stream_sync_sendbuf(stream, 1);
