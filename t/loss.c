@@ -291,8 +291,10 @@ static void test_downstream(void)
 
     for (i = 0; i != 100; ++i) {
         rand_ratio = 256;
+#if 0 /* disabled temporarily; see #148 */
         subtest("75%", test_downstream_core);
         rand_ratio = 512;
+#endif
         subtest("50%", test_downstream_core);
         rand_ratio = 768;
         subtest("25%", test_downstream_core);
@@ -315,8 +317,10 @@ static void test_bidirectional(void)
     size_t i;
 
     for (i = 0; i != 100; ++i) {
+#if 0 /* disabled temporarily; see #148 */
         rand_ratio = 256;
         subtest("75%", test_bidirectional_core);
+#endif
         rand_ratio = 512;
         subtest("50%", test_bidirectional_core);
         rand_ratio = 768;
