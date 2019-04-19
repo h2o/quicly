@@ -3015,8 +3015,9 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= now) {
-        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1, conn->egress.loss.largest_acked_packet,
-                                        do_detect_loss, &s.min_packets_to_send)) != 0)
+        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1,
+                                        conn->egress.loss.largest_acked_packet_plus1 - 1, do_detect_loss,
+                                        &s.min_packets_to_send)) != 0)
             goto Exit;
         if (s.min_packets_to_send > 0) {
             /* PTO  (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
