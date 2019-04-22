@@ -1992,7 +1992,7 @@ static ssize_t round_send_window(ssize_t window)
  */
 static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, int restrict_sending)
 {
-    /* If address is unvalidated, limit sending to 3x bytes received*/
+    /* If address is unvalidated, limit sending to 3x bytes received */
     if (!conn->super.peer.address_validation.validated) {
         uint64_t window = conn->super.stats.num_bytes.received * 3;
         if (window <= conn->super.stats.num_bytes.sent)
@@ -2000,7 +2000,7 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
         return window - conn->super.stats.num_bytes.sent;
     }
 
-    /* ensure there's enough window to send minimum number of packets */
+    /* Validated address. Ensure there's enough window to send minimum number of packets */
     if (!restrict_sending && conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight + min_bytes_to_send)
         return conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
     return min_bytes_to_send;
