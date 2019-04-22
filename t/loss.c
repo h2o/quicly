@@ -200,6 +200,13 @@ static void loss_core(int downstream_only)
     size_t num_sent_up, num_sent_down, num_received;
     int ret;
 
+#if 0 /* enable this to log the transaction of beginning from a specific subtest (in the case of the following, 9,3,37) */
+    if (test_index[0] == 9 && test_index[1] == 3 && test_index[2] == 37) {
+        quic_ctx.event_log.cb = quicly_new_default_event_logger(stdout);
+        quic_ctx.event_log.mask = UINT64_MAX;
+    }
+#endif
+
     quic_now = 0;
 
     { /* transmit first flight */
