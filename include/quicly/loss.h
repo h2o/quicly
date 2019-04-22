@@ -114,11 +114,12 @@ static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
 
 /* This function updates the early retransmit timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
- *  * if num_packets_to_send is zero, send things normally
- *  * if num_packets_to_send is non-zero, send the specfied number of packets immmediately
- * and then call quicly_loss_update_alarm and update the alarm */
+ *  * send min_packets_to_send number of packets immmediately. min_packets_to_send should never be 0.
+ *  * if restrict_sending is true, limit sending to min_packets_to_send, otherwise as limited by congestion/flow control
+ * and then call quicly_loss_update_alarm and update the alarm
+ */
 static int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect,
-                                size_t *num_packets_to_send);
+                                size_t *min_packets_to_send, int *restrict_sending);
 
 static int quicly_loss_detect_loss(quicly_loss_t *r, uint64_t largest_pn, quicly_loss_do_detect_cb do_detect);
 
@@ -225,17 +226,19 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
 }
 
 inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect,
-                                size_t *num_packets_to_send)
+                                size_t *min_packets_to_send, int *restrict_sending)
 {
     r->alarm_at = INT64_MAX;
+    *min_packets_to_send = 1;
     if (r->loss_time != INT64_MAX) {
-        /* Early retransmit or Time Loss Detection */
-        *num_packets_to_send = 0;
+        /* Time threshold loss detection. Send at least 1 packet, but no restrictions on sending otherwise. */
+        *restrict_sending = 0;
         return quicly_loss_detect_loss(r, largest_acked, do_detect);
     }
-    /* PTO */
+    /* PTO. Send at least and at most 2 packets. */
     ++r->pto_count;
-    *num_packets_to_send = 2;
+    *min_packets_to_send = 2;
+    *restrict_sending = 1;
     return 0;
 }
 
