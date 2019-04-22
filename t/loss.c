@@ -38,7 +38,6 @@ struct loss_cond_t {
             } ratio;
             uint64_t bits;
             size_t bits_avail;
-            int downstream;
         } rand_;
     } data;
 };
@@ -66,8 +65,10 @@ static int cond_rand_(struct loss_cond_t *cond)
 
     if (cond->data.rand_.bits_avail == 0) {
         if (c == NULL) {
-            /* use different seeds based on the direction */
-            c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, cond->data.rand_.downstream ? "1111111111111111" : "0000000000000000");
+            /* use different seed for each invocation */
+            static uint64_t key[2];
+            c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, &key);
+            ++key[0];
         }
         /* initialize next 64 bits */
         cond->data.rand_.bits = 0;
@@ -90,12 +91,11 @@ static int cond_rand_(struct loss_cond_t *cond)
 /**
  * loss_rate indicates as `nloss` packets out of every `ntotal` packets
  */
-static void init_cond_rand(struct loss_cond_t *cond, unsigned nloss, unsigned ntotal, int downstream)
+static void init_cond_rand(struct loss_cond_t *cond, unsigned nloss, unsigned ntotal)
 {
     *cond = (struct loss_cond_t){cond_rand_};
     cond->data.rand_.ratio.nloss = nloss;
     cond->data.rand_.ratio.ntotal = ntotal;
-    cond->data.rand_.downstream = downstream;
 }
 
 static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, struct loss_cond_t *cond,
@@ -338,25 +338,25 @@ static void test_downstream(void)
     loss_cond_up = cond_true;
 
     for (i = 0; i != 100; ++i) {
-        init_cond_rand(&loss_cond_down, 3, 4, 1);
+        init_cond_rand(&loss_cond_down, 3, 4);
         subtest("75%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 2, 1);
+        init_cond_rand(&loss_cond_down, 1, 2);
         subtest("50%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 4, 1);
+        init_cond_rand(&loss_cond_down, 1, 4);
         subtest("25%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 10, 1);
+        init_cond_rand(&loss_cond_down, 1, 10);
         subtest("10%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 20, 1);
+        init_cond_rand(&loss_cond_down, 1, 20);
         subtest("5%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 40, 1);
+        init_cond_rand(&loss_cond_down, 1, 40);
         subtest("2.5%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 64, 1);
+        init_cond_rand(&loss_cond_down, 1, 64);
         subtest("1.6%", loss_core);
     }
 }
@@ -367,33 +367,33 @@ static void test_bidirectional(void)
 
     for (i = 0; i != 100; ++i) {
 #if 0 /* TODO enable this after adding code that retransmits ACK every 1 PTO even when a single packet is received */
-        init_cond_rand(&loss_cond_down, 3, 4, 1);
-        init_cond_rand(&loss_cond_up, 3, 4, 0);
+        init_cond_rand(&loss_cond_down, 3, 4);
+        init_cond_rand(&loss_cond_up, 3, 4);
         subtest("75%", loss_core);
 #endif
 
-        init_cond_rand(&loss_cond_down, 1, 2, 1);
-        init_cond_rand(&loss_cond_up, 1, 2, 0);
+        init_cond_rand(&loss_cond_down, 1, 2);
+        init_cond_rand(&loss_cond_up, 1, 2);
         subtest("50%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 4, 1);
-        init_cond_rand(&loss_cond_up, 1, 4, 0);
+        init_cond_rand(&loss_cond_down, 1, 4);
+        init_cond_rand(&loss_cond_up, 1, 4);
         subtest("25%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 10, 1);
-        init_cond_rand(&loss_cond_up, 1, 10, 0);
+        init_cond_rand(&loss_cond_down, 1, 10);
+        init_cond_rand(&loss_cond_up, 1, 10);
         subtest("10%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 20, 1);
-        init_cond_rand(&loss_cond_up, 1, 20, 0);
+        init_cond_rand(&loss_cond_down, 1, 20);
+        init_cond_rand(&loss_cond_up, 1, 20);
         subtest("5%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 40, 1);
-        init_cond_rand(&loss_cond_up, 1, 40, 0);
+        init_cond_rand(&loss_cond_down, 1, 40);
+        init_cond_rand(&loss_cond_up, 1, 40);
         subtest("2.5%", loss_core);
 
-        init_cond_rand(&loss_cond_down, 1, 64, 1);
-        init_cond_rand(&loss_cond_up, 1, 64, 0);
+        init_cond_rand(&loss_cond_down, 1, 64);
+        init_cond_rand(&loss_cond_up, 1, 64);
         subtest("1.6%", loss_core);
     }
 }
