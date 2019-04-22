@@ -370,7 +370,7 @@ static void test_bidirectional(void)
     size_t i;
 
     for (i = 0; i != 100; ++i) {
-#if 0 /* TODO enable this after adding code that retransmits ACK every 1 PTO even when a single packet is received */
+#if 1 /* TODO enable this after adding code that retransmits ACK every 1 PTO even when a single packet is received */
         init_cond_rand(&loss_cond_down, 3, 4);
         init_cond_rand(&loss_cond_up, 3, 4);
         subtest("75%", loss_core);
@@ -409,7 +409,7 @@ void test_loss(void)
     uint64_t idle_timeout_backup = quic_ctx.transport_params.idle_timeout;
     quic_ctx.transport_params.idle_timeout = (uint64_t)300 * 1000; /* 30 seconds */
     subtest("downstream", test_downstream);
-    quic_ctx.transport_params.idle_timeout = (uint64_t)300 * 1000; /* 30 seconds */
+    quic_ctx.transport_params.idle_timeout = (uint64_t)30 * 86400 * 1000; /* 30 days */
     subtest("bidirectional", test_bidirectional);
     quic_ctx.transport_params.idle_timeout = idle_timeout_backup;
 }
