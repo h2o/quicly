@@ -2522,10 +2522,7 @@ UpdateState:
 
 static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
 {
-    /* TODO reconsider this (maybe 3 PTO? also not sure why we need to add ack-delay twice) */
-    /* TODO (jri): The timeouts used here should be entirely the peer's */
-    return (conn->egress.loss.rtt.smoothed + conn->egress.loss.rtt.variance) * 4 + conn->super.peer.transport_params.max_ack_delay +
-           QUICLY_DELAYED_ACK_TIMEOUT;
+    return 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.peer.transport_params.max_ack_delay);
 }
 
 static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
