@@ -2533,8 +2533,11 @@ static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
 
     quicly_sentmap_init_iter(&conn->egress.sentmap, iter);
 
-    while ((sent = quicly_sentmap_get(iter))->sent_at <= retire_before && sent->bytes_in_flight == 0)
+    while ((sent = quicly_sentmap_get(iter))->sent_at <= retire_before && sent->bytes_in_flight == 0) {
+        if (conn->egress.sentmap.num_entries < 100 && conn->super.state <= QUICLY_STATE_CONNECTED)
+            break;
         quicly_sentmap_update(&conn->egress.sentmap, iter, QUICLY_SENTMAP_EVENT_EXPIRED, conn);
+    }
 }
 
 int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs)

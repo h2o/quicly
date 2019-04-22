@@ -156,6 +156,10 @@ typedef struct st_quicly_sentmap_t {
      */
     size_t bytes_in_flight;
     /**
+     * number of entries
+     */
+    size_t num_entries;
+    /**
      * is non-NULL between prepare and commit, pointing to the packet header that is being written to
      */
     quicly_sent_t *_pending_packet;
@@ -230,6 +234,7 @@ inline void quicly_sentmap_commit(quicly_sentmap_t *map, uint16_t bytes_in_fligh
         map->bytes_in_flight += bytes_in_flight;
     }
     map->_pending_packet = NULL;
+    ++map->num_entries;
 }
 
 inline quicly_sent_t *quicly_sentmap_allocate(quicly_sentmap_t *map, quicly_sent_acked_cb acked)

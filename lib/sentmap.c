@@ -72,6 +72,7 @@ static void discard_entry(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter)
 {
     assert(iter->p->acked != NULL);
     iter->p->acked = NULL;
+    --map->num_entries;
 
     struct st_quicly_sent_block_t *block = *iter->ref;
     if (--block->num_entries == 0) {
