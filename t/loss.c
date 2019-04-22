@@ -70,21 +70,25 @@ static int cond_rand_(struct loss_cond_t *cond)
             c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, &key);
             ++key[0];
         }
-        /* initialize next 64 bits */
+        /* initialize next `ntotal` bits, of which `nloss` bits are set */
         cond->data.rand_.bits = 0;
         unsigned num_bits_set;
         for (num_bits_set = 0; num_bits_set != cond->data.rand_.ratio.nloss; ++num_bits_set) {
+            /* choose a mask that sets a new bit */
             uint64_t mask;
             do {
                 uint32_t v;
                 ptls_cipher_encrypt(c, &v, "01234567", 4);
                 mask = (uint64_t)1 << (v % cond->data.rand_.ratio.ntotal);
             } while ((cond->data.rand_.bits & mask) != 0);
+            /* set the chosen bit */
             cond->data.rand_.bits |= mask;
         }
         cond->data.rand_.bits_avail = cond->data.rand_.ratio.ntotal;
     }
 
+    /* return a bit, negating the value, as rand_.bits indicates the bits being lost, whereas we want to return if transmission
+     * succeeds */
     return ((cond->data.rand_.bits >> --cond->data.rand_.bits_avail) & 1) == 0;
 }
 
