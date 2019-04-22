@@ -2001,8 +2001,7 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
     }
 
     /* ensure there's enough window to send minimum number of packets */
-    if (!restrict_sending &&
-        conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight + min_bytes_to_send)
+    if (!restrict_sending && conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight + min_bytes_to_send)
         return conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
     return min_bytes_to_send;
 }
@@ -3024,8 +3023,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= now) {
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1,
-                                        conn->egress.loss.largest_acked_packet_plus1 - 1, do_detect_loss,
-                                        &min_packets_to_send, &restrict_sending)) != 0)
+                                        conn->egress.loss.largest_acked_packet_plus1 - 1, do_detect_loss, &min_packets_to_send,
+                                        &restrict_sending)) != 0)
             goto Exit;
         assert(min_packets_to_send > 0);
         assert(min_packets_to_send <= s.max_packets);
