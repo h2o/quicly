@@ -26,7 +26,79 @@
 
 static quicly_conn_t *client, *server;
 
-static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, int (*cond)(void),
+struct loss_cond_t {
+    int (*cb)(struct loss_cond_t *cond);
+    union {
+        struct {
+            size_t cnt;
+        } even;
+        struct {
+            struct {
+                unsigned nloss, ntotal;
+            } ratio;
+            uint64_t bits;
+            size_t bits_avail;
+            int downstream;
+        } rand_;
+    } data;
+};
+
+static int cond_true_(struct loss_cond_t *cond)
+{
+    return 1;
+}
+
+static struct loss_cond_t cond_true = {cond_true_};
+
+static int cond_even_(struct loss_cond_t *cond)
+{
+    return cond->data.even.cnt++ % 2 == 0;
+}
+
+static void init_cond_even(struct loss_cond_t *cond)
+{
+    *cond = (struct loss_cond_t){cond_even_};
+}
+
+static int cond_rand_(struct loss_cond_t *cond)
+{
+    static ptls_cipher_context_t *c;
+
+    if (cond->data.rand_.bits_avail == 0) {
+        if (c == NULL) {
+            /* use different seeds based on the direction */
+            c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, cond->data.rand_.downstream ? "1111111111111111" : "0000000000000000");
+        }
+        /* initialize next 64 bits */
+        cond->data.rand_.bits = 0;
+        unsigned num_bits_set;
+        for (num_bits_set = 0; num_bits_set != cond->data.rand_.ratio.nloss; ++num_bits_set) {
+            uint64_t mask;
+            do {
+                uint32_t v;
+                ptls_cipher_encrypt(c, &v, "01234567", 4);
+                mask = (uint64_t)1 << (v % cond->data.rand_.ratio.ntotal);
+            } while ((cond->data.rand_.bits & mask) != 0);
+            cond->data.rand_.bits |= mask;
+        }
+        cond->data.rand_.bits_avail = cond->data.rand_.ratio.ntotal;
+    }
+
+    return ((cond->data.rand_.bits >> --cond->data.rand_.bits_avail) & 1) == 0;
+}
+
+/**
+ * loss_rate indicates as `nloss` packets out of every `ntotal` packets
+ */
+static void init_cond_rand(struct loss_cond_t *cond, unsigned nloss, unsigned ntotal, int downstream)
+{
+    *cond = (struct loss_cond_t){cond_rand_};
+    cond->data.rand_.ratio.nloss = nloss;
+    cond->data.rand_.ratio.ntotal = ntotal;
+    cond->data.rand_.downstream = downstream;
+}
+
+static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, struct loss_cond_t *cond,
                          int64_t latency)
 {
     quicly_datagram_t *packets[32];
@@ -44,7 +116,7 @@ static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sen
     if (*num_sent != 0) {
         size_t i;
         for (i = 0; i != *num_sent; ++i) {
-            if (cond()) {
+            if (cond->cb(cond)) {
                 quicly_decoded_packet_t decoded[4];
                 size_t num_decoded = decode_packets(decoded, packets + i, 1), j;
                 assert(num_decoded != 0);
@@ -65,30 +137,16 @@ static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sen
     return 0;
 }
 
-static int cond_true(void)
-{
-    return 1;
-}
-
-static int cond_even_up(void)
-{
-    static size_t cnt;
-    return cnt++ % 2 == 0;
-}
-
-static int cond_even_down(void)
-{
-    static size_t cnt;
-    return cnt++ % 2 == 0;
-}
-
 static void test_even(void)
 {
     quicly_loss_conf_t lossconf = quicly_loss_default_conf;
+    struct loss_cond_t cond_down, cond_up;
     size_t num_sent, num_received;
     int ret;
 
     quic_ctx.loss = &lossconf;
+    init_cond_even(&cond_down);
+    init_cond_even(&cond_up);
 
     quic_now = 0;
 
@@ -108,11 +166,11 @@ static void test_even(void)
         ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, ptls_iovec_init(NULL, 0), new_master_id(), NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
-        cond_even_up();
+        cond_up.cb(&cond_up);
     }
 
     /* drop 2nd packet from server */
-    ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0);
     ok(ret == 0);
     ok(num_sent == 2);
     ok(num_received == 1);
@@ -122,7 +180,7 @@ static void test_even(void)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
     /* client sends delayed-ack that gets dropped */
-    ret = transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 0);
@@ -133,7 +191,7 @@ static void test_even(void)
     quic_now += 1000;
 
     /* server resends the contents of all the packets (in cleartext) */
-    ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 1);
@@ -143,7 +201,7 @@ static void test_even(void)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
     /* client arms the retransmit timer */
-    ret = transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 1);
@@ -151,7 +209,7 @@ static void test_even(void)
     quic_now += 1000;
 
     /* server resends the contents of all the packets (in cleartext) */
-    ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 0);
@@ -160,7 +218,7 @@ static void test_even(void)
     ok(!quicly_connection_is_ready(client));
 
     /* client sends a probe, that gets lost */
-    ret = transmit_cond(client, server, &num_sent, &num_received, cond_even_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 0);
@@ -168,7 +226,7 @@ static void test_even(void)
     quic_now += 1000;
 
     /* server retransmits the handshake packets */
-    ret = transmit_cond(server, client, &num_sent, &num_received, cond_even_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 1);
@@ -179,29 +237,15 @@ static void test_even(void)
     quic_ctx.loss = &quicly_loss_default_conf;
 }
 
-static unsigned rand_ratio;
+struct loss_cond_t loss_cond_down, loss_cond_up;
 
-static int cond_rand(void)
-{
-    static ptls_cipher_context_t *c;
-
-    if (c == NULL)
-        c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, "0000000000000000");
-
-    uint16_t v;
-    ptls_cipher_encrypt(c, &v, "0000", 2);
-    v &= 1023;
-
-    return v < rand_ratio;
-}
-
-static void loss_core(int downstream_only)
+static void loss_core(void)
 {
     size_t num_sent_up, num_sent_down, num_received;
     int ret;
 
 #if 0 /* enable this to log the transaction of beginning from a specific subtest (in the case of the following, 9,3,37) */
-    if (test_index[0] == 9 && test_index[1] == 3 && test_index[2] == 37) {
+    if (test_index[0] == 9 && test_index[1] == 2 && test_index[2] == 15) {
         quic_ctx.event_log.cb = quicly_new_default_event_logger(stdout);
         quic_ctx.event_log.mask = UINT64_MAX;
     }
@@ -240,7 +284,7 @@ static void loss_core(int downstream_only)
         assert(min_timeout == 0 || quic_now < min_timeout + 40); /* we might have spent two RTTs in the loop below */
         if (quic_now < min_timeout)
             quic_now = min_timeout;
-        if ((ret = transmit_cond(server, client, &num_sent_down, &num_received, cond_rand, 10)) != 0)
+        if ((ret = transmit_cond(server, client, &num_sent_down, &num_received, &loss_cond_down, 10)) != 0)
             goto Fail;
         server_timeout = quicly_get_first_timeout(server);
         assert(server_timeout > quic_now - 20);
@@ -259,7 +303,7 @@ static void loss_core(int downstream_only)
                 return;
             }
         }
-        if ((ret = transmit_cond(client, server, &num_sent_up, &num_received, downstream_only ? cond_true : cond_rand, 10)) != 0)
+        if ((ret = transmit_cond(client, server, &num_sent_up, &num_received, &loss_cond_up, 10)) != 0)
             goto Fail;
         client_timeout = quicly_get_first_timeout(client);
         assert(client_timeout > quic_now - 20);
@@ -287,36 +331,34 @@ Fail:
     ok(0);
 }
 
-static void test_downstream_core(void)
-{
-    loss_core(1);
-}
-
 static void test_downstream(void)
 {
     size_t i;
 
-    for (i = 0; i != 100; ++i) {
-        rand_ratio = 256;
-#if 0 /* disabled temporarily; see #148 */
-        subtest("75%", test_downstream_core);
-        rand_ratio = 512;
-#endif
-        subtest("50%", test_downstream_core);
-        rand_ratio = 768;
-        subtest("25%", test_downstream_core);
-        rand_ratio = 921;
-        subtest("10%", test_downstream_core);
-        rand_ratio = 973;
-        subtest("5%", test_downstream_core);
-        rand_ratio = 1014;
-        subtest("1%", test_downstream_core);
-    }
-}
+    loss_cond_up = cond_true;
 
-static void test_bidirectional_core(void)
-{
-    loss_core(0);
+    for (i = 0; i != 100; ++i) {
+        init_cond_rand(&loss_cond_down, 3, 4, 1);
+        subtest("75%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 2, 1);
+        subtest("50%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 4, 1);
+        subtest("25%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 10, 1);
+        subtest("10%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 20, 1);
+        subtest("5%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 40, 1);
+        subtest("2.5%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 64, 1);
+        subtest("1.6%", loss_core);
+    }
 }
 
 static void test_bidirectional(void)
@@ -324,20 +366,35 @@ static void test_bidirectional(void)
     size_t i;
 
     for (i = 0; i != 100; ++i) {
-#if 0 /* disabled temporarily; see #148 */
-        rand_ratio = 256;
-        subtest("75%", test_bidirectional_core);
+#if 0 /* TODO enable this after adding code that retransmits ACK every 1 PTO even when a single packet is received */
+        init_cond_rand(&loss_cond_down, 3, 4, 1);
+        init_cond_rand(&loss_cond_up, 3, 4, 0);
+        subtest("75%", loss_core);
 #endif
-        rand_ratio = 512;
-        subtest("50%", test_bidirectional_core);
-        rand_ratio = 768;
-        subtest("25%", test_bidirectional_core);
-        rand_ratio = 921;
-        subtest("10%", test_bidirectional_core);
-        rand_ratio = 973;
-        subtest("5%", test_bidirectional_core);
-        rand_ratio = 1014;
-        subtest("1%", test_bidirectional_core);
+
+        init_cond_rand(&loss_cond_down, 1, 2, 1);
+        init_cond_rand(&loss_cond_up, 1, 2, 0);
+        subtest("50%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 4, 1);
+        init_cond_rand(&loss_cond_up, 1, 4, 0);
+        subtest("25%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 10, 1);
+        init_cond_rand(&loss_cond_up, 1, 10, 0);
+        subtest("10%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 20, 1);
+        init_cond_rand(&loss_cond_up, 1, 20, 0);
+        subtest("5%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 40, 1);
+        init_cond_rand(&loss_cond_up, 1, 40, 0);
+        subtest("2.5%", loss_core);
+
+        init_cond_rand(&loss_cond_down, 1, 64, 1);
+        init_cond_rand(&loss_cond_up, 1, 64, 0);
+        subtest("1.6%", loss_core);
     }
 }
 
@@ -346,8 +403,9 @@ void test_loss(void)
     subtest("even", test_even);
 
     uint64_t idle_timeout_backup = quic_ctx.transport_params.idle_timeout;
-    quic_ctx.transport_params.idle_timeout = (uint64_t)365 * 86400 * 1000;
+    quic_ctx.transport_params.idle_timeout = (uint64_t)300 * 1000; /* 30 seconds */
     subtest("downstream", test_downstream);
+    quic_ctx.transport_params.idle_timeout = (uint64_t)300 * 1000; /* 30 seconds */
     subtest("bidirectional", test_bidirectional);
     quic_ctx.transport_params.idle_timeout = idle_timeout_backup;
 }
