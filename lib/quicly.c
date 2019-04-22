@@ -1984,8 +1984,15 @@ static ssize_t round_send_window(ssize_t window)
     return window;
 }
 
-static size_t calc_send_window(quicly_conn_t *conn)
+/* Helper function to compute send window based on:
+ * * state of peer validation,
+ * * current cwnd,
+ * * minimum send requirements in |min_bytes_to_send|, and
+ * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
+ */
+static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, int restrict_sending)
 {
+    /* If address is unvalidated, limit sending to 3x bytes received*/
     if (!conn->super.peer.address_validation.validated) {
         uint64_t window = conn->super.stats.num_bytes.received * 3;
         if (window <= conn->super.stats.num_bytes.sent)
@@ -1993,14 +2000,16 @@ static size_t calc_send_window(quicly_conn_t *conn)
         return window - conn->super.stats.num_bytes.sent;
     }
 
-    if (conn->egress.cc.cwnd <= conn->egress.sentmap.bytes_in_flight)
-        return 0;
-    return conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
+    /* ensure there's enough window to send minimum number of packets */
+    if (!restrict_sending &&
+        conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight + min_bytes_to_send)
+        return conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
+    return min_bytes_to_send;
 }
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
-    if (calc_send_window(conn) > 0) {
+    if (calc_send_window(conn, 0, 0) > 0) {
         if (conn->crypto.pending_flows != 0)
             return 0;
         if (quicly_linklist_is_linked(&conn->pending_link.control))
@@ -2048,8 +2057,6 @@ struct st_quicly_send_context_t {
     size_t max_packets;
     /* number of datagrams currently stored in |packets| */
     size_t num_packets;
-    /* minimum packets that need to be sent */
-    size_t min_packets_to_send;
     /* the currently available window for sending (in bytes) */
     ssize_t send_window;
     /* location where next frame should be written */
@@ -2971,7 +2978,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_packets)
 {
     quicly_send_context_t s = {{NULL, -1}, {NULL, NULL, NULL}, packets, *num_packets};
-    int ret;
+    int restrict_sending = 0, ret;
+    size_t min_packets_to_send = 0;
 
     update_now(conn->super.ctx);
 
@@ -3017,9 +3025,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     if (conn->egress.loss.alarm_at <= now) {
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1,
                                         conn->egress.loss.largest_acked_packet_plus1 - 1, do_detect_loss,
-                                        &s.min_packets_to_send)) != 0)
+                                        &min_packets_to_send, &restrict_sending)) != 0)
             goto Exit;
-        if (s.min_packets_to_send > 0) {
+        assert(min_packets_to_send > 0);
+        assert(min_packets_to_send <= s.max_packets);
+
+        if (restrict_sending) {
             /* PTO  (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
             LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, 0),
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
@@ -3031,7 +3042,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                  * in fact sends nothing) */
             } else {
                 /* mark something inflight as lost */
-                if ((ret = mark_packets_as_lost(conn, s.min_packets_to_send)) != 0)
+                if ((ret = mark_packets_as_lost(conn, min_packets_to_send)) != 0)
                     goto Exit;
             }
         }
@@ -3042,21 +3053,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         return QUICLY_ERROR_FREE_CONNECTION;
     }
 
-    /* TODO (jri): The following three blocks not need to be done. Extend the CC API to allow additional packets when PTO fires.
-     * NOTE (kazuho): the change might need to go into calc_send_window. */
-    s.send_window = calc_send_window(conn);
-
-    /* before address validation, nothing can be sent when the window size is zero */
-    if (s.send_window == 0 && !conn->super.peer.address_validation.validated) {
+    s.send_window = calc_send_window(conn, min_packets_to_send * conn->super.ctx->max_packet_size, restrict_sending);
+    if (s.send_window == 0) {
         ret = 0;
         goto Exit;
-    }
-
-    /* If PTO, ensure there's enough send_window to send */
-    if (s.min_packets_to_send != 0) {
-        assert(s.min_packets_to_send <= s.max_packets);
-        if (s.send_window < s.min_packets_to_send * conn->super.ctx->max_packet_size)
-            s.send_window = s.min_packets_to_send * conn->super.ctx->max_packet_size;
     }
 
     /* send handshake flows */
