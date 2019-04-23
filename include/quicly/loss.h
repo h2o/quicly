@@ -105,7 +105,8 @@ typedef int (*quicly_loss_do_detect_cb)(quicly_loss_t *r, uint64_t largest_acked
 static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
                              uint8_t *ack_delay_exponent);
 
-static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding, int has_new_data);
+static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
+                                     int has_new_data);
 
 /* called when an ACK is received
  */
@@ -170,7 +171,8 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
 }
 
-inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding, int has_new_data)
+inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
+                                     int has_new_data)
 {
     if (!has_outstanding) {
         /* Do not set alarm if there's no data oustanding */
@@ -197,7 +199,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay, r->conf->min_pto);
         if (r->pto_count >= QUICLY_AGGRESSIVE_PROBE_THRESHOLD)
             alarm_duration <<= r->pto_count - QUICLY_AGGRESSIVE_PROBE_THRESHOLD;
-        else if(!has_new_data) {
+        else if (!has_new_data) {
             alarm_duration >>= QUICLY_AGGRESSIVE_PROBE_THRESHOLD - r->pto_count;
             if (alarm_duration < r->conf->min_pto)
                 alarm_duration = r->conf->min_pto;
