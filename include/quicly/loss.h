@@ -121,7 +121,7 @@ static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
 static int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect,
                                 size_t *min_packets_to_send, int *restrict_sending);
 
-static int quicly_loss_detect_loss(quicly_loss_t *r, uint64_t largest_pn, quicly_loss_do_detect_cb do_detect);
+static int quicly_loss_detect_loss(quicly_loss_t *r, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect);
 
 /* inline definitions */
 
@@ -242,7 +242,7 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_
     return 0;
 }
 
-inline int quicly_loss_detect_loss(quicly_loss_t *r, uint64_t largest_pn, quicly_loss_do_detect_cb do_detect)
+inline int quicly_loss_detect_loss(quicly_loss_t *r, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect)
 {
     uint32_t delay_until_lost = ((r->rtt.latest > r->rtt.smoothed ? r->rtt.latest : r->rtt.smoothed) * 9 + 7) / 8;
     int64_t loss_time;
@@ -250,7 +250,7 @@ inline int quicly_loss_detect_loss(quicly_loss_t *r, uint64_t largest_pn, quicly
 
     r->loss_time = INT64_MAX;
 
-    if ((ret = do_detect(r, largest_pn, delay_until_lost, &loss_time)) != 0)
+    if ((ret = do_detect(r, largest_acked, delay_until_lost, &loss_time)) != 0)
         return ret;
     if (loss_time != INT64_MAX)
         r->loss_time = loss_time;
