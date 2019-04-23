@@ -900,7 +900,7 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
     if (idle_msec == INT64_MAX)
         return;
 
-    uint32_t three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.ctx->transport_params.max_ack_delay);
+    uint32_t three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.ctx->transport_params.max_ack_delay, conn->egress.loss.conf->min_pto);
     conn->idle_timeout.at = now + (idle_msec > three_pto ? idle_msec : three_pto);
     conn->idle_timeout.should_rearm_on_send = is_in_receive;
 }
@@ -908,7 +908,8 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
 static void update_loss_alarm(quicly_conn_t *conn)
 {
     quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
-                             conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe);
+                             conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe,
+                             conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, /*including_new_data=*/0));
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -3041,9 +3042,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
         if (restrict_sending) {
             /* PTO  (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
-            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CC_RTO, INT_EVENT_ATTR(CC_TYPE, 0),
+            LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PTO,
                                  INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
-                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
+                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd),
+                                 INT_EVENT_ATTR(NUMPTO, conn->egress.loss.pto_count));
             if (ptls_handshake_is_complete(conn->crypto.tls) &&
                 conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn,
                                                             conn->egress.max_data.sent < conn->egress.max_data.permitted)) {
@@ -4315,8 +4317,7 @@ const char *quicly_event_type_names[] = {"connect",
                                          "crypto-decrypt",
                                          "crypto-handshake",
                                          "crypto-update-secret",
-                                         "cc-tlp",
-                                         "cc-rto",
+                                         "pto",
                                          "cc-ack-received",
                                          "cc-congestion",
                                          "stream-send",
@@ -4372,9 +4373,9 @@ const char *quicly_event_attribute_names[] = {NULL,
                                               "end-of-recovery",
                                               "inflight",
                                               "cwnd",
+                                              "pto-count",
                                               "newly-acked",
                                               "first-octet",
-                                              "cc-type",
                                               "cc-end-of-recovery",
                                               "cc-exit-recovery",
                                               "acked-packets",

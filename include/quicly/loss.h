@@ -59,7 +59,7 @@ typedef struct quicly_rtt_t {
 
 static void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, uint32_t initial_rtt);
 static void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay);
-static uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay);
+static uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto);
 
 typedef struct quicly_loss_t {
     /**
@@ -105,14 +105,14 @@ typedef int (*quicly_loss_do_detect_cb)(quicly_loss_t *r, uint64_t largest_acked
 static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
                              uint8_t *ack_delay_exponent);
 
-static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding);
+static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding, int has_new_data);
 
 /* called when an ACK is received
  */
 static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
                                         uint64_t ack_delay_encoded, int ack_eliciting);
 
-/* This function updates the early retransmit timer and indicates to the caller how many packets should be sent.
+/* This function updates the loss detection timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
  *  * send min_packets_to_send number of packets immmediately. min_packets_to_send should never be 0.
  *  * if restrict_sending is true, limit sending to min_packets_to_send, otherwise as limited by congestion/flow control
@@ -158,9 +158,9 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     assert(rtt->smoothed != 0);
 }
 
-inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay)
+inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto)
 {
-    return rtt->smoothed + (rtt->variance != 0 ? rtt->variance * 4 : 1) + max_ack_delay;
+    return rtt->smoothed + (rtt->variance != 0 ? rtt->variance * 4 : min_pto) + max_ack_delay;
 }
 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
@@ -170,7 +170,7 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
 }
 
-inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding)
+inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding, int has_new_data)
 {
     if (!has_outstanding) {
         /* Do not set alarm if there's no data oustanding */
@@ -187,13 +187,21 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         alarm_duration = 2 * r->rtt.latest; /* should contain initial rtt */
     } else {
         /* PTO alarm */
-        alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay);
-        if (alarm_duration < r->conf->min_pto)
-            alarm_duration = r->conf->min_pto;
         /* the bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or pto_count, even when
          * the timer granularity is nanosecond */
         assert(r->pto_count < 63);
-        alarm_duration <<= r->pto_count;
+        /* Probes are sent with the following backoff to minimize latency of recovery:
+         *   * when there's a tail: 0.25, 0.5, 1, 2, 4, 8, ...
+         *   * when mid-transfer: 1, 1, 1, 2, 4, 8, ...
+         */
+        alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay, r->conf->min_pto);
+        if (r->pto_count >= QUICLY_AGGRESSIVE_PROBE_THRESHOLD)
+            alarm_duration <<= r->pto_count - QUICLY_AGGRESSIVE_PROBE_THRESHOLD;
+        else if(!has_new_data) {
+            alarm_duration >>= QUICLY_AGGRESSIVE_PROBE_THRESHOLD - r->pto_count;
+            if (alarm_duration < r->conf->min_pto)
+                alarm_duration = r->conf->min_pto;
+        }
     }
     r->alarm_at = last_retransmittable_sent_at + alarm_duration;
     if (r->alarm_at < now)
@@ -235,10 +243,12 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_
         *restrict_sending = 0;
         return quicly_loss_detect_loss(r, largest_acked, do_detect);
     }
-    /* PTO. Send at least and at most 2 packets. */
+    /* PTO. Send at least and at most 1 packet during early (and aggressive) probing and 2 packets otherwise. */
     ++r->pto_count;
-    *min_packets_to_send = 2;
     *restrict_sending = 1;
+    if (r->pto_count > QUICLY_AGGRESSIVE_PROBE_THRESHOLD)
+        *min_packets_to_send = 2;
+
     return 0;
 }
 
