@@ -2602,7 +2602,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
     int64_t time_threshold = now - delay_until_lost;
-    uint64_t packet_threshold = largest_acked > QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD ? largest_acked - QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD : 0;
+    uint64_t packet_threshold =
+        largest_acked > QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD ? largest_acked - QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD : 0;
     uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
 
@@ -2613,7 +2614,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
     /* Mark packets as lost if they are smaller than the largest_acked and
      * outside either time-threshold or packet-threshold windows.
      */
-    while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked && (sent->sent_at <= time_threshold || sent->packet_number <= packet_threshold)) {
+    while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
+           (sent->sent_at <= time_threshold || sent->packet_number <= packet_threshold)) {
         if (sent->bytes_in_flight != 0 && conn->egress.max_lost_pn <= sent->packet_number) {
             if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.stats.num_packets.lost;
