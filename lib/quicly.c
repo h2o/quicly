@@ -2612,10 +2612,18 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
     init_acks_iter(conn, &iter);
 
     /* Mark packets as lost if they are smaller than the largest_acked and
-     * outside either time-threshold or packet-threshold windows.
+     * outside either time-threshold or packet-threshold
+     * windows. Packet-threshold detection is only used for 0-RTT and 1-RTT
+     * packets, not for Initial or Handshake packets.
+     *
+     * (Note that this code can incorrectly mark packet number 0 as lost
+     * aggressively based on packet-threshold detection (that is, packet number
+     * 1 or 2 is acked). But since packet 0 will always be an Initial packet and
+     * we disable packet-threshold marking before the handshake is complete,
+     * this is ok.)
      */
     while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
-           (sent->sent_at <= time_threshold || sent->packet_number <= packet_threshold)) {
+           (sent->sent_at > time_threshold || (sent->ack_epoch == QUICLY_EPOCH_1RTT && sent->packet_number > packet_threshold))) {
         if (sent->bytes_in_flight != 0 && conn->egress.max_lost_pn <= sent->packet_number) {
             if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.stats.num_packets.lost;
