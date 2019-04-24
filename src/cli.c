@@ -757,7 +757,7 @@ int main(int argc, char **argv)
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
 
-    while ((ch = getopt(argc, argv, "a:C:c:k:e:i:I:l:M:m:Nnp:Rr:s:Vvx:X:h")) != -1) {
+    while ((ch = getopt(argc, argv, "Aa:C:c:k:e:i:I:l:M:m:Nnp:Rr:s:Vvx:X:h")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -834,7 +834,7 @@ int main(int argc, char **argv)
             break;
         case 'A':
             if (sscanf(optarg, "%" PRIu32, &ctx.loss->num_aggressive_ptos) != 1) {
-                fprintf(stderr, "invalid argument passed to `-r`\n");
+                fprintf(stderr, "invalid argument passed to `-A`\n");
                 exit(1);
             }
             break;
