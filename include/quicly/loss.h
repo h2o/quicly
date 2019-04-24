@@ -44,11 +44,16 @@ typedef struct quicly_loss_conf_t {
      * The default RTT used before an RTT sample is taken.
      */
     uint32_t default_initial_rtt;
+    /**
+     * Number of aggressive PTOs at the end of a window. This must not be set to more than 3.
+     */
+    uint32_t num_aggressive_ptos;
 } quicly_loss_conf_t;
 
 #define QUICLY_LOSS_DEFAULT_TIME_REORDERING_PERCENTILE (1024 / 8)
 
-extern quicly_loss_conf_t quicly_loss_default_conf;
+extern quicly_loss_conf_t quicly_loss_spec_conf;
+extern quicly_loss_conf_t quicly_loss_performant_conf;
 
 typedef struct quicly_rtt_t {
     uint32_t minimum;
@@ -192,18 +197,29 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         /* the bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or pto_count, even when
          * the timer granularity is nanosecond */
         assert(r->pto_count < 63);
-        /* Probes are sent with the following backoff to minimize latency of recovery:
+        /* Probes are sent with a modified backoff to minimize latency of recovery. For instance, with num_aggressive_ptos set to 2,
+         * the backoff pattern is as follows:
          *   * when there's a tail: 0.25, 0.5, 1, 2, 4, 8, ...
          *   * when mid-transfer: 1, 1, 1, 2, 4, 8, ...
+         * The first 2 probes in this case (and num_aggressive_ptos, more
+         * generally) are the aggressive ones, which add potentially (and
+         * likely) redundant retransmissions at a tail to reduce the cost of
+         * potential tail losses.
          */
         alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay, r->conf->min_pto);
-        if (r->pto_count >= QUICLY_AGGRESSIVE_PROBE_THRESHOLD)
-            alarm_duration <<= r->pto_count - QUICLY_AGGRESSIVE_PROBE_THRESHOLD;
-        else if (!has_new_data) {
-            alarm_duration >>= QUICLY_AGGRESSIVE_PROBE_THRESHOLD - r->pto_count;
-            if (alarm_duration < r->conf->min_pto)
-                alarm_duration = r->conf->min_pto;
-        }
+        if (r->pto_count < r->conf->num_aggressive_ptos) {
+            if (!has_new_data) {
+                /* Aggressive probes sent under an RTT do not need to account for ack delay, since there is no expectation 
+                 * of an ack being received before the probe is sent. */
+                alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
+                alarm_duration >>= r->conf->num_aggressive_ptos - r->pto_count;
+                if (alarm_duration < r->conf->min_pto)
+                    alarm_duration = r->conf->min_pto;
+            }
+            /* If there is new data to send, then this is mid-transfer. Send aggressive probes at 1 PTO. */
+        } else 
+            alarm_duration <<= r->pto_count - r->conf->num_aggressive_ptos;
+            
     }
     r->alarm_at = last_retransmittable_sent_at + alarm_duration;
     if (r->alarm_at < now)
@@ -248,7 +264,7 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_
     /* PTO. Send at least and at most 1 packet during early (and aggressive) probing and 2 packets otherwise. */
     ++r->pto_count;
     *restrict_sending = 1;
-    if (r->pto_count > QUICLY_AGGRESSIVE_PROBE_THRESHOLD)
+    if (r->pto_count > r->conf->num_aggressive_ptos)
         *min_packets_to_send = 2;
 
     return 0;

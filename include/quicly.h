@@ -238,11 +238,11 @@ typedef struct st_quicly_cid_encryptor_t {
  */
 typedef struct st_quicly_stream_scheduler_t {
     /**
-     * returns if there's any data to send.  When `including_new_data` is set to true, the scheduler returns if there is any stream
+     * returns if there's any data to send.  When `new_data_allowed` is set to true, the scheduler returns if there is any stream
      * that have been registered.  When set to false, the scheduler should return if there is any stream registered by the
      * `set_non_new_data` callback.
      */
-    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int including_new_data);
+    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int new_data_allowed);
     /**
      * Called by quicly to emit stream data.  The scheduler should repeatedly choose a stream and call `quicly_send_stream` until
      * `quicly_can_send_stream` returns false.
