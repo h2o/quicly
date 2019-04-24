@@ -209,7 +209,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay, r->conf->min_pto);
         if (r->pto_count < r->conf->num_aggressive_ptos) {
             if (!has_new_data) {
-                /* Aggressive probes sent under an RTT do not need to account for ack delay, since there is no expectation 
+                /* Aggressive probes sent under an RTT do not need to account for ack delay, since there is no expectation
                  * of an ack being received before the probe is sent. */
                 alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
                 alarm_duration >>= r->conf->num_aggressive_ptos - r->pto_count;
@@ -217,9 +217,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
                     alarm_duration = r->conf->min_pto;
             }
             /* If there is new data to send, then this is mid-transfer. Send aggressive probes at 1 PTO. */
-        } else 
+        } else
             alarm_duration <<= r->pto_count - r->conf->num_aggressive_ptos;
-            
     }
     r->alarm_at = last_retransmittable_sent_at + alarm_duration;
     if (r->alarm_at < now)

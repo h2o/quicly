@@ -908,10 +908,9 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
 
 static void update_loss_alarm(quicly_conn_t *conn)
 {
-    quicly_loss_update_alarm(
-        &conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
-        conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe,
-        conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, 1));
+    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
+                             conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe,
+                             conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, 1));
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
