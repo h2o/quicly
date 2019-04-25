@@ -29,6 +29,7 @@ extern "C" {
 #include "quicly.h"
 
 extern const quicly_context_t quicly_spec_context;
+extern const quicly_context_t quicly_performant_context;
 
 /**
  *

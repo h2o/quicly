@@ -3044,7 +3044,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if (restrict_sending) {
             /* PTO  (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
             LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_PTO, INT_EVENT_ATTR(BYTES_IN_FLIGHT, conn->egress.sentmap.bytes_in_flight),
-                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd), INT_EVENT_ATTR(NUMPTO, conn->egress.loss.pto_count));
+                                 INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd), INT_EVENT_ATTR(NUM_PTO, conn->egress.loss.pto_count));
             if (ptls_handshake_is_complete(conn->crypto.tls) &&
                 conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn,
                                                             conn->egress.max_data.sent < conn->egress.max_data.permitted)) {
