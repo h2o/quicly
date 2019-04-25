@@ -2596,12 +2596,14 @@ static int mark_packets_as_lost(quicly_conn_t *conn, size_t count)
  * application timer should be set for loss detection. if no timer is required,
  * loss_time is set to INT64_MAX.
  */
-static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay_until_lost, int64_t *loss_time)
+static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time)
 {
     quicly_conn_t *conn = (void *)((char *)ld - offsetof(quicly_conn_t, egress.loss));
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
-    int64_t sent_before = now - delay_until_lost;
+    int64_t time_threshold = now - delay_until_lost;
+    uint64_t packet_threshold =
+        largest_acked > QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD ? largest_acked - QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD : 0;
     uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
 
@@ -2609,11 +2611,19 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
 
     init_acks_iter(conn, &iter);
 
-    /* mark packets as lost if they are smaller than the largest_pn and outside
-     * the early retransmit window. in other words, packets that are not ready
-     * to be marked as lost according to the early retransmit timer.
+    /* Mark packets as lost if they are smaller than the largest_acked and
+     * outside either time-threshold or packet-threshold
+     * windows. Packet-threshold detection is only used for 0-RTT and 1-RTT
+     * packets, not for Initial or Handshake packets.
+     *
+     * (Note that this code can incorrectly mark packet number 0 as lost
+     * aggressively based on packet-threshold detection (that is, packet number
+     * 1 or 2 is acked). But since packet 0 will always be an Initial packet and
+     * we disable packet-threshold marking before the handshake is complete,
+     * this is ok.)
      */
-    while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_pn && sent->sent_at <= sent_before) {
+    while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
+           (sent->sent_at <= time_threshold || (sent->ack_epoch == QUICLY_EPOCH_1RTT && sent->packet_number <= packet_threshold))) {
         if (sent->bytes_in_flight != 0 && conn->egress.max_lost_pn <= sent->packet_number) {
             if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.stats.num_packets.lost;
@@ -2639,8 +2649,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_pn, uint32_t delay
                              INT_EVENT_ATTR(CWND, conn->egress.cc.cwnd));
     }
 
-    /* schedule early retransmit alarm if there is a packet outstanding that is smaller than largest_pn */
-    while (sent->packet_number < largest_pn && sent->sent_at != INT64_MAX) {
+    /* schedule time-threshold alarm if there is a packet outstanding that is smaller than largest_acked */
+    while (sent->packet_number < largest_acked && sent->sent_at != INT64_MAX) {
         if (sent->bytes_in_flight != 0) {
             *loss_time = sent->sent_at + delay_until_lost;
             break;
