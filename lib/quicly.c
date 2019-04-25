@@ -874,6 +874,12 @@ ptls_t *quicly_get_tls(quicly_conn_t *conn)
     return conn->crypto.tls;
 }
 
+int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
+{
+    *stats = conn->super.stats;
+    return 0;
+}
+
 void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed)
 {
     if (send_permitted != NULL)

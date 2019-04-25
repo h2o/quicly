@@ -247,12 +247,13 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
             if (request_interval != 0) {
                 enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
             } else {
-                quicly_stats_t *stats = quicly_get_stats(stream->conn);
+                quicly_stats_t stats;
+                quicly_get_stats(stream->conn, &stats);
                 fprintf(stderr,
                         "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
                         ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64 "\n",
-                        stats->num_packets.received, stats->num_packets.sent, stats->num_packets.lost,
-                        stats->num_packets.ack_received, stats->num_bytes.received, stats->num_bytes.sent);
+                        stats.num_packets.received, stats.num_packets.sent, stats.num_packets.lost, stats.num_packets.ack_received,
+                        stats.num_bytes.received, stats.num_bytes.sent);
                 quicly_close(stream->conn, 0, "");
             }
         }
@@ -475,12 +476,13 @@ static void on_signal(int signo)
     size_t i;
     for (i = 0; i != num_conns; ++i) {
         const quicly_cid_plaintext_t *master_id = quicly_get_master_id(conns[i]);
-        quicly_stats_t *stats = quicly_get_stats(conns[i]);
+        quicly_stats_t stats;
+        quicly_get_stats(conns[i], &stats);
         fprintf(stderr,
                 "conn:%08" PRIu32 ": received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
                 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64 "\n",
-                master_id->master_id, stats->num_packets.received, stats->num_packets.sent, stats->num_packets.lost,
-                stats->num_packets.ack_received, stats->num_bytes.received, stats->num_bytes.sent);
+                master_id->master_id, stats.num_packets.received, stats.num_packets.sent, stats.num_packets.lost,
+                stats.num_packets.ack_received, stats.num_bytes.received, stats.num_bytes.sent);
     }
     if (signo == SIGINT)
         _exit(0);

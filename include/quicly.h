@@ -758,7 +758,7 @@ static void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, sockl
 /**
  *
  */
-static quicly_stats_t *quicly_get_stats(quicly_conn_t *conn);
+int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats);
 /**
  *
  */
@@ -1007,12 +1007,6 @@ inline int quicly_stream_has_receive_side(int is_client, quicly_stream_id_t stre
 inline int quicly_stream_is_self_initiated(quicly_stream_t *stream)
 {
     return quicly_stream_is_client_initiated(stream->stream_id) == quicly_is_client(stream->conn);
-}
-
-inline quicly_stats_t *quicly_get_stats(quicly_conn_t *conn)
-{
-    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->stats;
 }
 
 inline void quicly_byte_to_hex(char *dst, uint8_t v)
