@@ -201,10 +201,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
          * the backoff pattern is as follows:
          *   * when there's a tail: 0.25, 0.5, 1, 2, 4, 8, ...
          *   * when mid-transfer: 1, 1, 1, 2, 4, 8, ...
-         * The first 2 probes in this case (and num_aggressive_ptos, more
-         * generally) are the aggressive ones, which add potentially (and
-         * likely) redundant retransmissions at a tail to reduce the cost of
-         * potential tail losses.
+         * The first 2 probes in this case (and num_aggressive_ptos, more generally) are the aggressive ones, which add potentially
+         * (and likely) redundant retransmissions at a tail to reduce the cost of potential tail losses.
          */
         alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay, r->conf->min_pto);
         if (r->pto_count < r->conf->num_aggressive_ptos) {
