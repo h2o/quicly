@@ -89,6 +89,18 @@ static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streamb
                                                                   client_on_receive,
                                                                   on_receive_reset};
 
+static void dump_stats(FILE *fp, quicly_conn_t *conn)
+{
+    quicly_stats_t stats;
+
+    quicly_get_stats(conn, &stats);
+    fprintf(fp,
+            "packets-received: %" PRIu64 ", packets-sent: %" PRIu64 ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64
+            ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64 ", srtt: %" PRIu32 "\n",
+            stats.num_packets.received, stats.num_packets.sent, stats.num_packets.lost, stats.num_packets.ack_received,
+            stats.num_bytes.received, stats.num_bytes.sent, stats.rtt.smoothed);
+}
+
 static int parse_request(ptls_iovec_t input, ptls_iovec_t *path, int *is_http1)
 {
     size_t off = 0, path_start;
@@ -247,13 +259,7 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
             if (request_interval != 0) {
                 enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
             } else {
-                quicly_stats_t stats;
-                quicly_get_stats(stream->conn, &stats);
-                fprintf(stderr,
-                        "packets: received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
-                        ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64 "\n",
-                        stats.num_packets.received, stats.num_packets.sent, stats.num_packets.lost, stats.num_packets.ack_received,
-                        stats.num_bytes.received, stats.num_bytes.sent);
+                dump_stats(stderr, stream->conn);
                 quicly_close(stream->conn, 0, "");
             }
         }
@@ -476,13 +482,8 @@ static void on_signal(int signo)
     size_t i;
     for (i = 0; i != num_conns; ++i) {
         const quicly_cid_plaintext_t *master_id = quicly_get_master_id(conns[i]);
-        quicly_stats_t stats;
-        quicly_get_stats(conns[i], &stats);
-        fprintf(stderr,
-                "conn:%08" PRIu32 ": received: %" PRIu64 ", sent: %" PRIu64 ", lost: %" PRIu64 ", ack-received: %" PRIu64
-                ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64 "\n",
-                master_id->master_id, stats.num_packets.received, stats.num_packets.sent, stats.num_packets.lost,
-                stats.num_packets.ack_received, stats.num_bytes.received, stats.num_bytes.sent);
+        fprintf(stderr, "conn:%08" PRIu32 ": ", master_id->master_id);
+        dump_stats(stderr, conns[i]);
     }
     if (signo == SIGINT)
         _exit(0);
