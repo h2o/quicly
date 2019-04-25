@@ -176,9 +176,15 @@ inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, ui
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
                              uint8_t *ack_delay_exponent)
 {
-    *r = (quicly_loss_t){.conf = conf, .max_ack_delay = max_ack_delay, .ack_delay_exponent = ack_delay_exponent,
-                         .pto_count = 0, .time_of_last_packet_sent = 0, .largest_acked_packet_plus1 = 0, 
-                         .total_bytes_sent = 0, .loss_time = INT64_MAX, .alarm_at = INT64_MAX};
+    *r = (quicly_loss_t){.conf = conf,
+                         .max_ack_delay = max_ack_delay,
+                         .ack_delay_exponent = ack_delay_exponent,
+                         .pto_count = 0,
+                         .time_of_last_packet_sent = 0,
+                         .largest_acked_packet_plus1 = 0,
+                         .total_bytes_sent = 0,
+                         .loss_time = INT64_MAX,
+                         .alarm_at = INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
 }
 
@@ -203,14 +209,16 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         /* the bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or pto_count, even when
          * the timer granularity is nanosecond */
         assert(r->pto_count < 63);
-        /* Probes are sent with a modified backoff to minimize latency of recovery. For instance, with num_speculative_ptos set to 2,
-         * the backoff pattern is as follows:
+        /* Probes are sent with a modified backoff to minimize latency of recovery. For instance, with num_speculative_ptos set to
+         * 2, the backoff pattern is as follows:
          *   * when there's a tail: 0.25, 0.5, 1, 2, 4, 8, ...
          *   * when mid-transfer: 1, 1, 1, 2, 4, 8, ...
-         * The first 2 probes in this case (and num_speculative_ptos, more generally), or the probes sent when pto_count < 0, are the
-         * speculative ones, which add potentially redundant retransmissions at a tail to reduce the cost of potential tail losses.
+         * The first 2 probes in this case (and num_speculative_ptos, more generally), or the probes sent when pto_count < 0, are
+         * the speculative ones, which add potentially redundant retransmissions at a tail to reduce the cost of potential tail
+         * losses.
          */
-        if (!can_send_stream_data && r->total_bytes_sent < total_bytes_sent && r->conf->num_speculative_ptos > 0 && r->pto_count <= 0) {
+        if (!can_send_stream_data && r->total_bytes_sent < total_bytes_sent && r->conf->num_speculative_ptos > 0 &&
+            r->pto_count <= 0) {
             /* New tail, defined as (i) not in PTO recovery, (iii) no stream data to send, and
              * (iv) new application data was sent since the last tail. Move the pto_count back to kickoff speculative probing. */
             if (r->pto_count == 0)
