@@ -757,7 +757,7 @@ int main(int argc, char **argv)
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
 
-    while ((ch = getopt(argc, argv, "Aa:C:c:k:e:i:I:l:M:m:Nnp:Rr:s:Vvx:X:h")) != -1) {
+    while ((ch = getopt(argc, argv, "A:a:C:c:k:e:i:I:l:M:m:Nnp:Rr:s:Vvx:X:h")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -782,13 +782,13 @@ int main(int argc, char **argv)
             ctx.event_log.cb = quicly_new_default_event_logger(fp);
         } break;
         case 'i':
-            if (sscanf(optarg, "%" PRId64, &request_interval) != 1) {
+            if (sscanf(optarg, "%" SCNd64, &request_interval) != 1) {
                 fprintf(stderr, "failed to parse request interval: %s\n", optarg);
                 exit(1);
             }
             break;
         case 'I':
-            if (sscanf(optarg, "%" PRId64, &ctx.transport_params.idle_timeout) != 1) {
+            if (sscanf(optarg, "%" SCNd64, &ctx.transport_params.idle_timeout) != 1) {
                 fprintf(stderr, "failed to parse idle timeout: %s\n", optarg);
                 exit(1);
             }
@@ -797,7 +797,7 @@ int main(int argc, char **argv)
             break;
         case 'M': {
             uint64_t v;
-            if (sscanf(optarg, "%" PRIu64, &v) != 1) {
+            if (sscanf(optarg, "%" SCNu64, &v) != 1) {
                 fprintf(stderr, "failed to parse max stream data:%s\n", optarg);
                 exit(1);
             }
@@ -806,7 +806,7 @@ int main(int argc, char **argv)
             ctx.transport_params.max_stream_data.uni = v;
         } break;
         case 'm':
-            if (sscanf(optarg, "%" PRIu64, &ctx.transport_params.max_data) != 1) {
+            if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.max_data) != 1) {
                 fprintf(stderr, "failed to parse max data:%s\n", optarg);
                 exit(1);
             }
@@ -827,13 +827,13 @@ int main(int argc, char **argv)
             enforce_retry = 1;
             break;
         case 'r':
-            if (sscanf(optarg, "%" PRIu32, &ctx.loss->default_initial_rtt) != 1) {
+            if (sscanf(optarg, "%" SCNu32, &ctx.loss->default_initial_rtt) != 1) {
                 fprintf(stderr, "invalid argument passed to `-r`\n");
                 exit(1);
             }
             break;
         case 'A':
-            if (sscanf(optarg, "%" PRIu32, &ctx.loss->num_aggressive_ptos) != 1) {
+            if (sscanf(optarg, "%" SCNu32, &ctx.loss->num_aggressive_ptos) != 1) {
                 fprintf(stderr, "invalid argument passed to `-A`\n");
                 exit(1);
             }
@@ -871,7 +871,7 @@ int main(int argc, char **argv)
             }
         } break;
         case 'X':
-            if (sscanf(optarg, "%" PRIu64, &ctx.transport_params.max_streams_bidi) != 1) {
+            if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.max_streams_bidi) != 1) {
                 fprintf(stderr, "failed to parse max streams count: %s\n", optarg);
                 exit(1);
             }

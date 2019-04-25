@@ -608,6 +608,7 @@ static void resched_stream_data(quicly_stream_t *stream)
             if (stream->sendstate.pending.ranges[0].start == stream->sendstate.size_inflight) {
                 scheduler->set_new_data(scheduler, stream);
             } else {
+                assert(stream->sendstate.pending.ranges[0].start < stream->sendstate.size_inflight);
                 scheduler->set_non_new_data(scheduler, stream);
             }
             goto Scheduling_Done;
