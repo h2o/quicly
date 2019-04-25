@@ -45,9 +45,9 @@ typedef struct quicly_loss_conf_t {
      */
     uint32_t default_initial_rtt;
     /**
-     * Number of aggressive PTOs at the end of a window. This must not be set to more than 3.
+     * Number of speculative PTOs at the end of a window. This must not be set to more than 3.
      */
-    uint32_t num_aggressive_ptos;
+    uint32_t num_speculative_ptos;
 } quicly_loss_conf_t;
 
 #define QUICLY_LOSS_DEFAULT_TIME_REORDERING_PERCENTILE (1024 / 8)
@@ -82,7 +82,7 @@ typedef struct quicly_loss_t {
     /**
      * The number of consecutive PTOs (PTOs that have fired without receiving an ack).
      */
-    uint8_t pto_count;
+    int8_t pto_count;
     /**
      * The time the most recent packet was sent.
      */
@@ -91,6 +91,10 @@ typedef struct quicly_loss_t {
      * The largest packet number acknowledged in an ack frame, added by one (so that zero can mean "below any PN").
      */
     uint64_t largest_acked_packet_plus1;
+    /**
+     * Total number of application data bytes sent when the last tail occurred, not including retransmissions.
+     */
+    uint64_t total_bytes_sent;
     /**
      * The time at which the next packet will be considered lost based on exceeding the reordering window in time.
      */
@@ -111,7 +115,7 @@ static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
                              uint8_t *ack_delay_exponent);
 
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
-                                     int has_new_data);
+                                     int can_send_stream_data, uint64_t total_bytes_sent);
 
 /* called when an ACK is received
  */
@@ -172,12 +176,14 @@ inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, ui
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
                              uint8_t *ack_delay_exponent)
 {
-    *r = (quicly_loss_t){conf, max_ack_delay, ack_delay_exponent, 0, 0, 0, INT64_MAX, INT64_MAX};
+    *r = (quicly_loss_t){.conf = conf, .max_ack_delay = max_ack_delay, .ack_delay_exponent = ack_delay_exponent,
+                         .pto_count = 0, .time_of_last_packet_sent = 0, .largest_acked_packet_plus1 = 0, 
+                         .total_bytes_sent = 0, .loss_time = INT64_MAX, .alarm_at = INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
 }
 
 inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
-                                     int has_new_data)
+                                     int can_send_stream_data, uint64_t total_bytes_sent)
 {
     if (!has_outstanding) {
         /* Do not set alarm if there's no data oustanding */
@@ -197,26 +203,31 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         /* the bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or pto_count, even when
          * the timer granularity is nanosecond */
         assert(r->pto_count < 63);
-        /* Probes are sent with a modified backoff to minimize latency of recovery. For instance, with num_aggressive_ptos set to 2,
+        /* Probes are sent with a modified backoff to minimize latency of recovery. For instance, with num_speculative_ptos set to 2,
          * the backoff pattern is as follows:
          *   * when there's a tail: 0.25, 0.5, 1, 2, 4, 8, ...
          *   * when mid-transfer: 1, 1, 1, 2, 4, 8, ...
-         * The first 2 probes in this case (and num_aggressive_ptos, more generally) are the aggressive ones, which add potentially
-         * (and likely) redundant retransmissions at a tail to reduce the cost of potential tail losses.
+         * The first 2 probes in this case (and num_speculative_ptos, more generally), or the probes sent when pto_count < 0, are the
+         * speculative ones, which add potentially redundant retransmissions at a tail to reduce the cost of potential tail losses.
          */
+        if (!can_send_stream_data && r->total_bytes_sent < total_bytes_sent && r->conf->num_speculative_ptos > 0 && r->pto_count <= 0) {
+            /* New tail, defined as (i) not in PTO recovery, (iii) no stream data to send, and
+             * (iv) new application data was sent since the last tail. Move the pto_count back to kickoff speculative probing. */
+            if (r->pto_count == 0)
+                /*  kick off speculative probing if not already in progress */
+                r->pto_count = -r->conf->num_speculative_ptos;
+            r->total_bytes_sent = total_bytes_sent;
+        }
         alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay, r->conf->min_pto);
-        if (r->pto_count < r->conf->num_aggressive_ptos) {
-            if (!has_new_data) {
-                /* Aggressive probes sent under an RTT do not need to account for ack delay, since there is no expectation
-                 * of an ack being received before the probe is sent. */
-                alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
-                alarm_duration >>= r->conf->num_aggressive_ptos - r->pto_count;
-                if (alarm_duration < r->conf->min_pto)
-                    alarm_duration = r->conf->min_pto;
-            }
-            /* If there is new data to send, then this is mid-transfer. Send aggressive probes at 1 PTO. */
-        } else
-            alarm_duration <<= r->pto_count - r->conf->num_aggressive_ptos;
+        if (r->pto_count < 0 && !can_send_stream_data) {
+            /* Speculative probes sent under an RTT do not need to account for ack delay, since there is no expectation
+             * of an ack being received before the probe is sent. */
+            alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
+            alarm_duration >>= -r->pto_count;
+            if (alarm_duration < r->conf->min_pto)
+                alarm_duration = r->conf->min_pto;
+        } else if (r->pto_count >= 0)
+            alarm_duration <<= r->pto_count;
     }
     r->alarm_at = last_retransmittable_sent_at + alarm_duration;
     if (r->alarm_at < now)
@@ -226,8 +237,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
                                         uint64_t ack_delay_encoded, int ack_eliciting)
 {
-    /* Reset PTO count if anything is newly acked */
-    if (largest_newly_acked != UINT64_MAX)
+    /* Reset PTO count if anything is newly acked, and if sender is not speculatively probing at a tail */
+    if (largest_newly_acked != UINT64_MAX && r->pto_count > 0)
         r->pto_count = 0;
 
     /* If largest newly acked is not larger than before, skip RTT sample */
@@ -258,10 +269,10 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_
         *restrict_sending = 0;
         return quicly_loss_detect_loss(r, largest_acked, do_detect);
     }
-    /* PTO. Send at least and at most 1 packet during early (and aggressive) probing and 2 packets otherwise. */
+    /* PTO. Send at least and at most 1 packet during speculative probing and 2 packets otherwise. */
     ++r->pto_count;
     *restrict_sending = 1;
-    if (r->pto_count > r->conf->num_aggressive_ptos)
+    if (r->pto_count > 0)
         *min_packets_to_send = 2;
 
     return 0;
