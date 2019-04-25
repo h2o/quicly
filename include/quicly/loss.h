@@ -219,8 +219,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
          */
         if (!can_send_stream_data && r->total_bytes_sent < total_bytes_sent && r->conf->num_speculative_ptos > 0 &&
             r->pto_count <= 0) {
-            /* New tail, defined as (i) not in PTO recovery, (iii) no stream data to send, and
-             * (iv) new application data was sent since the last tail. Move the pto_count back to kickoff speculative probing. */
+            /* New tail, defined as (i) sender is not in PTO recovery, (ii) there is no stream data to send, and
+             * (iii) new application data was sent since the last tail. Move the pto_count back to kick off speculative probing. */
             if (r->pto_count == 0)
                 /*  kick off speculative probing if not already in progress */
                 r->pto_count = -r->conf->num_speculative_ptos;
