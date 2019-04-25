@@ -448,17 +448,31 @@ struct st_quicly_conn_streamgroup_state_t {
     quicly_stream_id_t next_stream_id;
 };
 
+/**
+ * Values that do not need to be gathered upon the invocation of `quicly_get_stats`. We use typedef to define the same fields in
+ * the same order for quicly_stats_t and `struct st_quicly_public_conn_t::stats`.
+ */
+#define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
+    struct {                                                                                                                       \
+        uint64_t received;                                                                                                         \
+        uint64_t sent;                                                                                                             \
+        uint64_t lost;                                                                                                             \
+        uint64_t ack_received;                                                                                                     \
+    } num_packets;                                                                                                                 \
+    struct {                                                                                                                       \
+        uint64_t received;                                                                                                         \
+        uint64_t sent;                                                                                                             \
+    } num_bytes
+
 typedef struct st_quicly_stats_t {
-    struct {
-        uint64_t received;
-        uint64_t sent;
-        uint64_t lost;
-        uint64_t ack_received;
-    } num_packets;
-    struct {
-        uint64_t received;
-        uint64_t sent;
-    } num_bytes;
+    /**
+     * The pre-built fields. This MUST be the first member of `quicly_stats_t` so that we can use `memcpy`.
+     */
+    QUICLY_STATS_PREBUILT_FIELDS;
+    /**
+     * RTT
+     */
+    quicly_rtt_t rtt;
 } quicly_stats_t;
 
 struct _st_quicly_conn_public_t {
@@ -506,7 +520,9 @@ struct _st_quicly_conn_public_t {
         quicly_linklist_t new_data;
         quicly_linklist_t non_new_data;
     } _default_scheduler;
-    quicly_stats_t stats;
+    struct {
+        QUICLY_STATS_PREBUILT_FIELDS;
+    } stats;
     uint32_t version;
     void *data;
 };

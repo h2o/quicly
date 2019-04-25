@@ -876,7 +876,12 @@ ptls_t *quicly_get_tls(quicly_conn_t *conn)
 
 int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
 {
-    *stats = conn->super.stats;
+    /* copy the pre-built stats fields */
+    memcpy(stats, &conn->super.stats, sizeof(conn->super.stats));
+
+    /* set or generate the non-pre-built stats fields here */
+    stats->rtt = conn->egress.loss.rtt;
+
     return 0;
 }
 
