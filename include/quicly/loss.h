@@ -47,7 +47,7 @@ typedef struct quicly_loss_conf_t {
     /**
      * Number of speculative PTOs at the end of a window. This must not be set to more than 3.
      */
-    uint32_t num_speculative_ptos;
+    uint8_t num_speculative_ptos;
 } quicly_loss_conf_t;
 
 #define QUICLY_LOSS_DEFAULT_TIME_REORDERING_PERCENTILE (1024 / 8)
