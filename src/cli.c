@@ -717,29 +717,30 @@ static void usage(const char *cmd)
     printf("Usage: %s [options] host port\n"
            "\n"
            "Options:\n"
-           "  -a <alpn list>       a coma separated list of ALPN identifiers\n"
-           "  -C <cid-key>         CID encryption key (server-only). Randomly generated\n"
-           "                       if omitted.\n"
+           "  -a <alpn list>            a coma separated list of ALPN identifiers\n"
+           "  -C <cid-key>              CID encryption key (server-only). Randomly generated\n"
+           "                            if omitted.\n"
            "  -c certificate-file\n"
-           "  -k key-file          specifies the credentials to be used for running the\n"
-           "                       server. If omitted, the command runs as a client.\n"
-           "  -e event-log-file    file to log events\n"
-           "  -i interval          interval to reissue requests (in milliseconds)\n"
-           "  -I timeout           idle timeout (in milliseconds; default: 600,000)\n"
-           "  -l log-file          file to log traffic secrets\n"
-           "  -M <bytes>           max stream data (in bytes; default: 1MB)\n"
-           "  -m <bytes>           max data (in bytes; default: 16MB)\n"
-           "  -N                   enforce HelloRetryRequest (client-only)\n"
-           "  -n                   enforce version negotiation (client-only)\n"
-           "  -p path              path to request (can be set multiple times)\n"
-           "  -R                   require Retry (server only)\n"
-           "  -r [initial-rto]     initial RTO (in milliseconds)\n"
-           "  -s session-file      file to load / store the session ticket\n"
-           "  -V                   verify peer using the default certificates\n"
-           "  -v                   verbose mode (-vv emits packet dumps as well)\n"
-           "  -x named-group       named group to be used (default: secp256r1)\n"
-           "  -X                   max bidirectional stream count (default: 100)\n"
-           "  -h                   print this help\n"
+           "  -k key-file               specifies the credentials to be used for running the\n"
+           "                            server. If omitted, the command runs as a client.\n"
+           "  -e event-log-file         file to log events\n"
+           "  -i interval               interval to reissue requests (in milliseconds)\n"
+           "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
+           "  -l log-file               file to log traffic secrets\n"
+           "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
+           "  -m <bytes>                max data (in bytes; default: 16MB)\n"
+           "  -N                        enforce HelloRetryRequest (client-only)\n"
+           "  -n                        enforce version negotiation (client-only)\n"
+           "  -p path                   path to request (can be set multiple times)\n"
+           "  -R                        require Retry (server only)\n"
+           "  -r [initial-pto]          initial PTO (in milliseconds)\n"
+           "  -S [num-speculative-ptos] number of speculative PTOs\n"
+           "  -s session-file           file to load / store the session ticket\n"
+           "  -V                        verify peer using the default certificates\n"
+           "  -v                        verbose mode (-vv emits packet dumps as well)\n"
+           "  -x named-group            named group to be used (default: secp256r1)\n"
+           "  -X                        max bidirectional stream count (default: 100)\n"
+           "  -h                        print this help\n"
            "\n",
            cmd);
 }
@@ -751,7 +752,7 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
-    ctx = quicly_default_context;
+    ctx = quicly_spec_context;
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
     ctx.closed_by_peer = &closed_by_peer;
@@ -759,7 +760,7 @@ int main(int argc, char **argv)
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
 
-    while ((ch = getopt(argc, argv, "a:C:c:k:e:i:I:l:M:m:Nnp:Rr:s:Vvx:X:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:C:c:k:e:i:I:l:M:m:Nnp:Rr:S:s:Vvx:X:h")) != -1) {
         switch (ch) {
         case 'a':
             set_alpn(&hs_properties, optarg);
@@ -784,13 +785,13 @@ int main(int argc, char **argv)
             ctx.event_log.cb = quicly_new_default_event_logger(fp);
         } break;
         case 'i':
-            if (sscanf(optarg, "%" PRId64, &request_interval) != 1) {
+            if (sscanf(optarg, "%" SCNd64, &request_interval) != 1) {
                 fprintf(stderr, "failed to parse request interval: %s\n", optarg);
                 exit(1);
             }
             break;
         case 'I':
-            if (sscanf(optarg, "%" PRId64, &ctx.transport_params.idle_timeout) != 1) {
+            if (sscanf(optarg, "%" SCNd64, &ctx.transport_params.idle_timeout) != 1) {
                 fprintf(stderr, "failed to parse idle timeout: %s\n", optarg);
                 exit(1);
             }
@@ -799,7 +800,7 @@ int main(int argc, char **argv)
             break;
         case 'M': {
             uint64_t v;
-            if (sscanf(optarg, "%" PRIu64, &v) != 1) {
+            if (sscanf(optarg, "%" SCNu64, &v) != 1) {
                 fprintf(stderr, "failed to parse max stream data:%s\n", optarg);
                 exit(1);
             }
@@ -808,7 +809,7 @@ int main(int argc, char **argv)
             ctx.transport_params.max_stream_data.uni = v;
         } break;
         case 'm':
-            if (sscanf(optarg, "%" PRIu64, &ctx.transport_params.max_data) != 1) {
+            if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.max_data) != 1) {
                 fprintf(stderr, "failed to parse max data:%s\n", optarg);
                 exit(1);
             }
@@ -829,8 +830,14 @@ int main(int argc, char **argv)
             enforce_retry = 1;
             break;
         case 'r':
-            if (sscanf(optarg, "%" PRIu32, &ctx.loss->default_initial_rtt) != 1) {
+            if (sscanf(optarg, "%" SCNu32, &ctx.loss->default_initial_rtt) != 1) {
                 fprintf(stderr, "invalid argument passed to `-r`\n");
+                exit(1);
+            }
+            break;
+        case 'S':
+            if (sscanf(optarg, "%" SCNu8, &ctx.loss->num_speculative_ptos) != 1) {
+                fprintf(stderr, "invalid argument passed to `-S`\n");
                 exit(1);
             }
             break;
@@ -867,7 +874,7 @@ int main(int argc, char **argv)
             }
         } break;
         case 'X':
-            if (sscanf(optarg, "%" PRIu64, &ctx.transport_params.max_streams_bidi) != 1) {
+            if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.max_streams_bidi) != 1) {
                 fprintf(stderr, "failed to parse max streams count: %s\n", optarg);
                 exit(1);
             }

@@ -84,8 +84,7 @@ typedef enum en_quicly_event_type_t {
     QUICLY_EVENT_TYPE_CRYPTO_DECRYPT,
     QUICLY_EVENT_TYPE_CRYPTO_HANDSHAKE,
     QUICLY_EVENT_TYPE_CRYPTO_UPDATE_SECRET,
-    QUICLY_EVENT_TYPE_CC_TLP,
-    QUICLY_EVENT_TYPE_CC_RTO,
+    QUICLY_EVENT_TYPE_PTO,
     QUICLY_EVENT_TYPE_CC_ACK_RECEIVED,
     QUICLY_EVENT_TYPE_CC_CONGESTION,
     QUICLY_EVENT_TYPE_STREAM_SEND,
@@ -149,9 +148,9 @@ typedef enum en_quicly_event_attribute_type_t {
     QUICLY_EVENT_ATTRIBUTE_END_OF_RECOVERY,
     QUICLY_EVENT_ATTRIBUTE_BYTES_IN_FLIGHT,
     QUICLY_EVENT_ATTRIBUTE_CWND,
+    QUICLY_EVENT_ATTRIBUTE_NUM_PTO,
     QUICLY_EVENT_ATTRIBUTE_NEWLY_ACKED,
     QUICLY_EVENT_ATTRIBUTE_FIRST_OCTET,
-    QUICLY_EVENT_ATTRIBUTE_CC_TYPE,
     QUICLY_EVENT_ATTRIBUTE_CC_END_OF_RECOVERY,
     QUICLY_EVENT_ATTRIBUTE_CC_EXIT_RECOVERY,
     QUICLY_EVENT_ATTRIBUTE_ACKED_PACKETS,
@@ -239,11 +238,11 @@ typedef struct st_quicly_cid_encryptor_t {
  */
 typedef struct st_quicly_stream_scheduler_t {
     /**
-     * returns if there's any data to send.  When `including_new_data` is set to true, the scheduler returns if there is any stream
+     * returns if there's any data to send.  When `new_data_allowed` is set to true, the scheduler returns if there is any stream
      * that have been registered.  When set to false, the scheduler should return if there is any stream registered by the
      * `set_non_new_data` callback.
      */
-    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int including_new_data);
+    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int new_data_allowed);
     /**
      * Called by quicly to emit stream data.  The scheduler should repeatedly choose a stream and call `quicly_send_stream` until
      * `quicly_can_send_stream` returns false.
