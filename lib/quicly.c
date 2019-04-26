@@ -2608,7 +2608,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
 
     init_acks_iter(conn, &iter);
 
-    /* Mark packets as lost if they are smaller than the largest_acked and outside either time-threshold or packet-threshold windows
+    /* Mark packets as lost if they are smaller than the largest_acked and outside either time-threshold or packet-threshold windows.
      */
     while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
            (sent->sent_at <= now - delay_until_lost || /* time threshold */
