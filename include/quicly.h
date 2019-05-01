@@ -863,6 +863,10 @@ ptls_t *quicly_get_tls(quicly_conn_t *conn);
 /**
  *
  */
+quicly_stream_id_t quicly_get_ingress_max_streams(quicly_conn_t *conn, int uni);
+/**
+ *
+ */
 quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, quicly_stream_id_t stream_id);
 /**
  *
