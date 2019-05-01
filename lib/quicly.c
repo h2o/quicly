@@ -576,7 +576,7 @@ static void sched_stream_control(quicly_stream_t *stream)
     assert(stream->stream_id >= 0);
 
     if (!quicly_linklist_is_linked(&stream->_send_aux.pending_link.control))
-        quicly_linklist_insert(&stream->conn->pending_link.control, &stream->_send_aux.pending_link.control);
+        quicly_linklist_insert(stream->conn->pending_link.control.prev, &stream->_send_aux.pending_link.control);
 }
 
 static void resched_stream_data(quicly_stream_t *stream)

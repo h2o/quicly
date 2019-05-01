@@ -288,9 +288,11 @@ static void default_stream_scheduler_clear(quicly_stream_scheduler_t *self, quic
 
 static void schedule_to_slot(quicly_linklist_t *slot, quicly_stream_t *stream)
 {
+    /* TODO Add logic that refrains from re-registering the object to the same slot. Otherwise, arrival of additional data moves a
+     * stream that is already in the send list to the end of the list */
     if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler))
         quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
-    quicly_linklist_insert(slot, &stream->_send_aux.pending_link.default_scheduler);
+    quicly_linklist_insert(slot->prev, &stream->_send_aux.pending_link.default_scheduler);
 }
 
 static void default_stream_scheduler_set_new_data(quicly_stream_scheduler_t *self, quicly_stream_t *stream)
