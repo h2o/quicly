@@ -3278,6 +3278,11 @@ static int get_stream_or_open_if_new(quicly_conn_t *conn, uint64_t stream_id, qu
         goto Exit;
 
     if (quicly_stream_is_client_initiated(stream_id) != quicly_is_client(conn)) {
+        /* check if stream id is within the bounds */
+        if (stream_id / 4 >= quicly_get_ingress_max_streams(conn, quicly_stream_is_unidirectional(stream_id))) {
+            ret = QUICLY_TRANSPORT_ERROR_STREAM_LIMIT;
+            goto Exit;
+        }
         /* open new streams upto given id */
         struct st_quicly_conn_streamgroup_state_t *group = get_streamgroup_state(conn, stream_id);
         if (group->next_stream_id <= stream_id) {
