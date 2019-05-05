@@ -25,8 +25,9 @@
  * % sudo dtrace -c './cli 127.0.0.1 4433' -s misc/dtrace/dtrace.d
  */
 
-#define CONN_GET_ID(conn) (*(uint32_t *)copyin(conn + 16, 4))
+#define GET_CONN_ID(conn) (*(uint32_t *)copyin(conn + 16, 4))
+#define GET_STREAM_ID(stream) (*(uint64_t *)copyin(stream + 8, 8))
 
 quicly$target:::quicly_connect {
-    printf("\n{\"conn\": %d, \"scid\": \"%s\", \"dcid\": \"%s\"}", CONN_GET_ID(arg0), copyinstr(arg1), copyinstr(arg2));
+    printf("\n{\"conn\": %d, \"scid\": \"%s\", \"dcid\": \"%s\"}", GET_CONN_ID(arg0), copyinstr(arg1), copyinstr(arg2));
 }
