@@ -31,28 +31,32 @@ my @probes = do {
 };
 
 for my $probe (@probes) {
-    my @fmt = (sprintf '"type": "%s"', normalize_name($probe->[0]));
+    my @fmt = (sprintf '"type":"%s"', do {
+        my $name = $probe->[0];
+        $name =~ s/^quicly_//;
+        normalize_name($name);
+    });
     my @ap;
     for (my $i = 0; $i < @{$probe->[1]}; ++$i) {
         my ($name, $type) = @{$probe->[1]->[$i]};
         if ($type eq 'struct st_quicly_conn_t *') {
-            push @fmt, '"conn": %u';
+            push @fmt, '"conn":%u';
             push @ap, '*(uint32_t *)copyin(arg' . $i . ' + 16, 4)';
         } elsif ($type eq 'struct st_quicly_stream_t *') {
-            push @fmt, '"stream": %d';
+            push @fmt, '"stream-id":%d';
             push @ap, '*(int64_t *)copyin(arg' . $i . ' + 8, 8)';
         } else {
             $name = 'time'
                 if $name eq 'at';
             $name = normalize_name($name);
             if ($type =~ /^(unsigned\s|uint[0-9]+_t|size_t)/) {
-                push @fmt, "\"$name\": \%u";
+                push @fmt, "\"$name\":\%u";
                 push @ap, "arg$i";
             } elsif ($type =~ /^int(?:[0-9]+_t|)$/) {
-                push @fmt, "\"$name\": \%d";
+                push @fmt, "\"$name\":\%d";
                 push @ap, "arg$i";
             } elsif ($type =~ /^const\s+char\s+\*$/) {
-                push @fmt, "\"$name\": \"\%s\"";
+                push @fmt, "\"$name\":\"\%s\"";
                 push @ap, "arg$i ? copyinstr(arg$i) : \"\"";
             } elsif ($type =~ /^const\s+void\s+\*$/) {
                 # skip const void *

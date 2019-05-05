@@ -32,12 +32,16 @@ my $port = empty_port({
 });
 my $tempdir = tempdir(CLEANUP => 1);
 
+system("misc/probe2trace.pl < probes.d > $tempdir/dtrace.d") == 0 && $? == 0
+    or die "failed to generate dtrace script:$?";
+my $TRACE_PREFIX = "rm -f $tempdir/events; sudo dtrace -s $tempdir/dtrace.d -o $tempdir/events -c";
+
 subtest "hello" => sub {
     my $guard = spawn_server();
-    my $resp = `$cli -e $tempdir/events -p /12.txt 127.0.0.1 $port 2> /dev/null`;
+    my $resp = `$TRACE_PREFIX '$cli -p /12.txt 127.0.0.1 $port' 2> /dev/null`;
     is $resp, "hello world\n";
     subtest "events" => sub {
-        my $events = slurp_file("$tempdir/events");
+        my $events = read_events("$tempdir/events");
         complex $events, sub {
             $_ =~ /"type":"transport-close-send",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)"/s
                 and $1 eq 'packet-commit' and $2 eq 'quictrace-sent' and $3 eq 'send' and $4 eq 'free';
@@ -47,10 +51,10 @@ subtest "hello" => sub {
 
 subtest "version-negotiation" => sub {
     my $guard = spawn_server();
-    my $resp = `$cli -n -e $tempdir/events -p /12.txt 127.0.0.1 $port 2> /dev/null`;
+    my $resp = `$TRACE_PREFIX '$cli -n -p /12.txt 127.0.0.1 $port' 2> /dev/null`;
     is $resp, "hello world\n";
-    my $events = slurp_file("$tempdir/events");
-    if ($events =~ /"type":"connect",.*"quic-version":(\d+)(?:.|\n)*"type":"quic-version-switch",.*"quic-version":(\d+)/m) {
+    my $events = read_events("$tempdir/events");
+    if ($events =~ /"type":"connect",.*"version":(\d+)(?:.|\n)*"type":"version-switch",.*"new-version":(\d+)/m) {
         is $2, 0xff000012;
         isnt $1, 0xff000012;
     } else {
@@ -61,9 +65,9 @@ subtest "version-negotiation" => sub {
 
 subtest "retry" => sub {
     my $guard = spawn_server("-R");
-    my $resp = `$cli -e $tempdir/events -p /12.txt 127.0.0.1 $port 2> /dev/null`;
+    my $resp = `$TRACE_PREFIX '$cli -p /12.txt 127.0.0.1 $port' 2> /dev/null`;
     is $resp, "hello world\n";
-    my $events = slurp_file("$tempdir/events");
+    my $events = read_events("$tempdir/events");
     like $events, qr/"type":"receive",.*"first-octet":245.*\n.*"type":"stream-lost",.*"stream-id":-1,.*"off":0,/, "CH deemed lost in response to retry";
 };
 
@@ -74,10 +78,10 @@ subtest "0-rtt" => sub {
     my $resp = `$cli -s $tempdir/session -p /12.txt 127.0.0.1 $port 2> /dev/null`;
     is $resp, "hello world\n";
     ok -e "$tempdir/session", "session saved";
-    system "$cli -s $tempdir/session -e $tempdir/events 127.0.0.1 $port > /dev/null 2>&1";
-    my $events = slurp_file("$tempdir/events");
+    system "$TRACE_PREFIX '$cli -s $tempdir/session 127.0.0.1 $port' > /dev/null 2>&1";
+    my $events = read_events("$tempdir/events");
     like $events, qr/"type":"stream-send".*"stream-id":0,(.|\n)*"type":"packet-commit".*"pn":1,/m, "stream 0 on pn 1";
-    like $events, qr/"type":"cc-ack-received".*"pn":1,/m, "pn 1 acked";
+    like $events, qr/"type":"cc-ack-received".*"largest-acked":1,/m, "pn 1 acked";
 };
 
 subtest "stateless-reset" => sub {
@@ -89,18 +93,18 @@ subtest "stateless-reset" => sub {
         # child process
         open STDOUT, '>', '/dev/null'
             or die "failed to redirect stdout to /dev/null:$!";
-        exec $cli, '-e', "$tempdir/events", qw(-i 3000 127.0.0.1), $port;
+        exec 'sh', '-c', "$TRACE_PREFIX '$cli -i 5000 127.0.0.1 $port'";
         die "failed to exec $cli:$!";
     }
     # parent process, let the client fetch the first response, then kill respawn the server using same CID encryption key
-    sleep 1;
+    sleep 4;
     undef $guard;
     $guard = spawn_server(qw(-C deadbeef));
     # wait for the child to die
     while (waitpid($pid, 0) != $pid) {
     }
     # check that the stateless reset is logged
-    my $events = slurp_file("$tempdir/events");
+    my $events = read_events("$tempdir/events");
     like $events, qr/"type":"stateless-reset-receive",/m;
 };
 
@@ -183,6 +187,10 @@ sub spawn_server {
         kill 9, $pid;
         while (waitpid($pid, 0) != $pid) {}
     });
+}
+
+sub read_events {
+    join "\n", grep { /^\{/ } split "\n", slurp_file($_[0]);
 }
 
 sub slurp_file {

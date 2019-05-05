@@ -59,12 +59,12 @@ provider quicly {
     probe quicly_application_close_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t error_code,
                                            const char *reason_phrase);
 
-    probe quicly_stream_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t offset,
-                             size_t len, int is_fin);
-    probe quicly_stream_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t offset,
+    probe quicly_stream_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off, size_t len,
+                             int is_fin);
+    probe quicly_stream_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off,
                                 size_t len);
-    probe quicly_stream_acked(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t offset, size_t len);
-    probe quicly_stream_lost(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t offset, size_t len);
+    probe quicly_stream_acked(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t off, size_t len);
+    probe quicly_stream_lost(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t off, size_t len);
 
     probe quicly_max_data_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t limit);
     probe quicly_max_data_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t limit);
@@ -78,15 +78,15 @@ provider quicly {
     probe quicly_streams_blocked_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t limit, int is_unidirectional);
     probe quicly_streams_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t limit, int is_unidirectional);
 
-    probe quicly_data_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t offset);
+    probe quicly_data_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t off);
 
     probe quicly_stream_data_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t limit);
 
-    probe quicly_quictrace_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, size_t len, uint8_t packet_type);
+    probe quicly_quictrace_sent(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, size_t len, uint8_t packet_type);
     probe quicly_quictrace_recv(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, size_t len, uint8_t enc_level);
     probe quicly_quictrace_send_stream(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream,
-                                       uint64_t offset, size_t len, int fin);
-    probe quicly_quictrace_recv_stream(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t offset, size_t len,
+                                       uint64_t off, size_t len, int fin);
+    probe quicly_quictrace_recv_stream(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t off, size_t len,
                                        int fin);
     probe quicly_quictrace_recv_ack(struct st_quicly_conn_t *conn, int64_t at, uint64_t ack_block_begin, uint64_t ack_block_end);
     probe quicly_quictrace_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);

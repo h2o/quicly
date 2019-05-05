@@ -2133,7 +2133,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
     QUICLY_PROBE(PACKET_COMMIT, conn, now, conn->egress.packet_number, s->dst - s->target.first_byte_at, !s->target.ack_eliciting);
-    QUICLY_PROBE(QUICTRACE_SEND, conn, now, conn->egress.packet_number, s->target.packet->data.len,
+    QUICLY_PROBE(QUICTRACE_SENT, conn, now, conn->egress.packet_number, s->target.packet->data.len,
                  get_epoch(*s->target.first_byte_at));
 
     ++conn->egress.packet_number;
