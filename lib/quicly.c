@@ -3720,7 +3720,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *src,
                 quicly_stream_frame_t frame;
                 if ((ret = quicly_decode_stream_frame(frame_type, &src, end, &frame)) != 0)
                     goto Exit;
-                QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, now, frame.stream_id, frame.offset, frame.data.len, frame.is_fin);
+                QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, now, frame.stream_id, frame.offset, frame.data.len, (int)frame.is_fin);
                 if ((ret = handle_stream_frame(conn, &frame)) != 0)
                     goto Exit;
             } else {
