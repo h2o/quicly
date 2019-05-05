@@ -125,6 +125,7 @@
 		E95EBCCF227ECB4B0022C32D /* build_libFuzzer.sh */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.sh; path = build_libFuzzer.sh; sourceTree = "<group>"; };
 		E95EBCD1227ECB5F0022C32D /* bpftrace.d */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.dtrace; path = bpftrace.d; sourceTree = "<group>"; };
 		E95EBCD2227ECB5F0022C32D /* dtrace.d */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.dtrace; path = dtrace.d; sourceTree = "<group>"; };
+		E95EBCD5227F3F1F0022C32D /* probe2trace.pl */ = {isa = PBXFileReference; lastKnownFileType = text.script.perl; path = probe2trace.pl; sourceTree = "<group>"; };
 		E98041C322383C5C008B9745 /* cc.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = cc.h; sourceTree = "<group>"; };
 		E98041C522383C62008B9745 /* cc-reno.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "cc-reno.c"; sourceTree = "<group>"; };
 		E980421A223952D2008B9745 /* echo.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = echo.c; sourceTree = "<group>"; };
@@ -209,6 +210,7 @@
 			children = (
 				E95EBCCF227ECB4B0022C32D /* build_libFuzzer.sh */,
 				E95EBCD0227ECB520022C32D /* dtrace */,
+				E95EBCD5227F3F1F0022C32D /* probe2trace.pl */,
 			);
 			path = misc;
 			sourceTree = "<group>";
