@@ -35,6 +35,9 @@
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
 #include "quicly/cc.h"
+#if QUICLY_USE_DTRACE
+#include "quicly-probes.h"
+#endif
 
 #define QUICLY_QUIC_BIT 0x40
 #define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
@@ -81,6 +84,19 @@
 #define AEAD_BASE_LABEL "tls13 quic "
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
+
+#if QUICLY_USE_DTRACE
+#define QUICLY_PROBE(label, ...)                                                                                                   \
+    do {                                                                                                                           \
+        if (PTLS_UNLIKELY(QUICLY_QUICLY_##label##_ENABLED())) {                                                                    \
+            QUICLY_QUICLY_##label(__VA_ARGS__);                                                                                    \
+        }                                                                                                                          \
+    } while (0)
+#define QUICLY_PROBE_HEXDUMP(s, l) ({size_t _l = (l); ptls_hexdump(alloca(_l * 2 + 1), (s), _l);})
+#else
+#define QUICLY_PROBE(label, ...)
+#define QUICLY_PROBE_HEXDUMP(s, l)
+#endif
 
 #define INT_EVENT_ATTR(label, value) _int_event_attr(QUICLY_EVENT_ATTRIBUTE_##label, value)
 #define VEC_EVENT_ATTR(label, value) _vec_event_attr(QUICLY_EVENT_ATTRIBUTE_##label, value)
@@ -1652,6 +1668,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     conn->super.peer.address_validation.send_probe = 1;
     server_cid = quicly_get_peer_cid(conn);
 
+    QUICLY_PROBE(CONNECT, conn, QUICLY_PROBE_HEXDUMP(server_cid->cid, server_cid->len),
+                 QUICLY_PROBE_HEXDUMP(conn->super.host.src_cid.cid, conn->super.host.src_cid.len), conn->super.version);
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CONNECT, VEC_EVENT_ATTR(DCID, ptls_iovec_init(server_cid->cid, server_cid->len)),
                          VEC_EVENT_ATTR(SCID, ptls_iovec_init(conn->super.host.src_cid.cid, conn->super.host.src_cid.len)),
                          INT_EVENT_ATTR(QUIC_VERSION, conn->super.version));
