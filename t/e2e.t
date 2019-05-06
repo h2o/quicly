@@ -11,6 +11,9 @@ use Scope::Guard qw(scope_guard);
 use Test::More;
 use Time::HiRes qw(sleep);
 
+plan skip_all => 'WITH_DTRACE not set to ON, skipping'
+    unless $ENV{WITH_DTRACE} =~ /^on$/i;
+
 sub complex ($$;$) {
     my $s = shift;
     my $cb = shift;
