@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -148,19 +149,39 @@ static void send_header(quicly_stream_t *stream, int is_http1, int status, const
     send_str(stream, buf);
 }
 
+static int flatten_file_vec(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, size_t len)
+{
+    int fd = (int)vec->cbdata;
+    ssize_t rret;
+
+    /* FIXME handle partial read */
+    while ((rret = pread(fd, dst, len, off)) == -1 && errno == EINTR)
+        ;
+
+    return rret == len ? 0 : QUICLY_TRANSPORT_ERROR_INTERNAL; /* should return application-level error */
+}
+
+static void free_file_vec(quicly_streambuf_sendvec_t *vec)
+{
+    int fd = (int)vec->cbdata;
+    close(fd);
+}
+
 static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, const char *mime_type)
 {
-    FILE *fp;
-    char buf[1024];
-    size_t n;
+    static const quicly_streambuf_sendvec_callbacks_t send_file_callbacks = {flatten_file_vec, free_file_vec};
+    int fd;
+    struct stat st;
 
-    if ((fp = fopen(fn, "rb")) == NULL)
+    if ((fd = open(fn, O_RDONLY)) == -1)
         return 0;
-    send_header(stream, is_http1, 200, mime_type);
-    while ((n = fread(buf, 1, sizeof(buf), fp)) != 0)
-        quicly_streambuf_egress_write(stream, buf, n);
-    fclose(fp);
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return 0;
+    }
 
+    send_header(stream, is_http1, 200, mime_type);
+    quicly_streambuf_egress_write_vec(stream, &send_file_callbacks, (void *)(intptr_t)fd, (size_t)st.st_size);
     return 1;
 }
 
