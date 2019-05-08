@@ -32,14 +32,34 @@ extern "C" {
 #include "picotls.h"
 #include "quicly.h"
 
+typedef struct st_quicly_streambuf_sendvec_t quicly_streambuf_sendvec_t;
+
+typedef int (*quicly_streambuf_sendvec_flatten_cb)(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, size_t len);
+typedef void (*quicly_streambuf_sendvec_free_cb)(quicly_streambuf_sendvec_t *vec);
+
+typedef struct st_quicly_streambuf_sendvec_callbacks_t {
+    quicly_streambuf_sendvec_flatten_cb flatten;
+    quicly_streambuf_sendvec_free_cb free_;
+} quicly_streambuf_sendvec_callbacks_t;
+
+struct st_quicly_streambuf_sendvec_t {
+    const quicly_streambuf_sendvec_callbacks_t *cb;
+    void *cbdata;
+    size_t len;
+};
+
 /**
  * The simple stream buffer.  The API assumes that stream->data points to quicly_streambuf_t.  Applications can extend the structure
  * by passing arbitrary size to `quicly_streambuf_create`.
  */
 typedef struct st_quicly_streambuf_t {
     struct {
-        ptls_buffer_t buf;
-        uint64_t max_stream_data;
+        struct {
+            quicly_streambuf_sendvec_t *entries;
+            size_t size, capacity;
+        } vecs;
+        size_t off_in_first_vec;
+        uint64_t bytes_written;
     } egress;
     ptls_buffer_t ingress;
 } quicly_streambuf_t;
@@ -49,6 +69,8 @@ void quicly_streambuf_destroy(quicly_stream_t *stream, int err);
 void quicly_streambuf_egress_shift(quicly_stream_t *stream, size_t delta);
 int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
 int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len);
+int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, const quicly_streambuf_sendvec_callbacks_t *cb, void *cbdata,
+                                      size_t len);
 int quicly_streambuf_egress_shutdown(quicly_stream_t *stream);
 void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta);
 ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream);
