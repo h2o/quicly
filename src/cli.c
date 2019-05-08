@@ -164,6 +164,33 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
     return 1;
 }
 
+static int flatten_sized_text(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, size_t len)
+{
+    static const char pattern[] =
+        "hello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
+        "world\nhello world\nhello world\nhello world\nhello world\nhello world\n";
+
+    assert(len < sizeof(pattern) - 13); /* pattern is bigger than MTU size */
+    memcpy(dst, pattern + off % 12, len);
+    return 0;
+
+#undef PATTERN
+}
+
 static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_http1)
 {
     if (!(path.len > 5 && path.base[0] == '/' && memcmp(path.base + path.len - 4, ".txt", 4) == 0))
@@ -179,10 +206,8 @@ static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_ht
     }
 
     send_header(stream, is_http1, 200, "text/plain; charset=utf-8");
-    for (; size >= 12; size -= 12)
-        quicly_streambuf_egress_write(stream, "hello world\n", 12);
-    if (size != 0)
-        quicly_streambuf_egress_write(stream, "hello world", size);
+    static const quicly_streambuf_sendvec_callbacks_t callbacks = {flatten_sized_text};
+    quicly_streambuf_egress_write_vec(stream, &callbacks, NULL, size);
     return 1;
 }
 
