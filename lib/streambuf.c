@@ -49,8 +49,8 @@ void quicly_streambuf_destroy(quicly_stream_t *stream, int err)
 
     for (i = 0; i != sbuf->egress.vecs.size; ++i) {
         quicly_streambuf_sendvec_t *vec = sbuf->egress.vecs.entries + i;
-        if (vec->cb->free_ != NULL)
-            vec->cb->free_(vec);
+        if (vec->cb->discard != NULL)
+            vec->cb->discard(vec);
     }
     free(sbuf->egress.vecs.entries);
     ptls_buffer_dispose(&sbuf->ingress);
@@ -72,8 +72,8 @@ void quicly_streambuf_egress_shift(quicly_stream_t *stream, size_t delta)
             break;
         }
         delta -= bytes_in_first_vec;
-        if (first_vec->cb->free_ != NULL)
-            first_vec->cb->free_(first_vec);
+        if (first_vec->cb->discard != NULL)
+            first_vec->cb->discard(first_vec);
         sbuf->egress.off_in_first_vec = 0;
     }
     if (i != 0) {
@@ -156,14 +156,14 @@ static int flatten_raw(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, s
     return 0;
 }
 
-static void free_raw(quicly_streambuf_sendvec_t *vec)
+static void discard_raw(quicly_streambuf_sendvec_t *vec)
 {
     free(vec->cbdata);
 }
 
 int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len)
 {
-    static const quicly_streambuf_sendvec_callbacks_t raw_callbacks = {flatten_raw, free_raw};
+    static const quicly_streambuf_sendvec_callbacks_t raw_callbacks = {flatten_raw, discard_raw};
     char *bytes = NULL;
     int ret;
 

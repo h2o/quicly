@@ -34,12 +34,22 @@ extern "C" {
 
 typedef struct st_quicly_streambuf_sendvec_t quicly_streambuf_sendvec_t;
 
+/**
+ * Callback that flattens the contents of an iovec.
+ * @param dst the destination
+ * @param off offset within the iovec from where serialization should happen
+ * @param len number of bytes to serialize
+ * @return 0 if successful, otherwise an error code
+ */
 typedef int (*quicly_streambuf_sendvec_flatten_cb)(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, size_t len);
-typedef void (*quicly_streambuf_sendvec_free_cb)(quicly_streambuf_sendvec_t *vec);
+/**
+ * An optional callback that is called when an iovec is discarded
+ */
+typedef void (*quicly_streambuf_sendvec_discard_cb)(quicly_streambuf_sendvec_t *vec);
 
 typedef struct st_quicly_streambuf_sendvec_callbacks_t {
     quicly_streambuf_sendvec_flatten_cb flatten;
-    quicly_streambuf_sendvec_free_cb free_;
+    quicly_streambuf_sendvec_discard_cb discard;
 } quicly_streambuf_sendvec_callbacks_t;
 
 struct st_quicly_streambuf_sendvec_t {

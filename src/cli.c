@@ -161,7 +161,7 @@ static int flatten_file_vec(quicly_streambuf_sendvec_t *vec, void *dst, size_t o
     return rret == len ? 0 : QUICLY_TRANSPORT_ERROR_INTERNAL; /* should return application-level error */
 }
 
-static void free_file_vec(quicly_streambuf_sendvec_t *vec)
+static void discard_file_vec(quicly_streambuf_sendvec_t *vec)
 {
     int fd = (int)vec->cbdata;
     close(fd);
@@ -169,7 +169,7 @@ static void free_file_vec(quicly_streambuf_sendvec_t *vec)
 
 static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, const char *mime_type)
 {
-    static const quicly_streambuf_sendvec_callbacks_t send_file_callbacks = {flatten_file_vec, free_file_vec};
+    static const quicly_streambuf_sendvec_callbacks_t send_file_callbacks = {flatten_file_vec, discard_file_vec};
     int fd;
     struct stat st;
 
