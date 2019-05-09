@@ -155,6 +155,43 @@ int quicly_sendbuf_write_vec(quicly_stream_t *stream, quicly_sendbuf_t *sb, quic
     return quicly_stream_sync_sendbuf(stream, 1);
 }
 
+void quicly_recvbuf_shift(quicly_stream_t *stream, ptls_buffer_t *rb, size_t delta)
+{
+    assert(delta <= rb->off);
+    rb->off -= delta;
+    memmove(rb->base, rb->base + delta, rb->off);
+
+    quicly_stream_sync_recvbuf(stream, delta);
+}
+
+ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb)
+{
+    size_t avail;
+
+    if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
+        avail = rb->off;
+    } else if (stream->recvstate.data_off < stream->recvstate.received.ranges[0].end) {
+        avail = stream->recvstate.received.ranges[0].end - stream->recvstate.data_off;
+    } else {
+        avail = 0;
+    }
+
+    return ptls_iovec_init(rb->base, avail);
+}
+
+int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len)
+{
+    if (len != 0) {
+        int ret;
+        if ((ret = ptls_buffer_reserve(rb, off + len - rb->off)) != 0)
+            return ret;
+        memcpy(rb->base + off, src, len);
+        if (rb->off < off + len)
+            rb->off = off + len;
+    }
+    return 0;
+}
+
 int quicly_streambuf_create(quicly_stream_t *stream, size_t sz)
 {
     quicly_streambuf_t *sbuf;
@@ -196,44 +233,8 @@ int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
     return quicly_stream_sync_sendbuf(stream, 1);
 }
 
-void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta)
-{
-    quicly_streambuf_t *sbuf = stream->data;
-
-    assert(delta <= sbuf->ingress.off);
-    sbuf->ingress.off -= delta;
-    memmove(sbuf->ingress.base, sbuf->ingress.base + delta, sbuf->ingress.off);
-
-    quicly_stream_sync_recvbuf(stream, delta);
-}
-
-ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream)
-{
-    quicly_streambuf_t *sbuf = (quicly_streambuf_t *)stream->data;
-    size_t avail;
-
-    if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        avail = sbuf->ingress.off;
-    } else if (stream->recvstate.data_off < stream->recvstate.received.ranges[0].end) {
-        avail = stream->recvstate.received.ranges[0].end - stream->recvstate.data_off;
-    } else {
-        avail = 0;
-    }
-
-    return ptls_iovec_init(sbuf->ingress.base, avail);
-}
-
 int quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     quicly_streambuf_t *sbuf = stream->data;
-
-    if (len != 0) {
-        int ret;
-        if ((ret = ptls_buffer_reserve(&sbuf->ingress, off + len - sbuf->ingress.off)) != 0)
-            return ret;
-        memcpy(sbuf->ingress.base + off, src, len);
-        if (sbuf->ingress.off < off + len)
-            sbuf->ingress.off = off + len;
-    }
-    return 0;
+    return quicly_recvbuf_receive(stream, &sbuf->ingress, off, src, len);
 }

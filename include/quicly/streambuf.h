@@ -75,6 +75,10 @@ int quicly_sendbuf_emit(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t of
 int quicly_sendbuf_write(quicly_stream_t *stream, quicly_sendbuf_t *sb, const void *src, size_t len);
 int quicly_sendbuf_write_vec(quicly_stream_t *stream, quicly_sendbuf_t *sb, quicly_sendbuf_vec_t *vec);
 
+void quicly_recvbuf_shift(quicly_stream_t *stream, ptls_buffer_t *rb, size_t delta);
+ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb);
+int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len);
+
 /**
  * The simple stream buffer.  The API assumes that stream->data points to quicly_streambuf_t.  Applications can extend the structure
  * by passing arbitrary size to `quicly_streambuf_create`.
@@ -91,8 +95,8 @@ int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst,
 static int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len);
 static int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, quicly_sendbuf_vec_t *vec);
 int quicly_streambuf_egress_shutdown(quicly_stream_t *stream);
-void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta);
-ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream);
+static void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta);
+static ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream);
 int quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
 /* inline definitions */
@@ -118,6 +122,18 @@ inline int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, quicly_sen
 {
     quicly_streambuf_t *sbuf = stream->data;
     return quicly_sendbuf_write_vec(stream, &sbuf->egress, vec);
+}
+
+inline void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+    quicly_recvbuf_shift(stream, &sbuf->ingress, delta);
+}
+
+inline ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream)
+{
+    quicly_streambuf_t *sbuf = (quicly_streambuf_t *)stream->data;
+    return quicly_recvbuf_get(stream, &sbuf->ingress);
 }
 
 #ifdef __cplusplus
