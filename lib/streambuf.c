@@ -24,82 +24,57 @@
 #include <string.h>
 #include "quicly/streambuf.h"
 
-int quicly_streambuf_create(quicly_stream_t *stream, size_t sz)
+void quicly_sendbuf_dispose(quicly_sendbuf_t *sb)
 {
-    quicly_streambuf_t *sbuf;
-
-    assert(sz >= sizeof(*sbuf));
-    assert(stream->data == NULL);
-
-    if ((sbuf = malloc(sz)) == NULL)
-        return PTLS_ERROR_NO_MEMORY;
-    memset(&sbuf->egress, 0, sizeof(sbuf->egress));
-    ptls_buffer_init(&sbuf->ingress, "", 0);
-    if (sz != sizeof(*sbuf))
-        memset((char *)sbuf + sizeof(*sbuf), 0, sz - sizeof(*sbuf));
-
-    stream->data = sbuf;
-    return 0;
-}
-
-void quicly_streambuf_destroy(quicly_stream_t *stream, int err)
-{
-    quicly_streambuf_t *sbuf = stream->data;
     size_t i;
 
-    for (i = 0; i != sbuf->egress.vecs.size; ++i) {
-        quicly_streambuf_sendvec_t *vec = sbuf->egress.vecs.entries + i;
-        if (vec->cb->discard != NULL)
-            vec->cb->discard(vec);
+    for (i = 0; i != sb->vecs.size; ++i) {
+        quicly_sendbuf_vec_t *vec = sb->vecs.entries + i;
+        if (vec->cb->discard_vec != NULL)
+            vec->cb->discard_vec(vec);
     }
-    free(sbuf->egress.vecs.entries);
-    ptls_buffer_dispose(&sbuf->ingress);
-    free(sbuf);
-    stream->data = NULL;
+    free(sb->vecs.entries);
 }
 
-void quicly_streambuf_egress_shift(quicly_stream_t *stream, size_t delta)
+void quicly_sendbuf_shift(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t delta)
 {
-    quicly_streambuf_t *sbuf = stream->data;
     size_t i;
 
     for (i = 0; delta != 0; ++i) {
-        assert(i < sbuf->egress.vecs.size);
-        quicly_streambuf_sendvec_t *first_vec = sbuf->egress.vecs.entries + i;
-        size_t bytes_in_first_vec = first_vec->len - sbuf->egress.off_in_first_vec;
+        assert(i < sb->vecs.size);
+        quicly_sendbuf_vec_t *first_vec = sb->vecs.entries + i;
+        size_t bytes_in_first_vec = first_vec->len - sb->off_in_first_vec;
         if (delta < bytes_in_first_vec) {
-            sbuf->egress.off_in_first_vec += delta;
+            sb->off_in_first_vec += delta;
             break;
         }
         delta -= bytes_in_first_vec;
-        if (first_vec->cb->discard != NULL)
-            first_vec->cb->discard(first_vec);
-        sbuf->egress.off_in_first_vec = 0;
+        if (first_vec->cb->discard_vec != NULL)
+            first_vec->cb->discard_vec(first_vec);
+        sb->off_in_first_vec = 0;
     }
     if (i != 0) {
-        if (sbuf->egress.vecs.size != i) {
-            memmove(sbuf->egress.vecs.entries, sbuf->egress.vecs.entries + i,
-                    (sbuf->egress.vecs.size - i) * sizeof(*sbuf->egress.vecs.entries));
-            sbuf->egress.vecs.size -= i;
+        if (sb->vecs.size != i) {
+            memmove(sb->vecs.entries, sb->vecs.entries + i, (sb->vecs.size - i) * sizeof(*sb->vecs.entries));
+            sb->vecs.size -= i;
         } else {
-            free(sbuf->egress.vecs.entries);
-            sbuf->egress.vecs.entries = NULL;
-            sbuf->egress.vecs.size = 0;
-            sbuf->egress.vecs.capacity = 0;
+            free(sb->vecs.entries);
+            sb->vecs.entries = NULL;
+            sb->vecs.size = 0;
+            sb->vecs.capacity = 0;
         }
     }
     quicly_stream_sync_sendbuf(stream, 0);
 }
 
-int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
+int quicly_sendbuf_emit(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t off, void *dst, size_t *len, int *wrote_all)
 {
-    quicly_streambuf_t *sbuf = stream->data;
     size_t vec_index, capacity = *len;
     int ret;
 
-    off += sbuf->egress.off_in_first_vec;
-    for (vec_index = 0; capacity != 0 && vec_index < sbuf->egress.vecs.size; ++vec_index) {
-        quicly_streambuf_sendvec_t *vec = sbuf->egress.vecs.entries + vec_index;
+    off += sb->off_in_first_vec;
+    for (vec_index = 0; capacity != 0 && vec_index < sb->vecs.size; ++vec_index) {
+        quicly_sendbuf_vec_t *vec = sb->vecs.entries + vec_index;
         if (off < vec->len) {
             size_t bytes_flatten = vec->len - off;
             int partial = 0;
@@ -107,7 +82,7 @@ int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst,
                 bytes_flatten = capacity;
                 partial = 1;
             }
-            if ((ret = vec->cb->flatten(vec, dst, off, bytes_flatten)) != 0)
+            if ((ret = vec->cb->flatten_vec(vec, dst, off, bytes_flatten)) != 0)
                 return ret;
             dst = (uint8_t *)dst + bytes_flatten;
             capacity -= bytes_flatten;
@@ -119,7 +94,7 @@ int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst,
         }
     }
 
-    if (capacity == 0 && vec_index < sbuf->egress.vecs.size) {
+    if (capacity == 0 && vec_index < sb->vecs.size) {
         *wrote_all = 0;
     } else {
         *len = *len - capacity;
@@ -129,58 +104,89 @@ int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst,
     return 0;
 }
 
-int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, const quicly_streambuf_sendvec_callbacks_t *cb, void *cbdata,
-                                      size_t len)
-{
-    quicly_streambuf_t *sbuf = stream->data;
-
-    assert(sbuf->egress.vecs.size <= sbuf->egress.vecs.capacity);
-
-    if (sbuf->egress.vecs.size == sbuf->egress.vecs.capacity) {
-        quicly_streambuf_sendvec_t *new_entries;
-        size_t new_capacity = sbuf->egress.vecs.capacity == 0 ? 4 : sbuf->egress.vecs.capacity * 2;
-        if ((new_entries = realloc(sbuf->egress.vecs.entries, new_capacity * sizeof(*sbuf->egress.vecs.entries))) == NULL)
-            return PTLS_ERROR_NO_MEMORY;
-        sbuf->egress.vecs.entries = new_entries;
-        sbuf->egress.vecs.capacity = new_capacity;
-    }
-    sbuf->egress.vecs.entries[sbuf->egress.vecs.size++] = (quicly_streambuf_sendvec_t){cb, cbdata, len};
-    sbuf->egress.bytes_written += len;
-
-    return quicly_stream_sync_sendbuf(stream, 1);
-}
-
-static int flatten_raw(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, size_t len)
+static int flatten_raw(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     memcpy(dst, (uint8_t *)vec->cbdata + off, len);
     return 0;
 }
 
-static void discard_raw(quicly_streambuf_sendvec_t *vec)
+static void discard_raw(quicly_sendbuf_vec_t *vec)
 {
     free(vec->cbdata);
 }
 
-int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len)
+int quicly_sendbuf_write(quicly_stream_t *stream, quicly_sendbuf_t *sb, const void *src, size_t len)
 {
     static const quicly_streambuf_sendvec_callbacks_t raw_callbacks = {flatten_raw, discard_raw};
-    char *bytes = NULL;
+    quicly_sendbuf_vec_t vec = {&raw_callbacks, len, NULL};
     int ret;
 
     assert(quicly_sendstate_is_open(&stream->sendstate));
 
-    if ((bytes = malloc(len)) == NULL) {
+    if ((vec.cbdata = malloc(len)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Error;
     }
-    memcpy(bytes, src, len);
-    if ((ret = quicly_streambuf_egress_write_vec(stream, &raw_callbacks, bytes, len)) != 0)
+    memcpy(vec.cbdata, src, len);
+    if ((ret = quicly_sendbuf_write_vec(stream, sb, &vec)) != 0)
         goto Error;
     return 0;
 
 Error:
-    free(bytes);
+    free(vec.cbdata);
     return ret;
+}
+
+int quicly_sendbuf_write_vec(quicly_stream_t *stream, quicly_sendbuf_t *sb, quicly_sendbuf_vec_t *vec)
+{
+    assert(sb->vecs.size <= sb->vecs.capacity);
+
+    if (sb->vecs.size == sb->vecs.capacity) {
+        quicly_sendbuf_vec_t *new_entries;
+        size_t new_capacity = sb->vecs.capacity == 0 ? 4 : sb->vecs.capacity * 2;
+        if ((new_entries = realloc(sb->vecs.entries, new_capacity * sizeof(*sb->vecs.entries))) == NULL)
+            return PTLS_ERROR_NO_MEMORY;
+        sb->vecs.entries = new_entries;
+        sb->vecs.capacity = new_capacity;
+    }
+    sb->vecs.entries[sb->vecs.size++] = *vec;
+    sb->bytes_written += vec->len;
+
+    return quicly_stream_sync_sendbuf(stream, 1);
+}
+
+int quicly_streambuf_create(quicly_stream_t *stream, size_t sz)
+{
+    quicly_streambuf_t *sbuf;
+
+    assert(sz >= sizeof(*sbuf));
+    assert(stream->data == NULL);
+
+    if ((sbuf = malloc(sz)) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+    quicly_sendbuf_init(&sbuf->egress);
+    ptls_buffer_init(&sbuf->ingress, "", 0);
+    if (sz != sizeof(*sbuf))
+        memset((char *)sbuf + sizeof(*sbuf), 0, sz - sizeof(*sbuf));
+
+    stream->data = sbuf;
+    return 0;
+}
+
+void quicly_streambuf_destroy(quicly_stream_t *stream, int err)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+
+    quicly_sendbuf_dispose(&sbuf->egress);
+    ptls_buffer_dispose(&sbuf->ingress);
+    free(sbuf);
+    stream->data = NULL;
+}
+
+int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+    return quicly_sendbuf_emit(stream, &sbuf->egress, off, dst, len, wrote_all);
 }
 
 int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)

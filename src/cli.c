@@ -149,7 +149,7 @@ static void send_header(quicly_stream_t *stream, int is_http1, int status, const
     send_str(stream, buf);
 }
 
-static int flatten_file_vec(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, size_t len)
+static int flatten_file_vec(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     int fd = (int)vec->cbdata;
     ssize_t rret;
@@ -161,7 +161,7 @@ static int flatten_file_vec(quicly_streambuf_sendvec_t *vec, void *dst, size_t o
     return rret == len ? 0 : QUICLY_TRANSPORT_ERROR_INTERNAL; /* should return application-level error */
 }
 
-static void discard_file_vec(quicly_streambuf_sendvec_t *vec)
+static void discard_file_vec(quicly_sendbuf_vec_t *vec)
 {
     int fd = (int)vec->cbdata;
     close(fd);
@@ -181,11 +181,12 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
     }
 
     send_header(stream, is_http1, 200, mime_type);
-    quicly_streambuf_egress_write_vec(stream, &send_file_callbacks, (void *)(intptr_t)fd, (size_t)st.st_size);
+    quicly_sendbuf_vec_t vec = {&send_file_callbacks, (size_t)st.st_size, (void *)(intptr_t)fd};
+    quicly_streambuf_egress_write_vec(stream, &vec);
     return 1;
 }
 
-static int flatten_sized_text(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, size_t len)
+static int flatten_sized_text(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     static const char pattern[] =
         "hello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
@@ -228,7 +229,8 @@ static int send_sized_text(quicly_stream_t *stream, ptls_iovec_t path, int is_ht
 
     send_header(stream, is_http1, 200, "text/plain; charset=utf-8");
     static const quicly_streambuf_sendvec_callbacks_t callbacks = {flatten_sized_text};
-    quicly_streambuf_egress_write_vec(stream, &callbacks, NULL, size);
+    quicly_sendbuf_vec_t vec = {&callbacks, size, NULL};
+    quicly_streambuf_egress_write_vec(stream, &vec);
     return 1;
 }
 

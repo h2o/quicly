@@ -29,10 +29,11 @@ extern "C" {
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include "picotls.h"
 #include "quicly.h"
 
-typedef struct st_quicly_streambuf_sendvec_t quicly_streambuf_sendvec_t;
+typedef struct st_quicly_sendbuf_vec_t quicly_sendbuf_vec_t;
 
 /**
  * Callback that flattens the contents of an iovec.
@@ -41,50 +42,83 @@ typedef struct st_quicly_streambuf_sendvec_t quicly_streambuf_sendvec_t;
  * @param len number of bytes to serialize
  * @return 0 if successful, otherwise an error code
  */
-typedef int (*quicly_streambuf_sendvec_flatten_cb)(quicly_streambuf_sendvec_t *vec, void *dst, size_t off, size_t len);
+typedef int (*quicly_sendbuf_flatten_vec_cb)(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len);
 /**
  * An optional callback that is called when an iovec is discarded
  */
-typedef void (*quicly_streambuf_sendvec_discard_cb)(quicly_streambuf_sendvec_t *vec);
+typedef void (*quicly_sendbuf_discard_vec_cb)(quicly_sendbuf_vec_t *vec);
 
 typedef struct st_quicly_streambuf_sendvec_callbacks_t {
-    quicly_streambuf_sendvec_flatten_cb flatten;
-    quicly_streambuf_sendvec_discard_cb discard;
+    quicly_sendbuf_flatten_vec_cb flatten_vec;
+    quicly_sendbuf_discard_vec_cb discard_vec;
 } quicly_streambuf_sendvec_callbacks_t;
 
-struct st_quicly_streambuf_sendvec_t {
+struct st_quicly_sendbuf_vec_t {
     const quicly_streambuf_sendvec_callbacks_t *cb;
-    void *cbdata;
     size_t len;
+    void *cbdata;
 };
+
+typedef struct st_quicly_sendbuf_t {
+    struct {
+        quicly_sendbuf_vec_t *entries;
+        size_t size, capacity;
+    } vecs;
+    size_t off_in_first_vec;
+    uint64_t bytes_written;
+} quicly_sendbuf_t;
+
+static void quicly_sendbuf_init(quicly_sendbuf_t *sb);
+void quicly_sendbuf_dispose(quicly_sendbuf_t *sb);
+void quicly_sendbuf_shift(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t delta);
+int quicly_sendbuf_emit(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t off, void *dst, size_t *len, int *wrote_all);
+int quicly_sendbuf_write(quicly_stream_t *stream, quicly_sendbuf_t *sb, const void *src, size_t len);
+int quicly_sendbuf_write_vec(quicly_stream_t *stream, quicly_sendbuf_t *sb, quicly_sendbuf_vec_t *vec);
 
 /**
  * The simple stream buffer.  The API assumes that stream->data points to quicly_streambuf_t.  Applications can extend the structure
  * by passing arbitrary size to `quicly_streambuf_create`.
  */
 typedef struct st_quicly_streambuf_t {
-    struct {
-        struct {
-            quicly_streambuf_sendvec_t *entries;
-            size_t size, capacity;
-        } vecs;
-        size_t off_in_first_vec;
-        uint64_t bytes_written;
-    } egress;
+    quicly_sendbuf_t egress;
     ptls_buffer_t ingress;
 } quicly_streambuf_t;
 
 int quicly_streambuf_create(quicly_stream_t *stream, size_t sz);
 void quicly_streambuf_destroy(quicly_stream_t *stream, int err);
-void quicly_streambuf_egress_shift(quicly_stream_t *stream, size_t delta);
+static void quicly_streambuf_egress_shift(quicly_stream_t *stream, size_t delta);
 int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
-int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len);
-int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, const quicly_streambuf_sendvec_callbacks_t *cb, void *cbdata,
-                                      size_t len);
+static int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len);
+static int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, quicly_sendbuf_vec_t *vec);
 int quicly_streambuf_egress_shutdown(quicly_stream_t *stream);
 void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta);
 ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream);
 int quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+
+/* inline definitions */
+
+inline void quicly_sendbuf_init(quicly_sendbuf_t *sb)
+{
+    memset(sb, 0, sizeof(*sb));
+}
+
+inline void quicly_streambuf_egress_shift(quicly_stream_t *stream, size_t delta)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+    quicly_sendbuf_shift(stream, &sbuf->egress, delta);
+}
+
+inline int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+    return quicly_sendbuf_write(stream, &sbuf->egress, src, len);
+}
+
+inline int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, quicly_sendbuf_vec_t *vec)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+    return quicly_sendbuf_write_vec(stream, &sbuf->egress, vec);
+}
 
 #ifdef __cplusplus
 }
