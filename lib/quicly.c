@@ -1576,30 +1576,6 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
 
-    uint32_t negotiated_version;
-    if ((ret = ptls_decode32(&negotiated_version, &src, end)) != 0)
-        goto Exit;
-    if (negotiated_version != QUICLY_PROTOCOL_VERSION) {
-        fprintf(stderr, "unexpected negotiated version\n");
-        ret = QUICLY_TRANSPORT_ERROR_VERSION_NEGOTIATION;
-        goto Exit;
-    }
-
-    ptls_decode_open_block(src, end, 1, {
-        int found_negotiated_version = 0;
-        do {
-            uint32_t supported_version;
-            if ((ret = ptls_decode32(&supported_version, &src, end)) != 0)
-                goto Exit;
-            if (supported_version == negotiated_version)
-                found_negotiated_version = 1;
-        } while (src != end);
-        if (!found_negotiated_version) {
-            ret = PTLS_ALERT_ILLEGAL_PARAMETER; /* FIXME is this the correct error code? */
-            goto Exit;
-        }
-    });
-
     {
         quicly_transport_parameters_t params;
         quicly_cid_t odcid;
@@ -1664,7 +1640,6 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     /* handshake */
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
-    ptls_buffer_push32(&conn->crypto.transport_params.buf, conn->super.version);
     if ((ret = quicly_encode_transport_parameter_list(&conn->crypto.transport_params.buf, 1, &conn->super.ctx->transport_params,
                                                       NULL, NULL)) != 0)
         goto Exit;
@@ -1717,10 +1692,6 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     { /* decode transport_parameters extension */
         const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
-        uint32_t initial_version;
-        if ((ret = ptls_decode32(&initial_version, &src, end)) != 0)
-            goto Exit;
-        /* TODO we need to check initial_version when supporting multiple versions */
         if ((ret = quicly_decode_transport_parameter_list(&conn->super.peer.transport_params, NULL, NULL, 0, src, end)) != 0)
             goto Exit;
     }
@@ -1728,9 +1699,6 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
-    ptls_buffer_push32(&conn->crypto.transport_params.buf, QUICLY_PROTOCOL_VERSION);
-    ptls_buffer_push_block(&conn->crypto.transport_params.buf, 1,
-                           { ptls_buffer_push32(&conn->crypto.transport_params.buf, QUICLY_PROTOCOL_VERSION); });
     if ((ret = quicly_encode_transport_parameter_list(
              &conn->crypto.transport_params.buf, 0, &conn->super.ctx->transport_params,
              conn->retry_odcid.len != 0 ? &conn->retry_odcid : NULL,
