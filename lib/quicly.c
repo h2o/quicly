@@ -865,12 +865,13 @@ static void destroy_stream(quicly_stream_t *stream, int err)
     free(stream);
 }
 
-static void destroy_all_streams(quicly_conn_t *conn, int err)
+static void destroy_all_streams(quicly_conn_t *conn, int err, int including_crypto_streams)
 {
     quicly_stream_t *stream;
     kh_foreach_value(conn->streams, stream, {
         /* TODO do we need to send reset signals to open streams? */
-        destroy_stream(stream, err);
+        if (including_crypto_streams || stream->stream_id >= 0)
+            destroy_stream(stream, err);
     });
 }
 
@@ -1169,7 +1170,7 @@ void quicly_free(quicly_conn_t *conn)
 {
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_FREE);
 
-    destroy_all_streams(conn, 0);
+    destroy_all_streams(conn, 0, 1);
 
     quicly_maxsender_dispose(&conn->ingress.max_data.sender);
     if (conn->ingress.max_streams.uni != NULL)
@@ -3002,8 +3003,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX)
             return QUICLY_ERROR_FREE_CONNECTION;
         if (conn->super.state == QUICLY_STATE_CLOSING && conn->egress.send_ack_at <= now) {
-            destroy_all_streams(conn, 0); /* delayed until the emission of CONNECTION_CLOSE frame to allow quicly_close to be called
-                                           * from a stream handler */
+            destroy_all_streams(conn, 0, 0); /* delayed until the emission of CONNECTION_CLOSE frame to allow quicly_close to be
+                                              * called from a stream handler */
             if (conn->application != NULL && conn->application->one_rtt_writable) {
                 s.current.cipher = &conn->application->cipher.egress;
                 s.current.first_byte = QUICLY_QUIC_BIT;
@@ -3052,7 +3053,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     } else if (conn->idle_timeout.at <= now) {
         LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_IDLE_TIMEOUT);
         conn->super.state = QUICLY_STATE_DRAINING;
-        destroy_all_streams(conn, 0);
+        destroy_all_streams(conn, 0, 0);
         return QUICLY_ERROR_FREE_CONNECTION;
     }
 
@@ -3732,7 +3733,7 @@ static int handle_close(quicly_conn_t *conn, int err, uint64_t frame_type, ptls_
     if (conn->super.ctx->closed_by_peer != NULL)
         conn->super.ctx->closed_by_peer->cb(conn->super.ctx->closed_by_peer, conn, err, frame_type,
                                             (const char *)reason_phrase.base, reason_phrase.len);
-    destroy_all_streams(conn, err);
+    destroy_all_streams(conn, err, 0);
 
     return 0;
 }
