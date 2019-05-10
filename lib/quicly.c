@@ -526,13 +526,18 @@ static void init_max_streams(struct st_quicly_max_streams_t *m)
     quicly_maxsender_init(&m->blocked_sender, -1);
 }
 
-static void update_max_streams(struct st_quicly_max_streams_t *m, uint64_t count)
+static int update_max_streams(struct st_quicly_max_streams_t *m, uint64_t count)
 {
+    if (count > (uint64_t)1 << 60)
+        return QUICLY_TRANSPORT_ERROR_STREAM_LIMIT;
+
     if (m->count < count) {
         m->count = count;
         if (m->blocked_sender.max_acked < count)
             m->blocked_sender.max_acked = count;
     }
+
+    return 0;
 }
 
 int quicly_connection_is_ready(quicly_conn_t *conn)
@@ -1147,11 +1152,17 @@ static int discard_handshake_context(quicly_conn_t *conn, const quicly_sent_pack
     return 0;
 }
 
-static void apply_peer_transport_params(quicly_conn_t *conn)
+static int apply_peer_transport_params(quicly_conn_t *conn)
 {
+    int ret;
+
     conn->egress.max_data.permitted = conn->super.peer.transport_params.max_data;
-    update_max_streams(&conn->egress.max_streams.uni, conn->super.peer.transport_params.max_streams_uni);
-    update_max_streams(&conn->egress.max_streams.bidi, conn->super.peer.transport_params.max_streams_bidi);
+    if ((ret = update_max_streams(&conn->egress.max_streams.uni, conn->super.peer.transport_params.max_streams_uni)) != 0)
+        return ret;
+    if ((ret = update_max_streams(&conn->egress.max_streams.bidi, conn->super.peer.transport_params.max_streams_bidi)) != 0)
+        return ret;
+
+    return 0;
 }
 
 void quicly_free(quicly_conn_t *conn)
@@ -1664,7 +1675,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     if (max_early_data_size != 0) {
         conn->super.peer.transport_params = *resumed_transport_params;
-        apply_peer_transport_params(conn);
+        if ((ret = apply_peer_transport_params(conn)) != 0)
+            goto Exit;
     }
 
     *_conn = conn;
@@ -2934,7 +2946,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         break;
     case QUICLY_EPOCH_1RTT:
         if (is_enc)
-            apply_peer_transport_params(conn);
+            if ((ret = apply_peer_transport_params(conn)) != 0)
+                return ret;
         if (conn->application == NULL && (ret = setup_application_space(conn)) != 0)
             return ret;
         if (is_enc) {
@@ -3520,7 +3533,9 @@ static int handle_max_streams_frame(quicly_conn_t *conn, struct st_quicly_handle
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_MAX_STREAMS_RECEIVE, INT_EVENT_ATTR(LIMIT, frame.count),
                          INT_EVENT_ATTR(UNIDIRECTIONAL, uni));
 
-    update_max_streams(uni ? &conn->egress.max_streams.uni : &conn->egress.max_streams.bidi, frame.count);
+    if ((ret = update_max_streams(uni ? &conn->egress.max_streams.uni : &conn->egress.max_streams.bidi, frame.count)) != 0)
+        return ret;
+
     open_blocked_streams(conn, uni);
 
     return 0;
