@@ -299,7 +299,7 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint64_t max_data;
     /**
-     * in seconds
+     * in milliseconds
      */
     uint64_t idle_timeout;
     /**
