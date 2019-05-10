@@ -3673,10 +3673,6 @@ static int is_stateless_reset(quicly_conn_t *conn, quicly_decoded_packet_t *deco
 
     if (conn->application == NULL)
         return 0;
-    if (QUICLY_PACKET_IS_LONG_HEADER(decoded->octets.base[0]))
-        return 0;
-    if ((decoded->octets.base[0] & QUICLY_QUIC_BIT) == 0)
-        return 0;
     if (decoded->octets.len < QUICLY_STATELESS_RESET_PACKET_MIN_LEN)
         return 0;
     if (memcmp(decoded->octets.base + decoded->octets.len - QUICLY_STATELESS_RESET_TOKEN_LEN,
