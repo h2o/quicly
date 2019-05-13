@@ -44,7 +44,7 @@ typedef struct st_quicly_sendbuf_vec_t quicly_sendbuf_vec_t;
  */
 typedef int (*quicly_sendbuf_flatten_vec_cb)(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len);
 /**
- * An optional callback that is called when an iovec is discarded
+ * An optional callback that is called when an iovec is discarded.
  */
 typedef void (*quicly_sendbuf_discard_vec_cb)(quicly_sendbuf_vec_t *vec);
 
@@ -59,6 +59,9 @@ struct st_quicly_sendbuf_vec_t {
     void *cbdata;
 };
 
+/**
+ * A simple stream-level send buffer that can be used to store data to be sent.
+ */
 typedef struct st_quicly_sendbuf_t {
     struct {
         quicly_sendbuf_vec_t *entries;
@@ -68,15 +71,45 @@ typedef struct st_quicly_sendbuf_t {
     uint64_t bytes_written;
 } quicly_sendbuf_t;
 
+/**
+ * Inilializes the send buffer.
+ */
 static void quicly_sendbuf_init(quicly_sendbuf_t *sb);
+/**
+ * Disposes of the send buffer.
+ */
 void quicly_sendbuf_dispose(quicly_sendbuf_t *sb);
+/**
+ * The concrete function to be used when `quicly_stream_callbacks_t::on_send_shift` is being invoked (i.e., applications using
+ * `quicly_sendbuf_t` as the stream-level send buffer should call this function from it's `on_send_shift` callback).
+ */
 void quicly_sendbuf_shift(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t delta);
+/**
+ * The concrete function for `quicly_stream_callbacks_t::on_send_emit`.
+ */
 int quicly_sendbuf_emit(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t off, void *dst, size_t *len, int *wrote_all);
+/**
+ * Appends some bytes to the send buffer.  The data being appended is copied.
+ */
 int quicly_sendbuf_write(quicly_stream_t *stream, quicly_sendbuf_t *sb, const void *src, size_t len);
+/**
+ * Appends a vector to the send buffer.  Members of the `quicly_sendbuf_vec_t` are copied.
+ */
 int quicly_sendbuf_write_vec(quicly_stream_t *stream, quicly_sendbuf_t *sb, quicly_sendbuf_vec_t *vec);
 
+/**
+ * Pops the specified amount of bytes at the beginning of the simple stream-level receive buffer (which in fact is `ptls_buffer_t`).
+ */
 void quicly_recvbuf_shift(quicly_stream_t *stream, ptls_buffer_t *rb, size_t delta);
+/**
+ * Returns an iovec that refers to the data available in the receive buffer.  Applications are expected to call `quicly_recvbuf_get`
+ * to at first peek the received data, process the bytes they can, then call `quicly_recvbuf_shift` to pop the data that have been
+ * processed.
+ */
 ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb);
+/**
+ * The concrete function for `quily_stream_callbacks_t::on_receive`.
+ */
 int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len);
 
 /**
