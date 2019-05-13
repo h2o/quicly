@@ -206,8 +206,9 @@ static int flatten_sized_text(quicly_sendbuf_vec_t *vec, void *dst, size_t off, 
         "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
         "world\nhello world\nhello world\nhello world\nhello world\nhello world\n";
 
-    assert(len < sizeof(pattern) - 13); /* pattern is bigger than MTU size */
-    memcpy(dst, pattern + off % 12, len);
+    const char *src = pattern + off % 12;
+    assert(src + len - pattern <= sizeof(pattern) - 1); /* pattern is bigger than MTU size */
+    memcpy(dst, src, len);
     return 0;
 
 #undef PATTERN
