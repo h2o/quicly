@@ -186,6 +186,10 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
     return 1;
 }
 
+/**
+ * This function is an implementation of the quicly_sendbuf_flatten_vec_cb callback.  Refer to the doc-comments of the callback type
+ * for the API.
+ */
 static int flatten_sized_text(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     static const char pattern[] =
