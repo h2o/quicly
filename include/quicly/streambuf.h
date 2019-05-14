@@ -103,7 +103,7 @@ int quicly_sendbuf_write_vec(quicly_stream_t *stream, quicly_sendbuf_t *sb, quic
 void quicly_recvbuf_shift(quicly_stream_t *stream, ptls_buffer_t *rb, size_t delta);
 /**
  * Returns an iovec that refers to the data available in the receive buffer.  Applications are expected to call `quicly_recvbuf_get`
- * to at first peek the received data, process the bytes they can, then call `quicly_recvbuf_shift` to pop the data that have been
+ * to first peek at the received data, process the bytes they can, then call `quicly_recvbuf_shift` to pop the bytes that have been
  * processed.
  */
 ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb);
