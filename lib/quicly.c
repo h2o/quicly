@@ -3883,7 +3883,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     QUICLY_PROBE(ACCEPT, *conn, now, QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len),
                  QUICLY_PROBE_HEXDUMP(packet->cid.src.base, packet->cid.src.len));
     QUICLY_PROBE(CRYPTO_DECRYPT, *conn, now, pn, payload.base, payload.len);
-    QUICLY_PROBE(QUICTRACE_RECV, *conn, now, pn, payload.len, QUICLY_EPOCH_INITIAL);
+    QUICLY_PROBE(QUICTRACE_RECV, *conn, now, pn);
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
     (*conn)->super.stats.num_packets.received += 1;
@@ -4052,7 +4052,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     }
 
     QUICLY_PROBE(CRYPTO_DECRYPT, conn, now, pn, payload.base, payload.len);
-    QUICLY_PROBE(QUICTRACE_RECV, conn, now, pn, payload.len, epoch);
+    QUICLY_PROBE(QUICTRACE_RECV, conn, now, pn);
 
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
