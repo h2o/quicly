@@ -4134,7 +4134,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + 2));
             assert(stream != NULL);
             quicly_streambuf_t *buf = stream->data;
-            if (buf->egress.buf.off == 0) {
+            if (buf->egress.vecs.size == 0) {
                 if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now,
                                                   QUICLY_EPOCH_HANDSHAKE)) != 0)
                     goto Exit;
