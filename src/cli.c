@@ -830,13 +830,13 @@ int main(int argc, char **argv)
             enforce_retry = 1;
             break;
         case 'r':
-            if (sscanf(optarg, "%" SCNu32, &ctx.loss->default_initial_rtt) != 1) {
+            if (sscanf(optarg, "%" SCNu32, &ctx.loss.default_initial_rtt) != 1) {
                 fprintf(stderr, "invalid argument passed to `-r`\n");
                 exit(1);
             }
             break;
         case 'S':
-            if (sscanf(optarg, "%" SCNu8, &ctx.loss->num_speculative_ptos) != 1) {
+            if (sscanf(optarg, "%" SCNu8, &ctx.loss.num_speculative_ptos) != 1) {
                 fprintf(stderr, "invalid argument passed to `-S`\n");
                 exit(1);
             }

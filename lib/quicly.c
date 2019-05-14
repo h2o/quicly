@@ -1526,8 +1526,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         quicly_maxsender_init(conn->_.ingress.max_streams.bidi, conn->_.super.ctx->transport_params.max_streams_bidi);
     }
     quicly_sentmap_init(&conn->_.egress.sentmap);
-    quicly_loss_init(&conn->_.egress.loss, conn->_.super.ctx->loss,
-                     conn->_.super.ctx->loss->default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
+    quicly_loss_init(&conn->_.egress.loss, &conn->_.super.ctx->loss,
+                     conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
