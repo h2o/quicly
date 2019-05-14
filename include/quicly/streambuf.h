@@ -108,7 +108,7 @@ void quicly_recvbuf_shift(quicly_stream_t *stream, ptls_buffer_t *rb, size_t del
  */
 ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb);
 /**
- * The concrete function for `quily_stream_callbacks_t::on_receive`.
+ * The concrete function for `quicly_stream_callbacks_t::on_receive`.
  */
 int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len);
 
