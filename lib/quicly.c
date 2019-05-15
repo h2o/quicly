@@ -310,7 +310,6 @@ struct st_quicly_conn_t {
 struct st_quicly_handle_payload_state_t {
     const uint8_t *src, *const end;
     size_t epoch;
-    size_t num_frames_non_ack_eliciting;
     uint64_t frame_type;
 };
 
@@ -3350,7 +3349,6 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     size_t segs_acked = 0, bytes_acked = 0;
     int includes_ack_eliciting = 0, ret;
 
-    ++state->num_frames_non_ack_eliciting;
     if ((ret = quicly_decode_ack_frame(&state->src, state->end, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
         return ret;
 
@@ -3767,7 +3765,6 @@ static int handle_application_close_frame(quicly_conn_t *conn, struct st_quicly_
 
 static int handle_padding_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
-    ++state->num_frames_non_ack_eliciting;
     return 0;
 }
 
@@ -3802,56 +3799,59 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
          * Bitmasks that represent the epochs the frame can appear.  A frame is permitted when `1 << epoch` bit is set.
          */
         uint8_t permitted_epochs;
-    } frame_handlers[] = {
-
-#define FRAME(n, i, z, h, o) {handle_##n##_frame, \
-                              (i << QUICLY_EPOCH_INITIAL) | (z << QUICLY_EPOCH_0RTT) | (h << QUICLY_EPOCH_HANDSHAKE) | \
-                              (o << QUICLY_EPOCH_1RTT)}
-        /* The table below is used for generating `frame_handlers`.  Each line accepts the suffix of the frame handler, and four
-         * booleans (each of them being either 0 or 1) that indicate whether if the frame is permitted to appear in the
-         * corresponding epoch (i.e. 0=Initial, 1=0-RTT, 2=Handshake, 3=1-RTT
+        /**
+         *
          */
-        /* 0-7 */
-        FRAME(padding,              1, 1, 1, 1),
-        FRAME(ping,                 0, 1, 0, 1),
-        FRAME(ack,                  1, 0, 1, 1),
-        FRAME(ack,                  1, 0, 1, 1),
-        FRAME(reset_stream,         0, 1, 0, 1),
-        FRAME(stop_sending,         0, 1, 0, 1),
-        FRAME(crypto,               1, 0, 1, 1),
-        FRAME(new_token,            0, 0, 0, 1),
-        /* 8-15 */
-        FRAME(stream,               0, 1, 0, 1),
-        FRAME(stream,               0, 1, 0, 1),
-        FRAME(stream,               0, 1, 0, 1),
-        FRAME(stream,               0, 1, 0, 1),
-        FRAME(stream,               0, 1, 0, 1),
-        FRAME(stream,               0, 1, 0, 1),
-        FRAME(stream,               0, 1, 0, 1),
-        FRAME(stream,               0, 1, 0, 1),
-        /* 16-23 */
-        FRAME(max_data,             0, 1, 0, 1),
-        FRAME(max_stream_data,      0, 1, 0, 1),
-        FRAME(max_streams,          0, 1, 0, 1),
-        FRAME(max_streams,          0, 1, 0, 1),
-        FRAME(data_blocked,         0, 1, 0, 1),
-        FRAME(stream_data_blocked,  0, 1, 0, 1),
-        FRAME(streams_blocked,      0, 1, 0, 1),
-        FRAME(streams_blocked,      0, 1, 0, 1),
-        /* 24- */
-        FRAME(new_connection_id,    0, 1, 0, 1),
-        FRAME(retire_connection_id, 0, 0, 0, 1),
-        FRAME(path_challenge,       0, 1, 0, 1),
-        FRAME(path_response,        0, 0, 0, 1),
-        FRAME(transport_close,      1, 1, 1, 1),
-        FRAME(application_close,    0, 1, 0, 1)
+        uint8_t ack_eliciting : 1;
+    } frame_handlers[] = {
+#define FRAME(n, i, z, h, o, ae)                                                                                                   \
+    {                                                                                                                              \
+        handle_##n##_frame,                                                                                                        \
+        (i << QUICLY_EPOCH_INITIAL) | (z << QUICLY_EPOCH_0RTT) | (h << QUICLY_EPOCH_HANDSHAKE) | (o << QUICLY_EPOCH_1RTT),         \
+        ae                                                                                                                         \
+    }
+        /*  +----------------------+-------------------+---------------+
+         *  |                      |  permitted epochs |               |
+         *  |        frame         +----+----+----+----+ ack_eliciting |
+         *  |                      | IN | 0R | HS | 1R |               |
+         *  +----------------------+----+----+----+----+---------------+ */
+        FRAME(padding              ,  1 ,  1 ,  1 ,  1 , 0             ), /* 0 */
+        FRAME(ping                 ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(ack                  ,  1 ,  0 ,  1 ,  1 , 0             ),
+        FRAME(ack                  ,  1 ,  0 ,  1 ,  1 , 0             ),
+        FRAME(reset_stream         ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(stop_sending         ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(crypto               ,  1 ,  0 ,  1 ,  1 , 1             ),
+        FRAME(new_token            ,  0 ,  0 ,  0 ,  1 , 1             ),
+        FRAME(stream               ,  0 ,  1 ,  0 ,  1 , 1             ), /* 8 */
+        FRAME(stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(max_data             ,  0 ,  1 ,  0 ,  1 , 1             ), /* 16 */
+        FRAME(max_stream_data      ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(max_streams          ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(max_streams          ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(data_blocked         ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(stream_data_blocked  ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(streams_blocked      ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(streams_blocked      ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(new_connection_id    ,  0 ,  1 ,  0 ,  1 , 1             ), /* 24 */
+        FRAME(retire_connection_id ,  0 ,  0 ,  0 ,  1 , 1             ),
+        FRAME(path_challenge       ,  0 ,  1 ,  0 ,  1 , 1             ),
+        FRAME(path_response        ,  0 ,  0 ,  0 ,  1 , 1             ),
+        FRAME(transport_close      ,  1 ,  1 ,  1 ,  1 , 1             ),
+        FRAME(application_close    ,  0 ,  1 ,  0 ,  1 , 1             )
+        /*  +----------------------+----+----+----+----+---------------+ */
 #undef FRAME
-
     };
     /* clang-format on */
 
     struct st_quicly_handle_payload_state_t state = {_src, _src + _len, epoch};
-    size_t num_frames = 0;
+    size_t num_frames = 0, num_frames_ack_eliciting = 0;
     int ret;
 
     do {
@@ -3864,12 +3864,13 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
             ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
             break;
         }
-        ++num_frames;
+        num_frames += 1;
+        num_frames_ack_eliciting += frame_handlers[state.frame_type].ack_eliciting;
         if ((ret = (*frame_handlers[state.frame_type].cb)(conn, &state)) != 0)
             break;
     } while (state.src != state.end);
 
-    *is_ack_only = num_frames == state.num_frames_non_ack_eliciting;
+    *is_ack_only = num_frames_ack_eliciting == 0;
     if (ret != 0)
         *offending_frame_type = state.frame_type;
     return ret;
