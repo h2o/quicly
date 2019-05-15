@@ -3791,18 +3791,9 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
 
     /* `frame_handlers` is an array of frame handlers and the properties of the frames, indexed by the ID of the frame. */
     static const struct {
-        /**
-         * The callback function that handles the frame.
-         */
-        int (*cb)(quicly_conn_t *, struct st_quicly_handle_payload_state_t *);
-        /**
-         * Bitmasks that represent the epochs the frame can appear.  A frame is permitted when `1 << epoch` bit is set.
-         */
-        uint8_t permitted_epochs;
-        /**
-         * A boolean indicating if the frame is ack-eliciting.
-         */
-        uint8_t ack_eliciting;
+        int (*cb)(quicly_conn_t *, struct st_quicly_handle_payload_state_t *); /* callback function that handles the frame */
+        uint8_t permitted_epochs;  /* the epochs the frame can appear, calculated as bitwise-or of `1 << epoch` */
+        uint8_t ack_eliciting;     /* boolean indicating if the frame is ack-eliciting */
     } frame_handlers[] = {
 #define FRAME(n, i, z, h, o, ae)                                                                                                   \
     {                                                                                                                              \
