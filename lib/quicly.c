@@ -508,15 +508,17 @@ uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uin
     return candidate;
 }
 
-static void assert_consistency(quicly_conn_t *conn, int run_timers)
+static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
 {
     if (conn->egress.sentmap.bytes_in_flight != 0) {
         assert(conn->egress.loss.alarm_at != INT64_MAX);
     } else {
         assert(conn->egress.loss.loss_time == INT64_MAX);
     }
-    if (run_timers)
-        assert(now < conn->egress.loss.alarm_at || !conn->super.peer.address_validation.validated);
+    /* Allow timers not in the future when the peer is not yet validated, since we may not be able to send packets even when timers
+     * fire. */
+    if (timer_must_be_in_future && conn->super.peer.address_validation.validated)
+        assert(now < conn->egress.loss.alarm_at);
 }
 
 static void init_max_streams(struct st_quicly_max_streams_t *m)
