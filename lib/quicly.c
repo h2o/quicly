@@ -3800,9 +3800,9 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
          */
         uint8_t permitted_epochs;
         /**
-         *
+         * A boolean indicating if the frame is ack-eliciting.
          */
-        uint8_t ack_eliciting : 1;
+        uint8_t ack_eliciting;
     } frame_handlers[] = {
 #define FRAME(n, i, z, h, o, ae)                                                                                                   \
     {                                                                                                                              \
