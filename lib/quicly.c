@@ -3812,39 +3812,39 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
     }
         /*   +----------------------+-------------------+---------------+
          *   |                      |  permitted epochs |               |
-         *   |        frame         +----+----+----+----+ ack_eliciting |
+         *   |        frame         +----+----+----+----+ ack-eliciting |
          *   |                      | IN | 0R | HS | 1R |               |
          *   +----------------------+----+----+----+----+---------------+ */
-        FRAME( padding              ,  1 ,  1 ,  1 ,  1 , 0             ), /* 0 */
-        FRAME( ping                 ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( ack                  ,  1 ,  0 ,  1 ,  1 , 0             ),
-        FRAME( ack                  ,  1 ,  0 ,  1 ,  1 , 0             ),
-        FRAME( reset_stream         ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( stop_sending         ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( crypto               ,  1 ,  0 ,  1 ,  1 , 1             ),
-        FRAME( new_token            ,  0 ,  0 ,  0 ,  1 , 1             ),
-        FRAME( stream               ,  0 ,  1 ,  0 ,  1 , 1             ), /* 8 */
-        FRAME( stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( stream               ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( max_data             ,  0 ,  1 ,  0 ,  1 , 1             ), /* 16 */
-        FRAME( max_stream_data      ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( max_streams          ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( max_streams          ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( data_blocked         ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( stream_data_blocked  ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( streams_blocked      ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( streams_blocked      ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( new_connection_id    ,  0 ,  1 ,  0 ,  1 , 1             ), /* 24 */
-        FRAME( retire_connection_id ,  0 ,  0 ,  0 ,  1 , 1             ),
-        FRAME( path_challenge       ,  0 ,  1 ,  0 ,  1 , 1             ),
-        FRAME( path_response        ,  0 ,  0 ,  0 ,  1 , 1             ),
-        FRAME( transport_close      ,  1 ,  1 ,  1 ,  1 , 1             ),
-        FRAME( application_close    ,  0 ,  1 ,  0 ,  1 , 1             )
+        FRAME( padding              ,  1 ,  1 ,  1 ,  1 ,             0 ), /* 0 */
+        FRAME( ping                 ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( ack                  ,  1 ,  0 ,  1 ,  1 ,             0 ),
+        FRAME( ack                  ,  1 ,  0 ,  1 ,  1 ,             0 ),
+        FRAME( reset_stream         ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( stop_sending         ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( crypto               ,  1 ,  0 ,  1 ,  1 ,             1 ),
+        FRAME( new_token            ,  0 ,  0 ,  0 ,  1 ,             1 ),
+        FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ), /* 8 */
+        FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( max_data             ,  0 ,  1 ,  0 ,  1 ,             1 ), /* 16 */
+        FRAME( max_stream_data      ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( max_streams          ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( max_streams          ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( data_blocked         ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( stream_data_blocked  ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( streams_blocked      ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( streams_blocked      ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( new_connection_id    ,  0 ,  1 ,  0 ,  1 ,             1 ), /* 24 */
+        FRAME( retire_connection_id ,  0 ,  0 ,  0 ,  1 ,             1 ),
+        FRAME( path_challenge       ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( path_response        ,  0 ,  0 ,  0 ,  1 ,             1 ),
+        FRAME( transport_close      ,  1 ,  1 ,  1 ,  1 ,             1 ),
+        FRAME( application_close    ,  0 ,  1 ,  0 ,  1 ,             1 )
         /*   +----------------------+----+----+----+----+---------------+ */
 #undef FRAME
     };
