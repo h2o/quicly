@@ -367,7 +367,7 @@ struct st_quicly_context_t {
     /**
      * loss detection parameters
      */
-    quicly_loss_conf_t *loss;
+    quicly_loss_conf_t loss;
     /**
      * transport parameters
      */
