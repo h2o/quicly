@@ -3790,12 +3790,27 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
 static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src, size_t _len, uint64_t *offending_frame_type,
                           int *is_ack_only)
 {
-    static const struct {
-        int (*cb)(quicly_conn_t *, struct st_quicly_handle_payload_state_t *);
-        uint8_t permitted_epochs; /* bitmask of 1<<epoch */
-    } frame_handlers[] = {
     /* clang-format off */
-#define FRAME(n, i, z, h, o) {handle_##n##_frame, (i ? 1 : 0) | (z ? 2 : 0) | (h ? 4 : 0) | (o ? 8 : 0)}
+
+    /* `frame_handlers` is an array of frame handlers and the properties of the frames, indexed by the ID of the frame. */
+    static const struct {
+        /**
+         * The callback function that handles the frame.
+         */
+        int (*cb)(quicly_conn_t *, struct st_quicly_handle_payload_state_t *);
+        /**
+         * Bitmasks that represent the epochs the frame can appear.  A frame is permitted when `1 << epoch` bit is set.
+         */
+        uint8_t permitted_epochs;
+    } frame_handlers[] = {
+
+#define FRAME(n, i, z, h, o) {handle_##n##_frame, \
+                              (i << QUICLY_EPOCH_INITIAL) | (z << QUICLY_EPOCH_0RTT) | (h << QUICLY_EPOCH_HANDSHAKE) | \
+                              (o << QUICLY_EPOCH_1RTT)}
+        /* The table below is used for generating `frame_handlers`.  Each line accepts the suffix of the frame handler, and four
+         * booleans (each of them being either 0 or 1) that indicate whether if the frame is permitted to appear in the
+         * corresponding epoch (i.e. 0=Initial, 1=0-RTT, 2=Handshake, 3=1-RTT
+         */
         /* 0-7 */
         FRAME(padding,              1, 1, 1, 1),
         FRAME(ping,                 0, 1, 0, 1),
@@ -3831,8 +3846,10 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         FRAME(transport_close,      1, 1, 1, 1),
         FRAME(application_close,    0, 1, 0, 1)
 #undef FRAME
-        /* clang-format on */
+
     };
+    /* clang-format on */
+
     struct st_quicly_handle_payload_state_t state = {_src, _src + _len, epoch};
     size_t num_frames = 0;
     int ret;
