@@ -4112,26 +4112,37 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         epoch = 3;
     }
 
+    /* decrypt */
     if ((payload = decrypt_packet(header_protection, aead, &(*space)->next_expected_packet_number, packet, &pn)).base == NULL) {
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
-
     if (payload.len == 0) {
         ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         goto Exit;
     }
-
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_CRYPTO_DECRYPT, INT_EVENT_ATTR(PACKET_NUMBER, pn),
                          INT_EVENT_ATTR(LENGTH, payload.len));
     LOG_CONNECTION_EVENT(conn, QUICLY_EVENT_TYPE_QUICTRACE_RECV, INT_EVENT_ATTR(PACKET_NUMBER, pn),
                          INT_EVENT_ATTR(LENGTH, payload.len), INT_EVENT_ATTR(ENC_LEVEL, epoch));
 
+    /* update states */
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
-
     conn->super.stats.num_packets.received += 1;
     conn->super.stats.num_bytes.received += packet->octets.len;
+
+    /* state updates, that are triggered by the receipt of a packet */
+    if (epoch == QUICLY_EPOCH_HANDSHAKE && conn->initial != NULL) {
+        /* Discard Initial space before processing the payload of the Handshake packet to avoid the chance of an ACK frame included
+         * in the Handshake packet setting a loss timer for the Initial packet. */
+        if ((ret = discard_initial_context(conn)) != 0)
+            goto Exit;
+        update_loss_alarm(conn);
+        conn->super.peer.address_validation.validated = 1;
+    }
+
+    /* handle the payload */
     if ((ret = handle_payload(conn, epoch, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if (*space != NULL) {
@@ -4139,6 +4150,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             goto Exit;
     }
 
+    /* state updates post payload processing */
     switch (epoch) {
     case QUICLY_EPOCH_INITIAL:
         assert(conn->initial != NULL);
@@ -4149,11 +4161,6 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
         break;
     case QUICLY_EPOCH_HANDSHAKE:
-        if (conn->initial != NULL && !quicly_is_client(conn)) {
-            if ((ret = discard_initial_context(conn)) != 0)
-                goto Exit;
-            update_loss_alarm(conn);
-        }
         /* schedule the timer to discard contexts related to the handshake if we have received all handshake messages and all the
          * messages we sent have been acked */
         if (!conn->crypto.handshake_scheduled_for_discard && ptls_handshake_is_complete(conn->crypto.tls)) {
@@ -4173,7 +4180,6 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 conn->crypto.handshake_scheduled_for_discard = 1;
             }
         }
-        conn->super.peer.address_validation.validated = 1;
         break;
     case QUICLY_EPOCH_1RTT:
         if (!is_ack_only && should_send_max_data(conn))
