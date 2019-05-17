@@ -3299,7 +3299,7 @@ static int handle_stream_frame(quicly_conn_t *conn, struct st_quicly_handle_payl
 
     if ((ret = quicly_decode_stream_frame(state->frame_type, &state->src, state->end, &frame)) != 0)
         return ret;
-    QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, now, frame.stream_id, frame.offset, frame.data.len, frame.is_fin);
+    QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, now, frame.stream_id, frame.offset, frame.data.len, (int)frame.is_fin);
     if ((ret = get_stream_or_open_if_new(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
     return apply_stream_frame(stream, &frame);
