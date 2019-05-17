@@ -25,20 +25,18 @@
  * generated.
  */
 provider quicly {
-    probe quicly_connect(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const char *scid, uint32_t version);
-    probe quicly_accept(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const char *scid);
+    probe quicly_connect(struct st_quicly_conn_t *conn, int64_t at, uint32_t version);
+    probe quicly_accept(struct st_quicly_conn_t *conn, int64_t at, const char *dcid);
     probe quicly_free(struct st_quicly_conn_t *conn, int64_t at);
-    probe quicly_send(struct st_quicly_conn_t *conn, int64_t at, int state);
-    probe quicly_receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const char *scid, uint8_t first_octet,
-                         const void *bytes, size_t num_bytes);
+    probe quicly_send(struct st_quicly_conn_t *conn, int64_t at, int state, const char *dcid);
+    probe quicly_receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const void *bytes, size_t num_bytes);
     probe quicly_version_switch(struct st_quicly_conn_t *conn, int64_t at, uint32_t new_version);
     probe quicly_idle_timeout(struct st_quicly_conn_t *conn, int64_t at);
     probe quicly_stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t now);
 
-    probe quicly_crypto_decrypt(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, const void *decrypted,
-                                size_t decrypted_len);
-    probe quicly_crypto_handshake(struct st_quicly_conn_t *conn, int64_t at, int ret);
-    probe quicly_crypto_update_secret(struct st_quicly_conn_t *conn, int64_t at, int is_enc, uint8_t epoch, const char *label,
+    probe quicly_crypto_decrypt(struct st_quicly_conn_t *conn, uint64_t pn, const void *decrypted, size_t decrypted_len);
+    probe quicly_crypto_handshake(struct st_quicly_conn_t *conn, int ret);
+    probe quicly_crypto_update_secret(struct st_quicly_conn_t *conn, int is_enc, uint8_t epoch, const char *label,
                                       const char *secret);
 
     probe quicly_packet_prepare(struct st_quicly_conn_t *conn, int64_t at, uint8_t first_octet, const char *dcid);
@@ -90,8 +88,8 @@ provider quicly {
                                        int fin);
     probe quicly_quictrace_recv_ack(struct st_quicly_conn_t *conn, int64_t at, uint64_t ack_block_begin, uint64_t ack_block_end);
     probe quicly_quictrace_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
-    probe quicly_quictrace_cc_ack(struct st_quicly_conn_t *conn, int64_t at, uint32_t min_rtt, uint32_t smoothed_rtt,
-                                  uint32_t latest_rtt, uint32_t cwnd, size_t inflight);
-    probe quicly_quictrace_cc_lost(struct st_quicly_conn_t *conn, int64_t at, uint32_t min_rtt, uint32_t smoothed_rtt,
-                                   uint32_t latest_rtt, uint32_t cwnd, size_t inflight);
+    probe quicly_quictrace_cc_ack(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd,
+                                  size_t inflight);
+    probe quicly_quictrace_cc_lost(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd,
+                                   size_t inflight);
 };

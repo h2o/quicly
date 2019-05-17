@@ -30,6 +30,34 @@ my @probes = do {
     } @probes;
 };
 
+if ($^O eq 'linux') {
+    print << 'EOT';
+#include <stdint.h>
+
+struct st_quicly_conn_t {
+    uint32_t dummy[4];
+    uint32_t master_id;
+};
+
+struct st_quicly_stream_t {
+    uint64_t dummy[1];
+    int64_t stream_id;
+};
+
+struct st_first_octet_t {
+    uint8_t b;
+};
+
+struct quicly_rtt_t {
+    uint32_t minimum;
+    uint32_t smoothed;
+    uint32_t variance;
+    uint32_t latest;
+};
+
+EOT
+}
+
 for my $probe (@probes) {
     my @fmt = (sprintf '"type":"%s"', do {
         my $name = $probe->[0];
@@ -41,23 +69,47 @@ for my $probe (@probes) {
         my ($name, $type) = @{$probe->[1]->[$i]};
         if ($type eq 'struct st_quicly_conn_t *') {
             push @fmt, '"conn":%u';
-            push @ap, '*(uint32_t *)copyin(arg' . $i . ' + 16, 4)';
+            if ($^O eq 'linux') {
+                push @ap, '((struct st_quicly_conn_t *)arg' . $i . ')->master_id';
+            } else {
+                push @ap, '*(uint32_t *)copyin(arg' . $i . ' + 16, 4)';
+            }
         } elsif ($type eq 'struct st_quicly_stream_t *') {
             push @fmt, '"stream-id":%d';
-            push @ap, '*(int64_t *)copyin(arg' . $i . ' + 8, 8)';
+            if ($^O eq 'linux') {
+                push @ap, '*((struct st_quicly_stream_t *)arg' . $i . ')->stream_id';
+            } else {
+                push @ap, '*(int64_t *)copyin(arg' . $i . ' + 8, 8)';
+            }
+        } elsif ($type eq 'struct quicly_rtt_t *') {
+            push @fmt, map {qq("$_":\%u)} qw(min-rtt smoothed-rtt latest-rtt);
+            if ($^O eq 'linux') {
+                push @ap, map{"((struct quicly_rtt_t *)arg$i)->$_"} qw(minimum smoothed latest);
+            } else {
+                push @ap, map{"*(uint32_t *)copyin(arg$i + $_, 4)"} qw(0 4 12);
+            }
         } else {
             $name = 'time'
                 if $name eq 'at';
             $name = normalize_name($name);
-            if ($type =~ /^(unsigned\s|uint[0-9]+_t|size_t)/) {
-                push @fmt, "\"$name\":\%u";
-                push @ap, "arg$i";
-            } elsif ($type =~ /^int(?:[0-9]+_t|)$/) {
-                push @fmt, "\"$name\":\%d";
+            if ($type =~ /^(?:unsigned\s|uint([0-9]+)_t|size_t)/) {
+                if ($^O eq 'linux') {
+                    push @fmt, qq!"$name":\%@{[($1 && $1 == 64) || $type eq 'size_t' ? 'lu' : 'u']}!;
+                    push @ap, "arg$i";
+                } else {
+                    push @fmt, qq!"$name":\%lu!;
+                    push @ap, "(uint64_t)arg$i";
+                }
+            } elsif ($type =~ /^int(?:([0-9]+)_t|)$/) {
+                push @fmt, qq!"$name":\%@{[$1 && $1 == 64 ? 'ld' : 'd']}!;
                 push @ap, "arg$i";
             } elsif ($type =~ /^const\s+char\s+\*$/) {
-                push @fmt, "\"$name\":\"\%s\"";
-                push @ap, "arg$i ? copyinstr(arg$i) : \"\"";
+                push @fmt, qq!"$name":"\%s"!;
+                if ($^O eq 'linux') {
+                    push @ap, "str(arg$i)";
+                } else {
+                    push @ap, "arg$i ? copyinstr(arg$i) : \"\"";
+                }
             } elsif ($type =~ /^const\s+void\s+\*$/) {
                 # skip const void *
             } else {
@@ -65,13 +117,44 @@ for my $probe (@probes) {
             }
         }
     }
-    my $fmt = join ', ', @fmt;
-    $fmt =~ s/\"/\\\"/g;
-    print << "EOT";
+    if ($probe->[0] eq 'quicly_receive') {
+        splice @fmt, -1, 0, '"first-octet":%u';
+        if ($^O eq 'linux') {
+            splice @ap, -1, 0, '*((struct st_first_octet_t *)arg3)->b';
+        } else {
+            splice @ap, -1, 0, '*(uint8_t *)copyin(arg3, 1)';
+        }
+    }
+    if ($^O eq 'linux') {
+        $fmt[0] = "{$fmt[0]";
+        $fmt[-1] .= "}\\n";
+        print << "EOT";
+usdt::$probe->[0] {
+EOT
+        my @args = (shift(@fmt));
+        while (@fmt && @args <= 7) {
+            if (length "$args[0], $fmt[0]" >= 64) {
+                $args[0] =~ s/\"/\\\"/g;
+                print "    printf(\"@{[shift @args]}\", @{[join ', ', @args]});\n";
+                @args = ('');
+            }
+            $args[0] .= ", " . shift @fmt;
+            push @args, shift @ap;
+        }
+        $args[0] =~ s/\"/\\\"/g;
+        print << "EOT";
+    printf("@{[shift @args]}", @{[ join ', ', @args]});
+}
+EOT
+    } else {
+        my $fmt = join ', ', @fmt;
+        $fmt =~ s/\"/\\\"/g;
+        print << "EOT";
 quicly\$target:::$probe->[0] {
     printf("\\n\{$fmt\}", @{[join ', ', @ap]});
 }
 EOT
+    }
 }
 
 sub normalize_name {

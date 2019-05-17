@@ -717,7 +717,7 @@ int crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, 
         ret = ptls_handle_message(conn->crypto.tls, &output, epoch_offsets, in_epoch, input.base, input.len,
                                   &conn->crypto.handshake_properties);
         quicly_streambuf_ingress_shift(stream, input.len);
-        QUICLY_PROBE(CRYPTO_HANDSHAKE, conn, probe_now(), ret);
+        QUICLY_PROBE(CRYPTO_HANDSHAKE, conn, ret);
         switch (ret) {
         case 0:
             break;
@@ -1635,8 +1635,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     conn->super.peer.address_validation.send_probe = 1;
     server_cid = quicly_get_peer_cid(conn);
 
-    QUICLY_PROBE(CONNECT, conn, probe_now(), QUICLY_PROBE_HEXDUMP(server_cid->cid, server_cid->len),
-                 QUICLY_PROBE_HEXDUMP(conn->super.host.src_cid.cid, conn->super.host.src_cid.len), conn->super.version);
+    QUICLY_PROBE(CONNECT, conn, probe_now(), conn->super.version);
 
     if ((ret = setup_handshake_space_and_flow(conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
@@ -2629,8 +2628,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
         conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
         QUICLY_PROBE(CC_CONGESTION, conn, probe_now(), conn->egress.max_lost_pn, conn->egress.sentmap.bytes_in_flight,
                      conn->egress.cc.cwnd);
-        QUICLY_PROBE(QUICTRACE_CC_LOST, conn, probe_now(), conn->egress.loss.rtt.minimum, conn->egress.loss.rtt.smoothed,
-                     conn->egress.loss.rtt.latest, conn->egress.cc.cwnd, conn->egress.sentmap.bytes_in_flight);
+        QUICLY_PROBE(QUICTRACE_CC_LOST, conn, probe_now(), &conn->egress.loss.rtt, conn->egress.cc.cwnd,
+                     conn->egress.sentmap.bytes_in_flight);
     }
 
     /* schedule time-threshold alarm if there is a packet outstanding that is smaller than largest_acked */
@@ -2898,8 +2897,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         {NULL, NULL, "QUIC_SERVER_HANDSHAKE_TRAFFIC_SECRET", "QUIC_SERVER_TRAFFIC_SECRET_0"}};
     const char *log_label = log_labels[ptls_is_server(tls) == is_enc][epoch];
 
-    QUICLY_PROBE(CRYPTO_UPDATE_SECRET, conn, probe_now(), is_enc, epoch, log_label,
-                 QUICLY_PROBE_HEXDUMP(secret, cipher->hash->digest_size));
+    QUICLY_PROBE(CRYPTO_UPDATE_SECRET, conn, is_enc, epoch, log_label, QUICLY_PROBE_HEXDUMP(secret, cipher->hash->digest_size));
 
     if (tlsctx->log_event != NULL) {
         char hexbuf[PTLS_MAX_DIGEST_SIZE * 2 + 1];
@@ -3100,7 +3098,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         return 0;
     }
 
-    QUICLY_PROBE(SEND, conn, probe_now(), conn->super.state);
+    QUICLY_PROBE(SEND, conn, probe_now(), conn->super.state,
+                 QUICLY_PROBE_HEXDUMP(conn->super.peer.cid.cid, conn->super.peer.cid.len));
 
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
         /* check if the connection can be closed now (after 3 pto) */
@@ -3414,8 +3413,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     if (bytes_acked > 0) {
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame.largest_acknowledged,
                            (uint32_t)(conn->egress.sentmap.bytes_in_flight + bytes_acked));
-        QUICLY_PROBE(QUICTRACE_CC_ACK, conn, probe_now(), conn->egress.loss.rtt.minimum, conn->egress.loss.rtt.smoothed,
-                     conn->egress.loss.rtt.latest, conn->egress.cc.cwnd, conn->egress.sentmap.bytes_in_flight);
+        QUICLY_PROBE(QUICTRACE_CC_ACK, conn, probe_now(), &conn->egress.loss.rtt, conn->egress.cc.cwnd,
+                     conn->egress.sentmap.bytes_in_flight);
     }
 
     QUICLY_PROBE(CC_ACK_RECEIVED, conn, probe_now(), frame.largest_acknowledged, bytes_acked, conn->egress.cc.cwnd,
@@ -3920,9 +3919,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     egress_cipher = (struct st_quicly_cipher_context_t){NULL};
     (*conn)->crypto.handshake_properties.collected_extensions = server_collected_extensions;
 
-    QUICLY_PROBE(ACCEPT, *conn, probe_now(), QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len),
-                 QUICLY_PROBE_HEXDUMP(packet->cid.src.base, packet->cid.src.len));
-    QUICLY_PROBE(CRYPTO_DECRYPT, *conn, probe_now(), pn, payload.base, payload.len);
+    QUICLY_PROBE(ACCEPT, *conn, probe_now(), QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len));
+    QUICLY_PROBE(CRYPTO_DECRYPT, *conn, pn, payload.base, payload.len);
     QUICLY_PROBE(QUICTRACE_RECV, *conn, probe_now(), pn);
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
@@ -3954,10 +3952,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
     update_now(conn->super.ctx);
 
     QUICLY_PROBE(RECEIVE, conn, probe_now(), QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len),
-                 QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])
-                     ? QUICLY_PROBE_HEXDUMP(packet->cid.src.base, packet->cid.src.len)
-                     : NULL,
-                 packet->octets.base[0], packet->octets.base, packet->octets.len);
+                 packet->octets.base, packet->octets.len);
 
     if (is_stateless_reset(conn, packet)) {
         ret = handle_stateless_reset(conn);
@@ -4091,7 +4086,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         goto Exit;
     }
 
-    QUICLY_PROBE(CRYPTO_DECRYPT, conn, probe_now(), pn, payload.base, payload.len);
+    QUICLY_PROBE(CRYPTO_DECRYPT, conn, pn, payload.base, payload.len);
     QUICLY_PROBE(QUICTRACE_RECV, conn, probe_now(), pn);
 
     /* update states */
