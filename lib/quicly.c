@@ -4074,7 +4074,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             }
             aead = &conn->initial->cipher.ingress.aead;
             space = (void *)&conn->initial;
-            epoch = 0;
+            epoch = QUICLY_EPOCH_INITIAL;
             break;
         case QUICLY_PACKET_TYPE_HANDSHAKE:
             if (conn->handshake == NULL || (header_protection = conn->handshake->cipher.ingress.header_protection) == NULL) {
@@ -4083,7 +4083,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             }
             aead = &conn->handshake->cipher.ingress.aead;
             space = (void *)&conn->handshake;
-            epoch = 2;
+            epoch = QUICLY_EPOCH_HANDSHAKE;
             break;
         case QUICLY_PACKET_TYPE_0RTT:
             if (quicly_is_client(conn)) {
@@ -4097,7 +4097,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
             }
             aead = &conn->application->cipher.ingress.aead[0];
             space = (void *)&conn->application;
-            epoch = 1;
+            epoch = QUICLY_EPOCH_0RTT;
             break;
         default:
             ret = QUICLY_ERROR_PACKET_IGNORED;
@@ -4112,7 +4112,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
         }
         aead = conn->application->cipher.ingress.aead;
         space = (void *)&conn->application;
-        epoch = 3;
+        epoch = QUICLY_EPOCH_1RTT;
     }
 
     /* decrypt */
