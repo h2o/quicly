@@ -35,7 +35,7 @@ my $port = empty_port({
 });
 my $tempdir = tempdir(CLEANUP => 1);
 
-system("misc/probe2trace.pl < probes.d > $tempdir/dtrace.d") == 0 && $? == 0
+system("misc/probe2trace.pl < quicly-probes.d > $tempdir/dtrace.d") == 0 && $? == 0
     or die "failed to generate dtrace script:$?";
 
 subtest "hello" => sub {
