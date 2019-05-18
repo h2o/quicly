@@ -87,6 +87,7 @@ provider quicly {
     probe quicly_quictrace_recv_stream(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t off, size_t len,
                                        int fin);
     probe quicly_quictrace_recv_ack(struct st_quicly_conn_t *conn, int64_t at, uint64_t ack_block_begin, uint64_t ack_block_end);
+    probe quicly_quictrace_recv_ack_delay(struct st_quicly_conn_t *conn, int64_t at, int64_t ack_delay);
     probe quicly_quictrace_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
     probe quicly_quictrace_cc_ack(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd,
                                   size_t inflight);
