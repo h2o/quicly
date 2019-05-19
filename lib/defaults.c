@@ -240,18 +240,20 @@ void quicly_free_default_cid_encryptor(quicly_cid_encryptor_t *_self)
     free(self);
 }
 
-static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, quicly_conn_t *conn, int new_data_allowed)
+/**
+ * See doc-comment of `st_quicly_default_scheduler_state_t` to understand the logic.
+ */
+static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, quicly_conn_t *conn, int conn_is_saturated)
 {
     struct st_quicly_default_scheduler_state_t *sched = &((struct _st_quicly_conn_public_t *)conn)->_default_scheduler;
 
-    if (new_data_allowed) {
-        /* Connection NOT capped by connection-level flow control.  Merge the blocked list to the active list. */
+    if (!conn_is_saturated) {
+        /* not saturated */
         quicly_linklist_insert_list(&sched->active, &sched->blocked);
-        sched->in_blocked_mode = 0;
-    } else if (!sched->in_blocked_mode) {
-        /* Connection capped by connection-level flow control and the "active" list might contain streams that cannot make progess
-         * under such condition.  Lazily move such streams to the "blocked" list, at the same time checking if anything can be sent.
-         */
+        sched->in_saturated_mode = 0;
+    } else if (!sched->in_saturated_mode) {
+        /* Connection is saturated but the scheduler is not yet in saturated mode.  Lazily move such streams to the "blocked" list,
+         * at the same time checking if anything can be sent. */
         quicly_linklist_t *l = sched->active.next;
         while (l != &sched->active) {
             quicly_stream_t *stream = (void *)((char *)(l - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler)));
@@ -261,12 +263,15 @@ static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, qu
             quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
             quicly_linklist_insert(sched->blocked.prev, &stream->_send_aux.pending_link.default_scheduler);
         }
-        sched->in_blocked_mode = 1;
+        sched->in_saturated_mode = 1;
     }
 
     return quicly_linklist_is_linked(&sched->active);
 }
 
+/**
+ * See doc-comment of `st_quicly_default_scheduler_state_t` to understand the logic.
+ */
 static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, quicly_conn_t *conn, quicly_send_context_t *s)
 {
     struct st_quicly_default_scheduler_state_t *sched = &((struct _st_quicly_conn_public_t *)conn)->_default_scheduler;
@@ -299,6 +304,9 @@ static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, qui
     return ret;
 }
 
+/**
+ * See doc-comment of `st_quicly_default_scheduler_state_t` to understand the logic.
+ */
 static int default_stream_scheduler_update_state(quicly_stream_scheduler_t *self, quicly_stream_t *stream)
 {
     struct st_quicly_default_scheduler_state_t *sched = &((struct _st_quicly_conn_public_t *)stream->conn)->_default_scheduler;

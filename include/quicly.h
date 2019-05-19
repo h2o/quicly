@@ -238,11 +238,10 @@ typedef struct st_quicly_cid_encryptor_t {
  */
 typedef struct st_quicly_stream_scheduler_t {
     /**
-     * returns if there's any data to send.  When `new_data_allowed` is set to true, the scheduler returns if there is any stream
-     * that have been registered.  When set to false, the scheduler should return if there is any stream registered by the
-     * `set_non_new_data` callback.
+     * returns if there's any data to send.
+     * @param conn_is_flow_capped if the connection-level flow control window is currently saturated
      */
-    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int new_data_allowed);
+    int (*can_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, int conn_is_saturated);
     /**
      * Called by quicly to emit stream data.  The scheduler should repeatedly choose a stream and call `quicly_send_stream` until
      * `quicly_can_send_stream` returns false.
@@ -465,20 +464,20 @@ typedef struct st_quicly_stats_t {
     quicly_rtt_t rtt;
 } quicly_stats_t;
 
+/**
+ * The state of the default stream scheduler.
+ * `active` is a linked-list of streams for which STREAM frames can be emitted.  `blocked` is a linked-list of streams that have
+ * something to be sent but are currently blocked by the connection-level flow control.  `in_saturated_mode` is a boolean flag
+ * that indicates if *all* the blocked connections have been moved to `blocked`.
+ * When the `can_send` callback of the default stream scheduler is invoked with the `conn_is_saturated` flag set, connections that
+ * are blocked are eventually moved to the `blocked` list.  The `in_saturated_mode` flag is set once the move completes.
+ * When the callback is invoked without the flag being set, all the connections in the `blocked` list is moved to the `active` list
+ * and the `in_saturated_mode` is cleared.
+ */
 struct st_quicly_default_scheduler_state_t {
-    /**
-     * Linked-list of streams for which STREAM frames can be emitted.  When `in_blocked_mode` is true, only contains streams can be
-     * sent when connection-level send window is zero.  Otherwise, contains all the streams that can make progress.
-     */
     quicly_linklist_t active;
-    /**
-     * When `in_block_mode` is true, contains list of streams that are currently blocked by the connection-level flow control.
-     */
     quicly_linklist_t blocked;
-    /**
-     * A boolean indicating the mode of the default scheduler.
-     */
-    int in_blocked_mode;
+    int in_saturated_mode;
 };
 
 struct _st_quicly_conn_public_t {
