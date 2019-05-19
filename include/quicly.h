@@ -249,18 +249,9 @@ typedef struct st_quicly_stream_scheduler_t {
      */
     int (*do_send)(struct st_quicly_stream_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s);
     /**
-     * Called by quicly to unregister a stream from the scheduler when there's nothing to be sent immediately on that stream.
+     *
      */
-    void (*clear)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
-    /**
-     * Called by quicly to notify the scheduler that the stream has new data to be sent.
-     */
-    void (*set_new_data)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
-    /**
-     * Called by quicly to notify the scheduler that the stream has something other than new data to be sent (i.e. retransmits or
-     * FIN-only).
-     */
-    void (*set_non_new_data)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
+    int (*update_state)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
 } quicly_stream_scheduler_t;
 
 /**
@@ -474,6 +465,22 @@ typedef struct st_quicly_stats_t {
     quicly_rtt_t rtt;
 } quicly_stats_t;
 
+struct st_quicly_default_scheduler_state_t {
+    /**
+     * Linked-list of streams for which STREAM frames can be emitted.  When `in_blocked_mode` is true, only contains streams can be
+     * sent when connection-level send window is zero.  Otherwise, contains all the streams that can make progress.
+     */
+    quicly_linklist_t active;
+    /**
+     * When `in_block_mode` is true, contains list of streams that are currently blocked by the connection-level flow control.
+     */
+    quicly_linklist_t blocked;
+    /**
+     * A boolean indicating the mode of the default scheduler.
+     */
+    int in_blocked_mode;
+};
+
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
@@ -515,10 +522,7 @@ struct _st_quicly_conn_public_t {
             unsigned send_probe : 1;
         } address_validation;
     } peer;
-    struct {
-        quicly_linklist_t new_data;
-        quicly_linklist_t non_new_data;
-    } _default_scheduler;
+    struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
         QUICLY_STATS_PREBUILT_FIELDS;
     } stats;
@@ -797,12 +801,17 @@ int quicly_close(quicly_conn_t *conn, int err, const char *reason_phrase);
  */
 int64_t quicly_get_first_timeout(quicly_conn_t *conn);
 /**
- * checks if quicly_send_stream can be invoked
+ * returns if the connection is currently capped by connection-level flow control.
  */
-int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s, int new_data);
+int quicly_is_flow_capped(quicly_conn_t *conn);
 /**
- * sends data of given stream. Called by stream scheduler.  Prior to calling the function each time, the scheduler should call
- * `quicly_can_send_stream_data` to see if stream-level data can be sent.
+ * checks if quicly_send_stream can be invoked
+ * @return a boolean indicating if quicly_send_stream can be called immediately
+ */
+int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s);
+/**
+ * Sends data of given stream.  Called by stream scheduler.  Only streams that can send some data or EOS should be specified.  It is
+ * the responsibilty of the stream scheduler to maintain a list of such streams.
  */
 int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s);
 /**
