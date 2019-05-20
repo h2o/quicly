@@ -250,20 +250,16 @@ static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, qu
     if (!conn_is_saturated) {
         /* not saturated */
         quicly_linklist_insert_list(&sched->active, &sched->blocked);
-        sched->in_saturated_mode = 0;
-    } else if (!sched->in_saturated_mode) {
-        /* Connection is saturated but the scheduler is not yet in saturated mode.  Lazily move such streams to the "blocked" list,
-         * at the same time checking if anything can be sent. */
-        quicly_linklist_t *l = sched->active.next;
-        while (l != &sched->active) {
-            quicly_stream_t *stream = (void *)((char *)(l - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler)));
+    } else {
+        /* Saturated. Lazily move such streams to the "blocked" list, at the same time checking if anything can be sent. */
+        while (quicly_linklist_is_linked(&sched->active)) {
+            quicly_stream_t *stream =
+                (void *)((char *)(sched->active.next - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler)));
             if (quicly_sendstate_can_send(&stream->sendstate, NULL))
                 return 1;
-            l = stream->_send_aux.pending_link.default_scheduler.next;
             quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
             quicly_linklist_insert(sched->blocked.prev, &stream->_send_aux.pending_link.default_scheduler);
         }
-        sched->in_saturated_mode = 1;
     }
 
     return quicly_linklist_is_linked(&sched->active);

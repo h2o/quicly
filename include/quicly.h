@@ -467,17 +467,14 @@ typedef struct st_quicly_stats_t {
 /**
  * The state of the default stream scheduler.
  * `active` is a linked-list of streams for which STREAM frames can be emitted.  `blocked` is a linked-list of streams that have
- * something to be sent but are currently blocked by the connection-level flow control.  `in_saturated_mode` is a boolean flag
- * that indicates if *all* the blocked connections have been moved to `blocked`.
+ * something to be sent but are currently blocked by the connection-level flow control.
  * When the `can_send` callback of the default stream scheduler is invoked with the `conn_is_saturated` flag set, connections that
- * are blocked are eventually moved to the `blocked` list.  The `in_saturated_mode` flag is set once the move completes.
- * When the callback is invoked without the flag being set, all the connections in the `blocked` list is moved to the `active` list
- * and the `in_saturated_mode` is cleared.
+ * are blocked are eventually moved to the `blocked` list. When the callback is invoked without the flag being set, all the
+ * connections in the `blocked` list is moved to the `active` list and the `in_saturated_mode` is cleared.
  */
 struct st_quicly_default_scheduler_state_t {
     quicly_linklist_t active;
     quicly_linklist_t blocked;
-    int in_saturated_mode;
 };
 
 struct _st_quicly_conn_public_t {
