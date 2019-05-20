@@ -271,6 +271,16 @@ static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, qu
     return quicly_linklist_is_linked(&sched->active);
 }
 
+static void link_stream(struct st_quicly_default_scheduler_state_t *sched, quicly_stream_t *stream, int conn_is_flow_capped)
+{
+    if (!quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler)) {
+        quicly_linklist_t *slot = &sched->active;
+        if (conn_is_flow_capped && !quicly_sendstate_can_send(&stream->sendstate, NULL))
+            slot = &sched->blocked;
+        quicly_linklist_insert(slot->prev, &stream->_send_aux.pending_link.default_scheduler);
+    }
+}
+
 /**
  * See doc-comment of `st_quicly_default_scheduler_state_t` to understand the logic.
  */
@@ -290,17 +300,19 @@ static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, qui
             continue;
         }
         /* send! */
-        if ((ret = quicly_send_stream(stream, s)) != 0)
+        if ((ret = quicly_send_stream(stream, s)) != 0) {
+            /* FIXME Stop quicly_send_stream emitting SENDBUF_FULL (happpens when CWND is congested). Otherwise, we need to make
+             * adjustments to the scheduler after popping a stream */
+            if (ret == QUICLY_ERROR_SENDBUF_FULL) {
+                assert(quicly_sendstate_can_send(&stream->sendstate, &stream->_send_aux.max_stream_data));
+                link_stream(sched, stream, conn_is_flow_capped);
+            }
             break;
+        }
         /* reschedule */
         conn_is_flow_capped = quicly_is_flow_capped(conn);
-        if (quicly_sendstate_can_send(&stream->sendstate, &stream->_send_aux.max_stream_data)) {
-            if (!conn_is_flow_capped || quicly_sendstate_can_send(&stream->sendstate, NULL)) {
-                quicly_linklist_insert(&sched->active, &stream->_send_aux.pending_link.default_scheduler);
-            } else {
-                quicly_linklist_insert(&sched->blocked, &stream->_send_aux.pending_link.default_scheduler);
-            }
-        }
+        if (quicly_sendstate_can_send(&stream->sendstate, &stream->_send_aux.max_stream_data))
+            link_stream(sched, stream, conn_is_flow_capped);
     }
 
     return ret;
@@ -315,12 +327,7 @@ static int default_stream_scheduler_update_state(quicly_stream_scheduler_t *self
 
     if (quicly_sendstate_can_send(&stream->sendstate, &stream->_send_aux.max_stream_data)) {
         /* activate if not */
-        if (!quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler)) {
-            quicly_linklist_t *slot = &sched->active;
-            if (quicly_is_flow_capped(stream->conn) && !quicly_sendstate_can_send(&stream->sendstate, NULL))
-                slot = &sched->blocked;
-            quicly_linklist_insert(slot->prev, &stream->_send_aux.pending_link.default_scheduler);
-        }
+        link_stream(sched, stream, quicly_is_flow_capped(stream->conn));
     } else {
         /* disactivate if active */
         if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler))
