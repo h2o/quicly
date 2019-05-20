@@ -251,14 +251,20 @@ static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, qu
         /* not saturated */
         quicly_linklist_insert_list(&sched->active, &sched->blocked);
     } else {
-        /* Saturated. Lazily move such streams to the "blocked" list, at the same time checking if anything can be sent. */
-        while (quicly_linklist_is_linked(&sched->active)) {
-            quicly_stream_t *stream =
-                (void *)((char *)(sched->active.next - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler)));
-            if (quicly_sendstate_can_send(&stream->sendstate, NULL))
-                return 1;
-            quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
-            quicly_linklist_insert(sched->blocked.prev, &stream->_send_aux.pending_link.default_scheduler);
+        /* The code below is disabled, because H2O's scheduler doesn't allow you to "walk" the priority tree without actually
+         * running the round robin, and we want quicly's default to behave like H2O so that we can catch errors.  The downside is
+         * that there'd be at most one spurious call of `quicly_send` when the connection is saturated, but that should be fine.
+         */
+        if (0) {
+            /* Saturated. Lazily move such streams to the "blocked" list, at the same time checking if anything can be sent. */
+            while (quicly_linklist_is_linked(&sched->active)) {
+                quicly_stream_t *stream =
+                    (void *)((char *)(sched->active.next - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler)));
+                if (quicly_sendstate_can_send(&stream->sendstate, NULL))
+                    return 1;
+                quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
+                quicly_linklist_insert(sched->blocked.prev, &stream->_send_aux.pending_link.default_scheduler);
+            }
         }
     }
 
