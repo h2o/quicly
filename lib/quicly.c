@@ -1384,7 +1384,6 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
                 found_id_bits |= ID_TO_BIT(id);
             }
-            found_id_bits |= ID_TO_BIT(id);
             ptls_decode_open_block(src, end, 2, {
                 switch (id) {
                 case QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID: {
