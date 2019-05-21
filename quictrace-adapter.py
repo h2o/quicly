@@ -121,8 +121,8 @@ def transform(inf, outf):
             state = {}
 
         # process ACK frame info
-        if event == "recv-ack":
-            if "ack-delay" not in trace:
+        if "recv-ack" in event:
+            if "recv-ack-delay" not in event:
                 # create ack block, add to list
                 block = {"firstPacket": str(trace["ack-block-begin"]), 
                          "lastPacket": str(trace["ack-block-end"])}
