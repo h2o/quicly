@@ -40,16 +40,16 @@ SET(UNITTEST_SOURCE_FILES
 
 ADD_LIBRARY(quicly ${QUICLY_LIBRARY_FILES})
 
-ADD_EXECUTABLE(cli ${PICOTLS_OPENSSL_FILES} src/cli.c)
-TARGET_LINK_LIBRARIES(cli quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+#ADD_EXECUTABLE(cli ${PICOTLS_OPENSSL_FILES} src/cli.c)
+#TARGET_LINK_LIBRARIES(cli quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 
-ADD_EXECUTABLE(test.t ${PICOTLS_OPENSSL_FILES} ${UNITTEST_SOURCE_FILES})
-TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+#ADD_EXECUTABLE(test.t ${PICOTLS_OPENSSL_FILES} ${UNITTEST_SOURCE_FILES})
+#TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 
-ADD_EXECUTABLE(examples-echo ${PICOTLS_OPENSSL_FILES} examples/echo.c)
-TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+#ADD_EXECUTABLE(examples-echo ${PICOTLS_OPENSSL_FILES} examples/echo.c)
+#TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 
-ADD_EXECUTABLE(udpfw t/udpfw.c)
+#ADD_EXECUTABLE(udpfw t/udpfw.c)
 
 ADD_CUSTOM_TARGET(check env BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR} prove --exec "sh -c" -v ${CMAKE_CURRENT_BINARY_DIR}/*.t t/*.t
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -67,12 +67,12 @@ IF (BUILD_FUZZER)
     ENDIF()
     ADD_EXECUTABLE(quicly-fuzzer-packet fuzz/packet.cc ${PICOTLS_OPENSSL_FILES})
     SET(LIB_FUZZER "${CMAKE_CURRENT_BINARY_DIR}/libFuzzer.a")
-    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-coverage=edge,indirect-calls,8bit-counters")
-    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-coverage=edge,indirect-calls,8bit-counters")
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined")
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined")
     SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_C_FLAGS}")
 
     ADD_CUSTOM_TARGET(libFuzzer ${CMAKE_CURRENT_SOURCE_DIR}/misc/build_libFuzzer.sh WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     ADD_DEPENDENCIES(quicly-fuzzer-packet libFuzzer)
-    TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS} ${LIB_FUZZER})
+    TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 ENDIF()
 
