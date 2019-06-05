@@ -110,6 +110,7 @@ inline void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly
 
 inline void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent)
 {
+    assert(m->num_inflight != 0);
     if (m->max_acked < sent->value)
         m->max_acked = sent->value;
     --m->num_inflight;
@@ -117,6 +118,7 @@ inline void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_sent_
 
 inline void quicly_maxsender_lost(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent)
 {
+    assert(m->num_inflight != 0);
     --m->num_inflight;
 }
 
