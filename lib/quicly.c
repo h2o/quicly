@@ -1873,12 +1873,17 @@ static int on_ack_max_stream_data(quicly_conn_t *conn, const quicly_sent_packet_
 
     /* TODO cache pointer to stream (using a generation counter?) */
     if ((stream = quicly_get_stream(conn, sent->data.stream.stream_id)) != NULL) {
-        if (event == QUICLY_SENTMAP_EVENT_ACKED) {
+        switch (event) {
+        case QUICLY_SENTMAP_EVENT_ACKED:
             quicly_maxsender_acked(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
-        } else {
+            break;
+        case QUICLY_SENTMAP_EVENT_LOST:
             quicly_maxsender_lost(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
             if (should_send_max_stream_data(stream))
                 sched_stream_control(stream);
+            break;
+        default:
+            break;
         }
     }
 
