@@ -328,11 +328,7 @@ static __thread int64_t now;
 
 static void update_now(quicly_context_t *ctx)
 {
-    static __thread int64_t base;
-
     now = ctx->now->cb(ctx->now);
-    if (base == 0)
-        base = now;
 }
 
 static inline uint8_t get_epoch(uint8_t first_byte)
