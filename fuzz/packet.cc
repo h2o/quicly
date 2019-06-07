@@ -8,7 +8,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
 	quicly_context_t ctx;
 	quicly_decoded_packet_t p;
 
-	ctx = quicly_default_context;
+	ctx = quicly_spec_context;
 
 	ret = quicly_decode_packet(&ctx, &p, Data, Size);
 
