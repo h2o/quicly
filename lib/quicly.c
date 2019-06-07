@@ -321,7 +321,7 @@ static const quicly_stream_callbacks_t crypto_stream_callbacks = {quicly_streamb
 static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, int is_enc, size_t epoch, const void *secret);
 static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
-static const quicly_transport_parameters_t transport_params_before_handshake = {
+static const quicly_transport_parameters_t default_transport_params = {
     {0, 0, 0}, 0, 0, 0, 0, QUICLY_DEFAULT_ACK_DELAY_EXPONENT, QUICLY_DEFAULT_MAX_ACK_DELAY};
 
 static __thread int64_t now;
@@ -1345,7 +1345,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
     int ret;
 
     /* set parameters to their default values */
-    *params = (quicly_transport_parameters_t){{0}, 0, 0, 0, 0, 3, 25};
+    *params = default_transport_params;
     if (odcid != NULL)
         odcid->len = 0;
     if (stateless_reset_token != NULL)
@@ -1498,7 +1498,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         conn->_.super.peer.bidi.next_stream_id = 0;
         conn->_.super.peer.uni.next_stream_id = 2;
     }
-    conn->_.super.peer.transport_params = transport_params_before_handshake;
+    conn->_.super.peer.transport_params = default_transport_params;
     if (server_name != NULL && ctx->enforce_version_negotiation) {
         ctx->tls->random_bytes(&conn->_.super.version, sizeof(conn->_.super.version));
         conn->_.super.version = (conn->_.super.version & 0xf0f0f0f0) | 0x0a0a0a0a;
