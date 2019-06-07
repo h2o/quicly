@@ -40,16 +40,16 @@ SET(UNITTEST_SOURCE_FILES
 
 ADD_LIBRARY(quicly ${QUICLY_LIBRARY_FILES})
 
-#ADD_EXECUTABLE(cli ${PICOTLS_OPENSSL_FILES} src/cli.c)
-#TARGET_LINK_LIBRARIES(cli quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+ADD_EXECUTABLE(cli ${PICOTLS_OPENSSL_FILES} src/cli.c)
+TARGET_LINK_LIBRARIES(cli quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 
-#ADD_EXECUTABLE(test.t ${PICOTLS_OPENSSL_FILES} ${UNITTEST_SOURCE_FILES})
-#TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+ADD_EXECUTABLE(test.t ${PICOTLS_OPENSSL_FILES} ${UNITTEST_SOURCE_FILES})
+TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 
-#ADD_EXECUTABLE(examples-echo ${PICOTLS_OPENSSL_FILES} examples/echo.c)
-#TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+ADD_EXECUTABLE(examples-echo ${PICOTLS_OPENSSL_FILES} examples/echo.c)
+TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 
-#ADD_EXECUTABLE(udpfw t/udpfw.c)
+ADD_EXECUTABLE(udpfw t/udpfw.c)
 
 ADD_CUSTOM_TARGET(check env BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR} prove --exec "sh -c" -v ${CMAKE_CURRENT_BINARY_DIR}/*.t t/*.t
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -61,36 +61,20 @@ IF (CMAKE_SYSTEM_NAME STREQUAL "Linux")
      SET(CMAKE_C_FLAGS "-D_GNU_SOURCE -pthread ${CMAKE_C_FLAGS}")
 ENDIF ()
 
-option(BUILD_FUZZER "Build fuzz harness" ON)
-
 IF (BUILD_FUZZER)
     IF(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         MESSAGE(FATAL_ERROR "The fuzzer needs clang as a compiler")
     ENDIF()
     ADD_EXECUTABLE(quicly-fuzzer-packet fuzz/packet.cc ${PICOTLS_OPENSSL_FILES})
     SET(LIB_FUZZER "${CMAKE_CURRENT_BINARY_DIR}/libFuzzer.a")
-    IF(CMAKE_C_COMPILER_VERSION VERSION_LESS 10)
-    	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined")
-	message("C LESS THAN 10")
-    ELSE()
-	SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer -fsanitize=fuzzer-no-link")
-	message("C LESS THAN 10")
-    ENDIF()
+    SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer -fsanitize=address,undefined")
 
-    IF(${CMAKE_CXX_COMPILER_VERSION} VERSION_LESS 10)
-    	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined")
-	message("CXX LESS THAN 10.2!")
-    ELSE()
-	SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=fuzzer-no-link")
-	message("CXX LESS THAN 10.2!")
-    ENDIF()
+    SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=address,undefined")
 
     SET(CMAKE_EXE_LINKER_FLAGS "-v ${CMAKE_C_FLAGS}")
 
     ADD_CUSTOM_TARGET(libFuzzer ${CMAKE_CURRENT_SOURCE_DIR}/misc/build_libFuzzer.sh WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     ADD_DEPENDENCIES(quicly-fuzzer-packet libFuzzer)
-    TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
-    message("***TEST COMPILER VERSION MESSSAGE: ${CMAKE_CXX_COMPILER_VERSION}")
-    message("***TEST CMAKE SYSTEM NAME: ${CMAKE_SYSTEM_NAME}")
+    TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS} ${LIB_FUZZER})
 ENDIF()
 
