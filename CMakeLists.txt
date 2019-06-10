@@ -71,7 +71,7 @@ IF (BUILD_FUZZER)
 
     SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=address,undefined")
 
-    SET(CMAKE_EXE_LINKER_FLAGS "-v ${CMAKE_C_FLAGS}")
+    SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_C_FLAGS}")
 
     ADD_CUSTOM_TARGET(libFuzzer ${CMAKE_CURRENT_SOURCE_DIR}/misc/build_libFuzzer.sh WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
     ADD_DEPENDENCIES(quicly-fuzzer-packet libFuzzer)
