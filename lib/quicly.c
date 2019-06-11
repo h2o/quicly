@@ -313,6 +313,11 @@ struct st_quicly_handle_payload_state_t {
     uint64_t frame_type;
 };
 
+void __sanitizer_cov_trace_pc(void)
+{
+    printf("code instrumented...\n");
+}
+
 static int crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
 static const quicly_stream_callbacks_t crypto_stream_callbacks = {quicly_streambuf_destroy, quicly_streambuf_egress_shift,

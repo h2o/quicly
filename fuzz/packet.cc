@@ -2,6 +2,11 @@
 #include "quicly/defaults.h"
 #include "quicly/frame.h"
 
+void __sanitizer_cov_trace_pc(void)
+{
+    printf("code instrumented...\n");
+}
+
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
 {
 	int ret;
