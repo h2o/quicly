@@ -60,5 +60,5 @@ matrix:
         - make
         - make install
         - cd ..
-        - cmake -DCMAKE_C_FLAGS=-m32 -DOPENSSL_ROOT_DIR=$HOME/openssl-build .
+        - cmake -DCMAKE_C_FLAGS=-m32 -DOPENSSL_ROOT_DIR=$HOME/openssl-build -DBUILD_FUZZER .
         - make && make check
