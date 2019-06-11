@@ -76,7 +76,6 @@ static struct connection_t connections = {&connections, &connections};
 
 void __sanitizer_cov_trace_pc(void)
 {
-    printf("code instrumented...\n");
 }
 
 static void usage(const char *cmd, int exit_status)

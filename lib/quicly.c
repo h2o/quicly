@@ -315,7 +315,6 @@ struct st_quicly_handle_payload_state_t {
 
 void __sanitizer_cov_trace_pc(void)
 {
-    printf("code instrumented...\n");
 }
 
 static int crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
