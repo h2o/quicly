@@ -61,7 +61,10 @@ IF (CMAKE_SYSTEM_NAME STREQUAL "Linux")
      SET(CMAKE_C_FLAGS "-D_GNU_SOURCE -pthread ${CMAKE_C_FLAGS}")
 ENDIF ()
 
+SET(BUILD_FUZZER ON)
+
 IF (BUILD_FUZZER)
+    MESSAGE(STATUS "************* Making the fuzzer")
     IF(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         MESSAGE(FATAL_ERROR "The fuzzer needs clang as a compiler")
     ENDIF()
