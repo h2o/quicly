@@ -71,7 +71,8 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
         goto Error;
     if ((frame->ack_delay = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if ((frame->num_gaps = quicly_decodev(src, end)) == UINT64_MAX)
+    if ((frame->num_gaps = quicly_decodev(src, end)) == UINT64_MAX ||
+        frame->num_gaps > sizeof(frame->gaps) / sizeof(frame->gaps[0]))
         goto Error;
 
     if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)
