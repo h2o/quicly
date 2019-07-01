@@ -71,8 +71,7 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
         goto Error;
     if ((frame->ack_delay = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if ((frame->num_gaps = quicly_decodev(src, end)) == UINT64_MAX ||
-        frame->num_gaps > sizeof(frame->gaps) / sizeof(frame->gaps[0]))
+    if ((frame->num_gaps = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
 
     if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)
@@ -81,6 +80,9 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
         goto Error;
     frame->smallest_acknowledged = frame->largest_acknowledged - tmp;
     frame->ack_block_lengths[0] = tmp + 1;
+
+    if (frame->num_gaps > QUICLY_MAX_ACK_FRAME_RANGE)
+        frame->num_gaps = QUICLY_MAX_ACK_FRAME_RANGE;
 
     for (i = 0; i != frame->num_gaps; ++i) {
         if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)
