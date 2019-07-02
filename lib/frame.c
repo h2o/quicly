@@ -81,8 +81,8 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
     frame->smallest_acknowledged = frame->largest_acknowledged - tmp;
     frame->ack_block_lengths[0] = tmp + 1;
 
-    if (frame->num_gaps > QUICLY_MAX_ACK_FRAME_RANGE)
-        frame->num_gaps = QUICLY_MAX_ACK_FRAME_RANGE;
+    if (frame->num_gaps > QUICLY_MAX_ACK_RANGE_COUNT)
+        frame->num_gaps = QUICLY_MAX_ACK_RANGE_COUNT;
 
     for (i = 0; i != frame->num_gaps; ++i) {
         if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)

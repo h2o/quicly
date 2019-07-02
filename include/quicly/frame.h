@@ -62,7 +62,7 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_STREAM_BIT_LEN 0x2
 #define QUICLY_FRAME_TYPE_STREAM_BIT_FIN 0x1
 
-#define QUICLY_MAX_ACK_FRAME_RANGE 256
+#define QUICLY_MAX_ACK_RANGE_COUNT 256
 #define QUICLY_MAX_DATA_FRAME_CAPACITY (1 + 8)
 #define QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY (1 + 8 + 8)
 #define QUICLY_MAX_STREAMS_FRAME_CAPACITY (1 + 8)
@@ -207,8 +207,8 @@ typedef struct st_quicly_ack_frame_t {
     uint64_t smallest_acknowledged;
     uint64_t ack_delay;
     uint64_t num_gaps;
-    uint64_t ack_block_lengths[257];
-    uint64_t gaps[QUICLY_MAX_ACK_FRAME_RANGE];
+    uint64_t ack_block_lengths[QUICLY_MAX_ACK_RANGE_COUNT + 1];
+    uint64_t gaps[QUICLY_MAX_ACK_RANGE_COUNT];
 } quicly_ack_frame_t;
 
 int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame, int is_ack_ecn);
