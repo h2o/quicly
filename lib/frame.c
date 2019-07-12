@@ -93,10 +93,11 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
         tmp += 1;
         if (frame->smallest_acknowledged < tmp)
             goto Error;
-        frame->ack_block_lengths[i + 1] = tmp;
-        frame->smallest_acknowledged -= tmp;
-        if (i < QUICLY_MAX_ACK_RANGE_COUNT)
+        if (i < QUICLY_MAX_ACK_RANGE_COUNT) {
+            frame->ack_block_lengths[i + 1] = tmp;
+            frame->smallest_acknowledged -= tmp;
             frame->gaps[i] = curr_gap;
+        }
     }
 
     if (is_ack_ecn) {
