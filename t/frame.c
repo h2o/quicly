@@ -90,7 +90,7 @@ static void test_ack_decode(void)
     }
 
     { /* Bogus ACK Frame larger than the internal buffer */
-        uint8_t pat[528], *pos = pat;
+        uint8_t pat[1024], *pos = pat;
         const uint8_t *src = pat;
         int i;
         quicly_ack_frame_t decoded;
