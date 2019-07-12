@@ -89,6 +89,26 @@ static void test_ack_decode(void)
         ok(decoded.smallest_acknowledged == 0x34 - 1 - 2 - 3 - 4 - 5 + 1);
     }
 
+    { /* Bogus ACK Frame larger than the internal buffer */
+        uint8_t pat[528], *pos = pat;
+        const uint8_t *src = pat;
+        int i;
+        quicly_ack_frame_t decoded;
+        pos = quicly_encodev(pos, 0x84D0);
+        pos = quicly_encodev(pos, 0);
+        pos = quicly_encodev(pos, QUICLY_MAX_ACK_RANGE_COUNT + 1);
+        pos = quicly_encodev(pos, 8);
+        for (i = 0; i <= QUICLY_MAX_ACK_RANGE_COUNT; ++i) {
+            pos = quicly_encodev(pos, i); // gap
+            pos = quicly_encodev(pos, 1); // ack-range
+        }
+        ok(quicly_decode_ack_frame(&src, pos, &decoded, 0) == 0);
+        ok(decoded.largest_acknowledged == 0x84D0);
+        ok(decoded.ack_delay == 0);
+        ok(decoded.num_gaps == QUICLY_MAX_ACK_RANGE_COUNT + 1);
+        ok(decoded.gaps[QUICLY_MAX_ACK_RANGE_COUNT - 1] == QUICLY_MAX_ACK_RANGE_COUNT);
+    }
+
     subtest("underflow", test_ack_decode_underflow);
 }
 
