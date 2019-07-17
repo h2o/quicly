@@ -73,8 +73,6 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
         goto Error;
     if ((frame->num_gaps = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if (frame->num_gaps > QUICLY_ACK_MAX_GAPS)
-        frame->num_gaps = QUICLY_ACK_MAX_GAPS;
 
     if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
@@ -89,18 +87,23 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
         curr_gap = tmp + 1;
         if (frame->smallest_acknowledged < curr_gap)
             goto Error;
-        frame->smallest_acknowledged -= curr_gap;
         if ((tmp = quicly_decodev(src, end)) == UINT64_MAX)
             goto Error;
         tmp += 1;
-        if (frame->smallest_acknowledged < tmp)
-            goto Error;
         if (i < QUICLY_ACK_MAX_GAPS) {
+            frame->smallest_acknowledged -= curr_gap;
+            if (frame->smallest_acknowledged < tmp)
+                goto Error;
             frame->ack_block_lengths[i + 1] = tmp;
             frame->smallest_acknowledged -= tmp;
             frame->gaps[i] = curr_gap;
         }
     }
+
+    /* the entire ACK-Ranges section was decoded, but ranges beyond
+       QUICLY_ACK_MAX_GAPS are skipped. therefore calibrate the value. */
+    if (frame->num_gaps > QUICLY_ACK_MAX_GAPS)
+        frame->num_gaps = QUICLY_ACK_MAX_GAPS;
 
     if (is_ack_ecn) {
         /* just skip ECT(0), ECT(1), ECT-CE counters for the time being */
