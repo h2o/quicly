@@ -94,26 +94,27 @@ static void test_ack_decode(void)
         const uint8_t *src = pat;
         int i, range_sum;
         quicly_ack_frame_t decoded;
-        pos = quicly_encodev(pos, 0x84D0);
+        pos = quicly_encodev(pos, 0xFA00);
         pos = quicly_encodev(pos, 0);
         pos = quicly_encodev(pos, QUICLY_ACK_MAX_GAPS + 1);
         pos = quicly_encodev(pos, 8);
         for (i = 0; i <= QUICLY_ACK_MAX_GAPS ; ++i) {
             pos = quicly_encodev(pos, i); // gap
-            pos = quicly_encodev(pos, 1); // ack-range
+            pos = quicly_encodev(pos, i % 10); // ack-range
         }
+
         ok(quicly_decode_ack_frame(&src, pos, &decoded, 0) == 0);
-        ok(decoded.largest_acknowledged == 0x84D0);
+        ok(decoded.largest_acknowledged == 0xFA00);
         ok(decoded.ack_delay == 0);
         ok(decoded.num_gaps == QUICLY_ACK_MAX_GAPS);
         ok(decoded.ack_block_lengths[0] == 8 + 1); // first ack-range
         range_sum = decoded.ack_block_lengths[0];
         for (i = 0; i < QUICLY_ACK_MAX_GAPS; ++i) {
             ok(decoded.gaps[i] == i + 1);
-            ok(decoded.ack_block_lengths[i + 1] == 1 + 1);
+            ok(decoded.ack_block_lengths[i + 1] == (i % 10) + 1);
             range_sum += decoded.gaps[i] + decoded.ack_block_lengths[i + 1];
         }
-        ok(decoded.smallest_acknowledged == 0x84D0 - range_sum + 1);
+        ok(decoded.smallest_acknowledged == 0xFA00 - range_sum + 1);
     }
 
     subtest("underflow", test_ack_decode_underflow);
