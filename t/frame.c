@@ -96,19 +96,19 @@ static void test_ack_decode(void)
         quicly_ack_frame_t decoded;
         pos = quicly_encodev(pos, 0x84D0);
         pos = quicly_encodev(pos, 0);
-        pos = quicly_encodev(pos, QUICLY_MAX_ACK_RANGE_COUNT + 1);
+        pos = quicly_encodev(pos, QUICLY_ACK_MAX_GAPS + 1);
         pos = quicly_encodev(pos, 8);
-        for (i = 0; i <= QUICLY_MAX_ACK_RANGE_COUNT; ++i) {
+        for (i = 0; i <= QUICLY_ACK_MAX_GAPS ; ++i) {
             pos = quicly_encodev(pos, i); // gap
             pos = quicly_encodev(pos, 1); // ack-range
         }
         ok(quicly_decode_ack_frame(&src, pos, &decoded, 0) == 0);
         ok(decoded.largest_acknowledged == 0x84D0);
         ok(decoded.ack_delay == 0);
-        ok(decoded.num_gaps == QUICLY_MAX_ACK_RANGE_COUNT);
+        ok(decoded.num_gaps == QUICLY_ACK_MAX_GAPS);
         ok(decoded.ack_block_lengths[0] == 8 + 1); // first ack-range
         range_sum = decoded.ack_block_lengths[0];
-        for (i = 0; i < QUICLY_MAX_ACK_RANGE_COUNT; ++i) {
+        for (i = 0; i < QUICLY_ACK_MAX_GAPS; ++i) {
             ok(decoded.gaps[i] == i + 1);
             ok(decoded.ack_block_lengths[i + 1] == 1 + 1);
             range_sum += decoded.gaps[i] + decoded.ack_block_lengths[i + 1];
