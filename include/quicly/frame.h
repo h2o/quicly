@@ -184,6 +184,7 @@ static int quicly_decode_streams_blocked_frame(const uint8_t **src, const uint8_
 
 typedef struct st_quicly_new_connection_id_frame_t {
     uint64_t sequence;
+    uint64_t retire_prior_to;
     ptls_iovec_t cid;
     const uint8_t *stateless_reset_token;
 } quicly_new_connection_id_frame_t;
@@ -593,6 +594,8 @@ inline int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint
 {
     /* sequence */
     if ((frame->sequence = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Fail;
+    if ((frame->retire_prior_to = quicly_decodev(src, end)) == UINT64_MAX)
         goto Fail;
     if (end - *src < 1)
         goto Fail;
