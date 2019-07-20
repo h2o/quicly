@@ -2852,7 +2852,7 @@ Exit:
 
 static int send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s)
 {
-    uint8_t frame_header_buf[1 + 2 + 8 + 8], *p;
+    uint8_t frame_header_buf[1 + 8 + 8 + 8], *p;
     size_t reason_phrase_len = strlen(conn->egress.connection_close.reason_phrase);
     int ret;
 
@@ -2860,7 +2860,7 @@ static int send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s)
     p = frame_header_buf;
     *p++ = conn->egress.connection_close.frame_type != UINT64_MAX ? QUICLY_FRAME_TYPE_TRANSPORT_CLOSE
                                                                   : QUICLY_FRAME_TYPE_APPLICATION_CLOSE;
-    p = quicly_encode16(p, conn->egress.connection_close.error_code);
+    p = quicly_encodev(p, conn->egress.connection_close.error_code);
     if (conn->egress.connection_close.frame_type != UINT64_MAX)
         p = quicly_encodev(p, conn->egress.connection_close.frame_type);
     p = quicly_encodev(p, reason_phrase_len);
