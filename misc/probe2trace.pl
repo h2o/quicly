@@ -61,7 +61,6 @@ EOT
 for my $probe (@probes) {
     my @fmt = (sprintf '"type":"%s"', do {
         my $name = $probe->[0];
-        $name =~ s/^quicly_//;
         normalize_name($name);
     });
     my @ap;
@@ -117,7 +116,7 @@ for my $probe (@probes) {
             }
         }
     }
-    if ($probe->[0] eq 'quicly_receive') {
+    if ($probe->[0] eq 'receive') {
         splice @fmt, -1, 0, '"first-octet":%u';
         if ($^O eq 'linux') {
             splice @ap, -1, 0, '*((struct st_first_octet_t *)arg3)->b';
@@ -129,7 +128,7 @@ for my $probe (@probes) {
         $fmt[0] = "{$fmt[0]";
         $fmt[-1] .= "}\\n";
         print << "EOT";
-usdt::$probe->[0] {
+usdt::quicly:$probe->[0] {
 EOT
         my @args = (shift(@fmt));
         while (@fmt && @args <= 7) {

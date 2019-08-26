@@ -88,8 +88,8 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 #if QUICLY_USE_DTRACE
 #define QUICLY_PROBE(label, ...)                                                                                                   \
     do {                                                                                                                           \
-        if (PTLS_UNLIKELY(QUICLY_QUICLY_##label##_ENABLED())) {                                                                    \
-            QUICLY_QUICLY_##label(__VA_ARGS__);                                                                                    \
+        if (PTLS_UNLIKELY(QUICLY_##label##_ENABLED())) {                                                                           \
+            QUICLY_##label(__VA_ARGS__);                                                                                           \
         }                                                                                                                          \
     } while (0)
 #define QUICLY_PROBE_HEXDUMP(s, l)                                                                                                 \
