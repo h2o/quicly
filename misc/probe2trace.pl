@@ -32,7 +32,6 @@ my @probes = do {
 
 if ($^O eq 'linux') {
     print << 'EOT';
-#include <stdint.h>
 
 struct st_quicly_conn_t {
     uint32_t dummy[4];
