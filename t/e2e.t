@@ -13,6 +13,8 @@ use Time::HiRes qw(sleep);
 
 plan skip_all => 'WITH_DTRACE not set to ON, skipping'
     unless $ENV{WITH_DTRACE} =~ /^on$/i;
+plan skip_all => 'test does not support linux (yet)'
+    if $^O eq 'linux';
 
 sub complex ($$;$) {
     my $s = shift;
