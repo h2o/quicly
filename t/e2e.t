@@ -59,8 +59,8 @@ subtest "version-negotiation" => sub {
     is $resp, "hello world\n";
     my $events = read_events();
     if ($events =~ /"type":"connect",.*"version":(\d+)(?:.|\n)*"type":"version-switch",.*"new-version":(\d+)/m) {
-        is $2, 0xff000014;
-        isnt $1, 0xff000014;
+        is $2, 0xff000016;
+        isnt $1, 0xff000016;
     } else {
         fail "no quic-version-switch event";
         diag $events;
@@ -72,7 +72,9 @@ subtest "retry" => sub {
     my $resp = `@{[build_trace_cmd(cmd => "$cli -p /12.txt 127.0.0.1 $port")]} 2> /dev/null`;
     is $resp, "hello world\n";
     my $events = read_events();
-    like $events, qr/"type":"receive",.*"first-octet":245.*\n.*"type":"stream-lost",.*"stream-id":-1,.*"off":0,/, "CH deemed lost in response to retry";
+    complex $events, sub {
+        $_ =~ qr/"type":"receive",.*"first-octet":(\d+).*\n.*"type":"stream-lost",.*"stream-id":-1,.*"off":0,/ and $1 >= 240
+    }, "CH deemed lost in response to retry";
 };
 
 unlink "$tempdir/session";
