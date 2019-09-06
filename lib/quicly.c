@@ -86,11 +86,11 @@
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
 #if QUICLY_USE_DTRACE
-#define QUICLY_PROBE(label, ...)                                                                                                   \
+#define QUICLY_PROBE(label, conn, ...)                                                                                             \
     do {                                                                                                                           \
-        if (PTLS_UNLIKELY(QUICLY_##label##_ENABLED())) {                                                                           \
-            QUICLY_##label(__VA_ARGS__);                                                                                           \
-        }                                                                                                                          \
+        quicly_conn_t *_conn = (conn);                                                                                             \
+        if (PTLS_UNLIKELY(QUICLY_##label##_ENABLED()) && !ptls_skip_tracing(_conn->crypto.tls))                                    \
+            QUICLY_##label(_conn, __VA_ARGS__);                                                                                    \
     } while (0)
 #define QUICLY_PROBE_HEXDUMP(s, l)                                                                                                 \
     ({                                                                                                                             \
@@ -103,7 +103,7 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         quicly_escape_unsafe_string(alloca(_l * 4 + 1), (s), _l);                                                                  \
     })
 #else
-#define QUICLY_PROBE(label, ...)
+#define QUICLY_PROBE(label, conn, ...)
 #define QUICLY_PROBE_HEXDUMP(s, l)
 #define QUICLY_PROBE_ESCAPE_UNSAFE_STRING(s, l)
 #endif
