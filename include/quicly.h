@@ -211,13 +211,13 @@ typedef struct st_quicly_packet_allocator_t {
 } quicly_packet_allocator_t;
 
 /**
- * CID encryption
+ * used for encrypting (signing) various things (e.g., CID, stateless reset token, retry token)
  */
-typedef struct st_quicly_cid_encryptor_t {
+typedef struct st_quicly_encryptor_t {
     /**
      * encrypts CID and optionally generates a stateless reset token
      */
-    void (*encrypt_cid)(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
+    void (*encrypt_cid)(struct st_quicly_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
                         const quicly_cid_plaintext_t *plaintext);
     /**
      * decrypts CID. plaintext->thread_id should contain a randomly distributed number when validation fails, so that the value can
@@ -225,13 +225,13 @@ typedef struct st_quicly_cid_encryptor_t {
      * @param len length of encrypted bytes if known, or 0 if unknown (short header packet)
      * @return length of the CID, or SIZE_MAX if decryption failed
      */
-    size_t (*decrypt_cid)(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
+    size_t (*decrypt_cid)(struct st_quicly_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
                           size_t len);
     /**
      * generates a stateless reset token (returns if generated)
      */
-    int (*generate_stateless_reset_token)(struct st_quicly_cid_encryptor_t *self, void *token, const void *cid);
-} quicly_cid_encryptor_t;
+    int (*generate_stateless_reset_token)(struct st_quicly_encryptor_t *self, void *token, const void *cid);
+} quicly_encryptor_t;
 
 /**
  * stream scheduler
@@ -377,7 +377,7 @@ struct st_quicly_context_t {
     /**
      *
      */
-    quicly_cid_encryptor_t *cid_encryptor;
+    quicly_encryptor_t *cid_encryptor;
     /**
      * callback called when a new stream is opened by peer
      */

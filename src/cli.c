@@ -961,7 +961,7 @@ int main(int argc, char **argv)
             cid_key = random_key;
         }
         ctx.cid_encryptor =
-            quicly_new_default_cid_encryptor(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
+            quicly_new_default_encryptor(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
     } else {
         /* client */
         if (ticket_file != NULL)

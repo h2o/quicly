@@ -38,12 +38,11 @@ extern quicly_packet_allocator_t quicly_default_packet_allocator;
 /**
  *
  */
-quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
-                                                         ptls_iovec_t key);
+quicly_encryptor_t *quicly_new_default_encryptor(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash, ptls_iovec_t key);
 /**
  *
  */
-void quicly_free_default_cid_encryptor(quicly_cid_encryptor_t *self);
+void quicly_free_default_encryptor(quicly_encryptor_t *self);
 /**
  *
  */

@@ -87,13 +87,13 @@ static void default_free_packet(quicly_packet_allocator_t *self, quicly_datagram
 
 quicly_packet_allocator_t quicly_default_packet_allocator = {default_alloc_packet, default_free_packet};
 
-struct st_quicly_default_encrypt_cid_t {
-    quicly_cid_encryptor_t super;
+struct st_quicly_default_encryptor_t {
+    quicly_encryptor_t super;
     ptls_cipher_context_t *cid_encrypt_ctx, *cid_decrypt_ctx;
     ptls_hash_context_t *stateless_reset_token_ctx;
 };
 
-static void generate_stateless_reset_token(struct st_quicly_default_encrypt_cid_t *self, void *token, const void *cid)
+static void generate_stateless_reset_token(struct st_quicly_default_encryptor_t *self, void *token, const void *cid)
 {
     uint8_t md[PTLS_MAX_DIGEST_SIZE];
     self->stateless_reset_token_ctx->update(self->stateless_reset_token_ctx, cid, self->cid_encrypt_ctx->algo->block_size);
@@ -101,10 +101,10 @@ static void generate_stateless_reset_token(struct st_quicly_default_encrypt_cid_
     memcpy(token, md, QUICLY_STATELESS_RESET_TOKEN_LEN);
 }
 
-static void default_encrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_t *encrypted, void *stateless_reset_token,
+static void default_encrypt_cid(quicly_encryptor_t *_self, quicly_cid_t *encrypted, void *stateless_reset_token,
                                 const quicly_cid_plaintext_t *plaintext)
 {
-    struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
+    struct st_quicly_default_encryptor_t *self = (void *)_self;
     uint8_t buf[16], *p;
 
     /* encode */
@@ -132,10 +132,9 @@ static void default_encrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_t *enc
         generate_stateless_reset_token(self, stateless_reset_token, encrypted->cid);
 }
 
-static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
-                                  size_t len)
+static size_t default_decrypt_cid(quicly_encryptor_t *_self, quicly_cid_plaintext_t *plaintext, const void *encrypted, size_t len)
 {
-    struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
+    struct st_quicly_default_encryptor_t *self = (void *)_self;
     uint8_t ptbuf[16], tmpbuf[16];
     const uint8_t *p;
     size_t cid_len;
@@ -170,20 +169,19 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
     return cid_len;
 }
 
-static int default_generate_stateless_reset_token(quicly_cid_encryptor_t *_self, void *token, const void *cid)
+static int default_generate_stateless_reset_token(quicly_encryptor_t *_self, void *token, const void *cid)
 {
-    struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
+    struct st_quicly_default_encryptor_t *self = (void *)_self;
     generate_stateless_reset_token(self, token, cid);
     return 1;
 }
 
-quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash,
-                                                         ptls_iovec_t key)
+quicly_encryptor_t *quicly_new_default_encryptor(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash, ptls_iovec_t key)
 {
     uint8_t key_digestbuf[PTLS_MAX_DIGEST_SIZE], cid_keybuf[PTLS_MAX_SECRET_SIZE], reset_keybuf[PTLS_MAX_DIGEST_SIZE];
     ptls_cipher_context_t *cid_encrypt_ctx = NULL, *cid_decrypt_ctx = NULL;
     ptls_hash_context_t *stateless_reset_token_ctx = NULL;
-    struct st_quicly_default_encrypt_cid_t *self = NULL;
+    struct st_quicly_default_encryptor_t *self = NULL;
 
     if (key.len > hash->block_size) {
         ptls_calc_hash(hash, key_digestbuf, key.base, key.len);
@@ -204,7 +202,7 @@ quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t
         goto Exit;
 
     *self =
-        (struct st_quicly_default_encrypt_cid_t){{default_encrypt_cid, default_decrypt_cid, default_generate_stateless_reset_token},
+        (struct st_quicly_default_encryptor_t){{default_encrypt_cid, default_decrypt_cid, default_generate_stateless_reset_token},
                                                  cid_encrypt_ctx,
                                                  cid_decrypt_ctx,
                                                  stateless_reset_token_ctx};
@@ -225,9 +223,9 @@ Exit:
     return &self->super;
 }
 
-void quicly_free_default_cid_encryptor(quicly_cid_encryptor_t *_self)
+void quicly_free_default_encryptor(quicly_encryptor_t *_self)
 {
-    struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
+    struct st_quicly_default_encryptor_t *self = (void *)_self;
 
     ptls_cipher_free(self->cid_encrypt_ctx);
     ptls_cipher_free(self->cid_decrypt_ctx);
