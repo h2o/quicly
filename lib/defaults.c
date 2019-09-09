@@ -93,11 +93,6 @@ struct st_quicly_default_encrypt_cid_t {
     ptls_hash_context_t *stateless_reset_token_ctx;
 };
 
-static int expand_cid_encryption_key(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash, void *cid_key, ptls_iovec_t key)
-{
-    return ptls_hkdf_expand_label(hash, cid_key, cipher->key_size, key, "cid", ptls_iovec_init(NULL, 0), "");
-}
-
 static void generate_stateless_reset_token(struct st_quicly_default_encrypt_cid_t *self, void *token, const void *cid)
 {
     uint8_t md[PTLS_MAX_DIGEST_SIZE];
@@ -195,7 +190,7 @@ quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t
         key = ptls_iovec_init(key_digestbuf, hash->digest_size);
     }
 
-    if (expand_cid_encryption_key(cipher, hash, cid_keybuf, key) != 0)
+    if (ptls_hkdf_expand_label(hash, cid_keybuf, cipher->key_size, key, "cid", ptls_iovec_init(NULL, 0), "") != 0)
         goto Exit;
     if (ptls_hkdf_expand_label(hash, reset_keybuf, hash->digest_size, key, "reset", ptls_iovec_init(NULL, 0), "") != 0)
         goto Exit;
