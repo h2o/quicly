@@ -90,15 +90,12 @@ quicly_packet_allocator_t quicly_default_packet_allocator = {default_alloc_packe
 struct st_quicly_default_encryptor_t {
     quicly_encryptor_t super;
     ptls_cipher_context_t *cid_encrypt_ctx, *cid_decrypt_ctx;
-    ptls_hash_context_t *stateless_reset_token_ctx;
+    ptls_aead_context_t *stateless_reset_token_ctx;
 };
 
 static void generate_stateless_reset_token(struct st_quicly_default_encryptor_t *self, void *token, const void *cid)
 {
-    uint8_t md[PTLS_MAX_DIGEST_SIZE];
-    self->stateless_reset_token_ctx->update(self->stateless_reset_token_ctx, cid, self->cid_encrypt_ctx->algo->block_size);
-    self->stateless_reset_token_ctx->final(self->stateless_reset_token_ctx, md, PTLS_HASH_FINAL_MODE_RESET);
-    memcpy(token, md, QUICLY_STATELESS_RESET_TOKEN_LEN);
+    ptls_aead_encrypt(self->stateless_reset_token_ctx, token, "", 0, 0, cid, self->cid_encrypt_ctx->algo->block_size);
 }
 
 static void default_encrypt_cid(quicly_encryptor_t *_self, quicly_cid_t *encrypted, void *stateless_reset_token,
@@ -176,11 +173,12 @@ static int default_generate_stateless_reset_token(quicly_encryptor_t *_self, voi
     return 1;
 }
 
-quicly_encryptor_t *quicly_new_default_encryptor(ptls_cipher_algorithm_t *cipher, ptls_hash_algorithm_t *hash, ptls_iovec_t key)
+quicly_encryptor_t *quicly_new_default_encryptor(ptls_hash_algorithm_t *hash, ptls_cipher_algorithm_t *cid_cipher,
+                                                 ptls_aead_algorithm_t *token_aead, ptls_iovec_t key)
 {
     uint8_t key_digestbuf[PTLS_MAX_DIGEST_SIZE], cid_keybuf[PTLS_MAX_SECRET_SIZE], reset_keybuf[PTLS_MAX_DIGEST_SIZE];
     ptls_cipher_context_t *cid_encrypt_ctx = NULL, *cid_decrypt_ctx = NULL;
-    ptls_hash_context_t *stateless_reset_token_ctx = NULL;
+    ptls_aead_context_t *stateless_reset_token_ctx = NULL;
     struct st_quicly_default_encryptor_t *self = NULL;
 
     if (key.len > hash->block_size) {
@@ -188,19 +186,23 @@ quicly_encryptor_t *quicly_new_default_encryptor(ptls_cipher_algorithm_t *cipher
         key = ptls_iovec_init(key_digestbuf, hash->digest_size);
     }
 
-    if (ptls_hkdf_expand_label(hash, cid_keybuf, cipher->key_size, key, "cid", ptls_iovec_init(NULL, 0), "") != 0)
+    /* generate CID codec */
+    if (ptls_hkdf_expand_label(hash, cid_keybuf, cid_cipher->key_size, key, "cid", ptls_iovec_init(NULL, 0), "") != 0)
         goto Exit;
-    if (ptls_hkdf_expand_label(hash, reset_keybuf, hash->digest_size, key, "reset", ptls_iovec_init(NULL, 0), "") != 0)
+    if ((cid_encrypt_ctx = ptls_cipher_new(cid_cipher, 1, cid_keybuf)) == NULL)
         goto Exit;
-    if ((cid_encrypt_ctx = ptls_cipher_new(cipher, 1, cid_keybuf)) == NULL)
-        goto Exit;
-    if ((cid_decrypt_ctx = ptls_cipher_new(cipher, 0, cid_keybuf)) == NULL)
-        goto Exit;
-    if ((stateless_reset_token_ctx = ptls_hmac_create(hash, reset_keybuf, hash->digest_size)) == NULL)
-        goto Exit;
-    if ((self = malloc(sizeof(*self))) == NULL)
+    if ((cid_decrypt_ctx = ptls_cipher_new(cid_cipher, 0, cid_keybuf)) == NULL)
         goto Exit;
 
+    /* generate stateless token generator */
+    assert(token_aead->tag_size == QUICLY_STATELESS_RESET_TOKEN_LEN);
+    if (ptls_hkdf_expand_label(hash, reset_keybuf, hash->digest_size, key, "reset", ptls_iovec_init(NULL, 0), "") != 0)
+        goto Exit;
+    if ((stateless_reset_token_ctx = ptls_aead_new(token_aead, hash, 1, reset_keybuf, "")) == NULL)
+        goto Exit;
+
+    if ((self = malloc(sizeof(*self))) == NULL)
+        goto Exit;
     *self =
         (struct st_quicly_default_encryptor_t){{default_encrypt_cid, default_decrypt_cid, default_generate_stateless_reset_token},
                                                  cid_encrypt_ctx,
@@ -212,7 +214,7 @@ quicly_encryptor_t *quicly_new_default_encryptor(ptls_cipher_algorithm_t *cipher
 
 Exit:
     if (stateless_reset_token_ctx != NULL)
-        stateless_reset_token_ctx->final(stateless_reset_token_ctx, NULL, PTLS_HASH_FINAL_MODE_FREE);
+        ptls_aead_free(stateless_reset_token_ctx);
     if (cid_encrypt_ctx != NULL)
         ptls_cipher_free(cid_encrypt_ctx);
     if (cid_decrypt_ctx != NULL)
@@ -229,7 +231,7 @@ void quicly_free_default_encryptor(quicly_encryptor_t *_self)
 
     ptls_cipher_free(self->cid_encrypt_ctx);
     ptls_cipher_free(self->cid_decrypt_ctx);
-    self->stateless_reset_token_ctx->final(self->stateless_reset_token_ctx, NULL, PTLS_HASH_FINAL_MODE_FREE);
+    ptls_aead_free(self->stateless_reset_token_ctx);
     free(self);
 }
 
