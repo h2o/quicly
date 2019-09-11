@@ -36,7 +36,7 @@ matrix:
         - make install
         - cd ..
         - cmake -DOPENSSL_ROOT_DIR=$HOME/openssl-build -DWITH_DTRACE=OFF .
-        - make && make check
+        - make VERBOSE=1 && make check
     - os: osx
       osx_image: xcode6.4
       env:
@@ -48,7 +48,7 @@ matrix:
         - sudo cpanm --notest Test::TCP
       script:
         - cmake -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl .
-        - make && make check
+        - make VERBOSE=1 && make check
     - os: osx
       env:
         - label=osx10.10/i386
@@ -62,4 +62,4 @@ matrix:
         - make install
         - cd ..
         - cmake -DCMAKE_C_FLAGS=-m32 -DOPENSSL_ROOT_DIR=$HOME/openssl-build -DWITH_DTRACE=OFF .
-        - make && make check
+        - make VERBOSE=1 && make check
