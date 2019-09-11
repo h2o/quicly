@@ -34,6 +34,7 @@
 #include "quicly/streambuf.h"
 #include "../deps/picotls/t/util.h"
 
+FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
 
@@ -779,6 +780,7 @@ static void usage(const char *cmd)
            "  -c certificate-file\n"
            "  -k key-file               specifies the credentials to be used for running the\n"
            "                            server. If omitted, the command runs as a client.\n"
+           "  -e event-log-file         file to log events\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
            "  -l log-file               file to log traffic secrets\n"
@@ -828,6 +830,13 @@ int main(int argc, char **argv)
             break;
         case 'k':
             load_private_key(ctx.tls, optarg);
+            break;
+        case 'e':
+            if ((quicly_trace_fp = fopen(optarg, "w")) == NULL) {
+                fprintf(stderr, "failed to open file:%s:%s\n", optarg, strerror(errno));
+                exit(1);
+            }
+            setvbuf(quicly_trace_fp, NULL, _IONBF, 0);
             break;
         case 'i':
             if (sscanf(optarg, "%" SCNd64, &request_interval) != 1) {
