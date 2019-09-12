@@ -34,6 +34,7 @@
 #include "quicly/streambuf.h"
 #include "../deps/picotls/t/util.h"
 
+FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
 
@@ -830,16 +831,13 @@ int main(int argc, char **argv)
         case 'k':
             load_private_key(ctx.tls, optarg);
             break;
-        case 'e': {
-            FILE *fp;
-            if ((fp = fopen(optarg, "w")) == NULL) {
+        case 'e':
+            if ((quicly_trace_fp = fopen(optarg, "w")) == NULL) {
                 fprintf(stderr, "failed to open file:%s:%s\n", optarg, strerror(errno));
                 exit(1);
             }
-            setvbuf(fp, NULL, _IONBF, 0);
-            ctx.event_log.mask = UINT64_MAX;
-            ctx.event_log.cb = quicly_new_default_event_logger(fp);
-        } break;
+            setvbuf(quicly_trace_fp, NULL, _IONBF, 0);
+            break;
         case 'i':
             if (sscanf(optarg, "%" SCNd64, &request_interval) != 1) {
                 fprintf(stderr, "failed to parse request interval: %s\n", optarg);
