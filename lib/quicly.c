@@ -87,7 +87,7 @@
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
-#if QUICLY_USE_DTRACE
+#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
 #define QUICLY_PROBE(label, conn, ...)                                                                                             \
     do {                                                                                                                           \
         quicly_conn_t *_conn = (conn);                                                                                             \
