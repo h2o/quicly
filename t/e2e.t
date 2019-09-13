@@ -50,7 +50,7 @@ subtest "version-negotiation" => sub {
     my $resp = `$cli -n -e $tempdir/events -p /12.txt 127.0.0.1 $port 2> /dev/null`;
     is $resp, "hello world\n";
     my $events = slurp_file("$tempdir/events");
-    if ($events =~ /"type":"connect",.*"quic-version":(\d+)(?:.|\n)*"type":"quic-version-switch",.*"quic-version":(\d+)/m) {
+    if ($events =~ /"type":"connect",.*"version":(\d+)(?:.|\n)*"type":"version-switch",.*"new-version":(\d+)/m) {
         is $2, 0xff000016;
         isnt $1, 0xff000016;
     } else {
@@ -79,7 +79,7 @@ subtest "0-rtt" => sub {
     system "$cli -s $tempdir/session -e $tempdir/events 127.0.0.1 $port > /dev/null 2>&1";
     my $events = slurp_file("$tempdir/events");
     like $events, qr/"type":"stream-send".*"stream-id":0,(.|\n)*"type":"packet-commit".*"pn":1,/m, "stream 0 on pn 1";
-    like $events, qr/"type":"cc-ack-received".*"pn":1,/m, "pn 1 acked";
+    like $events, qr/"type":"cc-ack-received".*"largest-acked":1,/m, "pn 1 acked";
 };
 
 subtest "stateless-reset" => sub {
