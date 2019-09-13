@@ -142,6 +142,10 @@ QUICLY_CALLBACK_TYPE(void, closed_by_peer, quicly_conn_t *conn, int err, uint64_
  * returns current time in milliseconds
  */
 QUICLY_CALLBACK_TYPE0(int64_t, now);
+/**
+ * called when a NEW_TOKEN token is received on a connection
+ */
+QUICLY_CALLBACK_TYPE(int, save_resumption_token, quicly_conn_t *conn, ptls_iovec_t token);
 
 typedef struct st_quicly_max_stream_data_t {
     uint64_t bidi_local, bidi_remote, uni;
@@ -265,6 +269,10 @@ struct st_quicly_context_t {
      * returns current time in milliseconds
      */
     quicly_now_t *now;
+    /**
+     * called wen a NEW_TOKEN token is being received
+     */
+    quicly_save_resumption_token_t *save_resumption_token;
 };
 
 /**

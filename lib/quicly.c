@@ -3598,9 +3598,13 @@ static int handle_path_response_frame(quicly_conn_t *conn, struct st_quicly_hand
 static int handle_new_token_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     quicly_new_token_frame_t frame;
+    int ret;
 
-    /* TODO save the token along with the session ticket */
-    return quicly_decode_new_token_frame(&state->src, state->end, &frame);
+    if ((ret = quicly_decode_new_token_frame(&state->src, state->end, &frame)) != 0)
+        return ret;
+    if (conn->super.ctx->save_resumption_token == NULL)
+        return 0;
+    return conn->super.ctx->save_resumption_token->cb(conn->super.ctx->save_resumption_token, conn, frame.token);
 }
 
 static int handle_stop_sending_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
