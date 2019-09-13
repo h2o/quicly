@@ -67,6 +67,7 @@ typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 typedef struct st_quicly_send_context_t quicly_send_context_t;
+typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintext_t;
 
 #define QUICLY_CALLBACK_TYPE0(ret, name)                                                                                           \
     typedef struct st_quicly_##name##_t {                                                                                          \
@@ -146,6 +147,11 @@ QUICLY_CALLBACK_TYPE0(int64_t, now);
  * called when a NEW_TOKEN token is received on a connection
  */
 QUICLY_CALLBACK_TYPE(int, save_resumption_token, quicly_conn_t *conn, ptls_iovec_t token);
+/**
+ *
+ */
+QUICLY_CALLBACK_TYPE(int, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
+                     quicly_address_token_plaintext_t *token);
 
 typedef struct st_quicly_max_stream_data_t {
     uint64_t bidi_local, bidi_remote, uni;
@@ -273,6 +279,10 @@ struct st_quicly_context_t {
      * called wen a NEW_TOKEN token is being received
      */
     quicly_save_resumption_token_t *save_resumption_token;
+    /**
+     *
+     */
+    quicly_generate_resumption_token_t *generate_resumption_token;
 };
 
 /**
@@ -582,7 +592,7 @@ typedef struct st_quicly_decoded_packet_t {
     } _is_stateless_reset_cached;
 } quicly_decoded_packet_t;
 
-typedef struct st_quicly_address_token_plaintext_t {
+struct st_quicly_address_token_plaintext_t {
     int is_retry;
     uint64_t issued_at;
     union {
@@ -604,7 +614,7 @@ typedef struct st_quicly_address_token_plaintext_t {
         uint8_t bytes[256];
         size_t len;
     } appdata;
-} quicly_address_token_plaintext_t;
+};
 
 /**
  *
@@ -730,6 +740,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
  *
  */
 quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen, const void *cid);
+/**
+ *
+ */
+int quicly_send_resumption_token(quicly_conn_t *conn);
 /**
  *
  */

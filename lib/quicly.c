@@ -251,6 +251,14 @@ struct st_quicly_conn_t {
         /**
          *
          */
+        struct {
+            uint64_t generation;
+            uint64_t max_acked;
+            uint32_t num_inflight;
+        } new_token;
+        /**
+         *
+         */
         int64_t last_retransmittable_sent_at;
         /**
          * when to send an ACK, or other frames used for managing the connection
@@ -294,9 +302,10 @@ struct st_quicly_conn_t {
             quicly_linklist_t control;
         } streams;
         /**
-         * bit vector indicating if there's any pending crypto data
+         * bit vector indicating if there's any pending crypto data (the insignificant 4 bits), or other non-stream data
          */
         uint8_t flows;
+#define QUICLY_PENDING_FLOW_NEW_TOKEN_BIT (1 << 5)
     } pending;
     /**
      * retry token
@@ -1967,6 +1976,29 @@ static int on_ack_streams_blocked(quicly_conn_t *conn, const quicly_sent_packet_
     return 0;
 }
 
+static int on_ack_new_token(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                            quicly_sentmap_event_t event)
+{
+    if (sent->data.new_token.is_inflight) {
+        --conn->egress.new_token.num_inflight;
+        sent->data.new_token.is_inflight = 0;
+    }
+    switch (event) {
+    case QUICLY_SENTMAP_EVENT_ACKED:
+        QUICLY_PROBE(NEW_TOKEN_ACKED, conn, probe_now(), sent->data.new_token.generation);
+        if (conn->egress.new_token.max_acked < sent->data.new_token.generation)
+            conn->egress.new_token.max_acked = sent->data.new_token.generation;
+        break;
+    default:
+        break;
+    }
+
+    if (conn->egress.new_token.num_inflight == 0 && conn->egress.new_token.max_acked < conn->egress.new_token.generation)
+        conn->pending.flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
+
+    return 0;
+}
+
 static ssize_t round_send_window(ssize_t window)
 {
     if (window < MIN_SEND_WINDOW * 2) {
@@ -2722,6 +2754,50 @@ static void open_blocked_streams(quicly_conn_t *conn, int uni)
     }
 }
 
+static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    quicly_address_token_plaintext_t token;
+    ptls_buffer_t tokenbuf;
+    uint8_t tokenbuf_small[128];
+    quicly_sent_t *sent;
+    int ret;
+
+    ptls_buffer_init(&tokenbuf, tokenbuf_small, sizeof(tokenbuf_small));
+
+    /* build token */
+    token = (quicly_address_token_plaintext_t){0, conn->super.ctx->now->cb(conn->super.ctx->now)};
+    switch (conn->super.peer.sa->sa_family) {
+    case AF_INET:
+        token.remote.sin = *(struct sockaddr_in *)conn->super.peer.sa;
+        break;
+    case AF_INET6:
+        token.remote.sin6 = *(struct sockaddr_in6 *)conn->super.peer.sa;
+        break;
+    default:
+        return PTLS_ERROR_LIBRARY;
+    }
+    /* TODO fill token.resumption */
+
+    /* encrypt */
+    if ((ret = conn->super.ctx->generate_resumption_token->cb(conn->super.ctx->generate_resumption_token, conn, &tokenbuf,
+                                                              &token)) != 0)
+        goto Exit;
+
+    /* emit frame */
+    if ((ret = allocate_ack_eliciting_frame(conn, s, quicly_new_token_frame_capacity(ptls_iovec_init(tokenbuf.base, tokenbuf.off)),
+                                            &sent, on_ack_new_token)) != 0)
+        goto Exit;
+    sent->data.new_token.generation = conn->egress.new_token.generation;
+    s->dst = quicly_encode_new_token_frame(s->dst, ptls_iovec_init(tokenbuf.base, tokenbuf.off));
+    conn->pending.flows &= ~QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
+
+    QUICLY_PROBE(NEW_TOKEN_SEND, conn, probe_now(), tokenbuf.base, tokenbuf.off, sent->data.new_token.generation);
+    ret = 0;
+Exit:
+    ptls_buffer_dispose(&tokenbuf);
+    return ret;
+}
+
 quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
                                                    ptls_iovec_t dest_cid, ptls_iovec_t src_cid)
 {
@@ -3002,6 +3078,11 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         conn->application->one_rtt_writable = 1;
         open_blocked_streams(conn, 1);
         open_blocked_streams(conn, 0);
+        /* send the first resumption token using the 0.5 RTT window */
+        if (!quicly_is_client(conn) && conn->super.ctx->generate_resumption_token != NULL) {
+            ret = quicly_send_resumption_token(conn);
+            assert(ret == 0);
+        }
     }
 
     return 0;
@@ -3102,6 +3183,9 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             if ((ret = send_streams_blocked(conn, 1, s)) != 0)
                 goto Exit;
             if ((ret = send_streams_blocked(conn, 0, s)) != 0)
+                goto Exit;
+            /* send NEW_TOKEN */
+            if ((conn->pending.flows & QUICLY_PENDING_FLOW_NEW_TOKEN_BIT) != 0 && (ret = send_resumption_token(conn, s)) != 0)
                 goto Exit;
         } else {
             s->current.first_byte = QUICLY_PACKET_TYPE_0RTT;
@@ -3220,6 +3304,15 @@ quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct soc
     dgram->data.len = QUICLY_STATELESS_RESET_PACKET_MIN_LEN;
 
     return dgram;
+}
+
+int quicly_send_resumption_token(quicly_conn_t *conn)
+{
+    if (conn->super.state <= QUICLY_STATE_CONNECTED) {
+        ++conn->egress.new_token.generation;
+        conn->pending.flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
+    }
+    return 0;
 }
 
 static int on_end_closing(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
@@ -3607,6 +3700,7 @@ static int handle_new_token_frame(quicly_conn_t *conn, struct st_quicly_handle_p
 
     if ((ret = quicly_decode_new_token_frame(&state->src, state->end, &frame)) != 0)
         return ret;
+    QUICLY_PROBE(NEW_TOKEN_RECEIVE, conn, probe_now(), frame.token.base, frame.token.len);
     if (conn->super.ctx->save_resumption_token == NULL)
         return 0;
     return conn->super.ctx->save_resumption_token->cb(conn->super.ctx->save_resumption_token, conn, frame.token);

@@ -355,6 +355,14 @@ static void on_closed_by_peer(quicly_closed_by_peer_t *self, quicly_conn_t *conn
 
 static quicly_closed_by_peer_t closed_by_peer = {&on_closed_by_peer};
 
+static int on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn, ptls_buffer_t *buf,
+                                       quicly_address_token_plaintext_t *token)
+{
+    return quicly_encrypt_address_token(tlsctx.random_bytes, address_token_aead.enc, buf, buf->off, token);
+}
+
+static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
+
 static int send_one(int fd, quicly_datagram_t *p)
 {
     int ret;
@@ -862,6 +870,7 @@ int main(int argc, char **argv)
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
     ctx.closed_by_peer = &closed_by_peer;
+    ctx.generate_resumption_token = &generate_resumption_token;
 
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
