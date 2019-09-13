@@ -272,27 +272,32 @@ struct st_quicly_conn_t {
             ptls_buffer_t buf;
         } transport_params;
         /**
-         * bit vector indicating if there's any pending crypto data
-         */
-        uint8_t pending_flows;
-        /**
          * whether if the timer to discard the handshake contexts has been activated
          */
         uint8_t handshake_scheduled_for_discard;
     } crypto;
     /**
-     *
+     * contains things to be sent, that are covered by flow control, but not by the stream scheduler
      */
     struct {
-        /**
-         * contains list of blocked streams (sorted in ascending order of stream_ids)
-         */
         struct {
-            quicly_linklist_t uni;
-            quicly_linklist_t bidi;
-        } streams_blocked;
-        quicly_linklist_t control;
-    } pending_link;
+            /**
+             * list of blocked streams (sorted in ascending order of stream_ids)
+             */
+            struct {
+                quicly_linklist_t uni;
+                quicly_linklist_t bidi;
+            } blocked;
+            /**
+             * list of streams with pending control data (e.g., RESET_STREAM)
+             */
+            quicly_linklist_t control;
+        } streams;
+        /**
+         * bit vector indicating if there's any pending crypto data
+         */
+        uint8_t flows;
+    } pending;
     /**
      * retry token
      */
@@ -589,7 +594,7 @@ static void sched_stream_control(quicly_stream_t *stream)
     assert(stream->stream_id >= 0);
 
     if (!quicly_linklist_is_linked(&stream->_send_aux.pending_link.control))
-        quicly_linklist_insert(stream->conn->pending_link.control.prev, &stream->_send_aux.pending_link.control);
+        quicly_linklist_insert(stream->conn->pending.streams.control.prev, &stream->_send_aux.pending_link.control);
 }
 
 static void resched_stream_data(quicly_stream_t *stream)
@@ -598,9 +603,9 @@ static void resched_stream_data(quicly_stream_t *stream)
         assert(-4 <= stream->stream_id);
         uint8_t mask = 1 << -(1 + stream->stream_id);
         if (stream->sendstate.pending.num_ranges != 0) {
-            stream->conn->crypto.pending_flows |= mask;
+            stream->conn->pending.flows |= mask;
         } else {
-            stream->conn->crypto.pending_flows &= ~mask;
+            stream->conn->pending.flows &= ~mask;
         }
         return;
     }
@@ -827,7 +832,7 @@ static void destroy_stream(quicly_stream_t *stream, int err)
 
     if (stream->stream_id < 0) {
         size_t epoch = -(1 + stream->stream_id);
-        stream->conn->crypto.pending_flows &= ~(uint8_t)(1 << epoch);
+        stream->conn->pending.flows &= ~(uint8_t)(1 << epoch);
     } else {
         struct st_quicly_conn_streamgroup_state_t *group = get_streamgroup_state(conn, stream->stream_id);
         --group->num_streams;
@@ -1174,9 +1179,9 @@ void quicly_free(quicly_conn_t *conn)
 
     kh_destroy(quicly_stream_t, conn->streams);
 
-    assert(!quicly_linklist_is_linked(&conn->pending_link.streams_blocked.uni));
-    assert(!quicly_linklist_is_linked(&conn->pending_link.streams_blocked.bidi));
-    assert(!quicly_linklist_is_linked(&conn->pending_link.control));
+    assert(!quicly_linklist_is_linked(&conn->pending.streams.blocked.uni));
+    assert(!quicly_linklist_is_linked(&conn->pending.streams.blocked.bidi));
+    assert(!quicly_linklist_is_linked(&conn->pending.streams.control));
     assert(!quicly_linklist_is_linked(&conn->super._default_scheduler.active));
     assert(!quicly_linklist_is_linked(&conn->super._default_scheduler.blocked));
 
@@ -1534,9 +1539,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         conn->_.crypto.handshake_properties = (ptls_handshake_properties_t){{{{NULL}}}};
     }
     conn->_.crypto.handshake_properties.collect_extension = collect_transport_parameters;
-    quicly_linklist_init(&conn->_.pending_link.streams_blocked.uni);
-    quicly_linklist_init(&conn->_.pending_link.streams_blocked.bidi);
-    quicly_linklist_init(&conn->_.pending_link.control);
+    quicly_linklist_init(&conn->_.pending.streams.blocked.uni);
+    quicly_linklist_init(&conn->_.pending.streams.blocked.bidi);
+    quicly_linklist_init(&conn->_.pending.streams.control);
     conn->_.idle_timeout.at = INT64_MAX;
     conn->_.idle_timeout.should_rearm_on_send = 1;
 
@@ -1999,9 +2004,9 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
     if (calc_send_window(conn, 0, 0) > 0) {
-        if (conn->crypto.pending_flows != 0)
+        if (conn->pending.flows != 0)
             return 0;
-        if (quicly_linklist_is_linked(&conn->pending_link.control))
+        if (quicly_linklist_is_linked(&conn->pending.streams.control))
             return 0;
         if (scheduler_can_send(conn))
             return 0;
@@ -2662,7 +2667,7 @@ static int send_max_streams(quicly_conn_t *conn, int uni, quicly_send_context_t 
 
 static int send_streams_blocked(quicly_conn_t *conn, int uni, quicly_send_context_t *s)
 {
-    quicly_linklist_t *blocked_list = uni ? &conn->pending_link.streams_blocked.uni : &conn->pending_link.streams_blocked.bidi;
+    quicly_linklist_t *blocked_list = uni ? &conn->pending.streams.blocked.uni : &conn->pending.streams.blocked.bidi;
     int ret;
 
     if (!quicly_linklist_is_linked(blocked_list))
@@ -2695,10 +2700,10 @@ static void open_blocked_streams(quicly_conn_t *conn, int uni)
 
     if (uni) {
         count = conn->egress.max_streams.uni.count;
-        anchor = &conn->pending_link.streams_blocked.uni;
+        anchor = &conn->pending.streams.blocked.uni;
     } else {
         count = conn->egress.max_streams.bidi.count;
-        anchor = &conn->pending_link.streams_blocked.bidi;
+        anchor = &conn->pending.streams.blocked.bidi;
     }
 
     while (quicly_linklist_is_linked(anchor)) {
@@ -2866,7 +2871,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
             goto Exit;
 
     /* send data */
-    while ((conn->crypto.pending_flows & (uint8_t)(1 << epoch)) != 0) {
+    while ((conn->pending.flows & (uint8_t)(1 << epoch)) != 0) {
         quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
         assert(stream != NULL);
         if ((ret = quicly_send_stream(stream, s)) != 0)
@@ -3059,7 +3064,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
             }
             /* post-handshake messages */
-            if ((conn->crypto.pending_flows & (uint8_t)(1 << QUICLY_EPOCH_1RTT)) != 0) {
+            if ((conn->pending.flows & (uint8_t)(1 << QUICLY_EPOCH_1RTT)) != 0) {
                 quicly_stream_t *stream = quicly_get_stream(conn, -(1 + QUICLY_EPOCH_1RTT));
                 assert(stream != NULL);
                 if ((ret = quicly_send_stream(stream, s)) != 0)
@@ -3102,9 +3107,9 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             s->current.first_byte = QUICLY_PACKET_TYPE_0RTT;
         }
         /* send stream-level control frames */
-        while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending_link.control)) {
+        while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending.streams.control)) {
             quicly_stream_t *stream =
-                (void *)((char *)conn->pending_link.control.next - offsetof(quicly_stream_t, _send_aux.pending_link.control));
+                (void *)((char *)conn->pending.streams.control.next - offsetof(quicly_stream_t, _send_aux.pending_link.control));
             if ((ret = send_stream_control_frames(stream, s)) != 0)
                 goto Exit;
             quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
@@ -4258,7 +4263,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
     /* adjust blocked */
     if (stream->stream_id / 4 >= *max_stream_count) {
         stream->streams_blocked = 1;
-        quicly_linklist_insert((uni ? &conn->pending_link.streams_blocked.uni : &conn->pending_link.streams_blocked.bidi)->prev,
+        quicly_linklist_insert((uni ? &conn->pending.streams.blocked.uni : &conn->pending.streams.blocked.bidi)->prev,
                                &stream->_send_aux.pending_link.control);
     }
 
