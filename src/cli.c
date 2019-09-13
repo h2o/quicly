@@ -61,6 +61,9 @@ static ptls_handshake_properties_t hs_properties;
 static quicly_transport_parameters_t resumed_transport_params;
 static quicly_context_t ctx;
 static quicly_cid_plaintext_t next_cid;
+static struct {
+    ptls_aead_context_t *enc, *dec;
+} address_token_aead;
 static ptls_save_ticket_t save_ticket = {save_ticket_cb};
 static int enforce_retry;
 
@@ -543,6 +546,49 @@ static void on_signal(int signo)
         _exit(0);
 }
 
+static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
+                          quicly_address_token_plaintext_t *token)
+{
+    int64_t age;
+    int port_is_equal;
+
+    if ((age = ctx.now->cb(ctx.now) - token->issued_at) < 0)
+        age = 0;
+    if (remote->sa_family != token->remote.sa.sa_family)
+        return 0;
+    switch (remote->sa_family) {
+    case AF_INET: {
+        struct sockaddr_in *sin = (struct sockaddr_in *)remote;
+        if (sin->sin_addr.s_addr != token->remote.sin.sin_addr.s_addr)
+            return 0;
+        port_is_equal = sin->sin_port == token->remote.sin.sin_port;
+    } break;
+    case AF_INET6: {
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)remote;
+        if (memcmp(&sin6->sin6_addr, &token->remote.sin6.sin6_addr, sizeof(sin6->sin6_addr)) != 0)
+            return 0;
+        port_is_equal = sin6->sin6_port == token->remote.sin6.sin6_port;
+    } break;
+    default:
+        return 0;
+    }
+    if (token->is_retry) {
+        if (age > 30000)
+            return 0;
+        if (!port_is_equal)
+            return 0;
+        uint64_t cidhash_actual;
+        if (quicly_retry_calc_cidpair_hash(&ptls_openssl_sha256, client_cid, server_cid, &cidhash_actual) != 0)
+            return 0;
+        if (token->retry.cidpair_hash != cidhash_actual)
+            return 0;
+    } else {
+        if (age > 10 * 60 * 1000)
+            return 0;
+    }
+    return 1;
+}
+
 static int run_server(struct sockaddr *sa, socklen_t salen)
 {
     int fd;
@@ -640,25 +686,28 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     quicly_receive(conn, &packet);
                 } else if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
                     /* long header packet; potentially a new connection */
-                    if (enforce_retry && packet.token.len == 0 && packet.cid.dest.encrypted.len >= 8) {
+                    quicly_address_token_plaintext_t *token = NULL, token_buf;
+                    if (packet.token.len != 0 &&
+                        quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base, packet.token.len, 0) ==
+                            0 &&
+                        validate_token(&sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf))
+                        token = &token_buf;
+                    if (enforce_retry && token == NULL && packet.cid.dest.encrypted.len >= 8) {
                         /* unbound connection; send a retry token unless the client has supplied the correct one, but not too many
                          */
                         uint8_t new_server_cid[8];
                         memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
                         new_server_cid[0] ^= 0xff;
-                        quicly_datagram_t *rp = quicly_send_retry(
-                            &ctx, &sa, salen, packet.cid.src, ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
-                            packet.cid.dest.encrypted, packet.cid.dest.encrypted /* FIXME SMAC(odcid || sockaddr) */);
+                        quicly_datagram_t *rp = quicly_send_retry(&ctx, address_token_aead.enc, &sa, salen, packet.cid.src,
+                                                                  ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
+                                                                  packet.cid.dest.encrypted, ptls_iovec_init(NULL, 0));
                         assert(rp != NULL);
                         if (send_one(fd, rp) == -1)
                             perror("sendmsg failed");
                         break;
                     } else {
                         /* new connection */
-                        int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, &packet,
-                                                enforce_retry ? packet.token /* a production server should validate the token */
-                                                              : ptls_iovec_init(NULL, 0),
-                                                &next_cid, NULL);
+                        int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, &packet, token, &next_cid, NULL);
                         if (ret == 0) {
                             assert(conn != NULL);
                             ++next_cid.master_id;
@@ -816,6 +865,13 @@ int main(int argc, char **argv)
 
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
+
+    {
+        uint8_t secret[PTLS_MAX_DIGEST_SIZE];
+        ctx.tls->random_bytes(secret, ptls_openssl_sha256.digest_size);
+        address_token_aead.enc = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 1, secret, "");
+        address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
+    }
 
     while ((ch = getopt(argc, argv, "a:C:c:k:e:i:I:l:M:m:Nnp:Rr:S:s:Vvx:X:h")) != -1) {
         switch (ch) {

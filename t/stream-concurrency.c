@@ -45,7 +45,7 @@ void test_stream_concurrency(void)
         ok(num_packets == 1);
         ok(decode_packets(&decoded, &raw, 1) == 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, ptls_iovec_init(NULL, 0), new_master_id(), NULL);
+        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, NULL, new_master_id(), NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
         transmit(server, client);

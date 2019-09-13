@@ -228,7 +228,7 @@ static void test_vector(void)
     int ret;
 
     ok(quicly_decode_packet(&quic_ctx, &packet, datagram, sizeof(datagram)) == sizeof(datagram));
-    ret = setup_initial_encryption(&ingress, &egress, ptls_openssl_cipher_suites, packet.cid.dest.encrypted, 0);
+    ret = setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress, packet.cid.dest.encrypted, 0);
     ok(ret == 0);
     payload = decrypt_packet(ingress.header_protection, &ingress.aead, &next_expected_pn, &packet, &pn);
     ok(payload.base != NULL);
@@ -322,6 +322,44 @@ static void test_next_packet_number(void)
     ok(n == 65567);
 }
 
+static void test_address_token_codec(void)
+{
+    static const uint8_t zero_key[PTLS_MAX_SECRET_SIZE] = {0};
+    ptls_aead_context_t *enc = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 1, zero_key, ""),
+                        *dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, zero_key, "");
+    quicly_address_token_plaintext_t input, output;
+    ptls_buffer_t buf;
+
+    input = (quicly_address_token_plaintext_t){1, 234};
+    input.remote.sin.sin_family = AF_INET;
+    input.remote.sin.sin_addr.s_addr = htonl(0x7f000001);
+    input.remote.sin.sin_port = htons(443);
+    set_cid(&input.retry.odcid, ptls_iovec_init("abcdefgh", 8));
+    input.retry.cidpair_hash = 12345;
+    strcpy((char *)input.appdata.bytes, "hello world");
+    input.appdata.len = strlen((char *)input.appdata.bytes);
+    ptls_buffer_init(&buf, "", 0);
+
+    ok(quicly_encrypt_address_token(ptls_openssl_random_bytes, enc, &buf, 0, &input) == 0);
+    ptls_openssl_random_bytes(&output, sizeof(output));
+    ok(quicly_decrypt_address_token(dec, &output, buf.base, buf.off, 0) == 0);
+
+    ok(input.is_retry == output.is_retry);
+    ok(input.issued_at == output.issued_at);
+    ok(input.remote.sa.sa_family == output.remote.sa.sa_family);
+    ok(input.remote.sin.sin_addr.s_addr == output.remote.sin.sin_addr.s_addr);
+    ok(input.remote.sin.sin_port == output.remote.sin.sin_port);
+    ok(input.retry.odcid.len == output.retry.odcid.len);
+    ok(memcmp(input.retry.odcid.cid, output.retry.odcid.cid, input.retry.odcid.len) == 0);
+    ok(input.retry.cidpair_hash == output.retry.cidpair_hash);
+    ok(input.appdata.len == output.appdata.len);
+    ok(memcmp(input.appdata.bytes, output.appdata.bytes, input.appdata.len) == 0);
+
+    ptls_buffer_dispose(&buf);
+    ptls_aead_free(enc);
+    ptls_aead_free(dec);
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -376,6 +414,7 @@ int main(int argc, char **argv)
     quicly_amend_ptls_context(quic_ctx.tls);
 
     subtest("next-packet-number", test_next_packet_number);
+    subtest("address-token-codec", test_address_token_codec);
     subtest("ranges", test_ranges);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
