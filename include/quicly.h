@@ -26,6 +26,7 @@
 extern "C" {
 #endif
 
+#include <netinet/in.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -717,6 +718,30 @@ typedef struct st_quicly_decoded_packet_t {
     } _is_stateless_reset_cached;
 } quicly_decoded_packet_t;
 
+typedef struct st_quicly_address_token_plaintext_t {
+    int is_retry;
+    uint64_t issued_at;
+    union {
+        struct sockaddr sa;
+        struct sockaddr_in sin;
+        struct sockaddr_in6 sin6;
+    } remote;
+    union {
+        struct {
+            quicly_cid_t odcid;
+            uint64_t cidpair_hash;
+        } retry;
+        struct {
+            uint8_t bytes[256];
+            size_t len;
+        } resumption;
+    };
+    struct {
+        uint8_t bytes[256];
+        size_t len;
+    } appdata;
+} quicly_address_token_plaintext_t;
+
 /**
  *
  */
@@ -825,8 +850,14 @@ quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct
 /**
  *
  */
-quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen, ptls_iovec_t dcid,
-                                     ptls_iovec_t scid, ptls_iovec_t odcid, ptls_iovec_t token);
+int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
+                                   uint64_t *value);
+/**
+ *
+ */
+quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *sa,
+                                     socklen_t salen, ptls_iovec_t client_cid, ptls_iovec_t server_cid, ptls_iovec_t odcid,
+                                     ptls_iovec_t token);
 /**
  *
  */
@@ -866,8 +897,8 @@ int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *serv
  *                to the function.
  */
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                  quicly_decoded_packet_t *packet, ptls_iovec_t retry_odcid, const quicly_cid_plaintext_t *new_cid,
-                  ptls_handshake_properties_t *handshake_properties);
+                  quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
+                  const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties);
 /**
  *
  */
@@ -924,6 +955,17 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
  *
  */
 void quicly_amend_ptls_context(ptls_context_t *ptls);
+/**
+ * Encrypts an address token by serializing the plaintext structure and appending an authentication tag.  Bytes between `start_off`
+ * and `buf->off` (at the moment of invocation) is considered part of a token covered by AAD.
+ */
+int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead_context_t *aead, ptls_buffer_t *buf,
+                                 size_t start_off, const quicly_address_token_plaintext_t *plaintext);
+/**
+ * Decrypts an address token.
+ */
+int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token_plaintext_t *plaintext, const void *src,
+                                 size_t len, size_t prefix_len);
 /**
  *
  */
