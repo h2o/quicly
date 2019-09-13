@@ -4392,7 +4392,7 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
     size_t enc_start = buf->off;
 
     /* data */
-    ptls_buffer_push64(buf, !!plaintext->is_retry | ((uint64_t)plaintext->issued_at << 1));
+    ptls_buffer_push64(buf, (!!plaintext->is_retry) | ((uint64_t)plaintext->issued_at << 1));
     {
         uint16_t port;
         ptls_buffer_push_block(buf, 1, {
