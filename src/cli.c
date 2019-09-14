@@ -54,17 +54,18 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
     }
 }
 
-static int save_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src);
+static int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src);
 
-static const char *ticket_file = NULL;
+static const char *session_file = NULL;
 static ptls_handshake_properties_t hs_properties;
 static quicly_transport_parameters_t resumed_transport_params;
+static ptls_iovec_t resumption_token;
 static quicly_context_t ctx;
 static quicly_cid_plaintext_t next_cid;
 static struct {
     ptls_aead_context_t *enc, *dec;
 } address_token_aead;
-static ptls_save_ticket_t save_ticket = {save_ticket_cb};
+static ptls_save_ticket_t save_session_ticket = {save_session_ticket_cb};
 static int enforce_retry;
 
 ptls_key_exchange_algorithm_t *key_exchanges[128];
@@ -73,7 +74,7 @@ static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .key_exchanges = key_exchanges,
                                 .cipher_suites = ptls_openssl_cipher_suites,
                                 .require_dhe_on_psk = 1,
-                                .save_ticket = &save_ticket};
+                                .save_ticket = &save_session_ticket};
 static const char *req_paths[1024];
 
 static int on_stop_sending(quicly_stream_t *stream, int err);
@@ -356,7 +357,7 @@ static void on_closed_by_peer(quicly_closed_by_peer_t *self, quicly_conn_t *conn
 static quicly_closed_by_peer_t closed_by_peer = {&on_closed_by_peer};
 
 static int on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn, ptls_buffer_t *buf,
-                                       quicly_address_token_plaintext_t *token)
+                                        quicly_address_token_plaintext_t *token)
 {
     return quicly_encrypt_address_token(tlsctx.random_bytes, address_token_aead.enc, buf, buf->off, token);
 }
@@ -755,28 +756,76 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
     }
 }
 
-int save_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src)
+static void load_session(void)
 {
-    quicly_conn_t *conn = *ptls_get_data_ptr(tls);
+    static uint8_t buf[65536];
+    size_t len;
+    int ret;
+
+    {
+        FILE *fp;
+        if ((fp = fopen(session_file, "rb")) == NULL)
+            return;
+        len = fread(buf, 1, sizeof(buf), fp);
+        if (len == 0 || !feof(fp)) {
+            fprintf(stderr, "failed to load ticket from file:%s\n", session_file);
+            exit(1);
+        }
+        fclose(fp);
+    }
+
+    {
+        const uint8_t *src = buf, *end = buf + len;
+        ptls_iovec_t ticket;
+        ptls_decode_open_block(src, end, 2, {
+            ticket = ptls_iovec_init(src, end - src);
+            src = end;
+        });
+        ptls_decode_open_block(src, end, 2, {
+            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, 1, src, end)) != 0)
+                goto Exit;
+            src = end;
+        });
+        ptls_decode_open_block(src, end, 2, {
+            if ((resumption_token.len = end - src) != 0) {
+                resumption_token.base = malloc(resumption_token.len);
+                memcpy(resumption_token.base, src, resumption_token.len);
+            }
+            src = end;
+        });
+        hs_properties.client.session_ticket = ticket;
+    }
+
+Exit:;
+}
+
+static struct {
+    ptls_iovec_t tls_ticket;
+    ptls_iovec_t address_token;
+} session_info;
+
+int save_session(const quicly_transport_parameters_t *transport_params)
+{
     ptls_buffer_t buf;
     FILE *fp = NULL;
     int ret;
 
-    if (ticket_file == NULL)
+    if (session_file == NULL)
         return 0;
 
     ptls_buffer_init(&buf, "", 0);
 
     /* build data (session ticket and transport parameters) */
-    ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, src.base, src.len); });
+    ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.tls_ticket.base, session_info.tls_ticket.len); });
     ptls_buffer_push_block(&buf, 2, {
-        if ((ret = quicly_encode_transport_parameter_list(&buf, 1, quicly_get_peer_transport_parameters(conn), NULL, NULL)) != 0)
+        if ((ret = quicly_encode_transport_parameter_list(&buf, 1, transport_params, NULL, NULL)) != 0)
             goto Exit;
     });
+    ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.address_token.base, session_info.address_token.len); });
 
     /* write file */
-    if ((fp = fopen(ticket_file, "wb")) == NULL) {
-        fprintf(stderr, "failed to open file:%s:%s\n", ticket_file, strerror(errno));
+    if ((fp = fopen(session_file, "wb")) == NULL) {
+        fprintf(stderr, "failed to open file:%s:%s\n", session_file, strerror(errno));
         ret = PTLS_ERROR_LIBRARY;
         goto Exit;
     }
@@ -790,41 +839,26 @@ Exit:
     return 0;
 }
 
-static void load_ticket(void)
+int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src)
 {
-    static uint8_t buf[65536];
-    size_t len;
-    int ret;
+    free(session_info.tls_ticket.base);
+    session_info.tls_ticket = ptls_iovec_init(malloc(src.len), src.len);
+    memcpy(session_info.tls_ticket.base, src.base, src.len);
 
-    {
-        FILE *fp;
-        if ((fp = fopen(ticket_file, "rb")) == NULL)
-            return;
-        len = fread(buf, 1, sizeof(buf), fp);
-        if (len == 0 || !feof(fp)) {
-            fprintf(stderr, "failed to load ticket from file:%s\n", ticket_file);
-            exit(1);
-        }
-        fclose(fp);
-    }
-
-    {
-        const uint8_t *src = buf, *end = buf + len;
-        ptls_iovec_t ticket;
-        ptls_decode_open_block(src, end, 2, {
-            ticket = ptls_iovec_init(src, end - src);
-            src = end;
-        });
-        ptls_decode_block(src, end, 2, {
-            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, 1, src, end)) != 0)
-                goto Exit;
-            src = end;
-        });
-        hs_properties.client.session_ticket = ticket;
-    }
-
-Exit:;
+    quicly_conn_t *conn = *ptls_get_data_ptr(tls);
+    return save_session(quicly_get_peer_transport_parameters(conn));
 }
+
+static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
+{
+    free(session_info.address_token.base);
+    session_info.address_token = ptls_iovec_init(malloc(token.len), token.len);
+    memcpy(session_info.address_token.base, token.base, token.len);
+
+    return save_session(quicly_get_peer_transport_parameters(conn));
+}
+
+static quicly_save_resumption_token_t save_resumption_token = {save_resumption_token_cb};
 
 static void usage(const char *cmd)
 {
@@ -870,6 +904,7 @@ int main(int argc, char **argv)
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
     ctx.closed_by_peer = &closed_by_peer;
+    ctx.save_resumption_token = &save_resumption_token;
     ctx.generate_resumption_token = &generate_resumption_token;
 
     setup_session_cache(ctx.tls);
@@ -961,7 +996,7 @@ int main(int argc, char **argv)
             }
             break;
         case 's':
-            ticket_file = optarg;
+            session_file = optarg;
             break;
         case 'V':
             setup_verify_certificate(ctx.tls);
@@ -1027,8 +1062,8 @@ int main(int argc, char **argv)
             quicly_new_default_cid_encryptor(&ptls_openssl_bfecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
     } else {
         /* client */
-        if (ticket_file != NULL)
-            load_ticket();
+        if (session_file != NULL)
+            load_session();
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");
