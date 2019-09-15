@@ -45,7 +45,7 @@ static void test_handshake(void)
     /* receive CH, send handshake upto ServerFinished */
     num_decoded = decode_packets(decoded, packets, num_packets);
     ok(num_decoded == 1);
-    ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, decoded, NULL, new_master_id(), NULL);
+    ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, decoded, new_master_id(), NULL, NULL);
     ok(ret == 0);
     free_packets(packets, num_packets);
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
@@ -487,7 +487,7 @@ static void tiny_connection_window(void)
         ok(quicly_get_first_timeout(client) > quic_ctx.now->cb(quic_ctx.now));
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, NULL, new_master_id(), NULL);
+        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, new_master_id(), NULL, NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
     }

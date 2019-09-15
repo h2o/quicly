@@ -168,7 +168,7 @@ static void test_even(void)
         ok(num_packets == 1);
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, NULL, new_master_id(), NULL);
+        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, new_master_id(), NULL, NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
         cond_up.cb(&cond_up);
@@ -273,7 +273,7 @@ static void loss_core(void)
         quic_now += 10;
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, NULL, new_master_id(), NULL);
+        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, new_master_id(), NULL, NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
         quic_now += 10;

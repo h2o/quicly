@@ -4024,8 +4024,8 @@ static int handle_stateless_reset(quicly_conn_t *conn)
 }
 
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                  quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
-                  const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties)
+                  quicly_decoded_packet_t *packet, const quicly_cid_plaintext_t *new_cid,
+                  ptls_handshake_properties_t *handshake_properties, quicly_address_token_plaintext_t *address_token)
 {
     struct st_quicly_cipher_context_t ingress_cipher = {NULL}, egress_cipher = {NULL};
     ptls_iovec_t payload;
