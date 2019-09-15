@@ -771,8 +771,11 @@ int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *serv
                    const quicly_transport_parameters_t *resumed_transport_params, ptls_iovec_t address_token);
 /**
  * accepts a new connection
- * @param new_cid the CID to be used for the connection. When an error is being returned, the application can reuse the CID provided
- *                to the function.
+ * @param new_cid        The CID to be used for the connection. When an error is being returned, the application can reuse the CID
+ *                       provided to the function.
+ * @param address_token  An validated address validation token, if any.  Applications MUST validate the address validation token
+ *                       before calling this function, dropping the ones that failed to validate.  When a token is supplied,
+ *                       `quicly_accept` will consult the values being supplied assuming that the peer's address has been validated.
  */
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
                   quicly_decoded_packet_t *packet, const quicly_cid_plaintext_t *new_cid,
