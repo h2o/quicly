@@ -391,8 +391,8 @@ int main(int argc, char **argv)
     if (!is_server()) {
         /* initiate a connection, and open a stream */
         int ret;
-        if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)&sa, salen, &next_cid, NULL, NULL,
-                                  ptls_iovec_init(NULL, 0))) != 0) {
+        if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)&sa, salen, &next_cid, ptls_iovec_init(NULL, 0), NULL,
+                                  NULL)) != 0) {
             fprintf(stderr, "quicly_connect failed:%d\n", ret);
             exit(1);
         }

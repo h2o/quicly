@@ -1613,8 +1613,8 @@ Exit:
 }
 
 int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                   const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties,
-                   const quicly_transport_parameters_t *resumed_transport_params, ptls_iovec_t address_token)
+                   const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
+                   ptls_handshake_properties_t *handshake_properties, const quicly_transport_parameters_t *resumed_transport_params)
 {
     quicly_conn_t *conn = NULL;
     const quicly_cid_t *server_cid;

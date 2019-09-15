@@ -34,7 +34,7 @@ static void test_handshake(void)
 
     /* send CH */
     ret =
-        quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), NULL, NULL, ptls_iovec_init(NULL, 0));
+        quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL);
     ok(ret == 0);
     num_packets = sizeof(packets) / sizeof(packets[0]);
     ret = quicly_send(client, packets, &num_packets);
@@ -477,8 +477,8 @@ static void tiny_connection_window(void)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), NULL, NULL,
-                             ptls_iovec_init(NULL, 0));
+        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                             NULL);
         ok(ret == 0);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);
