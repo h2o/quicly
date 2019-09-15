@@ -26,7 +26,8 @@
  */
 provider quicly {
     probe connect(struct st_quicly_conn_t *conn, int64_t at, uint32_t version);
-    probe accept(struct st_quicly_conn_t *conn, int64_t at, const char *dcid);
+    probe accept(struct st_quicly_conn_t *conn, int64_t at, const char *dcid,
+                 struct st_quicly_address_token_plaintext_t *address_token);
     probe free(struct st_quicly_conn_t *conn, int64_t at);
     probe send(struct st_quicly_conn_t *conn, int64_t at, int state, const char *dcid);
     probe receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const void *bytes, size_t num_bytes);
