@@ -4408,6 +4408,19 @@ void quicly_request_stop(quicly_stream_t *stream, int err)
     }
 }
 
+socklen_t quicly_get_socklen(struct sockaddr *sa)
+{
+    switch (sa->sa_family) {
+    case AF_INET:
+        return sizeof(struct sockaddr_in);
+    case AF_INET6:
+        return sizeof(struct sockaddr_in6);
+    default:
+        assert(!"unexpected socket type");
+        return 0;
+    }
+}
+
 char *quicly_escape_unsafe_string(char *buf, const void *bytes, size_t len)
 {
     char *dst = buf;

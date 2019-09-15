@@ -685,7 +685,7 @@ static quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, in
 /**
  *
  */
-static void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen);
+static struct sockaddr *quicly_get_peername(quicly_conn_t *conn);
 /**
  *
  */
@@ -865,6 +865,10 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
  */
 static void quicly_byte_to_hex(char *dst, uint8_t v);
 /**
+ *
+ */
+socklen_t quicly_get_socklen(struct sockaddr *sa);
+/**
  * Builds a safe string. Supplied buffer MUST be 4x + 1 bytes bigger than the input.
  */
 char *quicly_escape_unsafe_string(char *dst, const void *bytes, size_t len);
@@ -966,22 +970,10 @@ inline quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, in
     return uni ? c->peer.uni.next_stream_id : c->peer.bidi.next_stream_id;
 }
 
-inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen)
+inline struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    *sa = &c->peer.address.sa;
-    switch ((*sa)->sa_family) {
-    case AF_INET:
-        *salen = sizeof(struct sockaddr_in);
-        break;
-    case AF_INET6:
-        *salen = sizeof(struct sockaddr_in6);
-        break;
-    default:
-        *salen = 0;
-        assert(!"unexpected peer address type");
-        break;
-    }
+    return &c->peer.address.sa;
 }
 
 inline void **quicly_get_data(quicly_conn_t *conn)

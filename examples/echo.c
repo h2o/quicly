@@ -189,20 +189,10 @@ static void process_msg(int is_client, quicly_conn_t **conns, struct msghdr *msg
 static int send_one(int fd, quicly_datagram_t *p)
 {
     struct iovec vec = {.iov_base = p->data.base, .iov_len = p->data.len};
-    struct msghdr mess = {.msg_name = &p->dest.sa, .msg_iov = &vec, .msg_iovlen = 1};
+    struct msghdr mess = {
+        .msg_name = &p->dest.sa, .msg_namelen = quicly_get_socklen(&p->dest.sa), .msg_iov = &vec, .msg_iovlen = 1};
     int ret;
 
-    switch (p->dest.sa.sa_family) {
-    case AF_INET:
-        mess.msg_namelen = sizeof(struct sockaddr_in);
-        break;
-    case AF_INET6:
-        mess.msg_namelen = sizeof(struct sockaddr_in6);
-        break;
-    default:
-        assert(!"unexpected address family");
-        break;
-    }
     while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
         ;
     return ret;

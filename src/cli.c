@@ -371,17 +371,7 @@ static int send_one(int fd, quicly_datagram_t *p)
     struct iovec vec;
     memset(&mess, 0, sizeof(mess));
     mess.msg_name = &p->dest.sa;
-    switch (p->dest.sa.sa_family) {
-    case AF_INET:
-        mess.msg_namelen = sizeof(struct sockaddr_in);
-        break;
-    case AF_INET6:
-        mess.msg_namelen = sizeof(struct sockaddr_in6);
-        break;
-    default:
-        assert(!"unknown address type");
-        break;
-    }
+    mess.msg_namelen = quicly_get_socklen(&p->dest.sa);
     vec.iov_base = p->data.base;
     vec.iov_len = p->data.len;
     mess.msg_iov = &vec;
