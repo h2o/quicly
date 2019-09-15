@@ -33,8 +33,8 @@ static void test_handshake(void)
     int ret, i;
 
     /* send CH */
-    ret =
-        quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL);
+    ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                         NULL);
     ok(ret == 0);
     num_packets = sizeof(packets) / sizeof(packets[0]);
     ret = quicly_send(client, packets, &num_packets);
@@ -45,7 +45,7 @@ static void test_handshake(void)
     /* receive CH, send handshake upto ServerFinished */
     num_decoded = decode_packets(decoded, packets, num_packets);
     ok(num_decoded == 1);
-    ret = quicly_accept(&server, &quic_ctx, &fake_address.sa, decoded, NULL, new_master_id(), NULL);
+    ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL);
     ok(ret == 0);
     free_packets(packets, num_packets);
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
@@ -477,8 +477,8 @@ static void tiny_connection_window(void)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
-                             NULL);
+        ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
+                             NULL, NULL);
         ok(ret == 0);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);
@@ -487,7 +487,7 @@ static void tiny_connection_window(void)
         ok(quicly_get_first_timeout(client) > quic_ctx.now->cb(quic_ctx.now));
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, &fake_address.sa, &decoded, NULL, new_master_id(), NULL);
+        ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
     }

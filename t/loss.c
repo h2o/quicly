@@ -159,8 +159,8 @@ static void test_even(void)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
-                             NULL);
+        ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
+                             NULL, NULL);
         ok(ret == 0);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);
@@ -168,7 +168,7 @@ static void test_even(void)
         ok(num_packets == 1);
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, &fake_address.sa, &decoded, NULL, new_master_id(), NULL);
+        ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
         cond_up.cb(&cond_up);
@@ -263,8 +263,8 @@ static void loss_core(void)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
-                             NULL);
+        ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
+                             NULL, NULL);
         ok(ret == 0);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);
@@ -273,7 +273,7 @@ static void loss_core(void)
         quic_now += 10;
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, &fake_address.sa, &decoded, NULL, new_master_id(), NULL);
+        ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
         quic_now += 10;
