@@ -768,7 +768,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
  */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
                    const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties,
-                   const quicly_transport_parameters_t *resumed_transport_params);
+                   const quicly_transport_parameters_t *resumed_transport_params, ptls_iovec_t address_token);
 /**
  * accepts a new connection
  * @param new_cid the CID to be used for the connection. When an error is being returned, the application can reuse the CID provided

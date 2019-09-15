@@ -37,7 +37,8 @@ void test_stream_concurrency(void)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), NULL, NULL);
+        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), NULL, NULL,
+                             ptls_iovec_init(NULL, 0));
         ok(ret == 0);
         num_packets = 1;
         ret = quicly_send(client, &raw, &num_packets);

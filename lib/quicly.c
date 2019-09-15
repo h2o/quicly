@@ -308,7 +308,7 @@ struct st_quicly_conn_t {
 #define QUICLY_PENDING_FLOW_NEW_TOKEN_BIT (1 << 5)
     } pending;
     /**
-     * retry token
+     * retry token (if the token is a Retry token can be determined by consulting the length of retry_odcid)
      */
     ptls_iovec_t token;
     /**
@@ -1614,7 +1614,7 @@ Exit:
 
 int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
                    const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties,
-                   const quicly_transport_parameters_t *resumed_transport_params)
+                   const quicly_transport_parameters_t *resumed_transport_params, ptls_iovec_t address_token)
 {
     quicly_conn_t *conn = NULL;
     const quicly_cid_t *server_cid;
@@ -1631,6 +1631,14 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     }
     conn->super.peer.address_validation.validated = 1;
     conn->super.peer.address_validation.send_probe = 1;
+    if (address_token.len != 0) {
+        if ((conn->token.base = malloc(address_token.len)) == NULL) {
+            ret = PTLS_ERROR_NO_MEMORY;
+            goto Exit;
+        }
+        memcpy(conn->token.base, address_token.base, address_token.len);
+        conn->token.len = address_token.len;
+    }
     server_cid = quicly_get_peer_cid(conn);
 
     QUICLY_PROBE(CONNECT, conn, probe_now(), conn->super.version);
@@ -4147,12 +4155,13 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            /* do not accept a second token (TODO allow 0-RTT token to be replaced) */
-            if (conn->token.len != 0) {
+            /* do not accept a second Retry */
+            if (conn->retry_odcid.len != 0) {
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
             /* store token and ODCID */
+            free(conn->token.base);
             if ((conn->token.base = malloc(packet->token.len)) == NULL) {
                 ret = PTLS_ERROR_NO_MEMORY;
                 goto Exit;
