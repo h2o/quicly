@@ -181,7 +181,7 @@ static void process_msg(int is_client, quicly_conn_t **conns, struct msghdr *msg
             quicly_receive(conns[i], &decoded);
         } else if (!is_client) {
             /* assume that the packet is a new connection */
-            quicly_accept(conns + i, &ctx, msg->msg_name, msg->msg_namelen, &decoded, &next_cid, NULL, NULL);
+            quicly_accept(conns + i, &ctx, msg->msg_name, msg->msg_namelen, &decoded, NULL, &next_cid, NULL);
         }
     }
 }

@@ -716,7 +716,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                         break;
                     } else {
                         /* new connection */
-                        int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, &packet, &next_cid, NULL, token);
+                        int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, &packet, token, &next_cid, NULL);
                         if (ret == 0) {
                             assert(conn != NULL);
                             ++next_cid.master_id;
