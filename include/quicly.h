@@ -55,10 +55,15 @@ extern "C" {
 #define QUICLY_STATELESS_RESET_TOKEN_LEN 16
 #define QUICLY_STATELESS_RESET_PACKET_MIN_LEN 39
 
+typedef union st_quicly_address_t {
+    struct sockaddr sa;
+    struct sockaddr_in sin;
+    struct sockaddr_in6 sin6;
+} quicly_address_t;
+
 typedef struct st_quicly_datagram_t {
     ptls_iovec_t data;
-    socklen_t salen;
-    struct sockaddr sa;
+    quicly_address_t dest;
 } quicly_datagram_t;
 
 typedef struct st_quicly_cid_t quicly_cid_t;
@@ -83,7 +88,7 @@ typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintex
  * allocates a packet buffer
  */
 typedef struct st_quicly_packet_allocator_t {
-    quicly_datagram_t *(*alloc_packet)(struct st_quicly_packet_allocator_t *self, socklen_t salen, size_t payloadsize);
+    quicly_datagram_t *(*alloc_packet)(struct st_quicly_packet_allocator_t *self, size_t payloadsize);
     void (*free_packet)(struct st_quicly_packet_allocator_t *self, quicly_datagram_t *packet);
 } quicly_packet_allocator_t;
 
@@ -388,8 +393,7 @@ struct _st_quicly_conn_public_t {
             uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
         } stateless_reset;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
-        struct sockaddr *sa;
-        socklen_t salen;
+        quicly_address_t address;
         quicly_transport_parameters_t transport_params;
         struct {
             unsigned validated : 1;
@@ -542,6 +546,9 @@ typedef struct st_quicly_decoded_packet_t {
      * octets of the entire packet
      */
     ptls_iovec_t octets;
+    /**
+     * Connection ID(s)
+     */
     struct {
         /**
          * destination CID
@@ -595,11 +602,7 @@ typedef struct st_quicly_decoded_packet_t {
 struct st_quicly_address_token_plaintext_t {
     int is_retry;
     uint64_t issued_at;
-    union {
-        struct sockaddr sa;
-        struct sockaddr_in sin;
-        struct sockaddr_in6 sin6;
-    } remote;
+    quicly_address_t remote;
     union {
         struct {
             quicly_cid_t odcid;
@@ -719,8 +722,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s);
 /**
  *
  */
-quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                   ptls_iovec_t dest_cid, ptls_iovec_t src_cid);
+quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, ptls_iovec_t dest_cid,
+                                                   ptls_iovec_t src_cid);
 /**
  *
  */
@@ -730,8 +733,7 @@ int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t c
  *
  */
 quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *sa,
-                                     socklen_t salen, ptls_iovec_t client_cid, ptls_iovec_t server_cid, ptls_iovec_t odcid,
-                                     ptls_iovec_t token);
+                                     ptls_iovec_t client_cid, ptls_iovec_t server_cid, ptls_iovec_t odcid, ptls_iovec_t token);
 /**
  *
  */
@@ -739,7 +741,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 /**
  *
  */
-quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen, const void *cid);
+quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *sa, const void *cid);
 /**
  *
  */
@@ -751,7 +753,7 @@ int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet);
 /**
  *
  */
-int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t salen, quicly_decoded_packet_t *decoded);
+int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, quicly_decoded_packet_t *decoded);
 /**
  *
  */
@@ -766,7 +768,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
  * Initiates a new connection.
  * @param new_cid the CID to be used for the connection. path_id is ignored.
  */
-int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
+int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa,
                    const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
                    ptls_handshake_properties_t *handshake_properties,
                    const quicly_transport_parameters_t *resumed_transport_params);
@@ -778,9 +780,9 @@ int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *serv
  *                       before calling this function, dropping the ones that failed to validate.  When a token is supplied,
  *                       `quicly_accept` will consult the values being supplied assuming that the peer's address has been validated.
  */
-int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                  quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
-                  const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties);
+int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *srcaddr, quicly_decoded_packet_t *packet,
+                  quicly_address_token_plaintext_t *address_token, const quicly_cid_plaintext_t *new_cid,
+                  ptls_handshake_properties_t *handshake_properties);
 /**
  *
  */
@@ -957,8 +959,19 @@ inline quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, in
 inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    *sa = c->peer.sa;
-    *salen = c->peer.salen;
+    *sa = &c->peer.address.sa;
+    switch ((*sa)->sa_family) {
+    case AF_INET:
+        *salen = sizeof(struct sockaddr_in);
+        break;
+    case AF_INET6:
+        *salen = sizeof(struct sockaddr_in6);
+        break;
+    default:
+        *salen = 0;
+        assert(!"unexpected peer address type");
+        break;
+    }
 }
 
 inline void **quicly_get_data(quicly_conn_t *conn)

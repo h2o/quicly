@@ -370,8 +370,18 @@ static int send_one(int fd, quicly_datagram_t *p)
     struct msghdr mess;
     struct iovec vec;
     memset(&mess, 0, sizeof(mess));
-    mess.msg_name = &p->sa;
-    mess.msg_namelen = p->salen;
+    mess.msg_name = &p->dest.sa;
+    switch (p->dest.sa.sa_family) {
+    case AF_INET:
+        mess.msg_namelen = sizeof(struct sockaddr_in);
+        break;
+    case AF_INET6:
+        mess.msg_namelen = sizeof(struct sockaddr_in6);
+        break;
+    default:
+        assert(!"unknown address type");
+        break;
+    }
     vec.iov_base = p->data.base;
     vec.iov_len = p->data.len;
     mess.msg_iov = &vec;
@@ -449,7 +459,7 @@ static void enqueue_requests(quicly_conn_t *conn)
     enqueue_requests_at = INT64_MAX;
 }
 
-static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
+static int run_client(struct sockaddr *sa, const char *host)
 {
     int fd, ret;
     struct sockaddr_in local;
@@ -465,7 +475,7 @@ static int run_client(struct sockaddr *sa, socklen_t salen, const char *host)
         perror("bind(2) failed");
         return 1;
     }
-    ret = quicly_connect(&conn, &ctx, host, sa, salen, &next_cid, resumption_token, &hs_properties, &resumed_transport_params);
+    ret = quicly_connect(&conn, &ctx, host, sa, &next_cid, resumption_token, &hs_properties, &resumed_transport_params);
     assert(ret == 0);
     ++next_cid.master_id;
     enqueue_requests(conn);
@@ -672,7 +682,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
                     if (packet.version != QUICLY_PROTOCOL_VERSION) {
                         quicly_datagram_t *rp =
-                            quicly_send_version_negotiation(&ctx, &sa, salen, packet.cid.src, packet.cid.dest.encrypted);
+                            quicly_send_version_negotiation(&ctx, &sa, packet.cid.src, packet.cid.dest.encrypted);
                         assert(rp != NULL);
                         if (send_one(fd, rp) == -1)
                             perror("sendmsg failed");
@@ -682,10 +692,11 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                     if (packet.cid.dest.encrypted.len > QUICLY_MAX_CID_LEN_V1 || packet.cid.src.len > QUICLY_MAX_CID_LEN_V1)
                         break;
                 }
+
                 quicly_conn_t *conn = NULL;
                 size_t i;
                 for (i = 0; i != num_conns; ++i) {
-                    if (quicly_is_destination(conns[i], &sa, salen, &packet)) {
+                    if (quicly_is_destination(conns[i], &sa, &packet)) {
                         conn = conns[i];
                         break;
                     }
@@ -707,7 +718,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                         uint8_t new_server_cid[8];
                         memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
                         new_server_cid[0] ^= 0xff;
-                        quicly_datagram_t *rp = quicly_send_retry(&ctx, address_token_aead.enc, &sa, salen, packet.cid.src,
+                        quicly_datagram_t *rp = quicly_send_retry(&ctx, address_token_aead.enc, &sa, packet.cid.src,
                                                                   ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
                                                                   packet.cid.dest.encrypted, ptls_iovec_init(NULL, 0));
                         assert(rp != NULL);
@@ -716,7 +727,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                         break;
                     } else {
                         /* new connection */
-                        int ret = quicly_accept(&conn, &ctx, &sa, mess.msg_namelen, &packet, token, &next_cid, NULL);
+                        int ret = quicly_accept(&conn, &ctx, &sa, &packet, token, &next_cid, NULL);
                         if (ret == 0) {
                             assert(conn != NULL);
                             ++next_cid.master_id;
@@ -732,7 +743,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                      * because loop is prevented by authenticating the CID (by checking node_id and thread_id). If the peer is also
                      * sending a reset, then the next CID is highly likely to contain a non-authenticating CID, ... */
                     if (packet.cid.dest.plaintext.node_id == 0 && packet.cid.dest.plaintext.thread_id == 0) {
-                        quicly_datagram_t *dgram = quicly_send_stateless_reset(&ctx, &sa, salen, packet.cid.dest.encrypted.base);
+                        quicly_datagram_t *dgram = quicly_send_stateless_reset(&ctx, &sa, packet.cid.dest.encrypted.base);
                         if (send_one(fd, dgram) == -1)
                             perror("sendmsg failed");
                     }
@@ -1075,5 +1086,5 @@ int main(int argc, char **argv)
     if (resolve_address((void *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
-    return ctx.tls->certificates.count != 0 ? run_server((void *)&sa, salen) : run_client((void *)&sa, salen, host);
+    return ctx.tls->certificates.count != 0 ? run_server((void *)&sa, salen) : run_client((void *)&sa, host);
 }

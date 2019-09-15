@@ -362,6 +362,22 @@ static int64_t now_cb(void)
 
 static int64_t (*volatile probe_now)(void) = now_cb;
 
+static void set_address(quicly_address_t *addr, struct sockaddr *sa)
+{
+    switch (sa->sa_family) {
+    case AF_INET:
+        addr->sin = *(struct sockaddr_in *)sa;
+        break;
+    case AF_INET6:
+        addr->sin6 = *(struct sockaddr_in6 *)sa;
+        break;
+    default:
+        memset(addr, 0xff, sizeof(*addr));
+        assert(!"unexpected address type");
+        break;
+    }
+}
+
 static ptls_cipher_suite_t *get_aes128gcmsha256(quicly_context_t *ctx)
 {
     ptls_cipher_suite_t **cs;
@@ -560,26 +576,19 @@ int quicly_connection_is_ready(quicly_conn_t *conn)
     return conn->application != NULL;
 }
 
-static int set_peeraddr(quicly_conn_t *conn, struct sockaddr *addr, socklen_t addrlen)
+static void set_peeraddr(quicly_conn_t *conn, struct sockaddr *srcaddr)
 {
-    int ret;
-
-    if (conn->super.peer.salen != addrlen) {
-        struct sockaddr *newsa;
-        if ((newsa = malloc(addrlen)) == NULL) {
-            ret = PTLS_ERROR_NO_MEMORY;
-            goto Exit;
-        }
-        free(conn->super.peer.sa);
-        conn->super.peer.sa = newsa;
-        conn->super.peer.salen = addrlen;
+    switch (srcaddr->sa_family) {
+    case AF_INET:
+        conn->super.peer.address.sin = *(struct sockaddr_in *)srcaddr;
+        break;
+    case AF_INET6:
+        conn->super.peer.address.sin6 = *(struct sockaddr_in6 *)srcaddr;
+        break;
+    default:
+        assert(!"unexpected source address type");
+        break;
     }
-
-    memcpy(conn->super.peer.sa, addr, addrlen);
-    ret = 0;
-
-Exit:
-    return ret;
 }
 
 static int stream_is_destroyable(quicly_stream_t *stream)
@@ -1199,7 +1208,6 @@ void quicly_free(quicly_conn_t *conn)
     free_application_space(&conn->application);
 
     free(conn->token.base);
-    free(conn->super.peer.sa);
     free(conn);
 }
 
@@ -1464,7 +1472,7 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
     return type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS;
 }
 
-static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
+static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *srcaddr,
                                         const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties)
 {
     ptls_t *tls = NULL;
@@ -1553,11 +1561,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_linklist_init(&conn->_.pending.streams.control);
     conn->_.idle_timeout.at = INT64_MAX;
     conn->_.idle_timeout.should_rearm_on_send = 1;
-
-    if (set_peeraddr(&conn->_, sa, salen) != 0) {
-        quicly_free(&conn->_);
-        return NULL;
-    }
+    set_peeraddr(&conn->_, srcaddr);
 
     *ptls_get_data_ptr(tls) = &conn->_;
 
@@ -1612,7 +1616,7 @@ Exit:
     return ret; /* negative error codes used to transmit QUIC errors through picotls */
 }
 
-int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
+int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa,
                    const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
                    ptls_handshake_properties_t *handshake_properties, const quicly_transport_parameters_t *resumed_transport_params)
 {
@@ -1625,7 +1629,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     update_now(ctx);
 
-    if ((conn = create_connection(ctx, server_name, sa, salen, new_cid, handshake_properties)) == NULL) {
+    if ((conn = create_connection(ctx, server_name, sa, new_cid, handshake_properties)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -2233,11 +2237,10 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         s->send_window = round_send_window(s->send_window);
         if (ack_eliciting && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
-        if ((s->target.packet = conn->super.ctx->packet_allocator->alloc_packet(
-                 conn->super.ctx->packet_allocator, conn->super.peer.salen, conn->super.ctx->max_packet_size)) == NULL)
+        if ((s->target.packet = conn->super.ctx->packet_allocator->alloc_packet(conn->super.ctx->packet_allocator,
+                                                                                conn->super.ctx->max_packet_size)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
-        s->target.packet->salen = conn->super.peer.salen;
-        memcpy(&s->target.packet->sa, conn->super.peer.sa, conn->super.peer.salen);
+        s->target.packet->dest = conn->super.peer.address;
         s->target.cipher = s->current.cipher;
         s->dst = s->target.packet->data.base;
         s->dst_end = s->target.packet->data.base + conn->super.ctx->max_packet_size;
@@ -2774,16 +2777,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
 
     /* build token */
     token = (quicly_address_token_plaintext_t){0, conn->super.ctx->now->cb(conn->super.ctx->now)};
-    switch (conn->super.peer.sa->sa_family) {
-    case AF_INET:
-        token.remote.sin = *(struct sockaddr_in *)conn->super.peer.sa;
-        break;
-    case AF_INET6:
-        token.remote.sin6 = *(struct sockaddr_in6 *)conn->super.peer.sa;
-        break;
-    default:
-        return PTLS_ERROR_LIBRARY;
-    }
+    token.remote = conn->super.peer.address;
     /* TODO fill token.resumption */
 
     /* encrypt */
@@ -2806,16 +2800,15 @@ Exit:
     return ret;
 }
 
-quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                   ptls_iovec_t dest_cid, ptls_iovec_t src_cid)
+quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, ptls_iovec_t dest_cid,
+                                                   ptls_iovec_t src_cid)
 {
     quicly_datagram_t *packet;
     uint8_t *dst;
 
-    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, salen, ctx->max_packet_size)) == NULL)
+    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, ctx->max_packet_size)) == NULL)
         return NULL;
-    packet->salen = salen;
-    memcpy(&packet->sa, sa, salen);
+    set_address(&packet->dest, sa);
     dst = packet->data.base;
 
     /* type_flags */
@@ -2864,8 +2857,7 @@ int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t c
 }
 
 quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *sa,
-                                     socklen_t salen, ptls_iovec_t client_cid, ptls_iovec_t server_cid, ptls_iovec_t odcid,
-                                     ptls_iovec_t appdata)
+                                     ptls_iovec_t client_cid, ptls_iovec_t server_cid, ptls_iovec_t odcid, ptls_iovec_t appdata)
 {
     quicly_address_token_plaintext_t token;
     quicly_datagram_t *packet = NULL;
@@ -2876,17 +2868,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
 
     /* build token as plaintext */
     token = (quicly_address_token_plaintext_t){1, ctx->now->cb(ctx->now)};
-    switch (sa->sa_family) {
-    case AF_INET:
-        token.remote.sin = *(struct sockaddr_in *)sa;
-        break;
-    case AF_INET6:
-        token.remote.sin6 = *(struct sockaddr_in6 *)sa;
-        break;
-    default:
-        assert(!"unsupported remote address type");
-        break;
-    }
+    set_address(&token.remote, sa);
     set_cid(&token.retry.odcid, odcid);
     if ((ret = quicly_retry_calc_cidpair_hash(get_aes128gcmsha256(ctx)->hash, client_cid, server_cid, &token.retry.cidpair_hash)) !=
         0)
@@ -2898,10 +2880,9 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
     }
 
     /* build packet */
-    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, salen, ctx->max_packet_size)) == NULL)
+    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, ctx->max_packet_size)) == NULL)
         goto Exit;
-    packet->salen = salen;
-    memcpy(&packet->sa, sa, salen);
+    set_address(&packet->dest, sa);
     ptls_buffer_init(&buf, packet->data.base, ctx->max_packet_size);
 
     ctx->tls->random_bytes(buf.base + buf.off, 1);
@@ -3291,15 +3272,14 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     return ret;
 }
 
-quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen, const void *cid)
+quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *sa, const void *cid)
 {
     quicly_datagram_t *dgram;
 
     /* allocate packet, set peer address */
-    if ((dgram = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, salen, QUICLY_STATELESS_RESET_PACKET_MIN_LEN)) == NULL)
+    if ((dgram = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, QUICLY_STATELESS_RESET_PACKET_MIN_LEN)) == NULL)
         return NULL;
-    dgram->salen = salen;
-    memcpy(&dgram->sa, sa, salen);
+    set_address(&dgram->dest, sa);
 
     /* build stateless reset packet */
     ctx->tls->random_bytes(dgram->data.base, QUICLY_STATELESS_RESET_PACKET_MIN_LEN - QUICLY_STATELESS_RESET_TOKEN_LEN);
@@ -3832,11 +3812,11 @@ static int is_stateless_reset(quicly_conn_t *conn, quicly_decoded_packet_t *deco
     return 1;
 }
 
-int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t salen, quicly_decoded_packet_t *decoded)
+int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, quicly_decoded_packet_t *decoded)
 {
     if (QUICLY_PACKET_IS_LONG_HEADER(decoded->octets.base[0])) {
         /* long header: validate address, then consult the CID */
-        if (compare_socket_address(conn->super.peer.sa, sa) != 0)
+        if (compare_socket_address(&conn->super.peer.address.sa, sa) != 0)
             return 0;
         /* server may see the CID generated by the client for Initial and 0-RTT packets */
         if (!quicly_is_client(conn) && decoded->cid.dest.might_be_client_generated) {
@@ -3853,7 +3833,7 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t sa
         if (is_stateless_reset(conn, decoded))
             goto Found_StatelessReset;
     } else {
-        if (compare_socket_address(conn->super.peer.sa, sa) == 0)
+        if (compare_socket_address(&conn->super.peer.address.sa, sa) == 0)
             goto Found;
     }
 
@@ -4023,9 +4003,9 @@ static int handle_stateless_reset(quicly_conn_t *conn)
     return handle_close(conn, QUICLY_ERROR_RECEIVED_STATELESS_RESET, UINT64_MAX, ptls_iovec_init("", 0));
 }
 
-int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                  quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
-                  const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties)
+int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *srcaddr, quicly_decoded_packet_t *packet,
+                  quicly_address_token_plaintext_t *address_token, const quicly_cid_plaintext_t *new_cid,
+                  ptls_handshake_properties_t *handshake_properties)
 {
     struct st_quicly_cipher_context_t ingress_cipher = {NULL}, egress_cipher = {NULL};
     ptls_iovec_t payload;
@@ -4060,7 +4040,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     }
 
     /* create connection */
-    if ((*conn = create_connection(ctx, NULL, sa, salen, new_cid, handshake_properties)) == NULL) {
+    if ((*conn = create_connection(ctx, NULL, srcaddr, new_cid, handshake_properties)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }

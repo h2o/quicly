@@ -37,7 +37,7 @@ void test_stream_concurrency(void)
         size_t num_packets;
         quicly_decoded_packet_t decoded;
 
-        ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)"abc", 3, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+        ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
                              NULL);
         ok(ret == 0);
         num_packets = 1;
@@ -46,7 +46,7 @@ void test_stream_concurrency(void)
         ok(num_packets == 1);
         ok(decode_packets(&decoded, &raw, 1) == 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, (void *)"abc", 3, &decoded, NULL, new_master_id(), NULL);
+        ret = quicly_accept(&server, &quic_ctx, &fake_address.sa, &decoded, NULL, new_master_id(), NULL);
         ok(ret == 0);
         free_packets(&raw, 1);
         transmit(server, client);
