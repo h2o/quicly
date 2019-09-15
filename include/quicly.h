@@ -67,6 +67,7 @@ typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 typedef struct st_quicly_send_context_t quicly_send_context_t;
+typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintext_t;
 
 #define QUICLY_CALLBACK_TYPE0(ret, name)                                                                                           \
     typedef struct st_quicly_##name##_t {                                                                                          \
@@ -142,6 +143,15 @@ QUICLY_CALLBACK_TYPE(void, closed_by_peer, quicly_conn_t *conn, int err, uint64_
  * returns current time in milliseconds
  */
 QUICLY_CALLBACK_TYPE0(int64_t, now);
+/**
+ * called when a NEW_TOKEN token is received on a connection
+ */
+QUICLY_CALLBACK_TYPE(int, save_resumption_token, quicly_conn_t *conn, ptls_iovec_t token);
+/**
+ *
+ */
+QUICLY_CALLBACK_TYPE(int, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
+                     quicly_address_token_plaintext_t *token);
 
 typedef struct st_quicly_max_stream_data_t {
     uint64_t bidi_local, bidi_remote, uni;
@@ -265,6 +275,14 @@ struct st_quicly_context_t {
      * returns current time in milliseconds
      */
     quicly_now_t *now;
+    /**
+     * called wen a NEW_TOKEN token is being received
+     */
+    quicly_save_resumption_token_t *save_resumption_token;
+    /**
+     *
+     */
+    quicly_generate_resumption_token_t *generate_resumption_token;
 };
 
 /**
@@ -574,7 +592,7 @@ typedef struct st_quicly_decoded_packet_t {
     } _is_stateless_reset_cached;
 } quicly_decoded_packet_t;
 
-typedef struct st_quicly_address_token_plaintext_t {
+struct st_quicly_address_token_plaintext_t {
     int is_retry;
     uint64_t issued_at;
     union {
@@ -596,7 +614,7 @@ typedef struct st_quicly_address_token_plaintext_t {
         uint8_t bytes[256];
         size_t len;
     } appdata;
-} quicly_address_token_plaintext_t;
+};
 
 /**
  *
@@ -725,6 +743,10 @@ quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct soc
 /**
  *
  */
+int quicly_send_resumption_token(quicly_conn_t *conn);
+/**
+ *
+ */
 int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet);
 /**
  *
@@ -745,12 +767,16 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
  * @param new_cid the CID to be used for the connection. path_id is ignored.
  */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                   const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties,
+                   const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
+                   ptls_handshake_properties_t *handshake_properties,
                    const quicly_transport_parameters_t *resumed_transport_params);
 /**
  * accepts a new connection
- * @param new_cid the CID to be used for the connection. When an error is being returned, the application can reuse the CID provided
- *                to the function.
+ * @param new_cid        The CID to be used for the connection. When an error is being returned, the application can reuse the CID
+ *                       provided to the function.
+ * @param address_token  An validated address validation token, if any.  Applications MUST validate the address validation token
+ *                       before calling this function, dropping the ones that failed to validate.  When a token is supplied,
+ *                       `quicly_accept` will consult the values being supplied assuming that the peer's address has been validated.
  */
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
