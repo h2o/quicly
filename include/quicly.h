@@ -758,7 +758,7 @@ int quicly_send_resumption_token(quicly_conn_t *conn);
 /**
  *
  */
-int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet);
+int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr, quicly_decoded_packet_t *packet);
 /**
  * consults if the incoming packet identified by (dest_addr, src_addr, decoded) belongs to the given connection
  */

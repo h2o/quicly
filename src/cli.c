@@ -530,7 +530,7 @@ static int run_client(struct sockaddr *sa, const char *host)
                 size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
                 if (plen == SIZE_MAX)
                     break;
-                quicly_receive(conn, &packet);
+                quicly_receive(conn, NULL, &sa, &packet);
                 off += plen;
             }
         }
@@ -703,7 +703,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 }
                 if (conn != NULL) {
                     /* existing connection */
-                    quicly_receive(conn, &packet);
+                    quicly_receive(conn, NULL, &sa, &packet);
                 } else if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
                     /* long header packet; potentially a new connection */
                     quicly_address_token_plaintext_t *token = NULL, token_buf;

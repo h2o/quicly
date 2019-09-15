@@ -284,7 +284,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     if (num_datagrams != 0) {
         size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
         for (i = 0; i != num_packets; ++i) {
-            ret = quicly_receive(dst, decoded + i);
+            ret = quicly_receive(dst, NULL, &fake_address.sa, decoded + i);
             ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
         }
         free_packets(datagrams, num_datagrams);

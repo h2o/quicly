@@ -4096,7 +4096,7 @@ Exit:
     return ret;
 }
 
-int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
+int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr, quicly_decoded_packet_t *packet)
 {
     ptls_cipher_context_t *header_protection;
     ptls_aead_context_t **aead;

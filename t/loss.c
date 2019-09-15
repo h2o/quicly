@@ -125,7 +125,7 @@ static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sen
                 size_t num_decoded = decode_packets(decoded, packets + i, 1), j;
                 assert(num_decoded != 0);
                 for (j = 0; j != num_decoded; ++j) {
-                    ret = quicly_receive(dst, decoded + j);
+                    ret = quicly_receive(dst, NULL, &fake_address.sa, decoded + j);
                     if (!(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED)) {
                         fprintf(stderr, "%s: quicly_receive: i=%zu, j=%zu, ret=%d\n", __FUNCTION__, i, j, ret);
                         return ret;
