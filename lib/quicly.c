@@ -4067,8 +4067,11 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     (*conn)->super.state = QUICLY_STATE_CONNECTED;
     set_cid(&(*conn)->super.peer.cid, packet->cid.src);
     set_cid(&(*conn)->super.host.offered_cid, packet->cid.dest.encrypted);
-    if (address_token != NULL && address_token->is_retry)
-        set_cid(&(*conn)->retry_odcid, ptls_iovec_init(address_token->retry.odcid.cid, address_token->retry.odcid.len));
+    if (address_token != NULL) {
+        (*conn)->super.peer.address_validation.validated = 1;
+        if (address_token->is_retry)
+            set_cid(&(*conn)->retry_odcid, ptls_iovec_init(address_token->retry.odcid.cid, address_token->retry.odcid.len));
+    }
     if ((ret = setup_handshake_space_and_flow(*conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
     (*conn)->initial->super.next_expected_packet_number = next_expected_pn;
