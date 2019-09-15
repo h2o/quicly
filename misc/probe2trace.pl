@@ -142,8 +142,10 @@ for my $probe (@probes) {
                 } else {
                     push @ap, "arg$i";
                 }
-            } elsif ($type =~ /^const\s+void\s+\*$/) {
-                # skip const void *
+            } elsif ($type =~ /\s+\*$/) {
+                # emit the address for other pointers
+                push @fmt, qq!"name":"0x%llx"!;
+                push @ap, "(unsigned long long)arg$i";
             } else {
                 die "can't handle type: $type";
             }
