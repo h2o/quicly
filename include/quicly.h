@@ -197,7 +197,7 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint8_t disable_migration : 1;
+    uint8_t disable_active_migration : 1;
 } quicly_transport_parameters_t;
 
 struct st_quicly_cid_t {
