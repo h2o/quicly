@@ -4307,6 +4307,11 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 conn->crypto.handshake_scheduled_for_discard = 1;
             }
         }
+        /* when running as a client, respect "disable_migration" TP sent by the peer at the end of the TLS handshake */
+        if (quicly_is_client(conn) && conn->super.host.address.sa.sa_family == AF_UNSPEC && dest_addr != NULL &&
+            dest_addr->sa_family != AF_UNSPEC && ptls_handshake_is_complete(conn->crypto.tls) &&
+            conn->super.peer.transport_params.disable_migration)
+            set_address(&conn->super.host.address, dest_addr);
         break;
     case QUICLY_EPOCH_1RTT:
         if (!is_ack_only && should_send_max_data(conn))
