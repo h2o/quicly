@@ -55,10 +55,15 @@ extern "C" {
 #define QUICLY_STATELESS_RESET_TOKEN_LEN 16
 #define QUICLY_STATELESS_RESET_PACKET_MIN_LEN 39
 
+typedef union st_quicly_address_t {
+    struct sockaddr sa;
+    struct sockaddr_in sin;
+    struct sockaddr_in6 sin6;
+} quicly_address_t;
+
 typedef struct st_quicly_datagram_t {
     ptls_iovec_t data;
-    socklen_t salen;
-    struct sockaddr sa;
+    quicly_address_t dest, src;
 } quicly_datagram_t;
 
 typedef struct st_quicly_cid_t quicly_cid_t;
@@ -83,7 +88,7 @@ typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintex
  * allocates a packet buffer
  */
 typedef struct st_quicly_packet_allocator_t {
-    quicly_datagram_t *(*alloc_packet)(struct st_quicly_packet_allocator_t *self, socklen_t salen, size_t payloadsize);
+    quicly_datagram_t *(*alloc_packet)(struct st_quicly_packet_allocator_t *self, size_t payloadsize);
     void (*free_packet)(struct st_quicly_packet_allocator_t *self, quicly_datagram_t *packet);
 } quicly_packet_allocator_t;
 
@@ -189,6 +194,10 @@ typedef struct st_quicly_transport_parameters_t {
      * in milliseconds; quicly ignores the value set for quicly_context_t::transport_parameters
      */
     uint16_t max_ack_delay;
+    /**
+     *
+     */
+    uint8_t disable_migration : 1;
 } quicly_transport_parameters_t;
 
 struct st_quicly_cid_t {
@@ -361,6 +370,10 @@ struct _st_quicly_conn_public_t {
     quicly_cid_plaintext_t master_id;
     struct {
         /**
+         * the local address (may be AF_UNSPEC)
+         */
+        quicly_address_t address;
+        /**
          * the SCID used in long header packets
          */
         quicly_cid_t src_cid;
@@ -377,6 +390,10 @@ struct _st_quicly_conn_public_t {
     } host;
     struct {
         /**
+         * the remote address (cannot be AF_UNSPEC)
+         */
+        quicly_address_t address;
+        /**
          * CID used for emitting the packets
          */
         quicly_cid_t cid;
@@ -388,8 +405,6 @@ struct _st_quicly_conn_public_t {
             uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
         } stateless_reset;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
-        struct sockaddr *sa;
-        socklen_t salen;
         quicly_transport_parameters_t transport_params;
         struct {
             unsigned validated : 1;
@@ -542,6 +557,9 @@ typedef struct st_quicly_decoded_packet_t {
      * octets of the entire packet
      */
     ptls_iovec_t octets;
+    /**
+     * Connection ID(s)
+     */
     struct {
         /**
          * destination CID
@@ -595,11 +613,7 @@ typedef struct st_quicly_decoded_packet_t {
 struct st_quicly_address_token_plaintext_t {
     int is_retry;
     uint64_t issued_at;
-    union {
-        struct sockaddr sa;
-        struct sockaddr_in sin;
-        struct sockaddr_in6 sin6;
-    } remote;
+    quicly_address_t local, remote;
     union {
         struct {
             quicly_cid_t odcid;
@@ -675,7 +689,7 @@ static quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, in
 /**
  *
  */
-static void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen);
+static struct sockaddr *quicly_get_peername(quicly_conn_t *conn);
 /**
  *
  */
@@ -719,8 +733,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s);
 /**
  *
  */
-quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
-                                                   ptls_iovec_t dest_cid, ptls_iovec_t src_cid);
+quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
+                                                   struct sockaddr *src_addr, ptls_iovec_t src_cid);
 /**
  *
  */
@@ -729,8 +743,8 @@ int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t c
 /**
  *
  */
-quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *sa,
-                                     socklen_t salen, ptls_iovec_t client_cid, ptls_iovec_t server_cid, ptls_iovec_t odcid,
+quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *dest_addr,
+                                     ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, ptls_iovec_t odcid,
                                      ptls_iovec_t token);
 /**
  *
@@ -739,7 +753,8 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 /**
  *
  */
-quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen, const void *cid);
+quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
+                                               const void *src_cid);
 /**
  *
  */
@@ -747,11 +762,12 @@ int quicly_send_resumption_token(quicly_conn_t *conn);
 /**
  *
  */
-int quicly_receive(quicly_conn_t *conn, quicly_decoded_packet_t *packet);
+int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr, quicly_decoded_packet_t *packet);
 /**
- *
+ * consults if the incoming packet identified by (dest_addr, src_addr, decoded) belongs to the given connection
  */
-int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *sa, socklen_t salen, quicly_decoded_packet_t *decoded);
+int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
+                          quicly_decoded_packet_t *decoded);
 /**
  *
  */
@@ -766,8 +782,8 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
  * Initiates a new connection.
  * @param new_cid the CID to be used for the connection. path_id is ignored.
  */
-int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *sa, socklen_t salen,
-                   const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
+int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *dest_addr,
+                   struct sockaddr *src_addr, const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
                    ptls_handshake_properties_t *handshake_properties,
                    const quicly_transport_parameters_t *resumed_transport_params);
 /**
@@ -778,7 +794,7 @@ int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *serv
  *                       before calling this function, dropping the ones that failed to validate.  When a token is supplied,
  *                       `quicly_accept` will consult the values being supplied assuming that the peer's address has been validated.
  */
-int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *sa, socklen_t salen,
+int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
                   const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties);
 /**
@@ -852,6 +868,10 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
  *
  */
 static void quicly_byte_to_hex(char *dst, uint8_t v);
+/**
+ *
+ */
+socklen_t quicly_get_socklen(struct sockaddr *sa);
 /**
  * Builds a safe string. Supplied buffer MUST be 4x + 1 bytes bigger than the input.
  */
@@ -954,11 +974,10 @@ inline quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, in
     return uni ? c->peer.uni.next_stream_id : c->peer.bidi.next_stream_id;
 }
 
-inline void quicly_get_peername(quicly_conn_t *conn, struct sockaddr **sa, socklen_t *salen)
+inline struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    *sa = c->peer.sa;
-    *salen = c->peer.salen;
+    return &c->peer.address.sa;
 }
 
 inline void **quicly_get_data(quicly_conn_t *conn)

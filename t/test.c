@@ -87,6 +87,7 @@ static void on_destroy(quicly_stream_t *stream, int err);
 static int on_egress_stop(quicly_stream_t *stream, int err);
 static int on_ingress_reset(quicly_stream_t *stream, int err);
 
+quicly_address_t fake_address;
 int64_t quic_now;
 quicly_context_t quic_ctx;
 quicly_stream_callbacks_t stream_callbacks = {on_destroy,     quicly_streambuf_egress_shift,    quicly_streambuf_egress_emit,
@@ -283,7 +284,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     if (num_datagrams != 0) {
         size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
         for (i = 0; i != num_packets; ++i) {
-            ret = quicly_receive(dst, decoded + i);
+            ret = quicly_receive(dst, NULL, &fake_address.sa, decoded + i);
             ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
         }
         free_packets(datagrams, num_datagrams);
@@ -383,6 +384,8 @@ int main(int argc, char **argv)
     quic_ctx.transport_params.max_streams_bidi = 10;
     quic_ctx.stream_open = &stream_open;
     quic_ctx.now = &get_now;
+
+    fake_address.sa.sa_family = AF_INET;
 
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
