@@ -212,7 +212,6 @@ quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t
     if ((self->reset_token_ctx = ptls_cipher_new(reset_token_cipher, 1, keybuf)) == NULL)
         goto Fail;
 
-Exit:
     ptls_clear_memory(keybuf, sizeof(keybuf));
     return &self->super;
 
@@ -225,9 +224,9 @@ Fail:
         if (self->reset_token_ctx != NULL)
             ptls_cipher_free(self->reset_token_ctx);
         free(self);
-        self = NULL;
     }
-    goto Exit;
+    ptls_clear_memory(keybuf, sizeof(keybuf));
+    return NULL;
 }
 
 void quicly_free_default_cid_encryptor(quicly_cid_encryptor_t *_self)
