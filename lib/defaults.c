@@ -192,10 +192,15 @@ quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t
                                                          ptls_iovec_t key)
 {
     struct st_quicly_default_encrypt_cid_t *self;
-    uint8_t keybuf[PTLS_MAX_SECRET_SIZE];
+    uint8_t digestbuf[PTLS_MAX_DIGEST_SIZE], keybuf[PTLS_MAX_SECRET_SIZE];
 
     assert(cid_cipher->block_size == 8 || cid_cipher->block_size == 16);
     assert(reset_token_cipher->block_size == 16);
+
+    if (key.len > hash->block_size) {
+        ptls_calc_hash(hash, digestbuf, key.base, key.len);
+        key = ptls_iovec_init(digestbuf, hash->digest_size);
+    }
 
     if ((self = malloc(sizeof(*self))) == NULL)
         goto Fail;
@@ -212,6 +217,7 @@ quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t
     if ((self->reset_token_ctx = ptls_cipher_new(reset_token_cipher, 1, keybuf)) == NULL)
         goto Fail;
 
+    ptls_clear_memory(digestbuf, sizeof(digestbuf));
     ptls_clear_memory(keybuf, sizeof(keybuf));
     return &self->super;
 
@@ -225,6 +231,7 @@ Fail:
             ptls_cipher_free(self->reset_token_ctx);
         free(self);
     }
+    ptls_clear_memory(digestbuf, sizeof(digestbuf));
     ptls_clear_memory(keybuf, sizeof(keybuf));
     return NULL;
 }
