@@ -44,6 +44,8 @@ extern quicly_packet_allocator_t quicly_default_packet_allocator;
 quicly_cid_encryptor_t *quicly_new_default_cid_encryptor(ptls_cipher_algorithm_t *cid_cipher,
                                                          ptls_cipher_algorithm_t *reset_token_cipher, ptls_hash_algorithm_t *hash,
                                                          ptls_iovec_t key);
+
+quicly_crypto_codec_t *quicly_new_default_crypto_codec();
 /**
  *
  */

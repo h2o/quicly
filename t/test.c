@@ -384,6 +384,7 @@ int main(int argc, char **argv)
     quic_ctx.transport_params.max_streams_bidi = 10;
     quic_ctx.stream_open = &stream_open;
     quic_ctx.now = &get_now;
+    quic_ctx.crypto_codec = quicly_new_default_crypto_codec();
 
     fake_address.sa.sa_family = AF_INET;
 

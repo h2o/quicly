@@ -1039,6 +1039,10 @@ int main(int argc, char **argv)
     if (key_exchanges[0] == NULL)
         key_exchanges[0] = &ptls_openssl_secp256r1;
 
+
+    ctx.crypto_codec =
+        quicly_new_default_crypto_codec();
+
     if (ctx.tls->certificates.count != 0 || ctx.tls->sign_certificate != NULL) {
         /* server */
         if (ctx.tls->certificates.count == 0 || ctx.tls->sign_certificate == NULL) {

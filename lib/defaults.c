@@ -246,6 +246,100 @@ void quicly_free_default_cid_encryptor(quicly_cid_encryptor_t *_self)
     free(self);
 }
 
+struct st_quicly_default_crypto_codec_t {
+    quicly_crypto_codec_t super;
+};
+
+static size_t quicly_default_crypto_codec_packet_encrypt(quicly_crypto_codec_t *_self, ptls_aead_context_t *aead,
+                                                  ptls_cipher_context_t *header_protection, uint8_t *dst, uint8_t *dst_payload_from,
+                                                  uint8_t *first_byte_at, uint64_t packet_number)
+{
+    int ret = ptls_aead_encrypt(aead, dst_payload_from, dst_payload_from, dst - dst_payload_from, packet_number, first_byte_at,
+                                dst_payload_from - first_byte_at);
+
+    { /* apply header protection */
+        _self->encrypt_packet_done(header_protection, first_byte_at, dst_payload_from);
+    }
+    return ret;
+}
+
+static void quicly_default_crypto_codec_packet_encrypt_done(ptls_cipher_context_t *header_protection, uint8_t *first_byte_at, uint8_t *dst_payload_from)
+{
+    uint8_t hpmask[1 + QUICLY_SEND_PN_SIZE] = {0};
+    ptls_cipher_init(header_protection, dst_payload_from - QUICLY_SEND_PN_SIZE + QUICLY_MAX_PN_SIZE);
+    ptls_cipher_encrypt(header_protection, hpmask, hpmask, sizeof(hpmask));
+
+    *first_byte_at ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(*first_byte_at) ? 0xf : 0x1f);
+    size_t i;
+    for (i = 0; i != QUICLY_SEND_PN_SIZE; ++i)
+        dst_payload_from[i - QUICLY_SEND_PN_SIZE] ^= hpmask[i + 1];
+}
+
+static int quicly_default_crypto_codec_packet_decrypt(quicly_crypto_codec_t *_self, quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr, quicly_pn_space_t *space,
+                                               ptls_cipher_context_t *header_protection, ptls_aead_context_t **aead, size_t epoch,
+                                               uint64_t *next_expected_pn, quicly_decoded_packet_t *packet)
+{
+    size_t encrypted_len = packet->octets.len - packet->encrypted_off;
+    uint8_t hpmask[5] = {0};
+    uint32_t pnbits = 0;
+    size_t pnlen, aead_index, i;
+    size_t ptlen;
+    uint64_t pn;
+
+    struct st_quicly_default_crypto_codec_t *self = (void *)_self;
+
+    /* decipher the header protection, as well as obtaining pnbits, pnlen */
+    if (encrypted_len < header_protection->algo->iv_size + QUICLY_MAX_PN_SIZE)
+        goto Error;
+    ptls_cipher_init(header_protection, packet->octets.base + packet->encrypted_off + QUICLY_MAX_PN_SIZE);
+    ptls_cipher_encrypt(header_protection, hpmask, hpmask, sizeof(hpmask));
+    packet->octets.base[0] ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0]) ? 0xf : 0x1f);
+    pnlen = (packet->octets.base[0] & 0x3) + 1;
+    for (i = 0; i != pnlen; ++i) {
+        packet->octets.base[packet->encrypted_off + i] ^= hpmask[i + 1];
+        pnbits = (pnbits << 8) | packet->octets.base[packet->encrypted_off + i];
+    }
+
+    /* determine aead index (FIXME move AEAD key selection and decryption logic to the caller?) */
+    if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
+        aead_index = 0;
+    } else {
+        /* note: aead index 0 is used by 0-RTT */
+        aead_index = (packet->octets.base[0] & QUICLY_KEY_PHASE_BIT) == 0;
+        if (aead[aead_index] == NULL)
+            goto Error;
+    }
+
+    /* AEAD */
+    pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
+    size_t aead_off = packet->encrypted_off + pnlen;
+    if ((ptlen = ptls_aead_decrypt(aead[aead_index], packet->octets.base + aead_off, packet->octets.base + aead_off,
+                                   packet->octets.len - aead_off, pn, packet->octets.base, aead_off)) == SIZE_MAX) {
+        if (QUICLY_DEBUG)
+            fprintf(stderr, "%s: aead decryption failure (pn: %" PRIu64 ")\n", __FUNCTION__, pn);
+        goto Error;
+    }
+
+    self->super.decrypt_packet_done(conn, dest_addr, src_addr, packet, space, epoch, pn, aead_off, ptlen);
+
+    return 0;
+
+Error:
+    return 1;
+}
+
+quicly_crypto_codec_t *quicly_new_default_crypto_codec()
+{
+    struct st_quicly_default_crypto_codec_t *self = NULL;
+    if ((self = malloc(sizeof(*self))) == NULL)
+        goto Exit;
+
+    *self = (struct st_quicly_default_crypto_codec_t){{quicly_default_crypto_codec_packet_encrypt, quicly_default_crypto_codec_packet_encrypt_done, quicly_default_crypto_codec_packet_decrypt, NULL}};
+
+Exit:
+    return &self->super;
+}
+
 /**
  * See doc-comment of `st_quicly_default_scheduler_state_t` to understand the logic.
  */
