@@ -348,7 +348,7 @@ typedef struct st_quicly_stats_t {
      */
     quicly_rtt_t rtt;
     /**
-     * Congestion control
+     * Congestion control (experimental; TODO cherry-pick what can be exposed as part of a stable API)
      */
     quicly_cc_t cc;
 } quicly_stats_t;
