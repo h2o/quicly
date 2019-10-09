@@ -83,7 +83,16 @@ static struct {
     ptls_iovec_t list[16];
     size_t count;
 } negotiated_protocols;
-static const char *req_paths[1024];
+
+struct {
+    const char *path;
+    int to_file;
+} reqs[1024];
+
+struct st_stream_data_t {
+    quicly_streambuf_t stream_data;
+    FILE* app_data;
+};
 
 static int on_stop_sending(quicly_stream_t *stream, int err);
 static int on_receive_reset(quicly_stream_t *stream, int err);
@@ -304,15 +313,17 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         return ret;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
-        fwrite(input.base, 1, input.len, stdout);
-        fflush(stdout);
+        struct st_stream_data_t* stream_data = stream->data;
+        FILE *out = (stream_data->app_data == NULL) ? stdout : stream_data->app_data;
+        fwrite(input.base, 1, input.len, out);
+        fflush(out);
         quicly_streambuf_ingress_shift(stream, input.len);
     }
 
     if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
         static size_t num_resp_received;
         ++num_resp_received;
-        if (req_paths[num_resp_received] == NULL) {
+        if (reqs[num_resp_received].path == NULL) {
             if (request_interval != 0) {
                 enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
             } else {
@@ -329,7 +340,7 @@ static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     int ret;
 
-    if ((ret = quicly_streambuf_create(stream, sizeof(quicly_streambuf_t))) != 0)
+    if ((ret = quicly_streambuf_create(stream, sizeof(struct st_stream_data_t))) != 0)
         return ret;
     stream->callbacks = ctx.tls->certificates.count != 0 ? &server_stream_callbacks : &client_stream_callbacks;
     return 0;
@@ -409,14 +420,24 @@ static void enqueue_requests(quicly_conn_t *conn)
     size_t i;
     int ret;
 
-    for (i = 0; req_paths[i] != NULL; ++i) {
-        char req[1024];
+    for (i = 0; reqs[i].path != NULL; ++i) {
+        char req[1024], destfile[1024], mode[] = "w";
         quicly_stream_t *stream;
         ret = quicly_open_stream(conn, &stream, 0);
         assert(ret == 0);
-        sprintf(req, "GET %s\r\n", req_paths[i]);
+        sprintf(req, "GET %s\r\n", reqs[i].path);
         send_str(stream, req);
         quicly_streambuf_egress_shutdown(stream);
+
+        if (reqs[i].to_file && reqs[i].path[0] == '/') {
+            struct st_stream_data_t* stream_data = stream->data;
+            sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
+            stream_data->app_data = fopen(destfile, mode);
+            if (stream_data->app_data == NULL) {
+                fprintf(stderr, "failed to open destination file: %s\n", reqs[i].path);
+                exit(1);
+            }
+        }
     }
     enqueue_requests_at = INT64_MAX;
 }
@@ -879,6 +900,7 @@ static void usage(const char *cmd)
            "  -N                        enforce HelloRetryRequest (client-only)\n"
            "  -n                        enforce version negotiation (client-only)\n"
            "  -p path                   path to request (can be set multiple times)\n"
+           "  -P path                   path to request, store response to file (can be set multiple times)\n"
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
@@ -899,6 +921,7 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
+    memset(reqs, 0, sizeof(reqs));
     ctx = quicly_spec_context;
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
@@ -916,7 +939,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:C:c:k:e:i:I:l:M:m:Nnp:Rr:S:s:Vvx:X:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:C:c:k:e:i:I:l:M:m:Nnp:P:Rr:S:s:Vvx:X:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < sizeof(negotiated_protocols.list) / sizeof(negotiated_protocols.list[0]));
@@ -974,11 +997,13 @@ int main(int argc, char **argv)
         case 'n':
             ctx.enforce_version_negotiation = 1;
             break;
-        case 'p': {
+        case 'p':
+        case 'P': {
             size_t i;
-            for (i = 0; req_paths[i] != NULL; ++i)
+            for (i = 0; reqs[i].path != NULL; ++i)
                 ;
-            req_paths[i] = optarg;
+            reqs[i].path = optarg;
+            if (ch == 'P') reqs[i].to_file = 1;
         } break;
         case 'R':
             enforce_retry = 1;
@@ -1041,8 +1066,8 @@ int main(int argc, char **argv)
     argc -= optind;
     argv += optind;
 
-    if (req_paths[0] == NULL)
-        req_paths[0] = "/";
+    if (reqs[0].path == NULL)
+        reqs[0].path = "/";
 
     if (key_exchanges[0] == NULL)
         key_exchanges[0] = &ptls_openssl_secp256r1;
