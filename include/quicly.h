@@ -37,6 +37,7 @@ extern "C" {
 #include "quicly/frame.h"
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
+#include "quicly/cc.h"
 #include "quicly/recvstate.h"
 #include "quicly/sendstate.h"
 #include "quicly/maxsender.h"
@@ -346,6 +347,10 @@ typedef struct st_quicly_stats_t {
      * RTT
      */
     quicly_rtt_t rtt;
+    /**
+     * Congestion control (experimental; TODO cherry-pick what can be exposed as part of a stable API)
+     */
+    quicly_cc_t cc;
 } quicly_stats_t;
 
 /**
