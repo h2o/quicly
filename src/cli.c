@@ -221,7 +221,7 @@ static int send_sized_text(quicly_stream_t *stream, const char *path, int is_htt
     size_t size;
     int lastpos;
 
-    if (sscanf(path, "/%zu.txt%n", &size, &lastpos) != 1)
+    if (sscanf(path, "/%zu%n", &size, &lastpos) != 1)
         return 0;
     if (lastpos != strlen(path))
         return 0;
