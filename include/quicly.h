@@ -158,6 +158,12 @@ QUICLY_CALLBACK_TYPE(int, save_resumption_token, quicly_conn_t *conn, ptls_iovec
  */
 QUICLY_CALLBACK_TYPE(int, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
                      quicly_address_token_plaintext_t *token);
+/**
+ *
+ */
+QUICLY_CALLBACK_TYPE(void, finalize_send_packet, quicly_conn_t *conn, ptls_cipher_context_t *hp, ptls_aead_context_t *aead,
+                     quicly_datagram_t *packet, size_t first_byte_at, size_t payload_from, int coalesced);
+
 
 typedef struct st_quicly_max_stream_data_t {
     uint64_t bidi_local, bidi_remote, uni;
@@ -293,6 +299,10 @@ struct st_quicly_context_t {
      *
      */
     quicly_generate_resumption_token_t *generate_resumption_token;
+    /**
+     * optional callback for encryption offloading
+     */
+    quicly_finalize_send_packet_t *finalize_send_packet;
 };
 
 /**
