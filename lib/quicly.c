@@ -2110,6 +2110,20 @@ struct st_quicly_send_context_t {
     uint8_t *dst_payload_from;
 };
 
+static void finalize_send_packet(quicly_conn_t *conn, ptls_cipher_context_t *hp, ptls_aead_context_t *aead,
+                                 quicly_datagram_t *packet, size_t first_byte_at, size_t payload_from, int coalesced)
+{
+    uint8_t hpmask[1 + QUICLY_SEND_PN_SIZE] = {0};
+    size_t i;
+
+    ptls_cipher_init(hp, packet->data.base + payload_from - QUICLY_SEND_PN_SIZE + QUICLY_MAX_PN_SIZE);
+    ptls_cipher_encrypt(hp, hpmask, hpmask, sizeof(hpmask));
+
+    packet->data.base[first_byte_at] ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(packet->data.base[first_byte_at]) ? 0xf : 0x1f);
+    for (i = 0; i != QUICLY_SEND_PN_SIZE; ++i)
+        packet->data.base[payload_from + i - QUICLY_SEND_PN_SIZE] ^= hpmask[i + 1];
+}
+
 static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
 {
     size_t packet_bytes_in_flight;
@@ -2143,16 +2157,12 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     s->dst = s->dst_payload_from + ptls_aead_encrypt(s->target.cipher->aead, s->dst_payload_from, s->dst_payload_from,
                                                      s->dst - s->dst_payload_from, conn->egress.packet_number,
                                                      s->target.first_byte_at, s->dst_payload_from - s->target.first_byte_at);
+    s->target.packet->data.len = s->dst - s->target.packet->data.base;
+    assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
-    { /* apply header protection */
-        uint8_t hpmask[1 + QUICLY_SEND_PN_SIZE] = {0};
-        ptls_cipher_init(s->target.cipher->header_protection, s->dst_payload_from - QUICLY_SEND_PN_SIZE + QUICLY_MAX_PN_SIZE);
-        ptls_cipher_encrypt(s->target.cipher->header_protection, hpmask, hpmask, sizeof(hpmask));
-        *s->target.first_byte_at ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(*s->target.first_byte_at) ? 0xf : 0x1f);
-        size_t i;
-        for (i = 0; i != QUICLY_SEND_PN_SIZE; ++i)
-            s->dst_payload_from[i - QUICLY_SEND_PN_SIZE] ^= hpmask[i + 1];
-    }
+    finalize_send_packet(conn, s->target.cipher->header_protection, s->target.cipher->aead, s->target.packet,
+                         s->target.first_byte_at - s->target.packet->data.base, s->dst_payload_from - s->target.packet->data.base,
+                         coalesced);
 
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
@@ -2162,9 +2172,6 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         packet_bytes_in_flight = 0;
     }
     quicly_sentmap_commit(&conn->egress.sentmap, (uint16_t)packet_bytes_in_flight);
-
-    s->target.packet->data.len = s->dst - s->target.packet->data.base;
-    assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
     QUICLY_PROBE(PACKET_COMMIT, conn, probe_now(), conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  !s->target.ack_eliciting);
