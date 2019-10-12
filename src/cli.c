@@ -56,6 +56,7 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
 }
 
 static int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src);
+static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_on_client_hello_parameters_t *params);
 
 static const char *session_file = NULL;
 static ptls_handshake_properties_t hs_properties;
@@ -67,6 +68,7 @@ static struct {
     ptls_aead_context_t *enc, *dec;
 } address_token_aead;
 static ptls_save_ticket_t save_session_ticket = {save_session_ticket_cb};
+static ptls_on_client_hello_t on_client_hello = {on_client_hello_cb};
 static int enforce_retry;
 
 ptls_key_exchange_algorithm_t *key_exchanges[128];
@@ -75,7 +77,8 @@ static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .key_exchanges = key_exchanges,
                                 .cipher_suites = ptls_openssl_cipher_suites,
                                 .require_dhe_on_psk = 1,
-                                .save_ticket = &save_session_ticket};
+                                .save_ticket = &save_session_ticket,
+                                .on_client_hello = &on_client_hello};
 static struct {
     ptls_iovec_t list[16];
     size_t count;
@@ -830,6 +833,30 @@ static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicl
 }
 
 static quicly_save_resumption_token_t save_resumption_token = {save_resumption_token_cb};
+
+static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_on_client_hello_parameters_t *params)
+{
+    int ret;
+
+    if (negotiated_protocols.count != 0) {
+        size_t i, j;
+        const ptls_iovec_t *x, *y;
+        for (i = 0; i != negotiated_protocols.count; ++i) {
+            x = negotiated_protocols.list + i;
+            for (j = 0; j != params->negotiated_protocols.count; ++j) {
+                y = params->negotiated_protocols.list + j;
+                if (x->len == y->len && memcmp(x->base, y->base, x->len) == 0)
+                    goto ALPN_Found;
+            }
+        }
+        return PTLS_ALERT_NO_APPLICATION_PROTOCOL;
+    ALPN_Found:
+        if ((ret = ptls_set_negotiated_protocol(tls, (const char *)x->base, x->len)) != 0)
+            return ret;
+    }
+
+    return 0;
+}
 
 static void usage(const char *cmd)
 {
