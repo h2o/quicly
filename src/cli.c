@@ -993,7 +993,7 @@ int main(int argc, char **argv)
             for (i = 0; reqs[i].path != NULL; ++i)
                 ;
             reqs[i].path = optarg;
-            if (ch == 'P') reqs[i].to_file = 1;
+            reqs[i].to_file = ch == 'P';
         } break;
         case 'R':
             enforce_retry = 1;
