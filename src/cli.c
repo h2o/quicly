@@ -913,7 +913,6 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
-    memset(reqs, 0, sizeof(reqs));
     ctx = quicly_spec_context;
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
