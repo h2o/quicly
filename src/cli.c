@@ -115,6 +115,16 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             stats.num_bytes.received, stats.num_bytes.sent, stats.rtt.smoothed);
 }
 
+static int validate_path(const char *path)
+{
+    if (path[0] != '/')
+        return 0;
+    /* TODO avoid false positives on the client-side */
+    if (strstr(path, "/.") != NULL)
+        return 0;
+    return 1;
+}
+
 static int parse_request(ptls_iovec_t input, char **path, int *is_http1)
 {
     size_t off = 0, path_start;
@@ -281,7 +291,7 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         goto Sent;
     if (send_sized_text(stream, path, is_http1))
         goto Sent;
-    if (path[0] == '/' && strstr(path, "/.") == NULL && send_file(stream, is_http1, path + 1, "text/plain"))
+    if (validate_path(path) && send_file(stream, is_http1, path + 1, "text/plain"))
         goto Sent;
 
     if (!quicly_sendstate_is_open(&stream->sendstate))
@@ -447,7 +457,7 @@ static void enqueue_requests(quicly_conn_t *conn)
         send_str(stream, req);
         quicly_streambuf_egress_shutdown(stream);
 
-        if (reqs[i].to_file && reqs[i].path[0] == '/') {
+        if (reqs[i].to_file) {
             struct st_stream_data_t* stream_data = stream->data;
             sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
             stream_data->app_data = fopen(destfile, mode);
@@ -989,6 +999,10 @@ int main(int argc, char **argv)
             break;
         case 'p':
         case 'P': {
+            if (!validate_path(optarg)) {
+                fprintf(stderr, "invalid path:%s\n", optarg);
+                exit(1);
+            }
             size_t i;
             for (i = 0; reqs[i].path != NULL; ++i)
                 ;
