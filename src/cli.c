@@ -452,7 +452,7 @@ static void enqueue_requests(quicly_conn_t *conn)
             sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
             stream_data->app_data = fopen(destfile, mode);
             if (stream_data->app_data == NULL) {
-                fprintf(stderr, "failed to open destination file: %s\n", reqs[i].path);
+                fprintf(stderr, "failed to open destination file:%s:%s\n", reqs[i].path, strerror(errno));
                 exit(1);
             }
         }
