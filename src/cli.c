@@ -273,7 +273,7 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         goto Sent;
     }
     if (!quicly_recvstate_transfer_complete(&stream->recvstate))
-        quicly_request_stop(stream, 0);
+        quicly_request_stop(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0));
 
     if (strcmp(path, "/logo.jpg") == 0 && send_file(stream, is_http1, "assets/logo.jpg", "image/jpeg"))
         goto Sent;
