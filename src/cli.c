@@ -307,6 +307,7 @@ Sent:
 
 static int client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
+    struct st_stream_data_t *stream_data = stream->data;
     ptls_iovec_t input;
     int ret;
 
@@ -314,7 +315,6 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         return ret;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
-        struct st_stream_data_t *stream_data = stream->data;
         FILE *out = (stream_data->outfp == NULL) ? stdout : stream_data->outfp;
         fwrite(input.base, 1, input.len, out);
         fflush(out);
@@ -322,6 +322,8 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
     }
 
     if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
+        if (stream_data->outfp != NULL)
+            fclose(stream_data->outfp);
         static size_t num_resp_received;
         ++num_resp_received;
         if (reqs[num_resp_received].path == NULL) {
