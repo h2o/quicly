@@ -64,6 +64,8 @@ extern "C" {
 
 #define QUICLY_MAX_DATA_FRAME_CAPACITY (1 + 8)
 #define QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY (1 + 8 + 8)
+#define QUICLY_MAX_STREAM_OFFSET_SIZE ((1L << 62) - 1)
+
 #define QUICLY_MAX_STREAMS_FRAME_CAPACITY (1 + 8)
 #define QUICLY_PING_FRAME_CAPACITY 1
 #define QUICLY_RST_FRAME_CAPACITY (1 + 8 + 8 + 8)
@@ -374,6 +376,8 @@ inline int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, c
         if ((len = quicly_decodev(src, end)) == UINT64_MAX)
             goto Error;
         if ((uint64_t)(end - *src) < len)
+            goto Error;
+        if (frame->offset + len > QUICLY_MAX_STREAM_OFFSET_SIZE)
             goto Error;
         frame->data = ptls_iovec_init(*src, len);
         *src += len;
