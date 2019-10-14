@@ -377,6 +377,8 @@ inline int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, c
             goto Error;
         if ((uint64_t)(end - *src) < len)
             goto Error;
+        if (frame->offset > UINT64_MAX - len)
+            goto Error;
         if (frame->offset + len > QUICLY_MAX_STREAM_OFFSET_SIZE)
             goto Error;
         frame->data = ptls_iovec_init(*src, len);
