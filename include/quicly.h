@@ -52,6 +52,8 @@ extern "C" {
 
 #define QUICLY_PROTOCOL_VERSION 0xff000017
 
+#define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte)&0xf0) == 0xc0)
+
 #define QUICLY_MAX_CID_LEN_V1 20
 #define QUICLY_STATELESS_RESET_TOKEN_LEN 16
 #define QUICLY_STATELESS_RESET_PACKET_MIN_LEN 39

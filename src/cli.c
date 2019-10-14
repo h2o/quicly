@@ -666,7 +666,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 if (conn != NULL) {
                     /* existing connection */
                     quicly_receive(conn, NULL, &sa, &packet);
-                } else if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
+                } else if (QUICLY_PACKET_IS_INITIAL(packet.octets.base[0])) {
                     /* long header packet; potentially a new connection */
                     quicly_address_token_plaintext_t *token = NULL, token_buf;
                     if (packet.token.len != 0 &&
@@ -701,7 +701,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                             assert(conn == NULL);
                         }
                     }
-                } else {
+                } else if (!QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
                     /* short header packet; potentially a dead connection. No need to check the length of the incoming packet,
                      * because loop is prevented by authenticating the CID (by checking node_id and thread_id). If the peer is also
                      * sending a reset, then the next CID is highly likely to contain a non-authenticating CID, ... */
