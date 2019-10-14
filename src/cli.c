@@ -449,7 +449,7 @@ static void enqueue_requests(quicly_conn_t *conn)
     int ret;
 
     for (i = 0; reqs[i].path != NULL; ++i) {
-        char req[1024], destfile[1024], mode[] = "w";
+        char req[1024], destfile[1024];
         quicly_stream_t *stream;
         ret = quicly_open_stream(conn, &stream, 0);
         assert(ret == 0);
@@ -460,7 +460,7 @@ static void enqueue_requests(quicly_conn_t *conn)
         if (reqs[i].to_file) {
             struct st_stream_data_t *stream_data = stream->data;
             sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
-            stream_data->app_data = fopen(destfile, mode);
+            stream_data->app_data = fopen(destfile, "w");
             if (stream_data->app_data == NULL) {
                 fprintf(stderr, "failed to open destination file:%s:%s\n", reqs[i].path, strerror(errno));
                 exit(1);
