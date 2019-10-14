@@ -29,6 +29,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <picotls.h>
 #include "quicly.h"
 #include "quicly/defaults.h"
 #include "quicly/streambuf.h"
@@ -55,6 +56,7 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
 }
 
 static int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src);
+static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_on_client_hello_parameters_t *params);
 
 static const char *session_file = NULL;
 static ptls_handshake_properties_t hs_properties;
@@ -66,6 +68,7 @@ static struct {
     ptls_aead_context_t *enc, *dec;
 } address_token_aead;
 static ptls_save_ticket_t save_session_ticket = {save_session_ticket_cb};
+static ptls_on_client_hello_t on_client_hello = {on_client_hello_cb};
 static int enforce_retry;
 
 ptls_key_exchange_algorithm_t *key_exchanges[128];
@@ -74,7 +77,12 @@ static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .key_exchanges = key_exchanges,
                                 .cipher_suites = ptls_openssl_cipher_suites,
                                 .require_dhe_on_psk = 1,
-                                .save_ticket = &save_session_ticket};
+                                .save_ticket = &save_session_ticket,
+                                .on_client_hello = &on_client_hello};
+static struct {
+    ptls_iovec_t list[16];
+    size_t count;
+} negotiated_protocols;
 static const char *req_paths[1024];
 
 static int on_stop_sending(quicly_stream_t *stream, int err);
@@ -394,33 +402,6 @@ static int send_pending(int fd, quicly_conn_t *conn)
     } while (ret == 0 && num_packets == sizeof(packets) / sizeof(packets[0]));
 
     return ret;
-}
-
-static void set_alpn(ptls_handshake_properties_t *pro, const char *alpn_str)
-{
-    const char *start, *cur;
-    ptls_iovec_t *list = NULL;
-    size_t entries = 0;
-    start = cur = alpn_str;
-#define ADD_ONE()                                                                                                                  \
-    if ((cur - start) > 0) {                                                                                                       \
-        list = realloc(list, sizeof(*list) * (entries + 1));                                                                       \
-        list[entries].base = (void *)strndup(start, cur - start);                                                                  \
-        list[entries++].len = cur - start;                                                                                         \
-    }
-
-    while (*cur) {
-        if (*cur == ',') {
-            ADD_ONE();
-            start = cur + 1;
-        }
-        cur++;
-    }
-    if (start != cur)
-        ADD_ONE();
-
-    pro->client.negotiated_protocols.list = list;
-    pro->client.negotiated_protocols.count = entries;
 }
 
 static void enqueue_requests(quicly_conn_t *conn)
@@ -853,12 +834,37 @@ static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicl
 
 static quicly_save_resumption_token_t save_resumption_token = {save_resumption_token_cb};
 
+static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_on_client_hello_parameters_t *params)
+{
+    int ret;
+
+    if (negotiated_protocols.count != 0) {
+        size_t i, j;
+        const ptls_iovec_t *x, *y;
+        for (i = 0; i != negotiated_protocols.count; ++i) {
+            x = negotiated_protocols.list + i;
+            for (j = 0; j != params->negotiated_protocols.count; ++j) {
+                y = params->negotiated_protocols.list + j;
+                if (x->len == y->len && memcmp(x->base, y->base, x->len) == 0)
+                    goto ALPN_Found;
+            }
+        }
+        return PTLS_ALERT_NO_APPLICATION_PROTOCOL;
+    ALPN_Found:
+        if ((ret = ptls_set_negotiated_protocol(tls, (const char *)x->base, x->len)) != 0)
+            return ret;
+    }
+
+    return 0;
+}
+
 static void usage(const char *cmd)
 {
     printf("Usage: %s [options] host port\n"
            "\n"
            "Options:\n"
-           "  -a <alpn list>            a coma separated list of ALPN identifiers\n"
+           "  -a <alpn>                 ALPN identifier; repeat the option to set multiple\n"
+           "                            candidates\n"
            "  -C <cid-key>              CID encryption key (server-only). Randomly generated\n"
            "                            if omitted.\n"
            "  -c certificate-file\n"
@@ -913,7 +919,8 @@ int main(int argc, char **argv)
     while ((ch = getopt(argc, argv, "a:C:c:k:e:i:I:l:M:m:Nnp:Rr:S:s:Vvx:X:h")) != -1) {
         switch (ch) {
         case 'a':
-            set_alpn(&hs_properties, optarg);
+            assert(negotiated_protocols.count < sizeof(negotiated_protocols.list) / sizeof(negotiated_protocols.list[0]));
+            negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init(optarg, strlen(optarg));
             break;
         case 'C':
             cid_key = optarg;
@@ -1055,6 +1062,8 @@ int main(int argc, char **argv)
                                                              ptls_iovec_init(cid_key, strlen(cid_key)));
     } else {
         /* client */
+        hs_properties.client.negotiated_protocols.list = negotiated_protocols.list;
+        hs_properties.client.negotiated_protocols.count = negotiated_protocols.count;
         if (session_file != NULL)
             load_session();
     }
