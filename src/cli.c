@@ -82,7 +82,7 @@ struct {
 
 struct st_stream_data_t {
     quicly_streambuf_t stream_data;
-    FILE* app_data;
+    FILE *app_data;
 };
 
 static int on_stop_sending(quicly_stream_t *stream, int err);
@@ -314,7 +314,7 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         return ret;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
-        struct st_stream_data_t* stream_data = stream->data;
+        struct st_stream_data_t *stream_data = stream->data;
         FILE *out = (stream_data->app_data == NULL) ? stdout : stream_data->app_data;
         fwrite(input.base, 1, input.len, out);
         fflush(out);
@@ -458,7 +458,7 @@ static void enqueue_requests(quicly_conn_t *conn)
         quicly_streambuf_egress_shutdown(stream);
 
         if (reqs[i].to_file) {
-            struct st_stream_data_t* stream_data = stream->data;
+            struct st_stream_data_t *stream_data = stream->data;
             sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
             stream_data->app_data = fopen(destfile, mode);
             if (stream_data->app_data == NULL) {
