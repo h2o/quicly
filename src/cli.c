@@ -81,8 +81,8 @@ struct {
 } reqs[1024];
 
 struct st_stream_data_t {
-    quicly_streambuf_t stream_data;
-    FILE *app_data;
+    quicly_streambuf_t streambuf;
+    FILE *outfp;
 };
 
 static int on_stop_sending(quicly_stream_t *stream, int err);
@@ -315,7 +315,7 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
         struct st_stream_data_t *stream_data = stream->data;
-        FILE *out = (stream_data->app_data == NULL) ? stdout : stream_data->app_data;
+        FILE *out = (stream_data->outfp == NULL) ? stdout : stream_data->outfp;
         fwrite(input.base, 1, input.len, out);
         fflush(out);
         quicly_streambuf_ingress_shift(stream, input.len);
@@ -460,8 +460,8 @@ static void enqueue_requests(quicly_conn_t *conn)
         if (reqs[i].to_file) {
             struct st_stream_data_t *stream_data = stream->data;
             sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
-            stream_data->app_data = fopen(destfile, "w");
-            if (stream_data->app_data == NULL) {
+            stream_data->outfp = fopen(destfile, "w");
+            if (stream_data->outfp == NULL) {
                 fprintf(stderr, "failed to open destination file:%s:%s\n", reqs[i].path, strerror(errno));
                 exit(1);
             }
