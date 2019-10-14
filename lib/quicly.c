@@ -439,6 +439,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
     packet->octets = ptls_iovec_init(src, len);
     packet->datagram_size = len;
     packet->token = ptls_iovec_init(NULL, 0);
+    packet->decrypted_pn = UINT64_MAX;
     ++src;
 
     if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
@@ -1739,8 +1740,8 @@ Exit:
     return ret;
 }
 
-static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptls_aead_context_t **aead, uint64_t *next_expected_pn,
-                                   quicly_decoded_packet_t *packet, uint64_t *pn)
+static ptls_iovec_t do_decrypt_packet(ptls_cipher_context_t *header_protection, ptls_aead_context_t **aead,
+                                      uint64_t next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn)
 {
     size_t encrypted_len = packet->octets.len - packet->encrypted_off;
     uint8_t hpmask[5] = {0};
@@ -1770,13 +1771,39 @@ static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptl
     }
 
     /* AEAD */
-    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
+    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, next_expected_pn);
     size_t aead_off = packet->encrypted_off + pnlen, ptlen;
     if ((ptlen = ptls_aead_decrypt(aead[aead_index], packet->octets.base + aead_off, packet->octets.base + aead_off,
                                    packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
         if (QUICLY_DEBUG)
             fprintf(stderr, "%s: aead decryption failure (pn: %" PRIu64 ")\n", __FUNCTION__, *pn);
         goto Error;
+    }
+
+    if (QUICLY_DEBUG) {
+        char *payload_hex = quicly_hexdump(packet->octets.base + aead_off, ptlen, 4);
+        fprintf(stderr, "%s: AEAD payload:\n%s", __FUNCTION__, payload_hex);
+        free(payload_hex);
+    }
+
+    return ptls_iovec_init(packet->octets.base + aead_off, ptlen);
+
+Error:
+    return ptls_iovec_init(NULL, 0);
+}
+
+static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptls_aead_context_t **aead,
+                                   uint64_t *next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn)
+{
+    ptls_iovec_t payload;
+
+    /* decrypt ourselves, or use the pre-decrypted input */
+    if (packet->decrypted_pn == UINT64_MAX) {
+        if ((payload = do_decrypt_packet(header_protection, aead, *next_expected_pn, packet, pn)).base == NULL)
+            goto Error;
+    } else {
+        payload = ptls_iovec_init(packet->octets.base + packet->encrypted_off, packet->octets.len - packet->encrypted_off);
+        *pn = packet->decrypted_pn;
     }
 
     /* check reserved bits after AEAD decryption */
@@ -1788,15 +1815,10 @@ static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptl
         goto Error;
     }
 
-    if (QUICLY_DEBUG) {
-        char *payload_hex = quicly_hexdump(packet->octets.base + aead_off, ptlen, 4);
-        fprintf(stderr, "%s: AEAD payload:\n%s", __FUNCTION__, payload_hex);
-        free(payload_hex);
-    }
-
     if (*next_expected_pn <= *pn)
         *next_expected_pn = *pn + 1;
-    return ptls_iovec_init(packet->octets.base + aead_off, ptlen);
+
+    return payload;
 
 Error:
     return ptls_iovec_init(NULL, 0);

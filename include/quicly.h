@@ -598,13 +598,17 @@ typedef struct st_quicly_decoded_packet_t {
     ptls_iovec_t token;
     /**
      * starting offset of data (i.e., version-dependent area of a long header packet (version numbers in case of VN), odcid (in case
-     * of retry), or encrypted PN)
+     * of retry), encrypted PN (if decrypted_pn is UINT64_MAX) or data (if decrypted_pn is not UINT64_MAX))
      */
     size_t encrypted_off;
     /**
      * size of the datagram
      */
     size_t datagram_size;
+    /**
+     * if not UINT64_MAX, indicates that the packet has been decrypted prior to being passed to `quicly_receive`.
+     */
+    uint64_t decrypted_pn;
     /**
      *
      */
