@@ -138,6 +138,8 @@ EndOfPath:
     if (input.base[off] == ' ') {
         *is_http1 = !(off + 1 + sizeof(http09) <= input.len && 
                         memcmp(&input.base[off + 1], http09, sizeof(http09)) == 0);    
+    } else {
+        *is_http1 = 0;
     }
     input.base[off] = '\0';
     return 1;
