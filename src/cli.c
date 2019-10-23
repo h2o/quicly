@@ -118,6 +118,7 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
 static int parse_request(ptls_iovec_t input, char **path, int *is_http1)
 {
     size_t off = 0, path_start;
+    char http09[] = {'H', 'T', 'T', 'P', '/', '0', '.', '9', '\r', '\n'};
 
     for (off = 0; off != input.len; ++off)
         if (input.base[off] == ' ')
@@ -134,7 +135,10 @@ EndOfMethod:
 
 EndOfPath:
     *path = (char *)(input.base + path_start);
-    *is_http1 = input.base[off] == ' ';
+    if (input.base[off] == ' ') {
+        *is_http1 = !(off + 1 + sizeof(http09) <= input.len && 
+                        memcmp(&input.base[off + 1], http09, sizeof(http09)) == 0);    
+    }
     input.base[off] = '\0';
     return 1;
 }
