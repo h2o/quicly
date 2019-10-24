@@ -90,8 +90,8 @@ struct {
 } reqs[1024];
 
 struct st_stream_data_t {
-    quicly_streambuf_t stream_data;
-    FILE* app_data;
+    quicly_streambuf_t streambuf;
+    FILE *outfp;
 };
 
 static int on_stop_sending(quicly_stream_t *stream, int err);
@@ -122,6 +122,16 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64 ", srtt: %" PRIu32 "\n",
             stats.num_packets.received, stats.num_packets.sent, stats.num_packets.lost, stats.num_packets.ack_received,
             stats.num_bytes.received, stats.num_bytes.sent, stats.rtt.smoothed);
+}
+
+static int validate_path(const char *path)
+{
+    if (path[0] != '/')
+        return 0;
+    /* TODO avoid false positives on the client-side */
+    if (strstr(path, "/.") != NULL)
+        return 0;
+    return 1;
 }
 
 static int parse_request(ptls_iovec_t input, char **path, int *is_http1)
@@ -291,7 +301,7 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         goto Sent;
     if (send_sized_text(stream, path, is_http1))
         goto Sent;
-    if (path[0] == '/' && strstr(path, "/.") == NULL && send_file(stream, is_http1, path + 1, "text/plain"))
+    if (validate_path(path) && send_file(stream, is_http1, path + 1, "text/plain"))
         goto Sent;
 
     if (!quicly_sendstate_is_open(&stream->sendstate))
@@ -307,6 +317,7 @@ Sent:
 
 static int client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
+    struct st_stream_data_t *stream_data = stream->data;
     ptls_iovec_t input;
     int ret;
 
@@ -314,14 +325,15 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         return ret;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
-        struct st_stream_data_t* stream_data = stream->data;
-        FILE *out = (stream_data->app_data == NULL) ? stdout : stream_data->app_data;
+        FILE *out = (stream_data->outfp == NULL) ? stdout : stream_data->outfp;
         fwrite(input.base, 1, input.len, out);
         fflush(out);
         quicly_streambuf_ingress_shift(stream, input.len);
     }
 
     if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
+        if (stream_data->outfp != NULL)
+            fclose(stream_data->outfp);
         static size_t num_resp_received;
         ++num_resp_received;
         if (reqs[num_resp_received].path == NULL) {
@@ -422,7 +434,7 @@ static void enqueue_requests(quicly_conn_t *conn)
     int ret;
 
     for (i = 0; reqs[i].path != NULL; ++i) {
-        char req[1024], destfile[1024], mode[] = "w";
+        char req[1024], destfile[1024];
         quicly_stream_t *stream;
         ret = quicly_open_stream(conn, &stream, 0);
         assert(ret == 0);
@@ -430,12 +442,12 @@ static void enqueue_requests(quicly_conn_t *conn)
         send_str(stream, req);
         quicly_streambuf_egress_shutdown(stream);
 
-        if (reqs[i].to_file && reqs[i].path[0] == '/') {
-            struct st_stream_data_t* stream_data = stream->data;
+        if (reqs[i].to_file) {
+            struct st_stream_data_t *stream_data = stream->data;
             sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
-            stream_data->app_data = fopen(destfile, mode);
-            if (stream_data->app_data == NULL) {
-                fprintf(stderr, "failed to open destination file: %s\n", reqs[i].path);
+            stream_data->outfp = fopen(destfile, "w");
+            if (stream_data->outfp == NULL) {
+                fprintf(stderr, "failed to open destination file:%s:%s\n", reqs[i].path, strerror(errno));
                 exit(1);
             }
         }
@@ -1000,11 +1012,15 @@ int main(int argc, char **argv)
             break;
         case 'p':
         case 'P': {
+            if (!validate_path(optarg)) {
+                fprintf(stderr, "invalid path:%s\n", optarg);
+                exit(1);
+            }
             size_t i;
             for (i = 0; reqs[i].path != NULL; ++i)
                 ;
             reqs[i].path = optarg;
-            if (ch == 'P') reqs[i].to_file = 1;
+            reqs[i].to_file = ch == 'P';
         } break;
         case 'R':
             enforce_retry = 1;
