@@ -27,10 +27,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
             quicly_stream_frame_t frame;
             if ((ret = quicly_decode_stream_frame(type_flags, &src, end, &frame)) != 0)
                 return 0;
-	} else if (type_flags >= QUICLY_FRAME_TYPE_ACK) {
-            quicly_ack_frame_t frame;
-            if ((ret = quicly_decode_ack_frame(&src, end, &frame, 0)) != 0)
-                return 0;
 	} else {
             switch (type_flags) {
         	case QUICLY_FRAME_TYPE_TRANSPORT_CLOSE: {
