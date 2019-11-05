@@ -94,7 +94,6 @@ void test_stream_concurrency(void)
     /* we would have free room now that RST of the server-sent side is ACKed */
     ok(server_streambuf->is_detached);
     ok(!client_streams[i]->streams_blocked);
-    ++i;
 
     /* but we cannot open one more */
     ret = quicly_open_stream(client, client_streams + i, 0);
