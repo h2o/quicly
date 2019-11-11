@@ -50,7 +50,7 @@ extern "C" {
 #define QUICLY_LONG_HEADER_BIT 0x80
 #define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
 
-#define QUICLY_PROTOCOL_VERSION 0xff000017
+#define QUICLY_PROTOCOL_VERSION 0xff000018
 
 #define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte)&0xf0) == 0xc0)
 
