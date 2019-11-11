@@ -3966,7 +3966,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
          *   |                      | IN | 0R | HS | 1R |               |
          *   +----------------------+----+----+----+----+---------------+ */
         FRAME( padding              ,  1 ,  1 ,  1 ,  1 ,             0 ), /* 0 */
-        FRAME( ping                 ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( ping                 ,  1 ,  1 ,  1 ,  1 ,             1 ),
         FRAME( ack                  ,  1 ,  0 ,  1 ,  1 ,             0 ),
         FRAME( ack                  ,  1 ,  0 ,  1 ,  1 ,             0 ),
         FRAME( reset_stream         ,  0 ,  1 ,  0 ,  1 ,             1 ),
