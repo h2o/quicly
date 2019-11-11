@@ -664,6 +664,8 @@ inline int quicly_decode_new_token_frame(const uint8_t **src, const uint8_t *end
     uint64_t token_len;
     if ((token_len = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
+    if (token_len == 0)
+        goto Error;
     if ((uint64_t)(end - *src) < token_len)
         goto Error;
     frame->token = ptls_iovec_init(*src, (size_t)token_len);
