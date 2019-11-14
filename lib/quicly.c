@@ -1302,7 +1302,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
     } while (0)
 
 int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
-                                           const quicly_cid_t *odcid, const void *stateless_reset_token)
+                                           const quicly_cid_t *odcid, const void *stateless_reset_token, int expand)
 {
     int ret;
 
@@ -1346,6 +1346,15 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { pushv(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
         if (params->disable_active_migration)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
+        /* if requested, add a greasing TP of 1 MTU size so that CH spans across multiple packets */
+        if (expand) {
+            PUSH_TRANSPORT_PARAMETER(buf, 31 * 100 + 27, {
+                if ((ret = ptls_buffer_reserve(buf, QUICLY_MAX_PACKET_SIZE)) != 0)
+                    goto Exit;
+                memset(buf->base + buf->off, 0, QUICLY_MAX_PACKET_SIZE);
+                buf->off += QUICLY_MAX_PACKET_SIZE;
+            });
+        }
     });
 #undef pushv
 
@@ -1662,7 +1671,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     /* handshake */
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     if ((ret = quicly_encode_transport_parameter_list(&conn->crypto.transport_params.buf, 1, &conn->super.ctx->transport_params,
-                                                      NULL, NULL)) != 0)
+                                                      NULL, NULL, conn->super.ctx->expand_client_hello)) != 0)
         goto Exit;
     conn->crypto.transport_params.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
@@ -1724,7 +1733,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     if ((ret = quicly_encode_transport_parameter_list(
              &conn->crypto.transport_params.buf, 0, &conn->super.ctx->transport_params,
              conn->retry_odcid.len != 0 ? &conn->retry_odcid : NULL,
-             conn->super.ctx->cid_encryptor != NULL ? conn->super.host.stateless_reset_token : NULL)) != 0)
+             conn->super.ctx->cid_encryptor != NULL ? conn->super.host.stateless_reset_token : NULL, 0)) != 0)
         goto Exit;
     properties->additional_extensions = conn->crypto.transport_params.ext;
     conn->crypto.transport_params.ext[0] =
