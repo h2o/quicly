@@ -351,7 +351,10 @@ static __thread int64_t now;
 
 static void update_now(quicly_context_t *ctx)
 {
-    now = ctx->now->cb(ctx->now);
+    int64_t newval = ctx->now->cb(ctx->now);
+
+    if (now < newval)
+        now = newval;
 }
 
 /**
