@@ -281,6 +281,9 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
     int is_http1;
     int ret;
 
+    if (!quicly_sendstate_is_open(&stream->sendstate))
+        return 0;
+
     if ((ret = quicly_streambuf_ingress_receive(stream, off, src, len)) != 0)
         return ret;
 
@@ -303,9 +306,6 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
         goto Sent;
     if (validate_path(path) && send_file(stream, is_http1, path + 1, "text/plain"))
         goto Sent;
-
-    if (!quicly_sendstate_is_open(&stream->sendstate))
-        return 0;
 
     send_header(stream, is_http1, 404, "text/plain; charset=utf-8");
     send_str(stream, "not found\n");
