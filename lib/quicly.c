@@ -1206,6 +1206,9 @@ void quicly_free(quicly_conn_t *conn)
     free_handshake_space(&conn->handshake);
     free_application_space(&conn->application);
 
+    ptls_buffer_dispose(&conn->crypto.transport_params.buf);
+    ptls_free(conn->crypto.tls);
+
     free(conn->token.base);
     free(conn);
 }
