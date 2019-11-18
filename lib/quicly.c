@@ -44,7 +44,6 @@
 #define QUICLY_QUIC_BIT 0x40
 #define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
 #define QUICLY_SHORT_HEADER_RESERVED_BITS 0x18
-#define QUICLY_KEY_PHASE_BIT 0x4
 
 #define QUICLY_PACKET_TYPE_INITIAL (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0)
 #define QUICLY_PACKET_TYPE_0RTT (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x10)
@@ -53,9 +52,6 @@
 #define QUICLY_PACKET_TYPE_BITMASK 0xf0
 
 #define QUICLY_MIN_INITIAL_DCID_LEN 8
-
-#define QUICLY_MAX_PN_SIZE 4  /* maximum defined by the RFC used for calculating header protection sampling offset */
-#define QUICLY_SEND_PN_SIZE 2 /* size of PN used for sending */
 
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS 0xffa5
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
@@ -121,25 +117,6 @@ struct st_quicly_pending_path_challenge_t {
     struct st_quicly_pending_path_challenge_t *next;
     uint8_t is_response;
     uint8_t data[QUICLY_PATH_CHALLENGE_DATA_LEN];
-};
-
-struct st_quicly_pn_space_t {
-    /**
-     * acks to be sent to peer
-     */
-    quicly_ranges_t ack_queue;
-    /**
-     * time at when the largest pn in the ack_queue has been received (or INT64_MAX if none)
-     */
-    int64_t largest_pn_received_at;
-    /**
-     *
-     */
-    uint64_t next_expected_packet_number;
-    /**
-     * packet count before ack is sent
-     */
-    uint32_t unacked_count;
 };
 
 struct st_quicly_handshake_space_t {

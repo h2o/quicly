@@ -56,6 +56,10 @@ extern "C" {
 #define QUICLY_STATELESS_RESET_TOKEN_LEN 16
 #define QUICLY_STATELESS_RESET_PACKET_MIN_LEN 39
 
+#define QUICLY_MAX_PN_SIZE 4  /* maximum defined by the RFC used for calculating header protection sampling offset */
+#define QUICLY_KEY_PHASE_BIT 0x4
+#define QUICLY_SEND_PN_SIZE 2 /* size of PN used for sending */
+
 typedef union st_quicly_address_t {
     struct sockaddr sa;
     struct sockaddr_in sin;
@@ -74,6 +78,7 @@ typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 typedef struct st_quicly_send_context_t quicly_send_context_t;
 typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintext_t;
+typedef struct st_quicly_pn_space_t quicly_pn_space_t;
 
 #define QUICLY_CALLBACK_TYPE0(ret, name)                                                                                           \
     typedef struct st_quicly_##name##_t {                                                                                          \
@@ -330,6 +335,26 @@ typedef enum {
 struct st_quicly_conn_streamgroup_state_t {
     uint32_t num_streams;
     quicly_stream_id_t next_stream_id;
+};
+
+
+struct st_quicly_pn_space_t {
+    /**
+     * acks to be sent to peer
+     */
+    quicly_ranges_t ack_queue;
+    /**
+     * time at when the largest pn in the ack_queue has been received (or INT64_MAX if none)
+     */
+    int64_t largest_pn_received_at;
+    /**
+     *
+     */
+    uint64_t next_expected_packet_number;
+    /**
+     * packet count before ack is sent
+     */
+    uint32_t unacked_count;
 };
 
 /**
