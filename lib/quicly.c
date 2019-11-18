@@ -878,6 +878,81 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     return 0;
 }
 
+ptls_cipher_context_t *quicly_get_conn_cipher_context(quicly_conn_t *conn, int packet_type)
+{
+    if (!conn)
+      return NULL;
+    switch(packet_type)
+    {
+      case QUICLY_PACKET_TYPE_INITIAL:
+        if (conn->initial)
+          return conn->initial->cipher.ingress.header_protection;
+        return NULL;
+      case QUICLY_PACKET_TYPE_HANDSHAKE:
+        if (conn->handshake)
+          return conn->handshake->cipher.ingress.header_protection;
+        return NULL;
+      case QUICLY_PACKET_TYPE_0RTT:
+        if (conn->application)
+          return conn->application->cipher.ingress.header_protection.zero_rtt;
+        return NULL;
+      case -1:
+        if (conn->application)
+          return conn->application->cipher.ingress.header_protection.one_rtt;
+        return NULL;
+      default:
+        return NULL;
+    }
+}
+
+ptls_aead_context_t **quicly_get_conn_aead_context(quicly_conn_t *conn, int packet_type)
+{
+    if (!conn)
+      return NULL;
+    switch(packet_type)
+    {
+      case QUICLY_PACKET_TYPE_INITIAL:
+        if (conn->initial)
+          return &conn->initial->cipher.ingress.aead;
+       return NULL;
+      case QUICLY_PACKET_TYPE_HANDSHAKE:
+        if (conn->handshake)
+          return &conn->handshake->cipher.ingress.aead;
+       return NULL;
+      case QUICLY_PACKET_TYPE_0RTT:
+      case -1:
+        if (conn->application)
+         return conn->application->cipher.ingress.aead;
+       return NULL;
+      default:
+        return NULL;
+    }
+}
+
+struct st_quicly_pn_space_t **quicly_get_conn_pn_space(quicly_conn_t *conn, int packet_type)
+{
+    if (!conn)
+      return NULL;
+    switch(packet_type)
+    {
+      case QUICLY_PACKET_TYPE_INITIAL:
+        if (conn->initial)
+          return (void*)&conn->initial;
+       return NULL;
+      case QUICLY_PACKET_TYPE_HANDSHAKE:
+        if (conn->handshake)
+          return (void*)&conn->handshake;
+       return NULL;
+      case QUICLY_PACKET_TYPE_0RTT:
+      case -1:
+        if (conn->application)
+         return (void*)&conn->application;
+       return NULL;
+      default:
+        return NULL;
+    }
+}
+
 quicly_stream_id_t quicly_get_ingress_max_streams(quicly_conn_t *conn, int uni)
 {
     quicly_maxsender_t *maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;

@@ -713,6 +713,18 @@ static quicly_state_t quicly_get_state(quicly_conn_t *conn);
 /**
  *
  */
+ptls_cipher_context_t *quicly_get_conn_cipher_context(quicly_conn_t *conn, int packet_type);
+/**
+ *
+ */
+ptls_aead_context_t **quicly_get_conn_aead_context(quicly_conn_t *conn, int packet_type);
+/**
+ *
+ */
+struct st_quicly_pn_space_t **quicly_get_conn_pn_space(quicly_conn_t *conn, int packet_type);
+/**
+ *
+ */
 int quicly_connection_is_ready(quicly_conn_t *conn);
 /**
  *
