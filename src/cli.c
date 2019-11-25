@@ -138,7 +138,7 @@ static int parse_request(ptls_iovec_t input, char **path, int *is_http1)
 {
     size_t off = 0, path_start;
     
-    printf("Request received: %s\n", input.base);
+    printf("Request received: %.*s\n", (int)input.len, input.base);
     for (off = 0; off != input.len; ++off)
         if (input.base[off] == ' ')
             goto EndOfMethod;
