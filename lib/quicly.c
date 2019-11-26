@@ -1841,7 +1841,7 @@ static int decrypt_packet(quicly_conn_t *conn, ptls_cipher_context_t *header_pro
     size_t encrypted_len = packet->octets.len - packet->encrypted_off;
     uint8_t hpmask[5] = {0};
     uint32_t pnbits = 0;
-    size_t pnlen, aead_index, i;
+    size_t pnlen, ptlen, aead_index, i;
 
     /* decipher the header protection, as well as obtaining pnbits, pnlen */
     if (encrypted_len < header_protection->algo->iv_size + QUICLY_MAX_PN_SIZE)
@@ -1855,7 +1855,10 @@ static int decrypt_packet(quicly_conn_t *conn, ptls_cipher_context_t *header_pro
         pnbits = (pnbits << 8) | packet->octets.base[packet->encrypted_off + i];
     }
 
-    /* determine aead index (FIXME move AEAD key selection and decryption logic to the caller?) */
+    size_t aead_off = packet->encrypted_off + pnlen;
+    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
+
+    /* AEAD, with key determination and update */
     if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
         aead_index = 0;
     } else {
@@ -1874,10 +1877,6 @@ static int decrypt_packet(quicly_conn_t *conn, ptls_cipher_context_t *header_pro
         }
         }
     }
-
-    /* AEAD */
-    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
-    size_t aead_off = packet->encrypted_off + pnlen, ptlen;
     if ((ptlen = ptls_aead_decrypt(aead[aead_index], packet->octets.base + aead_off, packet->octets.base + aead_off,
                                    packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
         /* retry if necessary */
