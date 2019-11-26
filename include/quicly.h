@@ -299,6 +299,10 @@ struct st_quicly_context_t {
      *
      */
     quicly_generate_resumption_token_t *generate_resumption_token;
+    /**
+     * number of packets that can be sent without a key update
+     */
+    uint64_t max_packets_per_key;
 };
 
 /**

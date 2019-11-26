@@ -22,6 +22,8 @@
 #include <sys/time.h>
 #include "quicly/defaults.h"
 
+#define DEFAULT_MAX_PACKETS_PER_KEY 16777216
+
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {
     NULL,                   /* tls */
@@ -42,7 +44,10 @@ const quicly_context_t quicly_spec_context = {
     NULL, /* on_stream_open */
     &quicly_default_stream_scheduler,
     NULL, /* on_conn_close */
-    &quicly_default_now
+    &quicly_default_now,
+    NULL,
+    NULL,
+    DEFAULT_MAX_PACKETS_PER_KEY
 };
 
 /* profile with a focus on reducing latency for the HTTP use case */
@@ -65,7 +70,10 @@ const quicly_context_t quicly_performant_context = {
     NULL, /* on_stream_open */
     &quicly_default_stream_scheduler,
     NULL, /* on_conn_close */
-    &quicly_default_now
+    &quicly_default_now,
+    NULL,
+    NULL,
+    DEFAULT_MAX_PACKETS_PER_KEY
 };
 
 static quicly_datagram_t *default_alloc_packet(quicly_packet_allocator_t *self, size_t payloadsize)
