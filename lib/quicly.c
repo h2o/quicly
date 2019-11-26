@@ -1205,7 +1205,7 @@ static int apply_peer_transport_params(quicly_conn_t *conn)
     return 0;
 }
 
-static int update_1rtt_key(ptls_cipher_suite_t *cipher, ptls_aead_context_t **aead, int is_enc, uint8_t *secret)
+static int update_1rtt_key(ptls_cipher_suite_t *cipher, int is_enc, ptls_aead_context_t **aead, uint8_t *secret)
 {
     uint8_t new_secret[PTLS_MAX_DIGEST_SIZE];
     ptls_aead_context_t *new_aead = NULL;
@@ -1241,7 +1241,7 @@ static int update_1rtt_egress_key(quicly_conn_t *conn)
     int ret;
 
     /* generate next AEAD key, and increment key phase if it succeeds */
-    if ((ret = update_1rtt_key(cipher, &space->cipher.egress.key.aead, 1, space->cipher.egress.secret)) != 0)
+    if ((ret = update_1rtt_key(cipher, 1, &space->cipher.egress.key.aead, space->cipher.egress.secret)) != 0)
         return ret;
     ++space->cipher.egress.key_phase;
 
@@ -1866,7 +1866,7 @@ static int decrypt_packet(quicly_conn_t *conn, ptls_cipher_context_t *header_pro
             struct st_quicly_application_space_t *space = conn->application;
             ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
             int ret;
-            if ((ret = update_1rtt_key(cipher, &space->cipher.ingress.aead[aead_index], 0, space->cipher.ingress.secret)) != 0)
+            if ((ret = update_1rtt_key(cipher, 0, &space->cipher.ingress.aead[aead_index], space->cipher.ingress.secret)) != 0)
                 return ret;
             ++space->cipher.ingress.key_phase.prepared;
             QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, space->cipher.ingress.key_phase.prepared,
