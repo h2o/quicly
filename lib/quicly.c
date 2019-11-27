@@ -3705,6 +3705,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                                 space->cipher.egress.key_update_pn.last = UINT64_MAX;
                                 space->cipher.egress.key_update_pn.next =
                                     conn->egress.packet_number + conn->super.ctx->max_packets_per_key;
+                                QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, space->cipher.egress.key_update_pn.next);
                             }
                         }
                     } else {
