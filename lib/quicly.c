@@ -1832,16 +1832,68 @@ Exit:
     return ret;
 }
 
-/**
- * @param aead pointer to AEAD context, or a 2-element array of AEAD contexts in case of 1-RTT
- */
-static int decrypt_packet(quicly_conn_t *conn, ptls_cipher_context_t *header_protection, ptls_aead_context_t **aead,
+static size_t aead_decrypt_fixed_key(void *ctx, uint64_t pn, quicly_decoded_packet_t *packet, size_t aead_off)
+{
+    ptls_aead_context_t *aead = ctx;
+    return ptls_aead_decrypt(aead, packet->octets.base + aead_off, packet->octets.base + aead_off, packet->octets.len - aead_off,
+                             pn, packet->octets.base, aead_off);
+}
+
+static size_t aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *packet, size_t aead_off)
+{
+    quicly_conn_t *conn = ctx;
+    struct st_quicly_application_space_t *space = conn->application;
+    size_t aead_index = (packet->octets.base[0] & QUICLY_KEY_PHASE_BIT) != 0, ptlen;
+
+    /* prepare key, when not available (yet) */
+    if (space->cipher.ingress.aead[aead_index] == NULL) {
+    Retry_1RTT : {
+        ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
+        int ret;
+        if ((ret = update_1rtt_key(cipher, 0, &space->cipher.ingress.aead[aead_index], space->cipher.ingress.secret)) != 0)
+            return ret;
+        ++space->cipher.ingress.key_phase.prepared;
+        QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, space->cipher.ingress.key_phase.prepared,
+                     QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
+    }
+    }
+
+    /* decrypt */
+    if ((ptlen = aead_decrypt_fixed_key(space->cipher.ingress.aead[aead_index], pn, packet, aead_off)) == SIZE_MAX) {
+        /* retry with a new key, if possible */
+        if (space->cipher.ingress.key_phase.decrypted == space->cipher.ingress.key_phase.prepared &&
+            space->cipher.ingress.key_phase.decrypted % 2 != aead_index)
+            goto Retry_1RTT;
+        /* otherwise return failure */
+        return SIZE_MAX;
+    }
+
+    /* update the confirmed key phase and also the egress key phase, if necessary */
+    if (space->cipher.ingress.key_phase.prepared != space->cipher.ingress.key_phase.decrypted &&
+        space->cipher.ingress.key_phase.prepared % 2 == aead_index) {
+        ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
+        assert(space->cipher.ingress.key_phase.prepared == space->cipher.ingress.key_phase.decrypted + 1);
+        space->cipher.ingress.key_phase.decrypted = space->cipher.ingress.key_phase.prepared;
+        QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, space->cipher.ingress.key_phase.decrypted,
+                     QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
+        if (space->cipher.egress.key_phase < space->cipher.ingress.key_phase.decrypted) {
+            int ret;
+            if ((ret = update_1rtt_egress_key(conn)) != 0)
+                return ret;
+        }
+    }
+
+    return ptlen;
+}
+
+static int decrypt_packet(ptls_cipher_context_t *header_protection,
+                          size_t (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t), void *aead_ctx,
                           uint64_t *next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn, ptls_iovec_t *payload)
 {
     size_t encrypted_len = packet->octets.len - packet->encrypted_off;
     uint8_t hpmask[5] = {0};
     uint32_t pnbits = 0;
-    size_t pnlen, ptlen, aead_index, i;
+    size_t pnlen, ptlen, i;
 
     /* decipher the header protection, as well as obtaining pnbits, pnlen */
     if (encrypted_len < header_protection->algo->iv_size + QUICLY_MAX_PN_SIZE)
@@ -1858,56 +1910,14 @@ static int decrypt_packet(quicly_conn_t *conn, ptls_cipher_context_t *header_pro
     size_t aead_off = packet->encrypted_off + pnlen;
     *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
 
-    /* AEAD, with key determination and update */
-    if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
-        aead_index = 0;
-    } else {
-        aead_index = (packet->octets.base[0] & QUICLY_KEY_PHASE_BIT) != 0;
-        if (aead[aead_index] == NULL) {
-            /* generate next key */
-        Retry_1RTT : {
-            struct st_quicly_application_space_t *space = conn->application;
-            ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
-            int ret;
-            if ((ret = update_1rtt_key(cipher, 0, &space->cipher.ingress.aead[aead_index], space->cipher.ingress.secret)) != 0)
-                return ret;
-            ++space->cipher.ingress.key_phase.prepared;
-            QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, space->cipher.ingress.key_phase.prepared,
-                         QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
-        }
-        }
-    }
-    if ((ptlen = ptls_aead_decrypt(aead[aead_index], packet->octets.base + aead_off, packet->octets.base + aead_off,
-                                   packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
-        /* retry if necessary */
-        if (!QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
-            struct st_quicly_application_space_t *space = conn->application;
-            if (space->cipher.ingress.key_phase.decrypted == space->cipher.ingress.key_phase.prepared &&
-                space->cipher.ingress.key_phase.decrypted % 2 != aead_index)
-                goto Retry_1RTT;
-        }
+    /* AEAD decryption */
+    if ((ptlen = (*aead_cb)(aead_ctx, *pn, packet, aead_off)) == SIZE_MAX) {
         if (QUICLY_DEBUG)
             fprintf(stderr, "%s: aead decryption failure (pn: %" PRIu64 ")\n", __FUNCTION__, *pn);
         return QUICLY_ERROR_PACKET_IGNORED;
     }
-
-    /* update the confirmed key phase and also the egress key phase, if necessary */
-    if (!QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
-        struct st_quicly_application_space_t *space = conn->application;
-        if (space->cipher.ingress.key_phase.prepared != space->cipher.ingress.key_phase.decrypted &&
-            space->cipher.ingress.key_phase.prepared % 2 == aead_index) {
-            ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
-            assert(space->cipher.ingress.key_phase.prepared == space->cipher.ingress.key_phase.decrypted + 1);
-            space->cipher.ingress.key_phase.decrypted = space->cipher.ingress.key_phase.prepared;
-            QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, space->cipher.ingress.key_phase.decrypted,
-                         QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
-            if (space->cipher.egress.key_phase < space->cipher.ingress.key_phase.decrypted) {
-                int ret;
-                if ((ret = update_1rtt_egress_key(conn)) != 0)
-                    return ret;
-            }
-        }
-    }
+    if (*next_expected_pn <= *pn)
+        *next_expected_pn = *pn + 1;
 
     /* consistency checks after AEAD decryption */
     if ((packet->octets.base[0] & (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0]) ? QUICLY_LONG_HEADER_RESERVED_BITS
@@ -1929,8 +1939,6 @@ static int decrypt_packet(quicly_conn_t *conn, ptls_cipher_context_t *header_pro
         free(payload_hex);
     }
 
-    if (*next_expected_pn <= *pn)
-        *next_expected_pn = *pn + 1;
     *payload = ptls_iovec_init(packet->octets.base + aead_off, ptlen);
     return 0;
 }
@@ -4217,8 +4225,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
                                         0)) != 0)
         goto Exit;
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
-    if ((ret = decrypt_packet(NULL, ingress_cipher.header_protection, &ingress_cipher.aead, &next_expected_pn, packet, &pn,
-                              &payload)) != 0)
+    if ((ret = decrypt_packet(ingress_cipher.header_protection, aead_decrypt_fixed_key, ingress_cipher.aead, &next_expected_pn,
+                              packet, &pn, &payload)) != 0)
         goto Exit;
 
     /* create connection */
@@ -4267,7 +4275,10 @@ Exit:
 int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr, quicly_decoded_packet_t *packet)
 {
     ptls_cipher_context_t *header_protection;
-    ptls_aead_context_t **aead;
+    struct {
+        size_t (*cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t);
+        void *ctx;
+    } aead;
     struct st_quicly_pn_space_t **space;
     size_t epoch;
     ptls_iovec_t payload;
@@ -4359,7 +4370,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 memcpy(conn->super.peer.cid.cid, packet->cid.src.base, packet->cid.src.len);
                 conn->super.peer.cid.len = packet->cid.src.len;
             }
-            aead = &conn->initial->cipher.ingress.aead;
+            aead.cb = aead_decrypt_fixed_key;
+            aead.ctx = conn->initial->cipher.ingress.aead;
             space = (void *)&conn->initial;
             epoch = QUICLY_EPOCH_INITIAL;
             break;
@@ -4368,7 +4380,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            aead = &conn->handshake->cipher.ingress.aead;
+            aead.cb = aead_decrypt_fixed_key;
+            aead.ctx = conn->handshake->cipher.ingress.aead;
             space = (void *)&conn->handshake;
             epoch = QUICLY_EPOCH_HANDSHAKE;
             break;
@@ -4382,7 +4395,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            aead = &conn->application->cipher.ingress.aead[1];
+            aead.cb = aead_decrypt_fixed_key;
+            aead.ctx = conn->application->cipher.ingress.aead[1];
             space = (void *)&conn->application;
             epoch = QUICLY_EPOCH_0RTT;
             break;
@@ -4397,13 +4411,15 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             ret = QUICLY_ERROR_PACKET_IGNORED;
             goto Exit;
         }
-        aead = conn->application->cipher.ingress.aead;
+        aead.cb = aead_decrypt_1rtt;
+        aead.ctx = conn;
         space = (void *)&conn->application;
         epoch = QUICLY_EPOCH_1RTT;
     }
 
     /* decrypt */
-    if ((ret = decrypt_packet(conn, header_protection, aead, &(*space)->next_expected_packet_number, packet, &pn, &payload)) != 0)
+    if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, &(*space)->next_expected_packet_number, packet, &pn,
+                              &payload)) != 0)
         goto Exit;
 
     QUICLY_PROBE(CRYPTO_DECRYPT, conn, pn, payload.base, payload.len);
