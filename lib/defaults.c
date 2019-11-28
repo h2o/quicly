@@ -36,6 +36,7 @@ const quicly_context_t quicly_spec_context = {
         100,                                                 /* max_concurrent_streams_bidi */
         0                                                    /* max_concurrent_streams_uni */
     },
+    DEFAULT_MAX_PACKETS_PER_KEY,
     0, /* enforce_version_negotiation */
     0, /* is_clustered */
     0, /* enlarge_client_hello */
@@ -44,10 +45,7 @@ const quicly_context_t quicly_spec_context = {
     NULL, /* on_stream_open */
     &quicly_default_stream_scheduler,
     NULL, /* on_conn_close */
-    &quicly_default_now,
-    NULL,
-    NULL,
-    DEFAULT_MAX_PACKETS_PER_KEY
+    &quicly_default_now
 };
 
 /* profile with a focus on reducing latency for the HTTP use case */
@@ -62,6 +60,7 @@ const quicly_context_t quicly_performant_context = {
         100,                                                 /* max_concurrent_streams_bidi */
         0                                                    /* max_concurrent_streams_uni */
     },
+    DEFAULT_MAX_PACKETS_PER_KEY,
     0, /* enforce_version_negotiation */
     0, /* is_clustered */
     0, /* enlarge_client_hello */
@@ -70,10 +69,7 @@ const quicly_context_t quicly_performant_context = {
     NULL, /* on_stream_open */
     &quicly_default_stream_scheduler,
     NULL, /* on_conn_close */
-    &quicly_default_now,
-    NULL,
-    NULL,
-    DEFAULT_MAX_PACKETS_PER_KEY
+    &quicly_default_now
 };
 
 static quicly_datagram_t *default_alloc_packet(quicly_packet_allocator_t *self, size_t payloadsize)
