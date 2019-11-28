@@ -1819,24 +1819,32 @@ Exit:
     return ret;
 }
 
-static size_t aead_decrypt_fixed_key(void *ctx, uint64_t pn, quicly_decoded_packet_t *packet, size_t aead_off)
+static size_t aead_decrypt_core(ptls_aead_context_t *aead, uint64_t pn, quicly_decoded_packet_t *packet, size_t aead_off)
 {
-    ptls_aead_context_t *aead = ctx;
     return ptls_aead_decrypt(aead, packet->octets.base + aead_off, packet->octets.base + aead_off, packet->octets.len - aead_off,
                              pn, packet->octets.base, aead_off);
 }
 
-static size_t aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *packet, size_t aead_off)
+static int aead_decrypt_fixed_key(void *ctx, uint64_t pn, quicly_decoded_packet_t *packet, size_t aead_off, size_t *ptlen)
+{
+    ptls_aead_context_t *aead = ctx;
+
+    if ((*ptlen = aead_decrypt_core(aead, pn, packet, aead_off)) == SIZE_MAX)
+        return QUICLY_ERROR_PACKET_IGNORED;
+    return 0;
+}
+
+static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *packet, size_t aead_off, size_t *ptlen)
 {
     quicly_conn_t *conn = ctx;
     struct st_quicly_application_space_t *space = conn->application;
-    size_t aead_index = (packet->octets.base[0] & QUICLY_KEY_PHASE_BIT) != 0, ptlen;
+    size_t aead_index = (packet->octets.base[0] & QUICLY_KEY_PHASE_BIT) != 0;
+    int ret;
 
     /* prepare key, when not available (yet) */
     if (space->cipher.ingress.aead[aead_index] == NULL) {
     Retry_1RTT : {
         ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
-        int ret;
         if ((ret = update_1rtt_key(cipher, 0, &space->cipher.ingress.aead[aead_index], space->cipher.ingress.secret)) != 0)
             return ret;
         ++space->cipher.ingress.key_phase.prepared;
@@ -1846,13 +1854,13 @@ static size_t aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t 
     }
 
     /* decrypt */
-    if ((ptlen = aead_decrypt_fixed_key(space->cipher.ingress.aead[aead_index], pn, packet, aead_off)) == SIZE_MAX) {
+    if ((*ptlen = aead_decrypt_core(space->cipher.ingress.aead[aead_index], pn, packet, aead_off)) == SIZE_MAX) {
         /* retry with a new key, if possible */
         if (space->cipher.ingress.key_phase.decrypted == space->cipher.ingress.key_phase.prepared &&
             space->cipher.ingress.key_phase.decrypted % 2 != aead_index)
             goto Retry_1RTT;
         /* otherwise return failure */
-        return SIZE_MAX;
+        return QUICLY_ERROR_PACKET_IGNORED;
     }
 
     /* update the confirmed key phase and also the egress key phase, if necessary */
@@ -1864,23 +1872,23 @@ static size_t aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t 
         QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, space->cipher.ingress.key_phase.decrypted,
                      QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
         if (space->cipher.egress.key_phase < space->cipher.ingress.key_phase.decrypted) {
-            int ret;
             if ((ret = update_1rtt_egress_key(conn)) != 0)
                 return ret;
         }
     }
 
-    return ptlen;
+    return 0;
 }
 
 static int do_decrypt_packet(ptls_cipher_context_t *header_protection,
-                             size_t (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t), void *aead_ctx,
+                             int (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t, size_t *), void *aead_ctx,
                              uint64_t *next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn, ptls_iovec_t *payload)
 {
     size_t encrypted_len = packet->octets.len - packet->encrypted_off;
     uint8_t hpmask[5] = {0};
     uint32_t pnbits = 0;
     size_t pnlen, ptlen, i;
+    int ret;
 
     /* decipher the header protection, as well as obtaining pnbits, pnlen */
     if (encrypted_len < header_protection->algo->iv_size + QUICLY_MAX_PN_SIZE)
@@ -1898,10 +1906,10 @@ static int do_decrypt_packet(ptls_cipher_context_t *header_protection,
     *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
 
     /* AEAD decryption */
-    if ((ptlen = (*aead_cb)(aead_ctx, *pn, packet, aead_off)) == SIZE_MAX) {
+    if ((ret = (*aead_cb)(aead_ctx, *pn, packet, aead_off, &ptlen)) != 0) {
         if (QUICLY_DEBUG)
-            fprintf(stderr, "%s: aead decryption failure (pn: %" PRIu64 ")\n", __FUNCTION__, *pn);
-        return QUICLY_ERROR_PACKET_IGNORED;
+            fprintf(stderr, "%s: aead decryption failure (pn: %" PRIu64 ",code:%d)\n", __FUNCTION__, *pn, ret);
+        return ret;
     }
     if (*next_expected_pn <= *pn)
         *next_expected_pn = *pn + 1;
@@ -1911,7 +1919,7 @@ static int do_decrypt_packet(ptls_cipher_context_t *header_protection,
 }
 
 static int decrypt_packet(ptls_cipher_context_t *header_protection,
-                          size_t (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t), void *aead_ctx,
+                          int (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t, size_t *), void *aead_ctx,
                           uint64_t *next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn, ptls_iovec_t *payload)
 {
     /* decrypt ourselves, or use the pre-decrypted input */
@@ -4289,7 +4297,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
 {
     ptls_cipher_context_t *header_protection;
     struct {
-        size_t (*cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t);
+        int (*cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t, size_t *);
         void *ctx;
     } aead;
     struct st_quicly_pn_space_t **space;
