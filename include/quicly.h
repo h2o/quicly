@@ -276,6 +276,10 @@ struct st_quicly_context_t {
      */
     quicly_transport_parameters_t transport_params;
     /**
+     * number of packets that can be sent without a key update
+     */
+    uint64_t max_packets_per_key;
+    /**
      * client-only
      */
     unsigned enforce_version_negotiation : 1;
