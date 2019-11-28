@@ -41,21 +41,7 @@
 #include "quicly-probes.h"
 #endif
 
-#define QUICLY_QUIC_BIT 0x40
-#define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
-#define QUICLY_SHORT_HEADER_RESERVED_BITS 0x18
-#define QUICLY_KEY_PHASE_BIT 0x4
-
-#define QUICLY_PACKET_TYPE_INITIAL (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0)
-#define QUICLY_PACKET_TYPE_0RTT (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x10)
-#define QUICLY_PACKET_TYPE_HANDSHAKE (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x20)
-#define QUICLY_PACKET_TYPE_RETRY (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x30)
-#define QUICLY_PACKET_TYPE_BITMASK 0xf0
-
 #define QUICLY_MIN_INITIAL_DCID_LEN 8
-
-#define QUICLY_MAX_PN_SIZE 4  /* maximum defined by the RFC used for calculating header protection sampling offset */
-#define QUICLY_SEND_PN_SIZE 2 /* size of PN used for sending */
 
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS 0xffa5
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
@@ -442,6 +428,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
     packet->octets = ptls_iovec_init(src, len);
     packet->datagram_size = len;
     packet->token = ptls_iovec_init(NULL, 0);
+    packet->decrypted_pn = UINT64_MAX;
     ++src;
 
     if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
@@ -1754,8 +1741,8 @@ Exit:
     return ret;
 }
 
-static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptls_aead_context_t **aead, uint64_t *next_expected_pn,
-                                   quicly_decoded_packet_t *packet, uint64_t *pn)
+static ptls_iovec_t do_decrypt_packet(ptls_cipher_context_t *header_protection, ptls_aead_context_t **aead,
+                                      uint64_t next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn)
 {
     size_t encrypted_len = packet->octets.len - packet->encrypted_off;
     uint8_t hpmask[5] = {0};
@@ -1785,13 +1772,39 @@ static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptl
     }
 
     /* AEAD */
-    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
+    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, next_expected_pn);
     size_t aead_off = packet->encrypted_off + pnlen, ptlen;
     if ((ptlen = ptls_aead_decrypt(aead[aead_index], packet->octets.base + aead_off, packet->octets.base + aead_off,
                                    packet->octets.len - aead_off, *pn, packet->octets.base, aead_off)) == SIZE_MAX) {
         if (QUICLY_DEBUG)
             fprintf(stderr, "%s: aead decryption failure (pn: %" PRIu64 ")\n", __FUNCTION__, *pn);
         goto Error;
+    }
+
+    if (QUICLY_DEBUG) {
+        char *payload_hex = quicly_hexdump(packet->octets.base + aead_off, ptlen, 4);
+        fprintf(stderr, "%s: AEAD payload:\n%s", __FUNCTION__, payload_hex);
+        free(payload_hex);
+    }
+
+    return ptls_iovec_init(packet->octets.base + aead_off, ptlen);
+
+Error:
+    return ptls_iovec_init(NULL, 0);
+}
+
+static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptls_aead_context_t **aead, uint64_t *next_expected_pn,
+                                   quicly_decoded_packet_t *packet, uint64_t *pn)
+{
+    ptls_iovec_t payload;
+
+    /* decrypt ourselves, or use the pre-decrypted input */
+    if (packet->decrypted_pn == UINT64_MAX) {
+        if ((payload = do_decrypt_packet(header_protection, aead, *next_expected_pn, packet, pn)).base == NULL)
+            goto Error;
+    } else {
+        payload = ptls_iovec_init(packet->octets.base + packet->encrypted_off, packet->octets.len - packet->encrypted_off);
+        *pn = packet->decrypted_pn;
     }
 
     /* check reserved bits after AEAD decryption */
@@ -1803,15 +1816,10 @@ static ptls_iovec_t decrypt_packet(ptls_cipher_context_t *header_protection, ptl
         goto Error;
     }
 
-    if (QUICLY_DEBUG) {
-        char *payload_hex = quicly_hexdump(packet->octets.base + aead_off, ptlen, 4);
-        fprintf(stderr, "%s: AEAD payload:\n%s", __FUNCTION__, payload_hex);
-        free(payload_hex);
-    }
-
     if (*next_expected_pn <= *pn)
         *next_expected_pn = *pn + 1;
-    return ptls_iovec_init(packet->octets.base + aead_off, ptlen);
+
+    return payload;
 
 Error:
     return ptls_iovec_init(NULL, 0);
@@ -2125,6 +2133,21 @@ struct st_quicly_send_context_t {
     uint8_t *dst_payload_from;
 };
 
+static void finalize_send_packet(quicly_finalize_send_packet_t *_self, quicly_conn_t *conn, ptls_cipher_context_t *hp,
+                                 ptls_aead_context_t *aead, quicly_datagram_t *packet, size_t first_byte_at, size_t payload_from,
+                                 int coalesced)
+{
+    uint8_t hpmask[1 + QUICLY_SEND_PN_SIZE] = {0};
+    size_t i;
+
+    ptls_cipher_init(hp, packet->data.base + payload_from - QUICLY_SEND_PN_SIZE + QUICLY_MAX_PN_SIZE);
+    ptls_cipher_encrypt(hp, hpmask, hpmask, sizeof(hpmask));
+
+    packet->data.base[first_byte_at] ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(packet->data.base[first_byte_at]) ? 0xf : 0x1f);
+    for (i = 0; i != QUICLY_SEND_PN_SIZE; ++i)
+        packet->data.base[payload_from + i - QUICLY_SEND_PN_SIZE] ^= hpmask[i + 1];
+}
+
 static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
 {
     size_t packet_bytes_in_flight;
@@ -2158,16 +2181,12 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     s->dst = s->dst_payload_from + ptls_aead_encrypt(s->target.cipher->aead, s->dst_payload_from, s->dst_payload_from,
                                                      s->dst - s->dst_payload_from, conn->egress.packet_number,
                                                      s->target.first_byte_at, s->dst_payload_from - s->target.first_byte_at);
+    s->target.packet->data.len = s->dst - s->target.packet->data.base;
+    assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
-    { /* apply header protection */
-        uint8_t hpmask[1 + QUICLY_SEND_PN_SIZE] = {0};
-        ptls_cipher_init(s->target.cipher->header_protection, s->dst_payload_from - QUICLY_SEND_PN_SIZE + QUICLY_MAX_PN_SIZE);
-        ptls_cipher_encrypt(s->target.cipher->header_protection, hpmask, hpmask, sizeof(hpmask));
-        *s->target.first_byte_at ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(*s->target.first_byte_at) ? 0xf : 0x1f);
-        size_t i;
-        for (i = 0; i != QUICLY_SEND_PN_SIZE; ++i)
-            s->dst_payload_from[i - QUICLY_SEND_PN_SIZE] ^= hpmask[i + 1];
-    }
+    (conn->super.ctx->finalize_send_packet != NULL ? conn->super.ctx->finalize_send_packet->cb : finalize_send_packet)(
+        conn->super.ctx->finalize_send_packet, conn, s->target.cipher->header_protection, s->target.cipher->aead, s->target.packet,
+        s->target.first_byte_at - s->target.packet->data.base, s->dst_payload_from - s->target.packet->data.base, coalesced);
 
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
@@ -2177,9 +2196,6 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         packet_bytes_in_flight = 0;
     }
     quicly_sentmap_commit(&conn->egress.sentmap, (uint16_t)packet_bytes_in_flight);
-
-    s->target.packet->data.len = s->dst - s->target.packet->data.base;
-    assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
     QUICLY_PROBE(PACKET_COMMIT, conn, probe_now(), conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  !s->target.ack_eliciting);
