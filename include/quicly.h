@@ -48,6 +48,17 @@ extern "C" {
 
 /* invariants! */
 #define QUICLY_LONG_HEADER_BIT 0x80
+#define QUICLY_QUIC_BIT 0x40
+#define QUICLY_KEY_PHASE_BIT 0x4
+#define QUICLY_LONG_HEADER_RESERVED_BITS 0xc
+#define QUICLY_SHORT_HEADER_RESERVED_BITS 0x18
+
+#define QUICLY_PACKET_TYPE_INITIAL (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0)
+#define QUICLY_PACKET_TYPE_0RTT (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x10)
+#define QUICLY_PACKET_TYPE_HANDSHAKE (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x20)
+#define QUICLY_PACKET_TYPE_RETRY (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x30)
+#define QUICLY_PACKET_TYPE_BITMASK 0xf0
+
 #define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
 
 #define QUICLY_PROTOCOL_VERSION 0xff000017
@@ -57,7 +68,6 @@ extern "C" {
 #define QUICLY_STATELESS_RESET_PACKET_MIN_LEN 39
 
 #define QUICLY_MAX_PN_SIZE 4  /* maximum defined by the RFC used for calculating header protection sampling offset */
-#define QUICLY_KEY_PHASE_BIT 0x4
 #define QUICLY_SEND_PN_SIZE 2 /* size of PN used for sending */
 
 typedef union st_quicly_address_t {
