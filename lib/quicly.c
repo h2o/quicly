@@ -31,6 +31,7 @@
 #include <sys/time.h>
 #include "khash.h"
 #include "quicly.h"
+#include "quicly/defaults.h"
 #include "quicly/sentmap.h"
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
