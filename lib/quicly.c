@@ -3961,7 +3961,7 @@ static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded
         if (CAN_SELECT(supported_version))
             return negotiate_using_version(conn, supported_version);
     }
-    return QUICLY_TRANSPORT_ERROR_VERSION_NEGOTIATION;
+    return QUICLY_ERROR_NO_COMPATIBLE_VERSION;
 
 #undef CAN_SELECT
 }
