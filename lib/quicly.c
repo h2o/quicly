@@ -71,8 +71,6 @@
  */
 #define MIN_SEND_WINDOW 64
 
-#define AEAD_BASE_LABEL "tls13 quic "
-
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
 #if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
@@ -1056,51 +1054,14 @@ static void free_handshake_space(struct st_quicly_handshake_space_t **space)
     }
 }
 
-static int setup_cipher(ptls_cipher_context_t **hp_ctx, ptls_aead_context_t **aead_ctx, ptls_aead_algorithm_t *aead,
-                        ptls_hash_algorithm_t *hash, int is_enc, const void *secret)
+static int setup_cipher(quicly_conn_t *conn, size_t epoch, int is_enc, ptls_cipher_context_t **hp_ctx,
+                        ptls_aead_context_t **aead_ctx, ptls_aead_algorithm_t *aead, ptls_hash_algorithm_t *hash,
+                        const void *secret)
 {
-    uint8_t hpkey[PTLS_MAX_SECRET_SIZE];
-    int ret;
+    /* quicly_accept builds cipher before instantitating a connection. In such case, we use the default crypto engine */
+    quicly_crypto_engine_t *engine = conn != NULL ? conn->super.ctx->crypto_engine : &quicly_default_crypto_engine;
 
-    if (hp_ctx != NULL)
-        *hp_ctx = NULL;
-    *aead_ctx = NULL;
-
-    if (hp_ctx != NULL) {
-        if ((ret = ptls_hkdf_expand_label(hash, hpkey, aead->ctr_cipher->key_size, ptls_iovec_init(secret, hash->digest_size),
-                                          "quic hp", ptls_iovec_init(NULL, 0), NULL)) != 0)
-            goto Exit;
-        if ((*hp_ctx = ptls_cipher_new(aead->ctr_cipher, is_enc, hpkey)) == NULL) {
-            ret = PTLS_ERROR_NO_MEMORY;
-            goto Exit;
-        }
-    }
-    if ((*aead_ctx = ptls_aead_new(aead, hash, is_enc, secret, AEAD_BASE_LABEL)) == NULL) {
-        ret = PTLS_ERROR_NO_MEMORY;
-        goto Exit;
-    }
-    if (QUICLY_DEBUG) {
-        char *secret_hex = quicly_hexdump(secret, hash->digest_size, SIZE_MAX),
-             *hpkey_hex = quicly_hexdump(hpkey, aead->ctr_cipher->key_size, SIZE_MAX);
-        fprintf(stderr, "%s:\n  aead-secret: %s\n  hp-key: %s\n", __FUNCTION__, secret_hex, hpkey_hex);
-        free(secret_hex);
-        free(hpkey_hex);
-    }
-
-    ret = 0;
-Exit:
-    if (ret != 0) {
-        if (*aead_ctx != NULL) {
-            ptls_aead_free(*aead_ctx);
-            *aead_ctx = NULL;
-        }
-        if (*hp_ctx != NULL) {
-            ptls_cipher_free(*hp_ctx);
-            *hp_ctx = NULL;
-        }
-    }
-    ptls_clear_memory(hpkey, sizeof(hpkey));
-    return ret;
+    return engine->setup_cipher(engine, conn, epoch, is_enc, hp_ctx, aead_ctx, aead, hash, secret);
 }
 
 static int setup_handshake_space_and_flow(quicly_conn_t *conn, size_t epoch)
@@ -1192,7 +1153,8 @@ static int apply_peer_transport_params(quicly_conn_t *conn)
     return 0;
 }
 
-static int update_1rtt_key(ptls_cipher_suite_t *cipher, int is_enc, ptls_aead_context_t **aead, uint8_t *secret)
+static int update_1rtt_key(quicly_conn_t *conn, ptls_cipher_suite_t *cipher, int is_enc, ptls_aead_context_t **aead,
+                           uint8_t *secret)
 {
     uint8_t new_secret[PTLS_MAX_DIGEST_SIZE];
     ptls_aead_context_t *new_aead = NULL;
@@ -1203,7 +1165,7 @@ static int update_1rtt_key(ptls_cipher_suite_t *cipher, int is_enc, ptls_aead_co
                                       ptls_iovec_init(secret, cipher->hash->digest_size), "quic ku", ptls_iovec_init(NULL, 0),
                                       NULL)) != 0)
         goto Exit;
-    if ((ret = setup_cipher(NULL, &new_aead, cipher->aead, cipher->hash, is_enc, new_secret)) != 0)
+    if ((ret = setup_cipher(conn, QUICLY_EPOCH_1RTT, is_enc, NULL, &new_aead, cipher->aead, cipher->hash, new_secret)) != 0)
         goto Exit;
 
     /* success! update AEAD and secret */
@@ -1228,7 +1190,7 @@ static int update_1rtt_egress_key(quicly_conn_t *conn)
     int ret;
 
     /* generate next AEAD key, and increment key phase if it succeeds */
-    if ((ret = update_1rtt_key(cipher, 1, &space->cipher.egress.key.aead, space->cipher.egress.secret)) != 0)
+    if ((ret = update_1rtt_key(conn, cipher, 1, &space->cipher.egress.key.aead, space->cipher.egress.secret)) != 0)
         return ret;
     ++space->cipher.egress.key_phase;
 
@@ -1300,7 +1262,7 @@ void quicly_free(quicly_conn_t *conn)
 }
 
 static int setup_initial_key(struct st_quicly_cipher_context_t *ctx, ptls_cipher_suite_t *cs, const void *master_secret,
-                             const char *label, int is_enc)
+                             const char *label, int is_enc, quicly_conn_t *conn)
 {
     uint8_t aead_secret[PTLS_MAX_DIGEST_SIZE];
     int ret;
@@ -1309,7 +1271,8 @@ static int setup_initial_key(struct st_quicly_cipher_context_t *ctx, ptls_cipher
                                       ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0),
                                       NULL)) != 0)
         goto Exit;
-    if ((ret = setup_cipher(&ctx->header_protection, &ctx->aead, cs->aead, cs->hash, is_enc, aead_secret)) != 0)
+    if ((ret = setup_cipher(conn, QUICLY_EPOCH_INITIAL, is_enc, &ctx->header_protection, &ctx->aead, cs->aead, cs->hash,
+                            aead_secret)) != 0)
         goto Exit;
 
 Exit:
@@ -1317,8 +1280,11 @@ Exit:
     return ret;
 }
 
+/**
+ * @param conn maybe NULL when called by quicly_accept
+ */
 static int setup_initial_encryption(ptls_cipher_suite_t *cs, struct st_quicly_cipher_context_t *ingress,
-                                    struct st_quicly_cipher_context_t *egress, ptls_iovec_t cid, int is_client)
+                                    struct st_quicly_cipher_context_t *egress, ptls_iovec_t cid, int is_client, quicly_conn_t *conn)
 {
     static const uint8_t salt[] = {0xc3, 0xee, 0xf7, 0x12, 0xc7, 0x2e, 0xbb, 0x5a, 0x11, 0xa7,
                                    0xd2, 0x43, 0x2b, 0xb4, 0x63, 0x65, 0xbe, 0xf9, 0xf5, 0x02};
@@ -1331,9 +1297,9 @@ static int setup_initial_encryption(ptls_cipher_suite_t *cs, struct st_quicly_ci
         goto Exit;
 
     /* create aead contexts */
-    if ((ret = setup_initial_key(ingress, cs, secret, labels[is_client], 0)) != 0)
+    if ((ret = setup_initial_key(ingress, cs, secret, labels[is_client], 0, conn)) != 0)
         goto Exit;
-    if ((ret = setup_initial_key(egress, cs, secret, labels[!is_client], 1)) != 0)
+    if ((ret = setup_initial_key(egress, cs, secret, labels[!is_client], 1, conn)) != 0)
         goto Exit;
 
 Exit:
@@ -1756,7 +1722,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     if ((ret = setup_handshake_space_and_flow(conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
     if ((ret = setup_initial_encryption(get_aes128gcmsha256(ctx), &conn->initial->cipher.ingress, &conn->initial->cipher.egress,
-                                        ptls_iovec_init(server_cid->cid, server_cid->len), 1)) != 0)
+                                        ptls_iovec_init(server_cid->cid, server_cid->len), 1, conn)) != 0)
         goto Exit;
 
     /* handshake */
@@ -1867,7 +1833,7 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
     if (space->cipher.ingress.aead[aead_index] == NULL) {
     Retry_1RTT : {
         ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
-        if ((ret = update_1rtt_key(cipher, 0, &space->cipher.ingress.aead[aead_index], space->cipher.ingress.secret)) != 0)
+        if ((ret = update_1rtt_key(conn, cipher, 0, &space->cipher.ingress.aead[aead_index], space->cipher.ingress.secret)) != 0)
             return ret;
         ++space->cipher.ingress.key_phase.prepared;
         QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, space->cipher.ingress.key_phase.prepared,
@@ -2288,21 +2254,6 @@ struct st_quicly_send_context_t {
     uint8_t *dst_payload_from;
 };
 
-static void finalize_send_packet(quicly_finalize_send_packet_t *_self, quicly_conn_t *conn, ptls_cipher_context_t *hp,
-                                 ptls_aead_context_t *aead, quicly_datagram_t *packet, size_t first_byte_at, size_t payload_from,
-                                 int coalesced)
-{
-    uint8_t hpmask[1 + QUICLY_SEND_PN_SIZE] = {0};
-    size_t i;
-
-    ptls_cipher_init(hp, packet->data.base + payload_from - QUICLY_SEND_PN_SIZE + QUICLY_MAX_PN_SIZE);
-    ptls_cipher_encrypt(hp, hpmask, hpmask, sizeof(hpmask));
-
-    packet->data.base[first_byte_at] ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(packet->data.base[first_byte_at]) ? 0xf : 0x1f);
-    for (i = 0; i != QUICLY_SEND_PN_SIZE; ++i)
-        packet->data.base[payload_from + i - QUICLY_SEND_PN_SIZE] ^= hpmask[i + 1];
-}
-
 static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
 {
     size_t packet_bytes_in_flight;
@@ -2349,8 +2300,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     s->target.packet->data.len = s->dst - s->target.packet->data.base;
     assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
 
-    (conn->super.ctx->finalize_send_packet != NULL ? conn->super.ctx->finalize_send_packet->cb : finalize_send_packet)(
-        conn->super.ctx->finalize_send_packet, conn, s->target.cipher->header_protection, s->target.cipher->aead, s->target.packet,
+    conn->super.ctx->crypto_engine->finalize_send_packet(
+        conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead, s->target.packet,
         s->target.first_byte_at - s->target.packet->data.base, s->dst_payload_from - s->target.packet->data.base, coalesced);
 
     /* update CC, commit sentmap */
@@ -3276,7 +3227,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 
 #undef SELECT_CIPHER_CONTEXT
 
-    if ((ret = setup_cipher(hp_slot, aead_slot, cipher->aead, cipher->hash, is_enc, secret)) != 0)
+    if ((ret = setup_cipher(conn, epoch, is_enc, hp_slot, aead_slot, cipher->aead, cipher->hash, secret)) != 0)
         return ret;
 
     if (epoch == QUICLY_EPOCH_1RTT && is_enc) {
@@ -4267,8 +4218,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         goto Exit;
     }
-    if ((ret = setup_initial_encryption(get_aes128gcmsha256(ctx), &ingress_cipher, &egress_cipher, packet->cid.dest.encrypted,
-                                        0)) != 0)
+    if ((ret = setup_initial_encryption(get_aes128gcmsha256(ctx), &ingress_cipher, &egress_cipher, packet->cid.dest.encrypted, 0,
+                                        NULL)) != 0)
         goto Exit;
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
     if ((ret = decrypt_packet(ingress_cipher.header_protection, aead_decrypt_fixed_key, ingress_cipher.aead, &next_expected_pn,
@@ -4399,7 +4350,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             dispose_cipher(&conn->initial->cipher.egress);
             if ((ret = setup_initial_encryption(get_aes128gcmsha256(conn->super.ctx), &conn->initial->cipher.ingress,
                                                 &conn->initial->cipher.egress,
-                                                ptls_iovec_init(conn->super.peer.cid.cid, conn->super.peer.cid.len), 1)) != 0)
+                                                ptls_iovec_init(conn->super.peer.cid.cid, conn->super.peer.cid.len), 1, NULL)) != 0)
                 goto Exit;
             /* schedule retransmit */
             ret = discard_sentmap_by_epoch(conn, ~0u);
