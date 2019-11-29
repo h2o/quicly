@@ -1330,8 +1330,9 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
     if (quicly_recvstate_transfer_complete(&stream->recvstate))
         return 0;
 
+    /* flow control */
     if (stream->stream_id >= 0) {
-        /* flow control */
+        /* STREAMs */
         uint64_t max_stream_data = frame->offset + frame->data.len;
         if ((int64_t)stream->_recv_aux.window < (int64_t)max_stream_data - (int64_t)stream->recvstate.data_off)
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
@@ -1344,6 +1345,10 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
             stream->conn->ingress.max_data.bytes_consumed += newly_received;
             /* FIXME send MAX_DATA if necessary */
         }
+    } else {
+        /* CRYPTO streams; maybe add different limit for 1-RTT CRYPTO? */
+        if (frame->offset + frame->data.len > stream->conn->super.ctx->max_crypto_bytes)
+            return QUICLY_TRANSPORT_ERROR_CRYPTO_BUFFER_EXCEEDED;
     }
 
     /* update recvbuf */

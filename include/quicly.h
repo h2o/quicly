@@ -280,6 +280,10 @@ struct st_quicly_context_t {
      */
     uint64_t max_packets_per_key;
     /**
+     * maximum number of bytes that can be transmitted on a CRYPTO stream (per each epoch)
+     */
+    uint64_t max_crypto_bytes;
+    /**
      * client-only
      */
     unsigned enforce_version_negotiation : 1;
