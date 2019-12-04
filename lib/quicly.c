@@ -1356,7 +1356,8 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
     if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin)) != 0)
         return ret;
 
-    if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
+    if (stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE &&
+        (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate))) {
         uint64_t buf_offset = frame->offset + frame->data.len - apply_len - stream->recvstate.data_off;
         if ((ret = stream->callbacks->on_receive(stream, (size_t)buf_offset, frame->data.base + frame->data.len - apply_len,
                                                  apply_len)) != 0)
