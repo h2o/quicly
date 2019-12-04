@@ -2686,6 +2686,7 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
                                                &wrote_all)) != 0)
         return ret;
     assert(len <= capacity);
+    assert(len != 0);
 
     /* update s->dst, insert length if necessary */
     if (frame_type_at == NULL || len < s->dst_end - s->dst) {
