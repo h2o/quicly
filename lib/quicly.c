@@ -1208,7 +1208,6 @@ static int update_1rtt_egress_key(quicly_conn_t *conn)
 static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key_phase)
 {
     struct st_quicly_application_space_t *space = conn->application;
-    ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
 
     assert(space->cipher.ingress.key_phase.decrypted < newly_decrypted_key_phase);
     assert(newly_decrypted_key_phase <= space->cipher.ingress.key_phase.prepared);
@@ -1216,7 +1215,7 @@ static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key
     space->cipher.ingress.key_phase.decrypted = newly_decrypted_key_phase;
 
     QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, space->cipher.ingress.key_phase.decrypted,
-                 QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
+                 QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, ptls_get_cipher(conn->crypto.tls)->hash->digest_size));
 
     if (space->cipher.egress.key_phase < space->cipher.ingress.key_phase.decrypted) {
         return update_1rtt_egress_key(conn);

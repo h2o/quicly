@@ -148,7 +148,7 @@ static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 
 quicly_stream_open_t stream_open = {on_stream_open};
 
-static void test_vector(void)
+static __attribute__ ((unused)) void test_vector(void)
 {
     static const uint8_t expected_payload[] = {
         0x06, 0x00, 0x40, 0xc4, 0x01, 0x00, 0x00, 0xc0, 0x03, 0x03, 0x66, 0x60, 0x26, 0x1f, 0xf9, 0x47, 0xce, 0xa4, 0x9c, 0xce,
