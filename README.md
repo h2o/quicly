@@ -8,6 +8,20 @@ The software is licensed under the MIT License.
 How to build
 ---
 
+Install dependencies first:
+
+```
+# If you use system perl, use --sudo
+% curl -sL https://cpanmin.us | perl - --sudo --self-upgrade
+% cpanm --installdeps --notest --sudo .
+
+# Otherwise, you'd better omit --sudo
+% curl -sL https://cpanmin.us | perl - --self-upgrade
+% cpanm --installdeps --notest .
+```
+
+Then, build this project.
+
 ```
 % git submodule update --init --recursive
 % cmake .
