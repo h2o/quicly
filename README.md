@@ -10,6 +10,7 @@ How to build
 
 ```
 % git submodule update --init --recursive
+% curl -L https://cpanmin.us | perl - --installdeps --notest .
 % cmake .
 % make
 % make check
@@ -21,6 +22,8 @@ If you have OpenSSL installed in a non-standard directory, you can pass the loca
 ```
 % PKG_CONFIG_PATH=/path/to/openssl/lib/pkgconfig cmake .
 ```
+
+You need to delete `CMakeCache.txt` when you get an error [Undefined symbols for architecture x86_64: "_SSL_is_server"](https://github.com/h2o/h2o/issues/2093).
 
 Running quicly
 ---
