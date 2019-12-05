@@ -8,6 +8,22 @@ The software is licensed under the MIT License.
 How to build
 ---
 
+```
+% git submodule update --init --recursive
+% cmake .
+% make
+```
+
+Building the software requires OpenSSL 1.0.2 or above.
+If you have OpenSSL installed in a non-standard directory, you can pass the location using the `PKG_CONFIG_PATH` environment variable.
+
+```
+% PKG_CONFIG_PATH=/path/to/openssl/lib/pkgconfig cmake .
+```
+
+How to test
+---
+
 Install dependencies first:
 
 ```
@@ -18,22 +34,12 @@ Install dependencies first:
 # Otherwise, you'd better omit --sudo
 % curl -sL https://cpanmin.us | perl - --self-upgrade
 % cpanm --installdeps --notest .
-```
-
-Then, build this project.
-
-```
-% git submodule update --init --recursive
-% cmake .
-% make
 % make check
 ```
 
-Building the software requires OpenSSL 1.0.2 or above.
-If you have OpenSSL installed in a non-standard directory, you can pass the location using the `PKG_CONFIG_PATH` environment variable.
-
+Then, run the tests:
 ```
-% PKG_CONFIG_PATH=/path/to/openssl/lib/pkgconfig cmake .
+% make check
 ```
 
 Running quicly
