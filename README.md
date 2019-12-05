@@ -34,7 +34,6 @@ Install dependencies first:
 # Otherwise, you'd better omit --sudo
 % curl -sL https://cpanmin.us | perl - --self-upgrade
 % cpanm --installdeps --notest .
-% make check
 ```
 
 Then, run the tests:
