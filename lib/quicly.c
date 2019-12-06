@@ -3725,7 +3725,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                         }
                         if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED, conn)) != 0)
                             return ret;
-                        if (sent->ack_epoch == QUICLY_EPOCH_1RTT) {
+                        if (state->epoch == QUICLY_EPOCH_1RTT) {
                             struct st_quicly_application_space_t *space = conn->application;
                             if (space->cipher.egress.key_update_pn.last <= packet_number) {
                                 space->cipher.egress.key_update_pn.last = UINT64_MAX;
