@@ -2007,11 +2007,10 @@ static int on_ack_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet
         if ((ret = quicly_sendstate_acked(&stream->sendstate, &sent->data.stream.args, packet->bytes_in_flight != 0,
                                           &bytes_to_shift)) != 0)
             return ret;
-        if (stream_is_destroyable(stream)) {
-            destroy_stream(stream, 0);
-        } else if (bytes_to_shift != 0) {
+        if (bytes_to_shift != 0)
             stream->callbacks->on_send_shift(stream, bytes_to_shift);
-        }
+        if (stream_is_destroyable(stream))
+            destroy_stream(stream, 0);
     } else {
         /* FIXME handle rto error */
         if ((ret = quicly_sendstate_lost(&stream->sendstate, &sent->data.stream.args)) != 0)
