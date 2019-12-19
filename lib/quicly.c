@@ -461,7 +461,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
         packet->cid.dest.encrypted.base = (uint8_t *)src;
         src += packet->cid.dest.encrypted.len;
         packet->cid.src.len = *src++;
-        if (src_end - src < packet->cid.src.len)
+        if (src_end - src < packet->cid.src.len || QUICLY_MAX_CID_LEN_V1 <= packet->cid.src.len)
             goto Error;
         packet->cid.src.base = (uint8_t *)src;
         src += packet->cid.src.len;
