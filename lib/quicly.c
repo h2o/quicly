@@ -3301,7 +3301,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         if (conn->application->one_rtt_writable) {
             s->current.first_byte = QUICLY_QUIC_BIT; /* short header */
             /* acks */
-            if (conn->application->super.unacked_count != 0) {
+            if (conn->egress.send_ack_at <= now && conn->application->super.unacked_count != 0) {
                 if ((ret = send_ack(conn, &conn->application->super, s)) != 0)
                     goto Exit;
             }
@@ -3372,7 +3372,8 @@ Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
     if (ret == 0) {
-        conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
+        if (conn->application == NULL || conn->application->super.unacked_count == 0)
+            conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         update_loss_alarm(conn);
         if (s->num_packets != 0)
             update_idle_timeout(conn, 0);
