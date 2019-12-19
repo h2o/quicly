@@ -185,6 +185,7 @@ static void test_send_then_close(void)
     ok(buffer_is(&server_streambuf->super.ingress, ""));
     quicly_streambuf_egress_shutdown(server_stream);
 
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(server, client);
 
     ok(client_streambuf->is_detached);
@@ -230,6 +231,7 @@ static void test_reset_after_close(void)
 
     quicly_streambuf_egress_shutdown(server_stream);
 
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(server, client);
 
     ok(client_streambuf->is_detached);
