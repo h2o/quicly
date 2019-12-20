@@ -65,8 +65,10 @@
 #define QUICLY_EPOCH_HANDSHAKE 2
 #define QUICLY_EPOCH_1RTT 3
 
-#define QUICLY_MAX_TOKEN_LEN 512 /* maximum length of token that we would accept */
-
+/**
+ * maximum size of token that quicly accepts
+ */
+#define QUICLY_MAX_TOKEN_LEN 512
 /**
  * do not try to send frames that require ACK if the send window is below this value
  */
