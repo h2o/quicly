@@ -77,7 +77,10 @@
  * maximum number of ACK blocks that quicly retains
  */
 #define QUICLY_MAX_ACK_BLOCKS 63
-
+/**
+ * sends ACK bundled with PING, when number of gaps in the ack queue becomes no less than this threshold
+ */
+#define QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK 8
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
@@ -2494,16 +2497,21 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
         ack_delay = 0;
     }
 
-    /* emit ack frame */
+    /* Emit an ACK frame. When there are no less than QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK (8) gaps, we bundle PING once per every
+     * 16 packets being sent. */
 Emit:
     if ((ret = allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
         return ret;
-    uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, ack_delay);
-    if (new_dst == NULL) {
-        /* no space, retry with new MTU-sized packet */
+    uint8_t *dst = s->dst;
+    if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 16 == 0)
+        *dst++ = QUICLY_FRAME_TYPE_PING;
+    dst = quicly_encode_ack_frame(dst, s->dst_end, &space->ack_queue, ack_delay);
+
+    /* when there's no space, retry with a new MTU-sized packet */
+    if (dst == NULL) {
+        /* [rare case] A coalesced packet might not have enough space to hold only an ACK. If so, pad it, as that's easier than
+         * rolling back. */
         if (s->dst == s->dst_payload_from) {
-            /* [rare case] A coalesced packet might not have enough space to hold only an ACK. If so, pad it, as that's easier than
-             * rolling back. */
             assert(s->target.first_byte_at != s->target.packet->data.base);
             *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
         }
@@ -2511,7 +2519,8 @@ Emit:
             return ret;
         goto Emit;
     }
-    s->dst = new_dst;
+
+    s->dst = dst;
 
     { /* save what's inflight */
         size_t i;
