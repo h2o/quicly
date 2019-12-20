@@ -1015,10 +1015,12 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
 
     if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
         goto Exit;
-    if (space->ack_queue.num_ranges >= QUICLY_ENCODE_ACK_MAX_BLOCKS) {
-        assert(space->ack_queue.num_ranges == QUICLY_ENCODE_ACK_MAX_BLOCKS);
-        quicly_ranges_shrink(&space->ack_queue, 0, 1);
-    }
+
+    /* Cap the size of ranges retained by ack_queue to hard-coded threshold. We cannot check that the current size is below or equal
+     * to the hard-coded maximum; it might have already gone above that value, when on_ack_ack splits a range. */
+    if (space->ack_queue.num_ranges > QUICLY_ENCODE_ACK_MAX_BLOCKS)
+        quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_ENCODE_ACK_MAX_BLOCKS);
+
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1) {
         /* FIXME implement deduplication at an earlier moment? */
         space->largest_pn_received_at = now;
