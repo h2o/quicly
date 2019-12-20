@@ -2494,6 +2494,12 @@ Emit:
     uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, ack_delay);
     if (new_dst == NULL) {
         /* no space, retry with new MTU-sized packet */
+        if (s->dst == s->dst_payload_from) {
+            /* [rare case] A coalesced packet might not have enough space to hold only an ACK. If so, pad it, as that's easier than
+             * rolling back. */
+            assert(s->target.first_byte_at != s->target.packet->data.base);
+            *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
+        }
         if ((ret = commit_send_packet(conn, s, 0)) != 0)
             return ret;
         goto Emit;
