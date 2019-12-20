@@ -176,7 +176,7 @@ static void send_header(quicly_stream_t *stream, int is_http1, int status, const
 
 static int flatten_file_vec(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
-    int fd = (int)vec->cbdata;
+    int fd = (intptr_t)vec->cbdata;
     ssize_t rret;
 
     /* FIXME handle partial read */
@@ -188,7 +188,7 @@ static int flatten_file_vec(quicly_sendbuf_vec_t *vec, void *dst, size_t off, si
 
 static void discard_file_vec(quicly_sendbuf_vec_t *vec)
 {
-    int fd = (int)vec->cbdata;
+    int fd = (intptr_t)vec->cbdata;
     close(fd);
 }
 

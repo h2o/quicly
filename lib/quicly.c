@@ -1208,7 +1208,6 @@ static int update_1rtt_egress_key(quicly_conn_t *conn)
 static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key_phase)
 {
     struct st_quicly_application_space_t *space = conn->application;
-    ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
 
     assert(space->cipher.ingress.key_phase.decrypted < newly_decrypted_key_phase);
     assert(newly_decrypted_key_phase <= space->cipher.ingress.key_phase.prepared);
@@ -1216,7 +1215,7 @@ static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key
     space->cipher.ingress.key_phase.decrypted = newly_decrypted_key_phase;
 
     QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, space->cipher.ingress.key_phase.decrypted,
-                 QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
+                 QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, ptls_get_cipher(conn->crypto.tls)->hash->digest_size));
 
     if (space->cipher.egress.key_phase < space->cipher.ingress.key_phase.decrypted) {
         return update_1rtt_egress_key(conn);
@@ -2495,6 +2494,12 @@ Emit:
     uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, ack_delay);
     if (new_dst == NULL) {
         /* no space, retry with new MTU-sized packet */
+        if (s->dst == s->dst_payload_from) {
+            /* [rare case] A coalesced packet might not have enough space to hold only an ACK. If so, pad it, as that's easier than
+             * rolling back. */
+            assert(s->target.first_byte_at != s->target.packet->data.base);
+            *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
+        }
         if ((ret = commit_send_packet(conn, s, 0)) != 0)
             return ret;
         goto Emit;
