@@ -1021,13 +1021,11 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
     if (space->ack_queue.num_ranges > QUICLY_ENCODE_ACK_MAX_BLOCKS)
         quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_ENCODE_ACK_MAX_BLOCKS);
 
-    if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1) {
-        /* FIXME implement deduplication at an earlier moment? */
+    /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
+    if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
         space->largest_pn_received_at = now;
-    }
-    /* TODO (jri): If not ack-only packet, then maintain count of such packets that are received.
-     * Send ack immediately when this number exceeds the threshold.
-     */
+
+    /* if the received packet is ack-eliciting, update / schedule transmission of ACK */
     if (!is_ack_only) {
         space->unacked_count++;
         /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
