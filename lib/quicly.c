@@ -73,6 +73,11 @@
  * do not try to send frames that require ACK if the send window is below this value
  */
 #define MIN_SEND_WINDOW 64
+/**
+ * maximum number of ACK blocks that quicly retains
+ */
+#define QUICLY_MAX_ACK_BLOCKS 63
+
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
@@ -1020,8 +1025,8 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
 
     /* Cap the size of ranges retained by ack_queue to hard-coded threshold. We cannot check that the current size is below or equal
      * to the hard-coded maximum; it might have already gone above that value, when on_ack_ack splits a range. */
-    if (space->ack_queue.num_ranges > QUICLY_ENCODE_ACK_MAX_BLOCKS)
-        quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_ENCODE_ACK_MAX_BLOCKS);
+    if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS)
+        quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS);
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
