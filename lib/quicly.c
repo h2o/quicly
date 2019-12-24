@@ -1019,17 +1019,23 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
+/**
+ * The number of ACK blocks retained by quicly is limited to QUICLY_MAX_ACK_BLOCKS. The stacks should call this function whenever
+ * there's chance of the ack_queue growing above that threshold.
+ */
+static void drop_excess_ack_blocks(struct st_quicly_pn_space_t *space)
+{
+    if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS)
+        quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS);
+}
+
 static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
 {
     int ret;
 
     if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
         goto Exit;
-
-    /* Cap the size of ranges retained by ack_queue to hard-coded threshold. We cannot check that the current size is below or equal
-     * to the hard-coded maximum; it might have already gone above that value, when on_ack_ack splits a range. */
-    if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS)
-        quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS);
+    drop_excess_ack_blocks(space);
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
@@ -1978,13 +1984,16 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
             break;
         default:
             assert(!"FIXME");
+            return QUICLY_TRANSPORT_ERROR_INTERNAL;
         }
-        if (space != NULL) {
-            quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end);
-            if (space->ack_queue.num_ranges == 0) {
-                space->largest_pn_received_at = INT64_MAX;
-                space->unacked_count = 0;
-            }
+        if (quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end) != 0) {
+            /* FIXME log error */
+            return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+        }
+        drop_excess_ack_blocks(space);
+        if (space->ack_queue.num_ranges == 0) {
+            space->largest_pn_received_at = INT64_MAX;
+            space->unacked_count = 0;
         }
     }
 
