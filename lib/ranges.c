@@ -40,7 +40,11 @@
 static int insert_at(quicly_ranges_t *ranges, uint64_t start, uint64_t end, size_t slot)
 {
     if (ranges->num_ranges == ranges->capacity) {
+        if (ranges->num_ranges == QUICLY_MAX_RANGES)
+            return -1;
         size_t new_capacity = ranges->capacity < 4 ? 4 : ranges->capacity * 2;
+        if (new_capacity > QUICLY_MAX_RANGES)
+            new_capacity = QUICLY_MAX_RANGES;
         quicly_range_t *new_ranges = malloc(new_capacity * sizeof(*new_ranges));
         if (new_ranges == NULL)
             return -1;

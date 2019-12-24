@@ -74,9 +74,9 @@
  */
 #define MIN_SEND_WINDOW 64
 /**
- * maximum number of ACK blocks that quicly retains
+ * maximum number of ACK blocks that quicly retains (should be smaller than QUICLY_MAX_RANGES)
  */
-#define QUICLY_MAX_ACK_BLOCKS 63
+#define QUICLY_MAX_ACK_BLOCKS 60
 /**
  * sends ACK bundled with PING, when number of gaps in the ack queue becomes no less than this threshold
  */
@@ -1025,6 +1025,10 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
  */
 static void drop_excess_ack_blocks(struct st_quicly_pn_space_t *space)
 {
+    /* Because quicly adds a range to ack_queue then shrinks it, the maximum number of blocks retained in ack_queue temporary
+     * exceeds QUICLY_MAX_ACK_BLOCKS by one. Therefore QUICLY_MAX_ACK_BLOCKS needs to be smaller than QUICLY_MAX_RANGES. */
+    QUICLY_BUILD_ASSERT(QUICLY_MAX_ACK_BLOCKS < QUICLY_MAX_RANGES);
+
     if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS)
         quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS);
 }

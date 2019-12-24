@@ -30,6 +30,8 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 
+#define QUICLY_MAX_RANGES 64
+
 typedef struct st_quicly_range_t {
     uint64_t start;
     uint64_t end; /* non-inclusive */
