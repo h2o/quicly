@@ -928,12 +928,38 @@ static void usage(const char *cmd)
            cmd);
 }
 
+#include <execinfo.h>
+#include <signal.h>
+
+static void set_signal_handler(int signo, void (*cb)(int signo))
+{
+    struct sigaction action;
+
+    memset(&action, 0, sizeof(action));
+    sigemptyset(&action.sa_mask);
+    action.sa_handler = cb;
+    sigaction(signo, &action, NULL);
+}
+
+static void on_sigfatal(int signo)
+{
+    fprintf(stderr, "received fatal signal %d\n", signo);
+
+    set_signal_handler(signo, SIG_DFL);
+
+    void *frames[128];
+    int framecnt = backtrace(frames, sizeof(frames) / sizeof(frames[0]));
+    backtrace_symbols_fd(frames, framecnt, 2);
+}
+
 int main(int argc, char **argv)
 {
     const char *host, *port, *cid_key = NULL;
     struct sockaddr_storage sa;
     socklen_t salen;
     int ch;
+
+    set_signal_handler(6, on_sigfatal);
 
     memset(reqs, 0, sizeof(reqs));
     ctx = quicly_spec_context;
