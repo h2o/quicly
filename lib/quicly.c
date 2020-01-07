@@ -228,9 +228,13 @@ struct st_quicly_conn_t {
          */
         quicly_loss_t loss;
         /**
-         * next or the currently encoding packet number (TODO move to pnspace)
+         * next or the currently encoding packet number
          */
         uint64_t packet_number;
+        /**
+         * next PN to be skipped
+         */
+        uint64_t next_gap_pn;
         /**
          * valid if state is CLOSING
          */
@@ -574,6 +578,30 @@ static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
      * fire. */
     if (timer_must_be_in_future && conn->super.peer.address_validation.validated)
         assert(now < conn->egress.loss.alarm_at);
+}
+
+static int on_invalid_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                          quicly_sentmap_event_t event)
+{
+    if (event == QUICLY_SENTMAP_EVENT_ACKED)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+    return 0;
+}
+
+static uint64_t calc_next_gap_pn(ptls_context_t *tlsctx, uint64_t next_pn)
+{
+    static __thread struct {
+        uint16_t values[32];
+        size_t off;
+    } cached_rand;
+
+    if (cached_rand.off == 0) {
+        tlsctx->random_bytes(cached_rand.values, sizeof(cached_rand.values));
+        cached_rand.off = sizeof(cached_rand.values) / sizeof(cached_rand.values[0]);
+    }
+
+    /* on average, skip one PN per every 256 packets, by selecting one of the 511 packet numbers following next_pn */
+    return next_pn + 1 + (cached_rand.values[--cached_rand.off] & 0x1ff);
 }
 
 static void init_max_streams(struct st_quicly_max_streams_t *m)
@@ -1643,6 +1671,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_loss_init(&conn->_.egress.loss, &conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
+    conn->_.egress.next_gap_pn = calc_next_gap_pn(conn->_.super.ctx->tls, 0);
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
@@ -2362,6 +2391,19 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         s->target.packet = NULL;
         s->target.cipher = NULL;
         s->target.first_byte_at = NULL;
+    }
+
+    /* insert PN gap if necessary, registering the PN to the ack queue so that we'd close the connection in the event of receiving
+     * an ACK for that gap. */
+    if (conn->egress.packet_number >= conn->egress.next_gap_pn && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
+        int ret;
+        if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, QUICLY_EPOCH_1RTT)) != 0)
+            return ret;
+        if (quicly_sentmap_allocate(&conn->egress.sentmap, on_invalid_ack) == NULL)
+            return PTLS_ERROR_NO_MEMORY;
+        quicly_sentmap_commit(&conn->egress.sentmap, 0);
+        ++conn->egress.packet_number;
+        conn->egress.next_gap_pn = calc_next_gap_pn(conn->super.ctx->tls, conn->egress.packet_number);
     }
 
     return 0;
