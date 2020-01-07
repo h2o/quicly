@@ -74,11 +74,8 @@
  */
 #define MIN_SEND_WINDOW 64
 /**
- * maximum number of ACK blocks that quicly retains (should be smaller than QUICLY_MAX_RANGES)
- */
-#define QUICLY_MAX_ACK_BLOCKS 60
-/**
- * sends ACK bundled with PING, when number of gaps in the ack queue becomes no less than this threshold
+ * sends ACK bundled with PING, when number of gaps in the ack queue becomes no less than this threshold. This value should be much
+ * smaller than QUICLY_MAX_RANGES.
  */
 #define QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK 8
 
@@ -1019,27 +1016,31 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
-/**
- * The number of ACK blocks retained by quicly is limited to QUICLY_MAX_ACK_BLOCKS. The stacks should call this function whenever
- * there's chance of the ack_queue growing above that threshold.
- */
-static void drop_excess_ack_blocks(struct st_quicly_pn_space_t *space)
+static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_reordered)
 {
-    /* Because quicly adds a range to ack_queue then shrinks it, the maximum number of blocks retained in ack_queue temporary
-     * exceeds QUICLY_MAX_ACK_BLOCKS by one. Therefore QUICLY_MAX_ACK_BLOCKS needs to be smaller than QUICLY_MAX_RANGES. */
-    QUICLY_BUILD_ASSERT(QUICLY_MAX_ACK_BLOCKS < QUICLY_MAX_RANGES);
+    /* Detect reordering. We return false-negative when receiving a late packet after all the packets with greater packet numbers
+     * have been ack-acked. But we do not care, due to the following reasons: that would be rare, there's no point in immediately
+     * acking a packet that is received as late as such. */
+    *is_reordered = ranges->num_ranges != 0 && pn < ranges->ranges[ranges->num_ranges - 1].end - 1;
 
-    if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS)
-        quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS);
+    /* fast path that handles in-order delivery without gaps */
+    if (ranges->num_ranges != 0 && pn == ranges->ranges[ranges->num_ranges - 1].end) {
+        ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
+        return 0;
+    }
+
+    /* slow path; we shrink then add, to avoid exceeding the QUICLY_MAX_RANGES */
+    if (ranges->num_ranges == QUICLY_MAX_RANGES)
+        quicly_ranges_shrink(ranges, 0, 1);
+    return quicly_ranges_add(ranges, pn, pn + 1);
 }
 
 static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
 {
-    int ret;
+    int ret, ack_now;
 
-    if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
+    if ((ret = record_pn(&space->ack_queue, pn, &ack_now)) != 0)
         goto Exit;
-    drop_excess_ack_blocks(space);
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
@@ -1050,12 +1051,15 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
         space->unacked_count++;
         /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
         if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK || epoch == QUICLY_EPOCH_INITIAL ||
-            epoch == QUICLY_EPOCH_HANDSHAKE) {
-            conn->egress.send_ack_at = now;
-        } else if (conn->egress.send_ack_at == INT64_MAX) {
-            /* FIXME use 1/4 minRTT */
-            conn->egress.send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
-        }
+            epoch == QUICLY_EPOCH_HANDSHAKE)
+            ack_now = 1;
+    }
+
+    if (ack_now) {
+        conn->egress.send_ack_at = now;
+    } else if (conn->egress.send_ack_at == INT64_MAX) {
+        /* FIXME use 1/4 minRTT */
+        conn->egress.send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
     ret = 0;
@@ -1990,11 +1994,14 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
             assert(!"FIXME");
             return QUICLY_TRANSPORT_ERROR_INTERNAL;
         }
+        /* Subtracting an ACK range might end up in splitting an existing range. By shrinking the number of ranges to MAX-1, we make
+         * sure that the potential split would not lead to an error. */
+        if (space->ack_queue.num_ranges == QUICLY_MAX_RANGES)
+            quicly_ranges_shrink(&space->ack_queue, 0, 1);
         if (quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end) != 0) {
             /* FIXME log error */
             return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         }
-        drop_excess_ack_blocks(space);
         if (space->ack_queue.num_ranges == 0) {
             space->largest_pn_received_at = INT64_MAX;
             space->unacked_count = 0;
