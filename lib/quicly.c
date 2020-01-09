@@ -1845,11 +1845,15 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
     }
 
     /* decrypt */
-    if ((*ptlen = aead_decrypt_core(space->cipher.ingress.aead[aead_index], pn, packet, aead_off)) == SIZE_MAX) {
+    ptls_aead_context_t *aead = space->cipher.ingress.aead[aead_index];
+    if ((*ptlen = aead_decrypt_core(aead, pn, packet, aead_off)) == SIZE_MAX) {
         /* retry with a new key, if possible */
         if (space->cipher.ingress.key_phase.decrypted == space->cipher.ingress.key_phase.prepared &&
-            space->cipher.ingress.key_phase.decrypted % 2 != aead_index)
+            space->cipher.ingress.key_phase.decrypted % 2 != aead_index) {
+            /* reapply AEAD to revert payload to the encrypted form. This assumes that the cipher used in AEAD is CTR. */
+            aead_decrypt_core(aead, pn, packet, aead_off);
             goto Retry_1RTT;
+        }
         /* otherwise return failure */
         return QUICLY_ERROR_PACKET_IGNORED;
     }
