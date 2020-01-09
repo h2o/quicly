@@ -44,12 +44,12 @@ matrix:
       before_install: &bs_osx
         - curl -L https://cpanmin.us | perl - --self-upgrade --sudo
         - cpanm --sudo --installdeps --notest .
-      script:
+      script: &script_osx64
         - cmake -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl .
         - make && make check
     - os: osx
       env:
-        - label=osx10.10/i386
+        - label=osx10.13/i386
       before_install: *bs_osx
       script:
         - curl -O https://www.openssl.org/source/openssl-1.1.0i.tar.gz
@@ -61,3 +61,8 @@ matrix:
         - cd ..
         - cmake -DCMAKE_C_FLAGS=-m32 -DOPENSSL_ROOT_DIR=$HOME/openssl-build -DWITH_DTRACE=OFF .
         - make && make check
+    - os: osx
+      env:
+        - label=osx10.13/x86_64
+      before_install: *bs_osx
+      script: *script_osx64
