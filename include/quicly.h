@@ -396,6 +396,7 @@ struct st_quicly_conn_streamgroup_state_t {
 #define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
     struct {                                                                                                                       \
         uint64_t received;                                                                                                         \
+        uint64_t decryption_failed;                                                                                                \
         uint64_t sent;                                                                                                             \
         uint64_t lost;                                                                                                             \
         uint64_t ack_received;                                                                                                     \

@@ -4428,8 +4428,10 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
 
     /* decrypt */
     if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, &(*space)->next_expected_packet_number, packet, &pn,
-                              &payload)) != 0)
+                              &payload)) != 0) {
+        ++conn->super.stats.num_packets.decryption_failed;
         goto Exit;
+    }
 
     QUICLY_PROBE(CRYPTO_DECRYPT, conn, pn, payload.base, payload.len);
     QUICLY_PROBE(QUICTRACE_RECV, conn, probe_now(), pn);
