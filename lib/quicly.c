@@ -74,11 +74,8 @@
  */
 #define MIN_SEND_WINDOW 64
 /**
- * maximum number of ACK blocks that quicly retains (should be smaller than QUICLY_MAX_RANGES)
- */
-#define QUICLY_MAX_ACK_BLOCKS 60
-/**
- * sends ACK bundled with PING, when number of gaps in the ack queue becomes no less than this threshold
+ * sends ACK bundled with PING, when number of gaps in the ack queue becomes no less than this threshold. This value should be much
+ * smaller than QUICLY_MAX_RANGES.
  */
 #define QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK 8
 
@@ -231,9 +228,13 @@ struct st_quicly_conn_t {
          */
         quicly_loss_t loss;
         /**
-         * next or the currently encoding packet number (TODO move to pnspace)
+         * next or the currently encoding packet number
          */
         uint64_t packet_number;
+        /**
+         * next PN to be skipped
+         */
+        uint64_t next_gap_pn;
         /**
          * valid if state is CLOSING
          */
@@ -577,6 +578,30 @@ static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
      * fire. */
     if (timer_must_be_in_future && conn->super.peer.address_validation.validated)
         assert(now < conn->egress.loss.alarm_at);
+}
+
+static int on_invalid_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                          quicly_sentmap_event_t event)
+{
+    if (event == QUICLY_SENTMAP_EVENT_ACKED)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+    return 0;
+}
+
+static uint64_t calc_next_gap_pn(ptls_context_t *tlsctx, uint64_t next_pn)
+{
+    static __thread struct {
+        uint16_t values[32];
+        size_t off;
+    } cached_rand;
+
+    if (cached_rand.off == 0) {
+        tlsctx->random_bytes(cached_rand.values, sizeof(cached_rand.values));
+        cached_rand.off = sizeof(cached_rand.values) / sizeof(cached_rand.values[0]);
+    }
+
+    /* on average, skip one PN per every 256 packets, by selecting one of the 511 packet numbers following next_pn */
+    return next_pn + 1 + (cached_rand.values[--cached_rand.off] & 0x1ff);
 }
 
 static void init_max_streams(struct st_quicly_max_streams_t *m)
@@ -1019,27 +1044,31 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
-/**
- * The number of ACK blocks retained by quicly is limited to QUICLY_MAX_ACK_BLOCKS. The stacks should call this function whenever
- * there's chance of the ack_queue growing above that threshold.
- */
-static void drop_excess_ack_blocks(struct st_quicly_pn_space_t *space)
+static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_reordered)
 {
-    /* Because quicly adds a range to ack_queue then shrinks it, the maximum number of blocks retained in ack_queue temporary
-     * exceeds QUICLY_MAX_ACK_BLOCKS by one. Therefore QUICLY_MAX_ACK_BLOCKS needs to be smaller than QUICLY_MAX_RANGES. */
-    QUICLY_BUILD_ASSERT(QUICLY_MAX_ACK_BLOCKS < QUICLY_MAX_RANGES);
+    /* Detect reordering. We return false-negative when receiving a late packet after all the packets with greater packet numbers
+     * have been ack-acked. But we do not care, due to the following reasons: that would be rare, there's no point in immediately
+     * acking a packet that is received as late as such. */
+    *is_reordered = ranges->num_ranges != 0 && pn < ranges->ranges[ranges->num_ranges - 1].end - 1;
 
-    if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS)
-        quicly_ranges_shrink(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS);
+    /* fast path that handles in-order delivery without gaps */
+    if (ranges->num_ranges != 0 && pn == ranges->ranges[ranges->num_ranges - 1].end) {
+        ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
+        return 0;
+    }
+
+    /* slow path; we shrink then add, to avoid exceeding the QUICLY_MAX_RANGES */
+    if (ranges->num_ranges == QUICLY_MAX_RANGES)
+        quicly_ranges_shrink(ranges, 0, 1);
+    return quicly_ranges_add(ranges, pn, pn + 1);
 }
 
 static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
 {
-    int ret;
+    int ret, ack_now;
 
-    if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
+    if ((ret = record_pn(&space->ack_queue, pn, &ack_now)) != 0)
         goto Exit;
-    drop_excess_ack_blocks(space);
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
@@ -1050,12 +1079,15 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
         space->unacked_count++;
         /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
         if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK || epoch == QUICLY_EPOCH_INITIAL ||
-            epoch == QUICLY_EPOCH_HANDSHAKE) {
-            conn->egress.send_ack_at = now;
-        } else if (conn->egress.send_ack_at == INT64_MAX) {
-            /* FIXME use 1/4 minRTT */
-            conn->egress.send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
-        }
+            epoch == QUICLY_EPOCH_HANDSHAKE)
+            ack_now = 1;
+    }
+
+    if (ack_now) {
+        conn->egress.send_ack_at = now;
+    } else if (conn->egress.send_ack_at == INT64_MAX) {
+        /* FIXME use 1/4 minRTT */
+        conn->egress.send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
     ret = 0;
@@ -1639,6 +1671,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_loss_init(&conn->_.egress.loss, &conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
+    conn->_.egress.next_gap_pn = calc_next_gap_pn(conn->_.super.ctx->tls, 0);
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
@@ -1990,11 +2023,14 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
             assert(!"FIXME");
             return QUICLY_TRANSPORT_ERROR_INTERNAL;
         }
+        /* Subtracting an ACK range might end up in splitting an existing range. By shrinking the number of ranges to MAX-1, we make
+         * sure that the potential split would not lead to an error. */
+        if (space->ack_queue.num_ranges == QUICLY_MAX_RANGES)
+            quicly_ranges_shrink(&space->ack_queue, 0, 1);
         if (quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end) != 0) {
             /* FIXME log error */
             return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         }
-        drop_excess_ack_blocks(space);
         if (space->ack_queue.num_ranges == 0) {
             space->largest_pn_received_at = INT64_MAX;
             space->unacked_count = 0;
@@ -2357,6 +2393,19 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         s->target.first_byte_at = NULL;
     }
 
+    /* insert PN gap if necessary, registering the PN to the ack queue so that we'd close the connection in the event of receiving
+     * an ACK for that gap. */
+    if (conn->egress.packet_number >= conn->egress.next_gap_pn && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
+        int ret;
+        if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, QUICLY_EPOCH_1RTT)) != 0)
+            return ret;
+        if (quicly_sentmap_allocate(&conn->egress.sentmap, on_invalid_ack) == NULL)
+            return PTLS_ERROR_NO_MEMORY;
+        quicly_sentmap_commit(&conn->egress.sentmap, 0);
+        ++conn->egress.packet_number;
+        conn->egress.next_gap_pn = calc_next_gap_pn(conn->super.ctx->tls, conn->egress.packet_number);
+    }
+
     return 0;
 }
 
@@ -2514,12 +2563,12 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
     }
 
     /* Emit an ACK frame. When there are no less than QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK (8) gaps, we bundle PING once per every
-     * 16 packets being sent. */
+     * 4 packets being sent. */
 Emit:
     if ((ret = allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
         return ret;
     uint8_t *dst = s->dst;
-    if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 16 == 0)
+    if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 4 == 0)
         *dst++ = QUICLY_FRAME_TYPE_PING;
     dst = quicly_encode_ack_frame(dst, s->dst_end, &space->ack_queue, ack_delay);
 
