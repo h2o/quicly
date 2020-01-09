@@ -66,3 +66,15 @@ matrix:
         - label=osx10.13/x86_64
       before_install: *bs_osx
       script: *script_osx64
+    - os: osx
+      osx_image: xcode9.2
+      env:
+        - label=osx10.12/x86_64
+      before_install: *bs_osx
+      script: *script_osx64
+    - os: osx
+      osx_image: xcode11.3
+      env:
+        - label=osx10.14/x86_64
+      before_install: *bs_osx
+      script: *script_osx64
