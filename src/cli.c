@@ -87,7 +87,7 @@ static struct {
 struct {
     const char *path;
     int to_file;
-} reqs[1024];
+} reqs[5000];
 
 struct st_stream_data_t {
     quicly_streambuf_t streambuf;
@@ -1027,8 +1027,12 @@ int main(int argc, char **argv)
                 exit(1);
             }
             size_t i;
-            for (i = 0; reqs[i].path != NULL; ++i)
+            for (i = 0; i < 5000 && reqs[i].path != NULL; ++i)
                 ;
+            if (i == 5000) {
+                fprintf(stderr, "too many requests, limited to 5000\n");
+                exit(1);
+            }
             reqs[i].path = optarg;
             reqs[i].to_file = ch == 'P';
         } break;
