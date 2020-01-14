@@ -1928,8 +1928,10 @@ static int do_decrypt_packet(ptls_cipher_context_t *header_protection,
     int ret;
 
     /* decipher the header protection, as well as obtaining pnbits, pnlen */
-    if (encrypted_len < header_protection->algo->iv_size + QUICLY_MAX_PN_SIZE)
+    if (encrypted_len < header_protection->algo->iv_size + QUICLY_MAX_PN_SIZE) {
+        *pn = UINT64_MAX;
         return QUICLY_ERROR_PACKET_IGNORED;
+    }
     ptls_cipher_init(header_protection, packet->octets.base + packet->encrypted_off + QUICLY_MAX_PN_SIZE);
     ptls_cipher_encrypt(header_protection, hpmask, hpmask, sizeof(hpmask));
     packet->octets.base[0] ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0]) ? 0xf : 0x1f);
@@ -1967,6 +1969,7 @@ static int decrypt_packet(ptls_cipher_context_t *header_protection,
             return ret;
     } else {
         *payload = ptls_iovec_init(packet->octets.base + packet->encrypted_off, packet->octets.len - packet->encrypted_off);
+        *pn = packet->decrypted.pn;
         if (aead_cb == aead_decrypt_1rtt) {
             quicly_conn_t *conn = aead_ctx;
             if (conn->application->cipher.ingress.key_phase.decrypted < packet->decrypted.key_phase) {
@@ -1974,7 +1977,6 @@ static int decrypt_packet(ptls_cipher_context_t *header_protection,
                     return ret;
             }
         }
-        *pn = packet->decrypted.pn;
         if (*next_expected_pn < *pn)
             *next_expected_pn = *pn + 1;
     }
@@ -4507,8 +4509,11 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
 
     /* decrypt */
     if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, &(*space)->next_expected_packet_number, packet, &pn,
-                              &payload)) != 0)
+                              &payload)) != 0) {
+        ++conn->super.stats.num_packets.decryption_failed;
+        QUICLY_PROBE(CRYPTO_DECRYPT, conn, pn, NULL, 0);
         goto Exit;
+    }
 
     QUICLY_PROBE(CRYPTO_DECRYPT, conn, pn, payload.base, payload.len);
     QUICLY_PROBE(QUICTRACE_RECV, conn, probe_now(), pn);
