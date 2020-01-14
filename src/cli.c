@@ -937,7 +937,7 @@ static void push_req(const char *path, int to_file)
     for (i = 0; reqs[i].path != NULL; ++i)
         ;
     reqs = realloc(reqs, sizeof(*reqs) * (i + 2));
-    reqs[i].path = optarg;
+    reqs[i].path = path;
     reqs[i].to_file = to_file;
     memset(reqs + i + 1, 0, sizeof(*reqs));
 }
