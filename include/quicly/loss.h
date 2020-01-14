@@ -283,12 +283,19 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
 inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_t largest_acked, quicly_loss_do_detect_cb do_detect,
                                 size_t *min_packets_to_send, int *restrict_sending)
 {
+    int64_t this_alarm_at = r->alarm_at;
+
     r->alarm_at = INT64_MAX;
     *min_packets_to_send = 1;
     if (r->loss_time != INT64_MAX) {
         /* Time threshold loss detection. Send at least 1 packet, but no restrictions on sending otherwise. */
         *restrict_sending = 0;
-        return quicly_loss_detect_loss(r, largest_acked, do_detect);
+        int ret = quicly_loss_detect_loss(r, largest_acked, do_detect);
+        if (ret == 0) {
+            fprintf(stderr, "%s:%d alarm_at changing from %" PRId64 " to %" PRId64 ", delta %" PRId64 "\n", __FUNCTION__, __LINE__,
+                    this_alarm_at, r->alarm_at, r->alarm_at - this_alarm_at);
+        }
+        return ret;
     }
     /* PTO. Send at least and at most 1 packet during speculative probing and 2 packets otherwise. */
     ++r->pto_count;
