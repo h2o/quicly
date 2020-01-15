@@ -1066,10 +1066,12 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_reordered)
 
 static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
 {
-    int ret, ack_now;
+    int ret, ack_now, is_reordered;
 
-    if ((ret = record_pn(&space->ack_queue, pn, &ack_now)) != 0)
+    if ((ret = record_pn(&space->ack_queue, pn, &is_reordered)) != 0)
         goto Exit;
+
+    ack_now = is_reordered && !is_ack_only;
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
