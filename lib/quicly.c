@@ -1046,15 +1046,16 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
 
 static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_reordered)
 {
-    /* Detect reordering. We return false-negative when receiving a late packet after all the packets with greater packet numbers
-     * have been ack-acked. But we do not care, due to the following reasons: that would be rare, there's no point in immediately
-     * acking a packet that is received as late as such. */
-    *is_reordered = ranges->num_ranges != 0 && pn < ranges->ranges[ranges->num_ranges - 1].end - 1;
+    *is_reordered = 0;
 
-    /* fast path that handles in-order delivery without gaps */
-    if (ranges->num_ranges != 0 && pn == ranges->ranges[ranges->num_ranges - 1].end) {
-        ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
-        return 0;
+    if (ranges->num_ranges != 0 && ranges->ranges[ranges->num_ranges - 1].end <= pn) {
+        /* fast path that is taken when we receive a packet in-order */
+        if (ranges->ranges[ranges->num_ranges - 1].end == pn) {
+            ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
+            return 0;
+        }
+        /* Otherwise we've found a gap. Send immediate ack in order to accelerate loss recovery on the sender. */
+        *is_reordered = 1;
     }
 
     /* slow path; we shrink then add, to avoid exceeding the QUICLY_MAX_RANGES */
