@@ -4462,7 +4462,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     /* handle the payload */
     if ((ret = handle_payload(conn, epoch, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
-    if (*space != NULL) {
+    if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
         if ((ret = record_receipt(conn, *space, pn, is_ack_only, epoch)) != 0)
             goto Exit;
     }
