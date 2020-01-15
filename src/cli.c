@@ -84,10 +84,13 @@ static struct {
     size_t count;
 } negotiated_protocols;
 
+/**
+ * list of requests to be processed, terminated by reqs[N].path == NULL
+ */
 struct {
     const char *path;
     int to_file;
-} reqs[1024];
+} *reqs;
 
 struct st_stream_data_t {
     quicly_streambuf_t streambuf;
@@ -928,6 +931,17 @@ static void usage(const char *cmd)
            cmd);
 }
 
+static void push_req(const char *path, int to_file)
+{
+    size_t i;
+    for (i = 0; reqs[i].path != NULL; ++i)
+        ;
+    reqs = realloc(reqs, sizeof(*reqs) * (i + 2));
+    reqs[i].path = path;
+    reqs[i].to_file = to_file;
+    memset(reqs + i + 1, 0, sizeof(*reqs));
+}
+
 int main(int argc, char **argv)
 {
     const char *host, *port, *cid_key = NULL;
@@ -935,7 +949,8 @@ int main(int argc, char **argv)
     socklen_t salen;
     int ch;
 
-    memset(reqs, 0, sizeof(reqs));
+    reqs = malloc(sizeof(*reqs));
+    memset(reqs, 0, sizeof(*reqs));
     ctx = quicly_spec_context;
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
@@ -1026,11 +1041,7 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid path:%s\n", optarg);
                 exit(1);
             }
-            size_t i;
-            for (i = 0; reqs[i].path != NULL; ++i)
-                ;
-            reqs[i].path = optarg;
-            reqs[i].to_file = ch == 'P';
+            push_req(optarg, ch == 'P');
         } break;
         case 'R':
             enforce_retry = 1;
@@ -1094,7 +1105,7 @@ int main(int argc, char **argv)
     argv += optind;
 
     if (reqs[0].path == NULL)
-        reqs[0].path = "/";
+        push_req("/", 0);
 
     if (key_exchanges[0] == NULL)
         key_exchanges[0] = &ptls_openssl_secp256r1;
