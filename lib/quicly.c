@@ -1091,7 +1091,6 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
     if (ack_now) {
         conn->egress.send_ack_at = now;
     } else if (conn->egress.send_ack_at == INT64_MAX) {
-        /* FIXME use 1/4 minRTT */
         conn->egress.send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
