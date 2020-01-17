@@ -1048,14 +1048,16 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_reordered)
 {
     *is_reordered = 0;
 
-    if (ranges->num_ranges != 0 && ranges->ranges[ranges->num_ranges - 1].end <= pn) {
-        /* fast path that is taken when we receive a packet in-order */
-        if (ranges->ranges[ranges->num_ranges - 1].end == pn) {
-            ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
-            return 0;
-        }
-        /* Otherwise we've found a gap. Send immediate ack to accelerate loss recovery at the sender. */
-        *is_reordered = 1;
+    if (ranges->num_ranges != 0) {
+         /* fast path that is taken when we receive a packet in-order */
+         if (ranges->ranges[ranges->num_ranges - 1].end == pn) {
+             ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
+             return 0;
+         }
+         /* If there's a gap, signal it to the caller so that an immediate ack can be sent out to accelerate loss recovery at the
+          * sender. */
+         if (ranges->ranges[ranges->num_ranges - 1].end <= pn)
+            *is_reordered = 1;
     }
 
     /* slow path; we shrink then add, to avoid exceeding the QUICLY_MAX_RANGES */
