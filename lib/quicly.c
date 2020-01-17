@@ -74,7 +74,7 @@
  */
 #define MIN_SEND_WINDOW 64
 /**
- * sends ACK bundled with PING, when number of gaps in the ack queue becomes no less than this threshold. This value should be much
+ * sends ACK bundled with PING, when number of gaps in the ack queue reaches or exceeds this threshold. This value should be much
  * smaller than QUICLY_MAX_RANGES.
  */
 #define QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK 8
