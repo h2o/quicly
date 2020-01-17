@@ -204,6 +204,9 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
 inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
                                      int can_send_stream_data, uint64_t total_bytes_sent)
 {
+    sprintf(debug_log + strlen(debug_log), "%s:%d last_retransmittable_sent_at=%" PRId64 ", has_outstanding=%d, can_send_stream_data=%d, total_bytes_sent=%" PRIu64 "\n",
+    __FUNCTION__, __LINE__, last_retransmittable_sent_at, has_outstanding, can_send_stream_data, total_bytes_sent);
+
     if (!has_outstanding) {
         /* Do not set alarm if there's no data oustanding */
         r->alarm_at = INT64_MAX;
@@ -215,8 +218,10 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
     if (r->loss_time != INT64_MAX) {
         /* time-threshold loss detection */
         alarm_duration = r->loss_time - last_retransmittable_sent_at;
+        sprintf(debug_log + strlen(debug_log), "%s:%d time-threshold loss detection, alarm_duration=%" PRId64 "\n", __FUNCTION__, __LINE__, alarm_duration);
     } else if (r->rtt.smoothed == 0) {
         alarm_duration = 2 * r->rtt.latest; /* should contain initial rtt */
+        sprintf(debug_log + strlen(debug_log), "%s:%d smoothed_RTT=0, alarm_duration=%" PRId64 "\n", __FUNCTION__, __LINE__, alarm_duration);
     } else {
         /* PTO alarm */
         /* the bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or pto_count, even when
@@ -240,6 +245,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
             r->total_bytes_sent = total_bytes_sent;
         }
         alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay, r->conf->min_pto);
+        sprintf(debug_log + strlen(debug_log), "%s:%d calculated from PTO, alarm_duration=%" PRId64 "\n", __FUNCTION__, __LINE__, alarm_duration);
         if (r->pto_count < 0 && !can_send_stream_data) {
             /* Speculative probes sent under an RTT do not need to account for ack delay, since there is no expectation
              * of an ack being received before the probe is sent. */
@@ -247,12 +253,17 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
             alarm_duration >>= -r->pto_count;
             if (alarm_duration < r->conf->min_pto)
                 alarm_duration = r->conf->min_pto;
-        } else if (r->pto_count >= 0)
+            sprintf(debug_log + strlen(debug_log), "%s:%d adjusted alarm_duration=%" PRId64 "\n", __FUNCTION__, __LINE__, alarm_duration);
+        } else if (r->pto_count >= 0) {
             alarm_duration <<= r->pto_count;
+            sprintf(debug_log + strlen(debug_log), "%s:%d adjusted alarm_duration=%" PRId64 "\n", __FUNCTION__, __LINE__, alarm_duration);
+        }
     }
     r->alarm_at = last_retransmittable_sent_at + alarm_duration;
+    sprintf(debug_log + strlen(debug_log), "%s:%d alarm_at=%" PRId64 "\n", __FUNCTION__, __LINE__, r->alarm_at);
     if (r->alarm_at < now)
         r->alarm_at = now;
+    sprintf(debug_log + strlen(debug_log), "%s:%d alarm_at=%" PRId64 "\n", __FUNCTION__, __LINE__, r->alarm_at);
 }
 
 inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
@@ -289,12 +300,12 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_
     *min_packets_to_send = 1;
     if (r->loss_time != INT64_MAX) {
         /* Time threshold loss detection. Send at least 1 packet, but no restrictions on sending otherwise. */
+        sprintf(debug_log + strlen(debug_log), "%s:%d time threshold loss detection\n", __FUNCTION__, __LINE__);
         *restrict_sending = 0;
         int ret = quicly_loss_detect_loss(r, largest_acked, do_detect);
-        if (ret == 0) {
-            fprintf(stderr, "%s:%d alarm_at changing from %" PRId64 " to %" PRId64 ", delta %" PRId64 "\n", __FUNCTION__, __LINE__,
+        if (ret == 0)
+            sprintf(debug_log + strlen(debug_log), "%s:%d alarm_at changing from %" PRId64 " to %" PRId64 ", delta %" PRId64 "\n", __FUNCTION__, __LINE__,
                     this_alarm_at, r->alarm_at, r->alarm_at - this_alarm_at);
-        }
         return ret;
     }
     /* PTO. Send at least and at most 1 packet during speculative probing and 2 packets otherwise. */
@@ -303,6 +314,7 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, uint64_
     if (r->pto_count > 0)
         *min_packets_to_send = 2;
 
+    sprintf(debug_log + strlen(debug_log), "%s:%d PTO, pto_count=%" PRIu8 "\n", __FUNCTION__, __LINE__, r->pto_count);
     return 0;
 }
 

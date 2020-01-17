@@ -75,6 +75,8 @@ extern "C" {
 
 typedef int64_t quicly_stream_id_t;
 
+extern char debug_log[32768];
+
 #ifdef __cplusplus
 }
 #endif
