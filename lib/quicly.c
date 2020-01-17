@@ -234,7 +234,7 @@ struct st_quicly_conn_t {
         /**
          * next PN to be skipped
          */
-        uint64_t next_gap_pn;
+        uint64_t next_pn_to_skip;
         /**
          * valid if state is CLOSING
          */
