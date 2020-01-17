@@ -588,7 +588,7 @@ static int on_invalid_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packe
     return 0;
 }
 
-static uint64_t calc_next_gap_pn(ptls_context_t *tlsctx, uint64_t next_pn)
+static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn)
 {
     static __thread struct {
         uint16_t values[32];
