@@ -1054,7 +1054,7 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_reordered)
             ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
             return 0;
         }
-        /* Otherwise we've found a gap. Send immediate ack in order to accelerate loss recovery on the sender. */
+        /* Otherwise we've found a gap. Send immediate ack to accelerate loss recovery at the sender. */
         *is_reordered = 1;
     }
 
