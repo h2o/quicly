@@ -1674,7 +1674,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_loss_init(&conn->_.egress.loss, &conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
-    conn->_.egress.next_gap_pn = calc_next_gap_pn(conn->_.super.ctx->tls, 0);
+    conn->_.egress.next_pn_to_skip = calc_next_pn_to_skip(conn->_.super.ctx->tls, 0);
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
@@ -2404,7 +2404,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
 
     /* insert PN gap if necessary, registering the PN to the ack queue so that we'd close the connection in the event of receiving
      * an ACK for that gap. */
-    if (conn->egress.packet_number >= conn->egress.next_gap_pn && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
+    if (conn->egress.packet_number >= conn->egress.next_pn_to_skip && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
         int ret;
         if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, QUICLY_EPOCH_1RTT)) != 0)
             return ret;
@@ -2412,7 +2412,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
             return PTLS_ERROR_NO_MEMORY;
         quicly_sentmap_commit(&conn->egress.sentmap, 0);
         ++conn->egress.packet_number;
-        conn->egress.next_gap_pn = calc_next_gap_pn(conn->super.ctx->tls, conn->egress.packet_number);
+        conn->egress.next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, conn->egress.packet_number);
     }
 
     return 0;
