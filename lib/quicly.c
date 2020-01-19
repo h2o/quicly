@@ -2110,8 +2110,11 @@ static int on_ack_max_stream_data(quicly_conn_t *conn, const quicly_sent_packet_
             break;
         case QUICLY_SENTMAP_EVENT_LOST:
             quicly_maxsender_lost(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
-            if (should_send_max_stream_data(stream))
+            sprintf(debug_log + strlen(debug_log), "%s:%d lost (sent=%" PRIu64 ", max_acked=%" PRIu64 "\n", __FUNCTION__, __LINE__, sent->data.max_stream_data.args.value, stream->_send_aux.max_stream_data_sender.max_acked);
+            if (should_send_max_stream_data(stream)) {
+                sprintf(debug_log + strlen(debug_log), "%s:%d scheduling stream control message\n", __FUNCTION__, __LINE__);
                 sched_stream_control(stream);
+            }
             break;
         default:
             break;
