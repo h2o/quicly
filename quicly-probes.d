@@ -96,4 +96,6 @@ provider quicly {
     probe quictrace_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
     probe quictrace_cc_ack(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd, size_t inflight);
     probe quictrace_cc_lost(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd, size_t inflight);
+
+    probe debug_message(struct st_quicly_conn_t *conn, const char *function, int line, const char *message);
 };

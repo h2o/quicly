@@ -75,7 +75,15 @@ extern "C" {
 
 typedef int64_t quicly_stream_id_t;
 
-extern char debug_log[32768];
+typedef struct st_quicly_conn_t quicly_conn_t;
+
+/**
+ * used for emitting arbitrary debug message through probes
+ */
+void quicly__debug_printf(struct st_quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
+
+#define quicly_debug_printf(conn, ...) quicly__debug_printf((conn), __FUNCTION__, __LINE__, __VA_ARGS__)
 
 #ifdef __cplusplus
 }

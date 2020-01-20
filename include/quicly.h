@@ -88,7 +88,6 @@ typedef struct st_quicly_datagram_t {
 typedef struct st_quicly_cid_t quicly_cid_t;
 typedef struct st_quicly_cid_plaintext_t quicly_cid_plaintext_t;
 typedef struct st_quicly_context_t quicly_context_t;
-typedef struct st_quicly_conn_t quicly_conn_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 typedef struct st_quicly_send_context_t quicly_send_context_t;
 typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintext_t;
