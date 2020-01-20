@@ -78,7 +78,8 @@ typedef int64_t quicly_stream_id_t;
 typedef struct st_quicly_conn_t quicly_conn_t;
 
 /**
- * used for emitting arbitrary debug message through probes
+ * Used for emitting arbitrary debug message through probes. The debug message might get emitted unescaped as a JSON string,
+ * therefore cannot contain characters that are required to be escaped as a JSON string (e.g., `\n`, `"`).
  */
 void quicly__debug_printf(struct st_quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
     __attribute__((format(printf, 4, 5)));
