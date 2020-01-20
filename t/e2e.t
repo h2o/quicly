@@ -38,6 +38,7 @@ subtest "hello" => sub {
     is $resp, "hello world\n";
     subtest "events" => sub {
         my $events = slurp_file("$tempdir/events");
+        $events =~ s/(^|\n)[^\n]*"type":"debug-message",.*?\n/$1/sg;
         complex $events, sub {
             $_ =~ /"type":"transport-close-send",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)"/s
                 and $1 eq 'packet-commit' and $2 eq 'quictrace-sent' and $3 eq 'send' and $4 eq 'free';
