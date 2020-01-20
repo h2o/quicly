@@ -3470,8 +3470,17 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             goto Exit;
     }
 
-    if (s->target.packet != NULL)
+    if (s->target.packet != NULL) {
+        /* change the packet to ACK-eliciting, if we are handling PTO and if all the scheduled packets are ACK-only */
+        if (restrict_sending && !s->target.ack_eliciting && conn->egress.last_retransmittable_sent_at != now) {
+            assert(s->dst < s->dst_end);
+            *s->dst++ = QUICLY_FRAME_TYPE_PING;
+            s->target.ack_eliciting = 1;
+            conn->egress.last_retransmittable_sent_at = now;
+            quicly_debug_printf(conn, "PTO converting ACK-only packet to ACK-eliciting");
+        }
         commit_send_packet(conn, s, 0);
+    }
 
     ret = 0;
 Exit:
