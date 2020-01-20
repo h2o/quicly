@@ -191,7 +191,7 @@ subtest "key-update" => sub {
         my ($server_opts, $client_opts, $doing_updates) = @_;
         my $guard = spawn_server(@$server_opts, "-e", "$tempdir/events");
         # ensure at least 30 round-trips
-        my $resp = `exec $cli -p /120000 -M 4000 @{[join " ", @$client_opts]} 127.0.0.1 $port 2> $tempdir/errlog`;
+        my $resp = `exec $cli -e /dev/stderr -p /120000 -M 4000 @{[join " ", @$client_opts]} 127.0.0.1 $port 2> $tempdir/errlog`;
         is $resp, "hello world\n" x 10000;
         undef $guard;
         my $num_key_updates = do {
