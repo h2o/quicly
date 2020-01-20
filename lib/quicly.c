@@ -4973,6 +4973,7 @@ const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {
 
 void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
 {
+#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
     char buf[1024];
     va_list args;
 
@@ -4984,4 +4985,5 @@ void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, c
     va_end(args);
 
     QUICLY_DEBUG_MESSAGE(conn, function, line, buf);
+#endif
 }
