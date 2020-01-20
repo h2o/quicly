@@ -187,12 +187,12 @@ int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end
     return 0;
 }
 
-void quicly_ranges_shrink(quicly_ranges_t *ranges, size_t start, size_t end)
+void quicly_ranges_shrink(quicly_ranges_t *ranges, size_t begin_range_index, size_t end_range_index)
 {
-    assert(start < end);
+    assert(begin_range_index < end_range_index);
 
-    MOVE(ranges->ranges + start, ranges->ranges + end, ranges->num_ranges - end);
-    ranges->num_ranges -= end - start;
+    MOVE(ranges->ranges + begin_range_index, ranges->ranges + end_range_index, ranges->num_ranges - end_range_index);
+    ranges->num_ranges -= end_range_index - begin_range_index;
     if (ranges->capacity > 4 && ranges->num_ranges * 3 <= ranges->capacity) {
         size_t new_capacity = ranges->capacity / 2;
         quicly_range_t *new_ranges = realloc(ranges->ranges, new_capacity * sizeof(*new_ranges));
