@@ -364,8 +364,6 @@ static const quicly_transport_parameters_t default_transport_params = {
 
 static __thread int64_t now;
 
-char debug_log[32768];
-
 static void update_now(quicly_context_t *ctx)
 {
     int64_t newval = ctx->now->cb(ctx->now);
@@ -578,15 +576,8 @@ static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
     }
     /* Allow timers not in the future when the peer is not yet validated, since we may not be able to send packets even when timers
      * fire. */
-    if (timer_must_be_in_future && conn->super.peer.address_validation.validated) {
-        if (now < conn->egress.loss.alarm_at) {
-            /* ok */
-        } else {
-            fprintf(stderr, "assertion failure:now=%" PRId64 ", alarm_at=%" PRId64 "\n%s", now, conn->egress.loss.alarm_at,
-                    debug_log);
-            abort();
-        }
-    }
+    if (timer_must_be_in_future && conn->super.peer.address_validation.validated)
+        assert(now < conn->egress.loss.alarm_at);
 }
 
 static int on_invalid_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
@@ -2110,9 +2101,9 @@ static int on_ack_max_stream_data(quicly_conn_t *conn, const quicly_sent_packet_
             break;
         case QUICLY_SENTMAP_EVENT_LOST:
             quicly_maxsender_lost(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
-            sprintf(debug_log + strlen(debug_log), "%s:%d lost (sent=%" PRIu64 ", max_acked=%" PRIu64 "\n", __FUNCTION__, __LINE__, sent->data.max_stream_data.args.value, stream->_send_aux.max_stream_data_sender.max_acked);
+            quicly_debug_printf(conn, "lost (sent=%" PRIu64 ", max_acked=%" PRIu64 "\n", sent->data.max_stream_data.args.value, stream->_send_aux.max_stream_data_sender.max_acked);
             if (should_send_max_stream_data(stream)) {
-                sprintf(debug_log + strlen(debug_log), "%s:%d scheduling stream control message\n", __FUNCTION__, __LINE__);
+                quicly_debug_printf(conn, "scheduling stream control message\n");
                 sched_stream_control(stream);
             }
             break;
@@ -2566,7 +2557,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
 
     if (space->ack_queue.num_ranges == 0) {
         assert(space->unacked_count == 0);
-        sprintf(debug_log + strlen(debug_log), "%s:%d bailing out, as num_ranges==0\n", __FUNCTION__, __LINE__);
+        quicly_debug_printf(conn, "bailing out, as num_ranges==0\n");
         return 0;
     }
 
@@ -2615,7 +2606,7 @@ Emit:
     }
 
     space->unacked_count = 0;
-    sprintf(debug_log + strlen(debug_log), "%s:%d ack sent\n", __FUNCTION__, __LINE__);
+    quicly_debug_printf(conn, "ack sent\n");
 
     return ret;
 }
@@ -2877,7 +2868,7 @@ static int mark_packets_as_lost(quicly_conn_t *conn, size_t count)
             assert(conn->egress.sentmap.bytes_in_flight == 0);
             break;
         }
-        sprintf(debug_log + strlen(debug_log), "%s:%d marking pn %" PRIu64 " lost, bytes: %" PRIu16 "\n", __FUNCTION__, __LINE__, pn, sent->bytes_in_flight);
+        quicly_debug_printf(conn, "marking pn %" PRIu64 " lost, bytes: %" PRIu16 "\n", pn, sent->bytes_in_flight);
         if (sent->bytes_in_flight != 0)
             --count;
         if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_LOST, conn)) != 0)
@@ -2900,7 +2891,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
     uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
 
-    sprintf(debug_log + strlen(debug_log), "%s:%d delay_until_lost=%" PRIu32 "\n", __FUNCTION__, __LINE__, delay_until_lost);
+    quicly_debug_printf(conn, "delay_until_lost=%" PRIu32 "\n", delay_until_lost);
 
     *loss_time = INT64_MAX;
 
@@ -2944,7 +2935,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
         sent = quicly_sentmap_get(&iter);
     }
 
-    sprintf(debug_log + strlen(debug_log), "%s:%d loss_time=%" PRId64 ", earliest_sent_at=%" PRId64 "\n", __FUNCTION__, __LINE__, *loss_time, *loss_time != INT64_MAX ? *loss_time - delay_until_lost : INT64_MAX);
+    quicly_debug_printf(conn, "loss_time=%" PRId64 ", earliest_sent_at=%" PRId64 "\n", *loss_time, *loss_time != INT64_MAX ? *loss_time - delay_until_lost : INT64_MAX);
 
     return 0;
 }
@@ -3209,7 +3200,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
 
     /* send ACK */
     if (ack_space != NULL && ack_space->unacked_count != 0) {
-        sprintf(debug_log + strlen(debug_log), "%s:%d sending ACK of epoch %zu\n", __FUNCTION__, __LINE__, epoch);
+        quicly_debug_printf(conn, "sending ACK of epoch %zu\n", epoch);
         if ((ret = send_ack(conn, ack_space, s)) != 0)
             goto Exit;
     }
@@ -3365,7 +3356,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     int restrict_sending = 0, ret;
     size_t min_packets_to_send = 0;
 
-    sprintf(debug_log + strlen(debug_log), "%s:%d loss.alarm_at: %" PRId64 ", last_retransmittable_sent_at: %" PRId64 "\n", __FUNCTION__, __LINE__, conn->egress.loss.alarm_at, conn->egress.last_retransmittable_sent_at);
+    quicly_debug_printf(conn, "loss.alarm_at: %" PRId64 ", last_retransmittable_sent_at: %" PRId64 "\n", conn->egress.loss.alarm_at, conn->egress.last_retransmittable_sent_at);
 
     /* handle timeouts */
     if (conn->egress.loss.alarm_at <= now) {
@@ -3373,7 +3364,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                                         conn->egress.loss.largest_acked_packet_plus1 - 1, do_detect_loss, &min_packets_to_send,
                                         &restrict_sending)) != 0)
             goto Exit;
-        sprintf(debug_log + strlen(debug_log), "%s:%d loss.alarm_at: %" PRId64 "\n", __FUNCTION__, __LINE__, conn->egress.loss.alarm_at);
+        quicly_debug_printf(conn, "loss.alarm_at: %" PRId64 "\n", conn->egress.loss.alarm_at);
         assert(min_packets_to_send > 0);
         assert(min_packets_to_send <= s->max_packets);
 
@@ -3416,7 +3407,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             s->current.first_byte = QUICLY_QUIC_BIT; /* short header */
             /* acks */
             if (conn->egress.send_ack_at <= now && conn->application->super.unacked_count != 0) {
-                sprintf(debug_log + strlen(debug_log), "%s:%d sending ACK of epoch 1RTT\n", __FUNCTION__, __LINE__);
+                quicly_debug_printf(conn, "sending ACK of epoch 1RTT\n");
                 if ((ret = send_ack(conn, &conn->application->super, s)) != 0)
                     goto Exit;
             }
@@ -3488,20 +3479,20 @@ Exit:
         ret = 0;
     if (ret == 0) {
         if (conn->application == NULL) {
-            sprintf(debug_log + strlen(debug_log), "%s:%d application=NULL\n", __FUNCTION__, __LINE__);
+            quicly_debug_printf(conn, "application=NULL\n");
         } else {
-            sprintf(debug_log + strlen(debug_log), "%s:%d 1-RTT unacked_count: %" PRIu32 "\n", __FUNCTION__, __LINE__, conn->application->super.unacked_count);
+            quicly_debug_printf(conn, "1-RTT unacked_count: %" PRIu32 "\n", conn->application->super.unacked_count);
         }
         if (conn->application == NULL || conn->application->super.unacked_count == 0) {
-            sprintf(debug_log + strlen(debug_log), "%s:%d resetting send_ack_at\n", __FUNCTION__, __LINE__);
+            quicly_debug_printf(conn, "resetting send_ack_at\n");
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         }
         update_loss_alarm(conn);
-        sprintf(debug_log + strlen(debug_log), "%s:%d updated loss alarm to %" PRId64 "\n", __FUNCTION__, __LINE__, conn->egress.loss.alarm_at);
+        quicly_debug_printf(conn, "updated loss alarm to %" PRId64 "\n", conn->egress.loss.alarm_at);
         if (s->num_packets != 0)
             update_idle_timeout(conn, 0);
     }
-    sprintf(debug_log + strlen(debug_log), "%s:%d returning %d\n", __FUNCTION__, __LINE__, ret);
+    quicly_debug_printf(conn, "returning %d\n", ret);
     return ret;
 }
 
@@ -3512,7 +3503,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     update_now(conn->super.ctx);
 
-    sprintf(debug_log, "In quicly_send\nrole: %s\nstate: %d\nnow: %" PRId64 "\nfirst-timeout: %" PRId64 "\nsend_ack_at: %" PRId64 ", loss.alarm_at: %" PRId64 "\n",
+    quicly_debug_printf(conn, "In quicly_send; role: %s\nstate: %d\nnow: %" PRId64 "\nfirst-timeout: %" PRId64 "\nsend_ack_at: %" PRId64 ", loss.alarm_at: %" PRId64 "\n",
             quicly_is_client(conn) ? "client" : "server", conn->super.state, now, quicly_get_first_timeout(conn),
             conn->egress.send_ack_at, conn->egress.loss.alarm_at);
 
