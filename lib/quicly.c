@@ -3470,6 +3470,28 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             goto Exit;
     }
 
+    /* handling PTO: send an ACK-eliciting packet if something is inflight */
+    if (restrict_sending) {
+        if (conn->egress.last_retransmittable_sent_at == now) {
+            /* we have committed at least one ACK-eliciting frame */
+        } else if (s->target.packet != NULL) {
+            /* we have a packet being built, which is not ACK-eliciting. Convert it to ACK-eliciting. */
+            assert(!s->target.ack_eliciting);
+            assert(s->dst < s->dst_end);
+            *s->dst++ = QUICLY_FRAME_TYPE_PING;
+            s->target.ack_eliciting = 1;
+            conn->egress.last_retransmittable_sent_at = now;
+            quicly_debug_printf(conn, "PTO converting ACK-only packet to ACK-eliciting");
+        } else if (conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe) {
+            /* send PING, as something is inflight but we have so far failed to build at ACK-eliciting packet */
+            if ((ret = allocate_frame(conn, s, 1)) != 0) {
+                assert(ret != QUICLY_ERROR_SENDBUF_FULL && "application should supply room for at least 2 packets");
+                goto Exit;
+            }
+            *s->dst++ = QUICLY_FRAME_TYPE_PING;
+        }
+    }
+
     if (s->target.packet != NULL)
         commit_send_packet(conn, s, 0);
 
