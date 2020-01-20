@@ -208,7 +208,7 @@ subtest "key-update" => sub {
         } else {
             is $num_key_updates, 0;
         }
-        system "misc/annotate-backtrace-symbols < $tempdir/errlog";
+        system "tail -1000 $tempdir/errlog | misc/annotate-backtrace-symbols";
     };
     subtest "none" => sub {
         $doit->([], [], undef);
