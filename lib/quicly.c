@@ -443,15 +443,19 @@ static void set_cid(quicly_cid_t *dest, ptls_iovec_t src)
 
 static ptls_aead_context_t *get_retry_aead(quicly_context_t *ctx, int is_enc)
 {
-    static const uint8_t secret[] = {0x65, 0x6e, 0x61, 0xe3, 0x36, 0xae, 0x94, 0x17, 0xf7, 0xf0, 0xed,
-                                     0xd8, 0xd7, 0x8d, 0x46, 0x1e, 0x2a, 0xa7, 0x08, 0x4a, 0xba, 0x7a,
-                                     0x14, 0xc1, 0xe9, 0xf7, 0x26, 0xd5, 0x57, 0x09, 0x16, 0x9a};
+    static const uint8_t key[] = {0xf5, 0xed, 0x46, 0x42, 0xe0, 0xe4, 0xc8, 0xd8, 0x78, 0xbb, 0xbc, 0x8a, 0x82, 0x88, 0x21, 0xc9};
     static __thread ptls_aead_context_t *aead[2 /* indexed by is_enc */] = {NULL};
 
     if (aead[is_enc] == NULL) {
-        ptls_cipher_suite_t *aes128gcmsha256 = get_aes128gcmsha256(ctx);
-        aead[is_enc] = ptls_aead_new(aes128gcmsha256->aead, aes128gcmsha256->hash, is_enc, secret, QUICLY_AEAD_BASE_LABEL);
-        assert(aead[is_enc] != NULL);
+        ptls_aead_algorithm_t *algo = get_aes128gcmsha256(ctx)->aead;
+        if ((aead[is_enc] = (ptls_aead_context_t *)malloc(algo->context_size)) != NULL) {
+            *aead[is_enc] = (ptls_aead_context_t){algo};
+            memset(aead[is_enc]->static_iv, 0, algo->iv_size);
+            if (algo->setup_crypto(aead[is_enc], is_enc, key) != 0) {
+                free(ctx);
+                ctx = NULL;
+            }
+        }
     }
 
     return aead[is_enc];
