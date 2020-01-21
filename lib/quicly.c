@@ -1044,20 +1044,17 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
-static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_reordered)
+static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
 {
-    *is_reordered = 0;
+    *is_out_of_order = 0;
 
     if (ranges->num_ranges != 0) {
-         /* fast path that is taken when we receive a packet in-order */
-         if (ranges->ranges[ranges->num_ranges - 1].end == pn) {
-             ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
-             return 0;
-         }
-         /* If there's a gap, signal it to the caller so that an immediate ack can be sent out to accelerate loss recovery at the
-          * sender. */
-         if (ranges->ranges[ranges->num_ranges - 1].end <= pn)
-            *is_reordered = 1;
+        /* fast path that is taken when we receive a packet in-order */
+        if (ranges->ranges[ranges->num_ranges - 1].end == pn) {
+            ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
+            return 0;
+        }
+        *is_out_of_order = 1;
     }
 
     /* slow path; we shrink then add, to avoid exceeding the QUICLY_MAX_RANGES */
@@ -1068,12 +1065,12 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_reordered)
 
 static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
 {
-    int ret, ack_now, is_reordered;
+    int ret, ack_now, is_out_of_order;
 
-    if ((ret = record_pn(&space->ack_queue, pn, &is_reordered)) != 0)
+    if ((ret = record_pn(&space->ack_queue, pn, &is_out_of_order)) != 0)
         goto Exit;
 
-    ack_now = is_reordered && !is_ack_only;
+    ack_now = is_out_of_order && !is_ack_only;
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
