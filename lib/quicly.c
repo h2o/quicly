@@ -430,6 +430,17 @@ static void set_cid(quicly_cid_t *dest, ptls_iovec_t src)
     dest->len = src.len;
 }
 
+static ptls_aead_context_t *create_retry_aead(quicly_context_t *ctx, int is_enc)
+{
+    static const uint8_t secret[] = {0x65, 0x6e, 0x61, 0xe3, 0x36, 0xae, 0x94, 0x17, 0xf7, 0xf0, 0xed,
+                                     0xd8, 0xd7, 0x8d, 0x46, 0x1e, 0x2a, 0xa7, 0x08, 0x4a, 0xba, 0x7a,
+                                     0x14, 0xc1, 0xe9, 0xf7, 0x26, 0xd5, 0x57, 0x09, 0x16, 0x9a};
+    ptls_cipher_suite_t *algo = get_aes128gcmsha256(ctx);
+    ptls_aead_context_t *aead = ptls_aead_new(algo->aead, algo->hash, is_enc, secret, QUICLY_AEAD_BASE_LABEL);
+    assert(aead != NULL);
+    return aead;
+}
+
 static void dispose_cipher(struct st_quicly_cipher_context_t *ctx)
 {
     ptls_aead_free(ctx->aead);
@@ -486,16 +497,11 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
             packet->encrypted_off = src - packet->octets.base;
         } else if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_RETRY) {
             /* retry */
-            if (src_end - src < 1)
+            if (src_end - src <= PTLS_AESGCM_TAG_SIZE)
                 goto Error;
-            size_t odcid_len = *src++;
-            if (odcid_len > QUICLY_MAX_CID_LEN_V1)
-                goto Error;
+            packet->token = ptls_iovec_init(src, src_end - src - PTLS_AESGCM_TAG_SIZE);
+            src += packet->token.len;
             packet->encrypted_off = src - packet->octets.base;
-            if (src_end - src < odcid_len)
-                goto Error;
-            src += odcid_len;
-            packet->token = ptls_iovec_init(src, src_end - src);
         } else {
             /* coalescible long header packet */
             if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
@@ -3031,7 +3037,7 @@ int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t c
 
 quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *dest_addr,
                                      ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, ptls_iovec_t odcid,
-                                     ptls_iovec_t token_prefix, ptls_iovec_t appdata)
+                                     ptls_iovec_t token_prefix, ptls_iovec_t appdata, ptls_aead_context_t **retry_aead_cache)
 {
     quicly_address_token_plaintext_t token;
     quicly_datagram_t *packet = NULL;
@@ -3054,20 +3060,21 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
         token.appdata.len = appdata.len;
     }
 
-    /* build packet */
+    /* start building the packet */
     if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, ctx->max_packet_size)) == NULL)
         goto Exit;
     set_address(&packet->dest, dest_addr);
     set_address(&packet->src, src_addr);
     ptls_buffer_init(&buf, packet->data.base, ctx->max_packet_size);
 
+    /* first generate a pseudo packet */
+    ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, odcid.base, odcid.len); });
     ctx->tls->random_bytes(buf.base + buf.off, 1);
     buf.base[buf.off] = QUICLY_PACKET_TYPE_RETRY | (buf.base[buf.off] & 0x0f);
     ++buf.off;
     ptls_buffer_push32(&buf, QUICLY_PROTOCOL_VERSION);
     ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, dest_cid.base, dest_cid.len); });
     ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, src_cid.base, src_cid.len); });
-    ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, odcid.base, odcid.len); });
     if (token_prefix.len != 0) {
         assert(token_prefix.len <= buf.capacity - buf.off);
         memcpy(buf.base + buf.off, token_prefix.base, token_prefix.len);
@@ -3076,9 +3083,28 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
     if ((ret = quicly_encrypt_address_token(ctx->tls->random_bytes, token_encrypt_ctx, &buf, buf.off - token_prefix.len, &token)) !=
         0)
         goto Exit;
-    assert(!buf.is_allocated);
-    packet->data.len = buf.off;
 
+    /* append AEAD tag */
+    ret = ptls_buffer_reserve(&buf, PTLS_AESGCM_TAG_SIZE);
+    assert(ret == 0);
+    assert(!buf.is_allocated);
+    {
+        ptls_aead_context_t *aead =
+            retry_aead_cache != NULL && *retry_aead_cache != NULL ? *retry_aead_cache : create_retry_aead(ctx->tls, 1);
+        ptls_aead_encrypt(aead, buf.base + buf.off, "", 0, 0, buf.base, buf.off);
+        if (retry_aead_cache != NULL) {
+            *retry_aead_cache = aead;
+        } else {
+            ptls_aead_free(aead);
+        }
+    }
+    buf.off += PTLS_AESGCM_TAG_SIZE;
+
+    /* convert the image to a Retry packet, by stripping the ODCID field */
+    memmove(buf.base, buf.base + odcid.len + 1, buf.off - (odcid.len + 1));
+    buf.off -= odcid.len + 1;
+
+    packet->data.len = buf.off;
     ret = 0;
 
 Exit:
@@ -4332,17 +4358,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         }
         switch (packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) {
         case QUICLY_PACKET_TYPE_RETRY: {
+            assert(packet->encrypted_off + PTLS_AESGCM_TAG_SIZE == packet->octets.len);
             /* check the packet */
-            if (packet->token.len >= QUICLY_MAX_TOKEN_LEN) {
-                ret = QUICLY_ERROR_PACKET_IGNORED;
-                goto Exit;
-            }
-            ptls_iovec_t odcid = ptls_iovec_init(packet->octets.base + packet->encrypted_off,
-                                                 packet->token.base - (packet->octets.base + packet->encrypted_off));
-            if (!quicly_cid_is_equal(&conn->super.peer.cid, odcid)) {
-                ret = QUICLY_ERROR_PACKET_IGNORED;
-                goto Exit;
-            }
             if (quicly_cid_is_equal(&conn->super.peer.cid, packet->cid.src)) {
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
@@ -4350,6 +4367,27 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             /* do not accept a second Retry */
             if (conn->retry_odcid.len != 0) {
                 ret = QUICLY_ERROR_PACKET_IGNORED;
+                goto Exit;
+            }
+            { /* validate the AEAD tag */
+                size_t pseudo_packet_len = 1 + conn->super.peer.cid.len + packet->encrypted_off;
+                uint8_t pseudo_packet[pseudo_packet_len];
+                pseudo_packet[0] = (uint8_t)conn->super.peer.cid.len;
+                memcpy(pseudo_packet + 1, conn->super.peer.cid.cid, conn->super.peer.cid.len);
+                memcpy(pseudo_packet + 1 + conn->super.peer.cid.len, packet->octets.base, packet->encrypted_off);
+                ptls_aead_context_t *aead = create_retry_aead(conn->super.ctx->tls, 0);
+                int aead_ok = ptls_aead_decrypt(aead, packet->octets.base + packet->encrypted_off,
+                                                packet->octets.base + packet->encrypted_off, PTLS_AESGCM_TAG_SIZE, 0, pseudo_packet,
+                                                pseudo_packet_len) == 0;
+                ptls_aead_free(aead);
+                if (!aead_ok) {
+                    ret = QUICLY_ERROR_PACKET_IGNORED;
+                    goto Exit;
+                }
+            }
+            /* check size of the Retry packet */
+            if (packet->token.len > QUICLY_MAX_TOKEN_LEN) {
+                ret = QUICLY_ERROR_PACKET_IGNORED; /* TODO this is a immediate fatal error, chose a better error code */
                 goto Exit;
             }
             /* store token and ODCID */
