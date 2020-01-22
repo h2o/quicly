@@ -70,7 +70,7 @@ int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end
 /**
  * removes ranges specified by the range indexes
  */
-void quicly_ranges_shrink(quicly_ranges_t *ranges, size_t begin_range_index, size_t end_range_index);
+void quicly_ranges_drop_smallest_range(quicly_ranges_t *ranges);
 
 /* inline functions */
 

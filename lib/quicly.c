@@ -1059,7 +1059,7 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
 
     /* slow path; we shrink then add, to avoid exceeding the QUICLY_MAX_RANGES */
     if (ranges->num_ranges == QUICLY_MAX_RANGES)
-        quicly_ranges_shrink(ranges, 0, 1);
+        quicly_ranges_drop_smallest_range(ranges);
     return quicly_ranges_add(ranges, pn, pn + 1);
 }
 
@@ -2033,7 +2033,7 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
         /* Subtracting an ACK range might end up in splitting an existing range. By shrinking the number of ranges to MAX-1, we make
          * sure that the potential split would not lead to an error. */
         if (space->ack_queue.num_ranges == QUICLY_MAX_RANGES)
-            quicly_ranges_shrink(&space->ack_queue, 0, 1);
+            quicly_ranges_drop_smallest_range(&space->ack_queue);
         if (quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end) != 0) {
             /* FIXME log error */
             return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
