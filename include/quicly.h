@@ -822,7 +822,8 @@ quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct
 int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
                                    uint64_t *value);
 /**
- *
+ * @param retry_aead_cache pointer to `ptls_aead_context_t *` that the function can store a AEAD context for future reuse. The cache
+ *                         cannot be shared between multiple threads. Can be set to NULL when caching is unnecessary.
  */
 quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *dest_addr,
                                      ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, ptls_iovec_t odcid,
