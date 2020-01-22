@@ -3203,17 +3203,14 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
         if ((ret = quicly_send_stream(stream, s)) != 0)
             goto Exit;
         resched_stream_data(stream);
+        send_probe = 0;
     }
 
     /* send probe if requested */
     if (send_probe) {
-        assert(quicly_is_client(conn));
-        if (s->num_packets == 0 && s->target.packet == NULL) {
-            if ((ret = allocate_frame(conn, s, 1)) != 0)
-                goto Exit;
-            *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
-        }
-        /* probes require us to set the timer regardless of if we have sent something retransmittable */
+        if ((ret = _do_allocate_frame(conn, s, 1, 1)) != 0)
+            goto Exit;
+        *s->dst++ = QUICLY_FRAME_TYPE_PING;
         conn->egress.last_retransmittable_sent_at = now;
     }
 
@@ -3384,15 +3381,24 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
     /* send handshake flows */
     if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, s,
-                                   conn->super.peer.address_validation.send_probe && conn->handshake == NULL)) != 0)
+                                   restrict_sending ||
+                                       (conn->super.peer.address_validation.send_probe && conn->handshake == NULL))) != 0)
         goto Exit;
-    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, s, conn->super.peer.address_validation.send_probe)) != 0)
+    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, s,
+                                   restrict_sending || conn->super.peer.address_validation.send_probe)) != 0)
         goto Exit;
 
     /* send encrypted frames */
     if (conn->application != NULL && (s->current.cipher = &conn->application->cipher.egress.key)->header_protection != NULL) {
+        s->current.first_byte = conn->application->one_rtt_writable ? QUICLY_QUIC_BIT : QUICLY_PACKET_TYPE_0RTT;
+        /* PTO, always send PING. This is the easiest thing to do in terms of timer control. */
+        if (restrict_sending) {
+            if ((ret = _do_allocate_frame(conn, s, 1, 1)) != 0)
+                goto Exit;
+            *s->dst++ = QUICLY_FRAME_TYPE_PING;
+        }
+        /* take actions only permitted for short header packets */
         if (conn->application->one_rtt_writable) {
-            s->current.first_byte = QUICLY_QUIC_BIT; /* short header */
             /* acks */
             if (conn->egress.send_ack_at <= now && conn->application->super.unacked_count != 0) {
                 if ((ret = send_ack(conn, &conn->application->super, s)) != 0)
@@ -3441,8 +3447,6 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             /* send NEW_TOKEN */
             if ((conn->pending.flows & QUICLY_PENDING_FLOW_NEW_TOKEN_BIT) != 0 && (ret = send_resumption_token(conn, s)) != 0)
                 goto Exit;
-        } else {
-            s->current.first_byte = QUICLY_PACKET_TYPE_0RTT;
         }
         /* send stream-level control frames */
         while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending.streams.control)) {
