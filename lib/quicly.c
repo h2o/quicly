@@ -3090,7 +3090,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
     assert(!buf.is_allocated);
     {
         ptls_aead_context_t *aead =
-            retry_aead_cache != NULL && *retry_aead_cache != NULL ? *retry_aead_cache : create_retry_aead(ctx->tls, 1);
+            retry_aead_cache != NULL && *retry_aead_cache != NULL ? *retry_aead_cache : create_retry_aead(ctx, 1);
         ptls_aead_encrypt(aead, buf.base + buf.off, "", 0, 0, buf.base, buf.off);
         if (retry_aead_cache != NULL) {
             *retry_aead_cache = aead;
@@ -4375,7 +4375,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 pseudo_packet[0] = (uint8_t)conn->super.peer.cid.len;
                 memcpy(pseudo_packet + 1, conn->super.peer.cid.cid, conn->super.peer.cid.len);
                 memcpy(pseudo_packet + 1 + conn->super.peer.cid.len, packet->octets.base, packet->encrypted_off);
-                ptls_aead_context_t *aead = create_retry_aead(conn->super.ctx->tls, 0);
+                ptls_aead_context_t *aead = create_retry_aead(conn->super.ctx, 0);
                 int aead_ok = ptls_aead_decrypt(aead, packet->octets.base + packet->encrypted_off,
                                                 packet->octets.base + packet->encrypted_off, PTLS_AESGCM_TAG_SIZE, 0, pseudo_packet,
                                                 pseudo_packet_len) == 0;
