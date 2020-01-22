@@ -68,7 +68,7 @@ int quicly_ranges_add(quicly_ranges_t *ranges, uint64_t start, uint64_t end);
  */
 int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end);
 /**
- * removes ranges specified by the range indexes
+ * removes the smallest range (e.g., the old ACK range)
  */
 void quicly_ranges_drop_smallest_range(quicly_ranges_t *ranges);
 
