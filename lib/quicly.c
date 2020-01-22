@@ -2268,6 +2268,9 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
+    if (conn->super.state >= QUICLY_STATE_CLOSING)
+        return conn->egress.send_ack_at;
+
     if (calc_send_window(conn, 0, 0) > 0) {
         if (conn->pending.flows != 0)
             return 0;
