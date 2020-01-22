@@ -65,12 +65,19 @@
 #define QUICLY_EPOCH_HANDSHAKE 2
 #define QUICLY_EPOCH_1RTT 3
 
-#define QUICLY_MAX_TOKEN_LEN 512 /* maximum length of token that we would accept */
-
+/**
+ * maximum size of token that quicly accepts
+ */
+#define QUICLY_MAX_TOKEN_LEN 512
 /**
  * do not try to send frames that require ACK if the send window is below this value
  */
 #define MIN_SEND_WINDOW 64
+/**
+ * sends ACK bundled with PING, when number of gaps in the ack queue reaches or exceeds this threshold. This value should be much
+ * smaller than QUICLY_MAX_RANGES.
+ */
+#define QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK 8
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
@@ -221,9 +228,13 @@ struct st_quicly_conn_t {
          */
         quicly_loss_t loss;
         /**
-         * next or the currently encoding packet number (TODO move to pnspace)
+         * next or the currently encoding packet number
          */
         uint64_t packet_number;
+        /**
+         * next PN to be skipped
+         */
+        uint64_t next_pn_to_skip;
         /**
          * valid if state is CLOSING
          */
@@ -567,6 +578,30 @@ static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
      * fire. */
     if (timer_must_be_in_future && conn->super.peer.address_validation.validated)
         assert(now < conn->egress.loss.alarm_at);
+}
+
+static int on_invalid_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                          quicly_sentmap_event_t event)
+{
+    if (event == QUICLY_SENTMAP_EVENT_ACKED)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+    return 0;
+}
+
+static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn)
+{
+    static __thread struct {
+        uint16_t values[32];
+        size_t off;
+    } cached_rand;
+
+    if (cached_rand.off == 0) {
+        tlsctx->random_bytes(cached_rand.values, sizeof(cached_rand.values));
+        cached_rand.off = sizeof(cached_rand.values) / sizeof(cached_rand.values[0]);
+    }
+
+    /* on average, skip one PN per every 256 packets, by selecting one of the 511 packet numbers following next_pn */
+    return next_pn + 1 + (cached_rand.values[--cached_rand.off] & 0x1ff);
 }
 
 static void init_max_streams(struct st_quicly_max_streams_t *m)
@@ -1009,33 +1044,51 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
+static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
+{
+    *is_out_of_order = 0;
+
+    if (ranges->num_ranges != 0) {
+        /* fast path that is taken when we receive a packet in-order */
+        if (ranges->ranges[ranges->num_ranges - 1].end == pn) {
+            ranges->ranges[ranges->num_ranges - 1].end = pn + 1;
+            return 0;
+        }
+        *is_out_of_order = 1;
+    }
+
+    /* slow path; we shrink then add, to avoid exceeding the QUICLY_MAX_RANGES */
+    if (ranges->num_ranges == QUICLY_MAX_RANGES)
+        quicly_ranges_drop_smallest_range(ranges);
+    return quicly_ranges_add(ranges, pn, pn + 1);
+}
+
 static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
 {
-    int ret;
+    int ret, ack_now, is_out_of_order;
 
-    if ((ret = quicly_ranges_add(&space->ack_queue, pn, pn + 1)) != 0)
+    if ((ret = record_pn(&space->ack_queue, pn, &is_out_of_order)) != 0)
         goto Exit;
-    if (space->ack_queue.num_ranges >= QUICLY_ENCODE_ACK_MAX_BLOCKS) {
-        assert(space->ack_queue.num_ranges == QUICLY_ENCODE_ACK_MAX_BLOCKS);
-        quicly_ranges_shrink(&space->ack_queue, 0, 1);
-    }
-    if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1) {
-        /* FIXME implement deduplication at an earlier moment? */
+
+    ack_now = is_out_of_order && !is_ack_only;
+
+    /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
+    if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
         space->largest_pn_received_at = now;
-    }
-    /* TODO (jri): If not ack-only packet, then maintain count of such packets that are received.
-     * Send ack immediately when this number exceeds the threshold.
-     */
+
+    /* if the received packet is ack-eliciting, update / schedule transmission of ACK */
     if (!is_ack_only) {
         space->unacked_count++;
         /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
         if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK || epoch == QUICLY_EPOCH_INITIAL ||
-            epoch == QUICLY_EPOCH_HANDSHAKE) {
-            conn->egress.send_ack_at = now;
-        } else if (conn->egress.send_ack_at == INT64_MAX) {
-            /* FIXME use 1/4 minRTT */
-            conn->egress.send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
-        }
+            epoch == QUICLY_EPOCH_HANDSHAKE)
+            ack_now = 1;
+    }
+
+    if (ack_now) {
+        conn->egress.send_ack_at = now;
+    } else if (conn->egress.send_ack_at == INT64_MAX) {
+        conn->egress.send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
     ret = 0;
@@ -1619,6 +1672,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_loss_init(&conn->_.egress.loss, &conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
+    conn->_.egress.next_pn_to_skip = calc_next_pn_to_skip(conn->_.super.ctx->tls, 0);
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
@@ -1974,13 +2028,19 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
             break;
         default:
             assert(!"FIXME");
+            return QUICLY_TRANSPORT_ERROR_INTERNAL;
         }
-        if (space != NULL) {
-            quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end);
-            if (space->ack_queue.num_ranges == 0) {
-                space->largest_pn_received_at = INT64_MAX;
-                space->unacked_count = 0;
-            }
+        /* Subtracting an ACK range might end up in splitting an existing range. By shrinking the number of ranges to MAX-1, we make
+         * sure that the potential split would not lead to an error. */
+        if (space->ack_queue.num_ranges == QUICLY_MAX_RANGES)
+            quicly_ranges_drop_smallest_range(&space->ack_queue);
+        if (quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end) != 0) {
+            /* FIXME log error */
+            return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+        }
+        if (space->ack_queue.num_ranges == 0) {
+            space->largest_pn_received_at = INT64_MAX;
+            space->unacked_count = 0;
         }
     }
 
@@ -2340,6 +2400,19 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         s->target.first_byte_at = NULL;
     }
 
+    /* insert PN gap if necessary, registering the PN to the ack queue so that we'd close the connection in the event of receiving
+     * an ACK for that gap. */
+    if (conn->egress.packet_number >= conn->egress.next_pn_to_skip && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
+        int ret;
+        if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, QUICLY_EPOCH_1RTT)) != 0)
+            return ret;
+        if (quicly_sentmap_allocate(&conn->egress.sentmap, on_invalid_ack) == NULL)
+            return PTLS_ERROR_NO_MEMORY;
+        quicly_sentmap_commit(&conn->egress.sentmap, 0);
+        ++conn->egress.packet_number;
+        conn->egress.next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, conn->egress.packet_number);
+    }
+
     return 0;
 }
 
@@ -2496,16 +2569,21 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
         ack_delay = 0;
     }
 
-    /* emit ack frame */
+    /* Emit an ACK frame. When there are no less than QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK (8) gaps, we bundle PING once per every
+     * 4 packets being sent. */
 Emit:
     if ((ret = allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
         return ret;
-    uint8_t *new_dst = quicly_encode_ack_frame(s->dst, s->dst_end, &space->ack_queue, ack_delay);
-    if (new_dst == NULL) {
-        /* no space, retry with new MTU-sized packet */
+    uint8_t *dst = s->dst;
+    if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 4 == 0)
+        *dst++ = QUICLY_FRAME_TYPE_PING;
+    dst = quicly_encode_ack_frame(dst, s->dst_end, &space->ack_queue, ack_delay);
+
+    /* when there's no space, retry with a new MTU-sized packet */
+    if (dst == NULL) {
+        /* [rare case] A coalesced packet might not have enough space to hold only an ACK. If so, pad it, as that's easier than
+         * rolling back. */
         if (s->dst == s->dst_payload_from) {
-            /* [rare case] A coalesced packet might not have enough space to hold only an ACK. If so, pad it, as that's easier than
-             * rolling back. */
             assert(s->target.first_byte_at != s->target.packet->data.base);
             *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
         }
@@ -2513,7 +2591,8 @@ Emit:
             return ret;
         goto Emit;
     }
-    s->dst = new_dst;
+
+    s->dst = dst;
 
     { /* save what's inflight */
         size_t i;
@@ -3315,7 +3394,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         if (conn->application->one_rtt_writable) {
             s->current.first_byte = QUICLY_QUIC_BIT; /* short header */
             /* acks */
-            if (conn->application->super.unacked_count != 0) {
+            if (conn->egress.send_ack_at <= now && conn->application->super.unacked_count != 0) {
                 if ((ret = send_ack(conn, &conn->application->super, s)) != 0)
                     goto Exit;
             }
@@ -3386,7 +3465,8 @@ Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
     if (ret == 0) {
-        conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
+        if (conn->application == NULL || conn->application->super.unacked_count == 0)
+            conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         update_loss_alarm(conn);
         if (s->num_packets != 0)
             update_idle_timeout(conn, 0);
