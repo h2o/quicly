@@ -4249,7 +4249,7 @@ static int handle_handshake_done_frame(quicly_conn_t *conn, struct st_quicly_han
     if (!quicly_is_client(conn))
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     assert(conn->initial == NULL);
-    if (conn->handshake != NULL)
+    if (conn->handshake == NULL)
         return 0;
     return discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE);
 }
