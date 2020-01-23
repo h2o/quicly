@@ -416,10 +416,10 @@ void test_loss(void)
 {
     subtest("even", test_even);
 
-    uint64_t idle_timeout_backup = quic_ctx.transport_params.idle_timeout;
-    quic_ctx.transport_params.idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
+    uint64_t idle_timeout_backup = quic_ctx.transport_params.max_idle_timeout;
+    quic_ctx.transport_params.max_idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
     subtest("downstream", test_downstream);
-    quic_ctx.transport_params.idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
+    quic_ctx.transport_params.max_idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
     subtest("bidirectional", test_bidirectional);
-    quic_ctx.transport_params.idle_timeout = idle_timeout_backup;
+    quic_ctx.transport_params.max_idle_timeout = idle_timeout_backup;
 }

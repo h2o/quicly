@@ -46,7 +46,7 @@
 
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS 0xffa5
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
-#define QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT 1
+#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT 1
 #define QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN 2
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_PACKET_SIZE 3
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA 4
@@ -977,10 +977,10 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
     int64_t idle_msec = INT64_MAX;
     /* TODO reconsider how to refer to peer's idle-timeout value after https://github.com/quicwg/base-drafts/issues/2602 gets
      * resolved */
-    if (conn->initial == NULL && conn->handshake == NULL && conn->super.peer.transport_params.idle_timeout != 0)
-        idle_msec = conn->super.peer.transport_params.idle_timeout;
-    if (conn->super.ctx->transport_params.idle_timeout != 0 && conn->super.ctx->transport_params.idle_timeout < idle_msec)
-        idle_msec = conn->super.ctx->transport_params.idle_timeout;
+    if (conn->initial == NULL && conn->handshake == NULL && conn->super.peer.transport_params.max_idle_timeout != 0)
+        idle_msec = conn->super.peer.transport_params.max_idle_timeout;
+    if (conn->super.ctx->transport_params.max_idle_timeout != 0 && conn->super.ctx->transport_params.max_idle_timeout < idle_msec)
+        idle_msec = conn->super.ctx->transport_params.max_idle_timeout;
 
     if (idle_msec == INT64_MAX)
         return;
@@ -1423,8 +1423,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
                                      { pushv(buf, params->max_stream_data.uni); });
         if (params->max_data != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA, { pushv(buf, params->max_data); });
-        if (params->idle_timeout != 0)
-            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT, { pushv(buf, params->idle_timeout); });
+        if (params->max_idle_timeout != 0)
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT, { pushv(buf, params->max_idle_timeout); });
         if (is_client) {
             assert(odcid == NULL && stateless_reset_token == NULL);
         } else {
@@ -1529,8 +1529,8 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                     memcpy(stateless_reset_token, src, QUICLY_STATELESS_RESET_TOKEN_LEN);
                     src = end;
                     break;
-                case QUICLY_TRANSPORT_PARAMETER_ID_IDLE_TIMEOUT:
-                    if ((ret = quicly_tls_decode_varint(&params->idle_timeout, &src, end)) != 0)
+                case QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT:
+                    if ((ret = quicly_tls_decode_varint(&params->max_idle_timeout, &src, end)) != 0)
                         goto Exit;
                     break;
                 case QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI:

@@ -1006,7 +1006,7 @@ int main(int argc, char **argv)
             }
             break;
         case 'I':
-            if (sscanf(optarg, "%" SCNd64, &ctx.transport_params.idle_timeout) != 1) {
+            if (sscanf(optarg, "%" SCNd64, &ctx.transport_params.max_idle_timeout) != 1) {
                 fprintf(stderr, "failed to parse idle timeout: %s\n", optarg);
                 exit(1);
             }
