@@ -242,6 +242,7 @@ struct st_quicly_conn_t {
             uint16_t error_code;
             uint64_t frame_type; /* UINT64_MAX if application close */
             const char *reason_phrase;
+            unsigned long num_packets_received;
         } connection_close;
         /**
          *
@@ -2268,6 +2269,9 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
+    if (conn->super.state >= QUICLY_STATE_CLOSING)
+        return conn->egress.send_ack_at;
+
     if (calc_send_window(conn, 0, 0) > 0) {
         if (conn->pending.flows != 0)
             return 0;
@@ -4395,7 +4399,10 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     switch (conn->super.state) {
     case QUICLY_STATE_CLOSING:
         conn->super.state = QUICLY_STATE_DRAINING;
-        conn->egress.send_ack_at = 0; /* send CONNECTION_CLOSE */
+        ++conn->egress.connection_close.num_packets_received;
+        /* respond with a CONNECTION_CLOSE frame using exponential back-off */
+        if (__builtin_popcountl(conn->egress.connection_close.num_packets_received) == 1)
+            conn->egress.send_ack_at = 0;
         ret = 0;
         goto Exit;
     case QUICLY_STATE_DRAINING:
