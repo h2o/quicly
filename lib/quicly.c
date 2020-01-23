@@ -566,7 +566,7 @@ uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uin
 
     if (candidate + win / 2 <= expected)
         return candidate + win;
-    if (candidate > expected + win / 2 && candidate > win)
+    if (candidate > expected + win / 2 && candidate >= win)
         return candidate - win;
     return candidate;
 }
