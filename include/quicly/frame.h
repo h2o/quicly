@@ -74,8 +74,6 @@ extern "C" {
 #define QUICLY_PATH_CHALLENGE_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STREAM_FRAME_CAPACITY (1 + 8 + 8 + 1)
 
-#define QUICLY_STATELESS_RESET_TOKEN_LEN 16
-
 static uint16_t quicly_decode16(const uint8_t **src);
 static uint32_t quicly_decode24(const uint8_t **src);
 static uint32_t quicly_decode32(const uint8_t **src);
@@ -605,14 +603,10 @@ inline int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint
 
     { /* cid */
         uint8_t cid_len = *(*src)++;
-        if (cid_len == 0) {
-            frame->cid = ptls_iovec_init(NULL, 0);
-        } else if (4 <= cid_len && cid_len <= 18) {
-            frame->cid = ptls_iovec_init(src, cid_len);
-            *src += cid_len;
-        } else {
+        if (!(1 <= cid_len && cid_len <= QUICLY_MAX_CID_LEN_V1))
             goto Fail;
-        }
+        frame->cid = ptls_iovec_init(src, cid_len);
+        *src += cid_len;
     }
 
     /* stateless reset token */
