@@ -570,6 +570,11 @@ uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uin
 
 static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
 {
+    if (conn->super.state >= QUICLY_STATE_CLOSING) {
+        assert(!timer_must_be_in_future || now < conn->egress.send_ack_at);
+        return;
+    }
+
     if (conn->egress.sentmap.bytes_in_flight != 0) {
         assert(conn->egress.loss.alarm_at != INT64_MAX);
     } else {
