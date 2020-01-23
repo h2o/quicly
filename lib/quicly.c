@@ -974,9 +974,8 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
     if (!is_in_receive && !conn->idle_timeout.should_rearm_on_send)
         return;
 
+    /* calculate the minimum of the two max_idle_timeout */
     int64_t idle_msec = INT64_MAX;
-    /* TODO reconsider how to refer to peer's idle-timeout value after https://github.com/quicwg/base-drafts/issues/2602 gets
-     * resolved */
     if (conn->initial == NULL && conn->handshake == NULL && conn->super.peer.transport_params.max_idle_timeout != 0)
         idle_msec = conn->super.peer.transport_params.max_idle_timeout;
     if (conn->super.ctx->transport_params.max_idle_timeout != 0 && conn->super.ctx->transport_params.max_idle_timeout < idle_msec)
