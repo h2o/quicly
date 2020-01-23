@@ -310,6 +310,9 @@ static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, qui
     struct st_quicly_default_scheduler_state_t *sched = &((struct _st_quicly_conn_public_t *)conn)->_default_scheduler;
     int conn_is_flow_capped = quicly_is_flow_capped(conn), ret = 0;
 
+    if (!conn_is_flow_capped)
+        quicly_linklist_insert_list(&sched->active, &sched->blocked);
+
     while (quicly_can_send_stream_data((quicly_conn_t *)conn, s) && quicly_linklist_is_linked(&sched->active)) {
         /* detach the first active stream */
         quicly_stream_t *stream =
