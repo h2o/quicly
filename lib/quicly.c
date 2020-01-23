@@ -4403,7 +4403,6 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
 
     switch (conn->super.state) {
     case QUICLY_STATE_CLOSING:
-        conn->super.state = QUICLY_STATE_DRAINING;
         ++conn->egress.connection_close.num_packets_received;
         /* respond with a CONNECTION_CLOSE frame using exponential back-off */
         if (__builtin_popcountl(conn->egress.connection_close.num_packets_received) == 1)
