@@ -367,10 +367,13 @@ static void test_rst_during_loss(void)
     ok(tmp == max_data_at_start + 8);
 
     {
-        quicly_decoded_packet_t decoded;
-        decode_packets(&decoded, &reordered_packet, 1);
-        ret = quicly_receive(server, NULL, &fake_address.sa, &decoded);
-        ok(ret == 0);
+        quicly_decoded_packet_t decoded[4];
+        size_t i, num_decoded = decode_packets(decoded, &reordered_packet, 1);
+        ok(num_decoded != 0);
+        for (i = 0; i < num_decoded; ++i) {
+            ret = quicly_receive(server, NULL, &fake_address.sa, decoded + i);
+            ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+        }
     }
 
     quicly_get_max_data(server, NULL, NULL, &tmp);

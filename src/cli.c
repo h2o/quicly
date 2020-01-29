@@ -716,10 +716,10 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                         uint8_t new_server_cid[8];
                         memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
                         new_server_cid[0] ^= 0xff;
-                        quicly_datagram_t *rp = quicly_send_retry(&ctx, address_token_aead.enc, &sa, packet.cid.src, NULL,
-                                                                  ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
-                                                                  packet.cid.dest.encrypted, ptls_iovec_init(NULL, 0),
-                                                                  ptls_iovec_init(NULL, 0));
+                        quicly_datagram_t *rp =
+                            quicly_send_retry(&ctx, address_token_aead.enc, &sa, packet.cid.src, NULL,
+                                              ptls_iovec_init(new_server_cid, sizeof(new_server_cid)), packet.cid.dest.encrypted,
+                                              ptls_iovec_init(NULL, 0), ptls_iovec_init(NULL, 0), NULL);
                         assert(rp != NULL);
                         if (send_one(fd, rp) == -1)
                             perror("sendmsg failed");
@@ -1006,7 +1006,7 @@ int main(int argc, char **argv)
             }
             break;
         case 'I':
-            if (sscanf(optarg, "%" SCNd64, &ctx.transport_params.idle_timeout) != 1) {
+            if (sscanf(optarg, "%" SCNd64, &ctx.transport_params.max_idle_timeout) != 1) {
                 fprintf(stderr, "failed to parse idle timeout: %s\n", optarg);
                 exit(1);
             }
