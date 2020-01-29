@@ -4639,7 +4639,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         } else {
             /* Running as a server.
              * If handshake was just completed, drop handshake context, schedule the first emission of HANDSHAKE_DONE frame. */
-            if (conn->handshake != NULL && ptls_handshake_is_complete(conn->crypto.tls)) {
+            if (ptls_handshake_is_complete(conn->crypto.tls)) {
                 if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
                     goto Exit;
                 assert(conn->handshake == NULL);
