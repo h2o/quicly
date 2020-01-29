@@ -2203,6 +2203,7 @@ static int on_ack_streams_blocked(quicly_conn_t *conn, const quicly_sent_packet_
 static int on_ack_handshake_done(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
                                  quicly_sentmap_event_t event)
 {
+    /* When HANDSHAKE_DONE is deemed lost, schedule retransmission. */
     if (event == QUICLY_SENTMAP_EVENT_LOST)
         conn->pending.flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
     return 0;
@@ -4637,7 +4638,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 set_address(&conn->super.host.address, dest_addr);
         } else {
             /* Running as a server.
-             * When invoked for the first time, drop handshake context, schedule the first emission of HANDSHAKE_DONE frame. */
+             * If handshake was just completed, drop handshake context, schedule the first emission of HANDSHAKE_DONE frame. */
             if (conn->handshake != NULL && ptls_handshake_is_complete(conn->crypto.tls)) {
                 if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
                     goto Exit;
