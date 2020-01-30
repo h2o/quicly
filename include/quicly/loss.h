@@ -219,8 +219,6 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         alarm_duration = 2 * r->rtt.latest; /* should contain initial rtt */
     } else {
         /* PTO alarm */
-        /* the bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or pto_count, even when
-         * the timer granularity is nanosecond */
         assert(r->pto_count < 63);
         /* Probes are sent with a modified backoff to minimize latency of recovery. For instance, with num_speculative_ptos set to
          * 2, the backoff pattern is as follows:
@@ -247,7 +245,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
             if (alarm_duration < r->conf->min_pto)
                 alarm_duration = r->conf->min_pto;
         } else {
-            /* ordinary PTO */
+            /* Ordinary PTO. The bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or
+             * pto_count, even when the timer granularity is nanosecond. */
             alarm_duration = quicly_rtt_get_pto(&r->rtt, is_post_handshake ? *r->max_ack_delay : 0, r->conf->min_pto);
             alarm_duration <<= r->pto_count;
         }
