@@ -128,7 +128,7 @@ static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
                              uint8_t *ack_delay_exponent);
 
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
-                                     int can_send_stream_data, uint64_t total_bytes_sent);
+                                     int is_tail, int is_post_handshake, uint64_t total_bytes_sent);
 
 /* called when an ACK is received
  */
@@ -202,7 +202,7 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
 }
 
 inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
-                                     int can_send_stream_data, uint64_t total_bytes_sent)
+                                     int is_tail, int is_post_handshake, uint64_t total_bytes_sent)
 {
     if (!has_outstanding) {
         /* Do not set alarm if there's no data oustanding */
@@ -230,25 +230,28 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
          * the speculative ones, which add potentially redundant retransmissions at a tail to reduce the cost of potential tail
          * losses.
          */
-        if (!can_send_stream_data && r->total_bytes_sent < total_bytes_sent && r->conf->num_speculative_ptos > 0 &&
+        if (is_post_handshake && is_tail && r->total_bytes_sent < total_bytes_sent && r->conf->num_speculative_ptos > 0 &&
             r->pto_count <= 0) {
-            /* New tail, defined as (i) sender is not in PTO recovery, (ii) there is no stream data to send, and
-             * (iii) new application data was sent since the last tail. Move the pto_count back to kick off speculative probing. */
+            /* New tail, defined as (i) sender is not in PTO recovery, (ii) there is no data to send, and (iii) new application data
+             * was sent since the last tail. Move the pto_count back to kick off speculative probing. */
             if (r->pto_count == 0)
                 /*  kick off speculative probing if not already in progress */
                 r->pto_count = -r->conf->num_speculative_ptos;
             r->total_bytes_sent = total_bytes_sent;
         }
-        alarm_duration = quicly_rtt_get_pto(&r->rtt, *r->max_ack_delay, r->conf->min_pto);
-        if (r->pto_count < 0 && !can_send_stream_data) {
+        if (r->pto_count < 0 && is_tail) {
             /* Speculative probes sent under an RTT do not need to account for ack delay, since there is no expectation
              * of an ack being received before the probe is sent. */
             alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
             alarm_duration >>= -r->pto_count;
             if (alarm_duration < r->conf->min_pto)
                 alarm_duration = r->conf->min_pto;
-        } else if (r->pto_count >= 0)
-            alarm_duration <<= r->pto_count;
+        } else {
+            /* ordinary PTO */
+            alarm_duration = quicly_rtt_get_pto(&r->rtt, is_post_handshake ? *r->max_ack_delay : 0, r->conf->min_pto);
+            if (r->pto_count >= 0)
+                alarm_duration <<= r->pto_count;
+        }
     }
     r->alarm_at = last_retransmittable_sent_at + alarm_duration;
     if (r->alarm_at < now)

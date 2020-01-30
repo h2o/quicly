@@ -999,9 +999,11 @@ static int scheduler_can_send(quicly_conn_t *conn)
 
 static void update_loss_alarm(quicly_conn_t *conn)
 {
-    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at,
-                             conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe,
-                             scheduler_can_send(conn), conn->egress.max_data.sent);
+    int has_outstanding = conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe,
+        is_tail = !(conn->pending.flows != 0 || scheduler_can_send(conn)),
+        is_post_handshake = conn->initial == NULL && conn->handshake == NULL;
+    quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at, has_outstanding, is_tail,
+                             is_post_handshake, conn->egress.max_data.sent);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
