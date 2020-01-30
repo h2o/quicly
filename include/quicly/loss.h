@@ -249,8 +249,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         } else {
             /* ordinary PTO */
             alarm_duration = quicly_rtt_get_pto(&r->rtt, is_post_handshake ? *r->max_ack_delay : 0, r->conf->min_pto);
-            if (r->pto_count >= 0)
-                alarm_duration <<= r->pto_count;
+            alarm_duration <<= r->pto_count;
         }
     }
     r->alarm_at = last_retransmittable_sent_at + alarm_duration;
