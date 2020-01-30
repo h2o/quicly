@@ -231,8 +231,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
          * FIXME: use of `can_send_stream_data` and `bytes_sent` is not entirely correct, it does not take things like MAX_ frames
          * and pending.flows into consideration.
          */
-        if (!can_send_stream_data && r->total_bytes_sent < total_bytes_sent && r->conf->num_speculative_ptos > 0 &&
-            r->pto_count <= 0) {
+        if (r->conf->num_speculative_ptos > 0 && r->pto_count <= 0 && !handshake_is_in_progress && !can_send_stream_data &&
+            r->total_bytes_sent < total_bytes_sent) {
             /* New tail, defined as (i) sender is not in PTO recovery, (ii) there is no stream data to send, and
              * (iii) new application data was sent since the last tail. Move the pto_count back to kick off speculative probing. */
             if (r->pto_count == 0)
