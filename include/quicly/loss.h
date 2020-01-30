@@ -227,6 +227,9 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
          * The first 2 probes in this case (and num_speculative_ptos, more generally), or the probes sent when pto_count < 0, are
          * the speculative ones, which add potentially redundant retransmissions at a tail to reduce the cost of potential tail
          * losses.
+         *
+         * FIXME: use of `can_send_stream_data` and `bytes_sent` is not entirely correct, it does not take things like MAX_ frames
+         * and pending.flows into consideration.
          */
         if (!can_send_stream_data && r->total_bytes_sent < total_bytes_sent && r->conf->num_speculative_ptos > 0 &&
             r->pto_count <= 0) {
