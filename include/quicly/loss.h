@@ -239,7 +239,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
                 r->pto_count = -r->conf->num_speculative_ptos;
             r->total_bytes_sent = total_bytes_sent;
         }
-        if (r->pto_count < 0 && is_tail) {
+        if (r->pto_count < 0) {
             /* Speculative probes sent under an RTT do not need to account for ack delay, since there is no expectation
              * of an ack being received before the probe is sent. */
             alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
