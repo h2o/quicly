@@ -5008,3 +5008,20 @@ int quicly_stream_noop_on_receive_reset(quicly_stream_t *stream, int err)
 const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {
     quicly_stream_noop_on_destroy,   quicly_stream_noop_on_send_shift, quicly_stream_noop_on_send_emit,
     quicly_stream_noop_on_send_stop, quicly_stream_noop_on_receive,    quicly_stream_noop_on_receive_reset};
+
+void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
+{
+#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
+    char buf[1024];
+    va_list args;
+
+    if (!QUICLY_DEBUG_MESSAGE_ENABLED())
+        return;
+
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+
+    QUICLY_DEBUG_MESSAGE(conn, function, line, buf);
+#endif
+}
