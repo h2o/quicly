@@ -2292,6 +2292,14 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     return at;
 }
 
+uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn)
+{
+    if(!conn->application)
+         return UINT64_MAX;
+
+    return conn->application->super.next_expected_packet_number;
+}
+
 /* data structure that is used during one call through quicly_send()
  */
 struct st_quicly_send_context_t {
