@@ -2810,12 +2810,15 @@ UpdateState:
     return 0;
 }
 
+/**
+ * Returns the timeout for sentmap entries. This timeout is also used as the duration of CLOSING / DRAINING state, and therefore be
+ * longer than 3PTO. At the moment, the value is 4PTO.
+ */
 static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
 {
-    /* TODO reconsider this (maybe 3 PTO? also not sure why we need to add ack-delay twice) */
-    /* TODO (jri): The timeouts used here should be entirely the peer's */
-    return (conn->egress.loss.rtt.smoothed + conn->egress.loss.rtt.variance) * 4 + conn->super.peer.transport_params.max_ack_delay +
-           QUICLY_DELAYED_ACK_TIMEOUT;
+    return quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.peer.transport_params.max_ack_delay,
+                              conn->egress.loss.conf->min_pto) *
+           4;
 }
 
 static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
@@ -3820,6 +3823,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     }
 
     init_acks_iter(conn, &iter);
+
+    /* TODO log PNs being ACKed too late */
 
     size_t gap_index = frame.num_gaps;
     while (1) {
