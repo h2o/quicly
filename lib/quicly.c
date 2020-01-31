@@ -3821,6 +3821,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     init_acks_iter(conn, &iter);
 
+    /* TODO log PNs being ACKed too late */
+
     size_t gap_index = frame.num_gaps;
     while (1) {
         uint64_t block_length = frame.ack_block_lengths[gap_index];
