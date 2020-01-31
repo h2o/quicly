@@ -2385,7 +2385,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     } else {
         packet_bytes_in_flight = 0;
     }
-    quicly_sentmap_commit(&conn->egress.sentmap, (uint16_t)packet_bytes_in_flight);
+    if (quicly_sentmap_is_open(&conn->egress.sentmap))
+        quicly_sentmap_commit(&conn->egress.sentmap, (uint16_t)packet_bytes_in_flight);
 
     QUICLY_PROBE(PACKET_COMMIT, conn, probe_now(), conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  !s->target.ack_eliciting);
@@ -2405,7 +2406,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
 
     /* insert PN gap if necessary, registering the PN to the ack queue so that we'd close the connection in the event of receiving
      * an ACK for that gap. */
-    if (conn->egress.packet_number >= conn->egress.next_pn_to_skip && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
+    if (conn->egress.packet_number >= conn->egress.next_pn_to_skip && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte) &&
+        conn->super.state < QUICLY_STATE_CLOSING) {
         int ret;
         if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, QUICLY_EPOCH_1RTT)) != 0)
             return ret;
@@ -2519,8 +2521,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
     assert(s->dst_end - s->dst >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
 
-    {
-        /* register to sentmap */
+    /* register to sentmap */
+    if (conn->super.state < QUICLY_STATE_CLOSING) {
         uint8_t ack_epoch = get_epoch(s->current.first_byte);
         if (ack_epoch == QUICLY_EPOCH_0RTT)
             ack_epoch = QUICLY_EPOCH_1RTT;
