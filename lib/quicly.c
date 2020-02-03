@@ -4265,13 +4265,22 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
 
 static int handle_handshake_done_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
+    int ret;
+
     QUICLY_PROBE(HANDSHAKE_DONE_RECEIVE, conn, probe_now());
+
     if (!quicly_is_client(conn))
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
     assert(conn->initial == NULL);
     if (conn->handshake == NULL)
         return 0;
-    return discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE);
+
+    conn->super.peer.address_validation.send_probe = 0;
+    if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
+        return ret;
+    update_loss_alarm(conn);
+    return 0;
 }
 
 static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src, size_t _len, uint64_t *offending_frame_type,
