@@ -578,7 +578,7 @@ static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
         return;
     }
 
-    if (conn->egress.sentmap.bytes_in_flight != 0) {
+    if (conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe) {
         assert(conn->egress.loss.alarm_at != INT64_MAX);
     } else {
         assert(conn->egress.loss.loss_time == INT64_MAX);
