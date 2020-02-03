@@ -70,7 +70,7 @@
  */
 #define QUICLY_MAX_TOKEN_LEN 512
 /**
- * do not try to send frames that require ACK if the send window is below this value
+ * do not try to send ACK-eliciting frames if the available CWND is below this value
  */
 #define MIN_SEND_WINDOW 64
 /**
@@ -2255,16 +2255,21 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
 {
     /* If address is unvalidated, limit sending to 3x bytes received */
     if (!conn->super.peer.address_validation.validated) {
-        uint64_t window = conn->super.stats.num_bytes.received * 3;
-        if (window <= conn->super.stats.num_bytes.sent)
-            return 0;
-        return window - conn->super.stats.num_bytes.sent;
+        uint64_t total = conn->super.stats.num_bytes.received * 3;
+        if (conn->super.stats.num_bytes.sent + MIN_SEND_WINDOW <= total)
+            return total - conn->super.stats.num_bytes.sent;
+        return 0;
     }
 
     /* Validated address. Ensure there's enough window to send minimum number of packets */
+    uint64_t window = 0;
     if (!restrict_sending && conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight + min_bytes_to_send)
-        return conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
-    return min_bytes_to_send;
+        window = conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
+    if (window < MIN_SEND_WINDOW)
+        window = 0;
+    if (window < min_bytes_to_send)
+        window = min_bytes_to_send;
+    return window;
 }
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
