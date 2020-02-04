@@ -755,6 +755,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
             for (i = 0; i != num_conns; ++i) {
                 if (quicly_get_first_timeout(conns[i]) <= ctx.now->cb(ctx.now)) {
                     if (send_pending(fd, conns[i]) != 0) {
+                        dump_stats(stderr, conns[i]);
                         quicly_free(conns[i]);
                         memmove(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(*conns));
                         --i;
