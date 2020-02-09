@@ -2588,14 +2588,10 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
         ack_delay = 0;
     }
 
-    /* Emit an ACK frame. When there are no less than QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK (8) gaps, we bundle PING once per every
-     * 4 packets being sent. */
-Emit:
+Emit: /* emit an ACK frame */
     if ((ret = allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
         return ret;
     uint8_t *dst = s->dst;
-    if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 4 == 0)
-        *dst++ = QUICLY_FRAME_TYPE_PING;
     dst = quicly_encode_ack_frame(dst, s->dst_end, &space->ack_queue, ack_delay);
 
     /* when there's no space, retry with a new MTU-sized packet */
@@ -2610,6 +2606,11 @@ Emit:
             return ret;
         goto Emit;
     }
+
+    /* when there are no less than QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK (8) gaps, bundle PING once every 4 packets being sent */
+    if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 4 == 0 &&
+        dst < s->dst_end)
+        *dst++ = QUICLY_FRAME_TYPE_PING;
 
     s->dst = dst;
 
