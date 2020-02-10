@@ -1424,7 +1424,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
         if (params->max_data != 0)
             PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA, { pushv(buf, params->max_data); });
         if (params->max_idle_timeout != 0)
-            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT, { pushv(buf, params->max_idle_timeout); });
+            PUSH_TRANSPORT_PARAMETER(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT,
+                                     { pushv(buf, params->max_idle_timeout); });
         if (is_client) {
             assert(odcid == NULL && stateless_reset_token == NULL);
         } else {
@@ -2299,8 +2300,8 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
 uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn)
 {
-    if(!conn->application)
-         return UINT64_MAX;
+    if (!conn->application)
+        return UINT64_MAX;
 
     return conn->application->super.next_expected_packet_number;
 }
@@ -2915,7 +2916,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
 
     init_acks_iter(conn, &iter);
 
-    /* Mark packets as lost if they are smaller than the largest_acked and outside either time-threshold or packet-threshold windows.
+    /* Mark packets as lost if they are smaller than the largest_acked and outside either time-threshold or packet-threshold
+     * windows.
      */
     while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
            (sent->sent_at <= now - delay_until_lost || /* time threshold */
@@ -3465,7 +3467,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             /* take actions only permitted for short header packets */
             if (conn->application->one_rtt_writable) {
                 /* send HANDSHAKE_DONE */
-                if ((conn->pending.flows & QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT) != 0 && (ret = send_handshake_done(conn, s)) != 0)
+                if ((conn->pending.flows & QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT) != 0 &&
+                    (ret = send_handshake_done(conn, s)) != 0)
                     goto Exit;
                 /* post-handshake messages */
                 if ((conn->pending.flows & (uint8_t)(1 << QUICLY_EPOCH_1RTT)) != 0) {
@@ -3513,8 +3516,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             }
             /* send stream-level control frames */
             while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending.streams.control)) {
-                quicly_stream_t *stream =
-                    (void *)((char *)conn->pending.streams.control.next - offsetof(quicly_stream_t, _send_aux.pending_link.control));
+                quicly_stream_t *stream = (void *)((char *)conn->pending.streams.control.next -
+                                                   offsetof(quicly_stream_t, _send_aux.pending_link.control));
                 if ((ret = send_stream_control_frames(stream, s)) != 0)
                     goto Exit;
                 quicly_linklist_unlink(&stream->_send_aux.pending_link.control);

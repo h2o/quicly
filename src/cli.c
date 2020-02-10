@@ -90,7 +90,7 @@ static struct {
 struct {
     const char *path;
     int to_file;
-} *reqs;
+} * reqs;
 
 struct st_stream_data_t {
     quicly_streambuf_t streambuf;
@@ -121,8 +121,9 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
 
     quicly_get_stats(conn, &stats);
     fprintf(fp,
-            "packets-received: %" PRIu64 ", packets-decryption-failed: %" PRIu64 ", packets-sent: %" PRIu64 ", packets-lost: %"
-            PRIu64 ", ack-received: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64 ", srtt: %" PRIu32 "\n",
+            "packets-received: %" PRIu64 ", packets-decryption-failed: %" PRIu64 ", packets-sent: %" PRIu64
+            ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64
+            ", srtt: %" PRIu32 "\n",
             stats.num_packets.received, stats.num_packets.decryption_failed, stats.num_packets.sent, stats.num_packets.lost,
             stats.num_packets.ack_received, stats.num_bytes.received, stats.num_bytes.sent, stats.rtt.smoothed);
 }
@@ -140,7 +141,7 @@ static int validate_path(const char *path)
 static int parse_request(ptls_iovec_t input, char **path, int *is_http1)
 {
     size_t off = 0, path_start;
-    
+
     for (off = 0; off != input.len; ++off)
         if (input.base[off] == ' ')
             goto EndOfMethod;
