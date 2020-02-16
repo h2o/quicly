@@ -1383,9 +1383,9 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 
     if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t buf_offset = frame->offset + frame->data.len - apply_len - stream->recvstate.data_off;
-        if ((ret = stream->callbacks->on_receive(stream, (size_t)buf_offset, frame->data.base + frame->data.len - apply_len,
-                                                 apply_len)) != 0)
-            return ret;
+        stream->callbacks->on_receive(stream, (size_t)buf_offset, frame->data.base + frame->data.len - apply_len, apply_len);
+        if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
+            return QUICLY_ERROR_IS_CLOSING;
     }
 
     if (should_send_max_stream_data(stream))
@@ -2770,9 +2770,12 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     /* write payload */
     assert(capacity != 0);
     len = capacity;
-    if ((ret = stream->callbacks->on_send_emit(stream, (size_t)(off - stream->sendstate.acked.ranges[0].end), s->dst, &len,
-                                               &wrote_all)) != 0)
-        return ret;
+    stream->callbacks->on_send_emit(stream, (size_t)(off - stream->sendstate.acked.ranges[0].end), s->dst, &len, &wrote_all);
+    if (stream->conn->super.state >= QUICLY_STATE_CLOSING) {
+        return QUICLY_ERROR_IS_CLOSING;
+    } else if (stream->_send_aux.rst.sender_state != QUICLY_SENDER_STATE_NONE) {
+        return 0;
+    }
     assert(len <= capacity);
     assert(len != 0);
 
@@ -3802,10 +3805,10 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
         uint64_t bytes_missing;
         if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_offset, &bytes_missing)) != 0)
             return ret;
-        conn->ingress.max_data.bytes_consumed += bytes_missing;
-        if ((ret = stream->callbacks->on_receive_reset(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code))) !=
-            0)
-            return ret;
+        stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
+        stream->callbacks->on_receive_reset(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code));
+        if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
+            return QUICLY_ERROR_IS_CLOSING;
         if (stream_is_destroyable(stream))
             destroy_stream(stream, 0);
     }
@@ -4059,8 +4062,9 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, struct st_quicly_handl
         /* reset the stream, then notify the application */
         int err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code);
         quicly_reset_stream(stream, err);
-        if ((ret = stream->callbacks->on_send_stop(stream, err)) != 0)
-            return ret;
+        stream->callbacks->on_send_stop(stream, err);
+        if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
+            return QUICLY_ERROR_IS_CLOSING;
     }
 
     return 0;
