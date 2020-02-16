@@ -97,10 +97,10 @@ struct st_stream_data_t {
     FILE *outfp;
 };
 
-static int on_stop_sending(quicly_stream_t *stream, int err);
-static int on_receive_reset(quicly_stream_t *stream, int err);
-static int server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
-static int client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+static void on_stop_sending(quicly_stream_t *stream, int err);
+static void on_receive_reset(quicly_stream_t *stream, int err);
+static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
 static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streambuf_destroy,
                                                                   quicly_streambuf_egress_shift,
@@ -264,35 +264,33 @@ static int send_sized_text(quicly_stream_t *stream, const char *path, int is_htt
     return 1;
 }
 
-static int on_stop_sending(quicly_stream_t *stream, int err)
+static void on_stop_sending(quicly_stream_t *stream, int err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
-    return 0;
 }
 
-static int on_receive_reset(quicly_stream_t *stream, int err)
+static void on_receive_reset(quicly_stream_t *stream, int err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
-    return 0;
 }
 
-static int server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     char *path;
     int is_http1;
-    int ret;
 
     if (!quicly_sendstate_is_open(&stream->sendstate))
-        return 0;
+        return;
 
-    if ((ret = quicly_streambuf_ingress_receive(stream, off, src, len)) != 0)
-        return ret;
+    quicly_streambuf_ingress_receive(stream, off, src, len);
+    if (quicly_get_state(stream->conn) >= QUICLY_STATE_CLOSING)
+        return;
 
     if (!parse_request(quicly_streambuf_ingress_get(stream), &path, &is_http1)) {
         if (!quicly_recvstate_transfer_complete(&stream->recvstate))
-            return 0;
+            return;
         /* failed to parse request */
         send_header(stream, 1, 500, "text/plain; charset=utf-8");
         send_str(stream, "failed to parse HTTP request\n");
@@ -315,17 +313,16 @@ static int server_on_receive(quicly_stream_t *stream, size_t off, const void *sr
 Sent:
     quicly_streambuf_egress_shutdown(stream);
     quicly_streambuf_ingress_shift(stream, len);
-    return 0;
 }
 
-static int client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     struct st_stream_data_t *stream_data = stream->data;
     ptls_iovec_t input;
-    int ret;
 
-    if ((ret = quicly_streambuf_ingress_receive(stream, off, src, len)) != 0)
-        return ret;
+    quicly_streambuf_ingress_receive(stream, off, src, len);
+    if (quicly_get_state(stream->conn) >= QUICLY_STATE_CLOSING)
+        return;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
         FILE *out = (stream_data->outfp == NULL) ? stdout : stream_data->outfp;
@@ -348,8 +345,6 @@ static int client_on_receive(quicly_stream_t *stream, size_t off, const void *sr
             }
         }
     }
-
-    return 0;
 }
 
 static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
