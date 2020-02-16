@@ -193,18 +193,19 @@ ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb)
     return ptls_iovec_init(rb->base, avail);
 }
 
-void quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len)
+int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len)
 {
     if (len != 0) {
         int ret;
         if ((ret = ptls_buffer_reserve(rb, off + len - rb->off)) != 0) {
             convert_error(stream, ret);
-            return;
+            return -1;
         }
         memcpy(rb->base + off, src, len);
         if (rb->off < off + len)
             rb->off = off + len;
     }
+    return 0;
 }
 
 int quicly_streambuf_create(quicly_stream_t *stream, size_t sz)
@@ -248,8 +249,8 @@ int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
     return quicly_stream_sync_sendbuf(stream, 1);
 }
 
-void quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+int quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     quicly_streambuf_t *sbuf = stream->data;
-    quicly_recvbuf_receive(stream, &sbuf->ingress, off, src, len);
+    return quicly_recvbuf_receive(stream, &sbuf->ingress, off, src, len);
 }

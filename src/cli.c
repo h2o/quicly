@@ -284,8 +284,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     if (!quicly_sendstate_is_open(&stream->sendstate))
         return;
 
-    quicly_streambuf_ingress_receive(stream, off, src, len);
-    if (quicly_get_state(stream->conn) >= QUICLY_STATE_CLOSING)
+    if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
         return;
 
     if (!parse_request(quicly_streambuf_ingress_get(stream), &path, &is_http1)) {
@@ -320,8 +319,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     struct st_stream_data_t *stream_data = stream->data;
     ptls_iovec_t input;
 
-    quicly_streambuf_ingress_receive(stream, off, src, len);
-    if (quicly_get_state(stream->conn) >= QUICLY_STATE_CLOSING)
+    if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
         return;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {

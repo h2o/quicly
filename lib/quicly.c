@@ -764,8 +764,7 @@ void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src,
     ptls_iovec_t input;
     ptls_buffer_t output;
 
-    quicly_streambuf_ingress_receive(stream, off, src, len);
-    if (conn->super.state >= QUICLY_STATE_CLOSING)
+    if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
         return;
 
     ptls_buffer_init(&output, "", 0);

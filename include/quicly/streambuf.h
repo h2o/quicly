@@ -110,7 +110,7 @@ ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb);
 /**
  * The concrete function for `quicly_stream_callbacks_t::on_receive`.
  */
-void quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len);
+int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len);
 
 /**
  * The simple stream buffer.  The API assumes that stream->data points to quicly_streambuf_t.  Applications can extend the structure
@@ -130,7 +130,12 @@ static int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, quicly_sen
 int quicly_streambuf_egress_shutdown(quicly_stream_t *stream);
 static void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta);
 static ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream);
-void quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+/**
+ * Writes given data into `quicly_stream_buf_t::ingress` and returns 0 if successful. Upon failure, `quicly_close` is called
+ * automatically, and a non-zero value is returned. Applications can ignore the returned value, or use it to find out if it can use
+ * the information stored in the ingress buffer.
+ */
+int quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
 /* inline definitions */
 
