@@ -87,7 +87,7 @@ void quicly_sendbuf_shift(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t 
 /**
  * The concrete function for `quicly_stream_callbacks_t::on_send_emit`.
  */
-int quicly_sendbuf_emit(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t off, void *dst, size_t *len, int *wrote_all);
+void quicly_sendbuf_emit(quicly_stream_t *stream, quicly_sendbuf_t *sb, size_t off, void *dst, size_t *len, int *wrote_all);
 /**
  * Appends some bytes to the send buffer.  The data being appended is copied.
  */
@@ -110,7 +110,7 @@ ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb);
 /**
  * The concrete function for `quicly_stream_callbacks_t::on_receive`.
  */
-int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len);
+void quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len);
 
 /**
  * The simple stream buffer.  The API assumes that stream->data points to quicly_streambuf_t.  Applications can extend the structure
@@ -124,13 +124,13 @@ typedef struct st_quicly_streambuf_t {
 int quicly_streambuf_create(quicly_stream_t *stream, size_t sz);
 void quicly_streambuf_destroy(quicly_stream_t *stream, int err);
 static void quicly_streambuf_egress_shift(quicly_stream_t *stream, size_t delta);
-int quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
+void quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
 static int quicly_streambuf_egress_write(quicly_stream_t *stream, const void *src, size_t len);
 static int quicly_streambuf_egress_write_vec(quicly_stream_t *stream, quicly_sendbuf_vec_t *vec);
 int quicly_streambuf_egress_shutdown(quicly_stream_t *stream);
 static void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta);
 static ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream);
-int quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+void quicly_streambuf_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
 /* inline definitions */
 

@@ -349,7 +349,7 @@ struct st_quicly_handle_payload_state_t {
     uint64_t frame_type;
 };
 
-static int crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+static void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
 static const quicly_stream_callbacks_t crypto_stream_callbacks = {quicly_streambuf_destroy, quicly_streambuf_egress_shift,
                                                                   quicly_streambuf_egress_emit, NULL, crypto_stream_receive};
@@ -756,32 +756,34 @@ static int write_crypto_data(quicly_conn_t *conn, ptls_buffer_t *tlsbuf, size_t 
     return 0;
 }
 
-int crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     quicly_conn_t *conn = stream->conn;
     size_t in_epoch = -(1 + stream->stream_id), epoch_offsets[5] = {0};
     ptls_iovec_t input;
     ptls_buffer_t output;
-    int ret;
 
-    if ((ret = quicly_streambuf_ingress_receive(stream, off, src, len)) != 0)
-        return ret;
+    quicly_streambuf_ingress_receive(stream, off, src, len);
+    if (conn->super.state >= QUICLY_STATE_CLOSING)
+        return;
 
     ptls_buffer_init(&output, "", 0);
 
     /* send handshake messages to picotls, and let it fill in the response */
     while ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
-        ret = ptls_handle_message(conn->crypto.tls, &output, epoch_offsets, in_epoch, input.base, input.len,
-                                  &conn->crypto.handshake_properties);
+        int handshake_result = ptls_handle_message(conn->crypto.tls, &output, epoch_offsets, in_epoch, input.base, input.len,
+                                                   &conn->crypto.handshake_properties);
         quicly_streambuf_ingress_shift(stream, input.len);
-        QUICLY_PROBE(CRYPTO_HANDSHAKE, conn, ret);
-        switch (ret) {
+        QUICLY_PROBE(CRYPTO_HANDSHAKE, conn, handshake_result);
+        switch (handshake_result) {
         case 0:
-            break;
         case PTLS_ERROR_IN_PROGRESS:
-            ret = 0;
             break;
         default:
+            quicly_close(conn,
+                         PTLS_ERROR_GET_CLASS(handshake_result) == PTLS_ERROR_CLASS_SELF_ALERT ? handshake_result
+                                                                                               : QUICLY_TRANSPORT_ERROR_INTERNAL,
+                         NULL);
             goto Exit;
         }
         /* drop 0-RTT write key if 0-RTT is rejected by peer */
@@ -800,7 +802,6 @@ int crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, 
 
 Exit:
     ptls_buffer_dispose(&output);
-    return ret;
 }
 
 static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max_stream_data_local,
@@ -5023,24 +5024,20 @@ void quicly_stream_noop_on_send_shift(quicly_stream_t *stream, size_t delta)
 {
 }
 
-int quicly_stream_noop_on_send_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
+void quicly_stream_noop_on_send_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
 {
-    return 0;
 }
 
-int quicly_stream_noop_on_send_stop(quicly_stream_t *stream, int err)
+void quicly_stream_noop_on_send_stop(quicly_stream_t *stream, int err)
 {
-    return 0;
 }
 
-int quicly_stream_noop_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+void quicly_stream_noop_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
-    return 0;
 }
 
-int quicly_stream_noop_on_receive_reset(quicly_stream_t *stream, int err)
+void quicly_stream_noop_on_receive_reset(quicly_stream_t *stream, int err)
 {
-    return 0;
 }
 
 const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {

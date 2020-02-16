@@ -84,8 +84,8 @@
     "-----END CERTIFICATE-----\n"
 
 static void on_destroy(quicly_stream_t *stream, int err);
-static int on_egress_stop(quicly_stream_t *stream, int err);
-static int on_ingress_reset(quicly_stream_t *stream, int err);
+static void on_egress_stop(quicly_stream_t *stream, int err);
+static void on_ingress_reset(quicly_stream_t *stream, int err);
 
 quicly_address_t fake_address;
 int64_t quic_now;
@@ -108,20 +108,18 @@ void on_destroy(quicly_stream_t *stream, int err)
     ++on_destroy_callcnt;
 }
 
-int on_egress_stop(quicly_stream_t *stream, int err)
+void on_egress_stop(quicly_stream_t *stream, int err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     test_streambuf_t *sbuf = stream->data;
     sbuf->error_received.stop_sending = err;
-    return 0;
 }
 
-int on_ingress_reset(quicly_stream_t *stream, int err)
+void on_ingress_reset(quicly_stream_t *stream, int err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     test_streambuf_t *sbuf = stream->data;
     sbuf->error_received.reset_stream = err;
-    return 0;
 }
 
 const quicly_cid_plaintext_t *new_master_id(void)
