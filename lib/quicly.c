@@ -355,6 +355,7 @@ static const quicly_stream_callbacks_t crypto_stream_callbacks = {quicly_streamb
                                                                   quicly_streambuf_egress_emit, NULL, crypto_stream_receive};
 
 static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, int is_enc, size_t epoch, const void *secret);
+static int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase);
 static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
 static const quicly_transport_parameters_t default_transport_params = {
@@ -780,10 +781,10 @@ void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src,
         case PTLS_ERROR_IN_PROGRESS:
             break;
         default:
-            quicly_close(conn,
-                         PTLS_ERROR_GET_CLASS(handshake_result) == PTLS_ERROR_CLASS_SELF_ALERT ? handshake_result
-                                                                                               : QUICLY_TRANSPORT_ERROR_INTERNAL,
-                         NULL);
+            initiate_close(conn,
+                           PTLS_ERROR_GET_CLASS(handshake_result) == PTLS_ERROR_CLASS_SELF_ALERT ? handshake_result
+                                                                                                 : QUICLY_TRANSPORT_ERROR_INTERNAL,
+                           QUICLY_FRAME_TYPE_CRYPTO, NULL);
             goto Exit;
         }
         /* drop 0-RTT write key if 0-RTT is rejected by peer */
@@ -3682,7 +3683,7 @@ static int enter_close(quicly_conn_t *conn, int host_is_initiating, int wait_dra
     return 0;
 }
 
-static int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase)
+int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase)
 {
     uint16_t quic_error_code;
 
