@@ -3702,7 +3702,6 @@ int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char
         quic_error_code = QUICLY_TRANSPORT_ERROR_TLS_ALERT_BASE + PTLS_ERROR_TO_ALERT(err);
     } else {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INTERNAL);
-        frame_type = UINT64_MAX;
     }
 
     conn->egress.connection_close.error_code = quic_error_code;
