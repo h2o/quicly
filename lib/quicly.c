@@ -2028,10 +2028,9 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
          * sure that the potential split would not lead to an error. */
         if (space->ack_queue.num_ranges == QUICLY_MAX_RANGES)
             quicly_ranges_drop_smallest_range(&space->ack_queue);
-        if (quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end) != 0) {
-            /* FIXME log error */
-            return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-        }
+        int ret;
+        if ((ret = quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end)) != 0)
+            return ret;
         if (space->ack_queue.num_ranges == 0) {
             space->largest_pn_received_at = INT64_MAX;
             space->unacked_count = 0;
@@ -3713,7 +3712,7 @@ int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char
 
 int quicly_close(quicly_conn_t *conn, int err, const char *reason_phrase)
 {
-    assert(err == 0 || QUICLY_ERROR_IS_QUIC_APPLICATION(err));
+    assert(err == 0 || QUICLY_ERROR_IS_QUIC_APPLICATION(err) || QUICLY_ERROR_IS_CONCEALED(err));
     update_now(conn->super.ctx);
 
     return initiate_close(conn, err, QUICLY_FRAME_TYPE_PADDING /* used when err == 0 */, reason_phrase);
