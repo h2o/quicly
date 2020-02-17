@@ -3692,7 +3692,10 @@ int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char
         reason_phrase = "";
 
     /* convert error code to QUIC error codes */
-    if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
+    if (err == 0) {
+        quic_error_code = 0;
+        frame_type = QUICLY_FRAME_TYPE_PADDING;
+    } else if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
     } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
@@ -3701,7 +3704,6 @@ int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char
         quic_error_code = QUICLY_TRANSPORT_ERROR_TLS_ALERT_BASE + PTLS_ERROR_TO_ALERT(err);
     } else {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INTERNAL);
-        frame_type = UINT64_MAX;
     }
 
     conn->egress.connection_close.error_code = quic_error_code;
