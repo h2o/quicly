@@ -243,6 +243,7 @@ struct st_quicly_conn_t {
             uint64_t frame_type; /* UINT64_MAX if application close */
             const char *reason_phrase;
             unsigned long num_packets_received;
+            unsigned long num_sent;
         } connection_close;
         /**
          *
@@ -3307,6 +3308,8 @@ static int send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s)
     memcpy(s->dst, conn->egress.connection_close.reason_phrase, reason_phrase_len);
     s->dst += reason_phrase_len;
 
+    ++conn->egress.connection_close.num_sent;
+
     if (conn->egress.connection_close.frame_type != UINT64_MAX) {
         QUICLY_PROBE(TRANSPORT_CLOSE_SEND, conn, probe_now(), conn->egress.connection_close.error_code,
                      conn->egress.connection_close.frame_type, conn->egress.connection_close.reason_phrase);
@@ -3563,11 +3566,13 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                  QUICLY_PROBE_HEXDUMP(conn->super.peer.cid.cid, conn->super.peer.cid.len));
 
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
-        /* check if the connection can be closed now (after 3 pto) */
         quicly_sentmap_iter_t iter;
         init_acks_iter(conn, &iter);
-        if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX)
-            return QUICLY_ERROR_FREE_CONNECTION;
+        /* check if the connection can be closed now (after 3 pto) */
+        if (conn->super.state == QUICLY_STATE_DRAINING || conn->egress.connection_close.num_sent != 0) {
+            if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX)
+                return QUICLY_ERROR_FREE_CONNECTION;
+        }
         if (conn->super.state == QUICLY_STATE_CLOSING && conn->egress.send_ack_at <= now) {
             destroy_all_streams(conn, 0, 0); /* delayed until the emission of CONNECTION_CLOSE frame to allow quicly_close to be
                                               * called from a stream handler */
@@ -3586,8 +3591,9 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             if ((ret = commit_send_packet(conn, &s, 0)) != 0)
                 return ret;
         }
-        conn->egress.send_ack_at = quicly_sentmap_get(&iter)->sent_at + get_sentmap_expiration_time(conn);
-        assert(conn->egress.send_ack_at > now);
+        /* wait at least 1ms */
+        if ((conn->egress.send_ack_at = quicly_sentmap_get(&iter)->sent_at + get_sentmap_expiration_time(conn)) <= now)
+            conn->egress.send_ack_at = now + 1;
         *num_packets = s.num_packets;
         return 0;
     }
