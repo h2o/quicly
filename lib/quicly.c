@@ -3693,7 +3693,10 @@ int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char
         reason_phrase = "";
 
     /* convert error code to QUIC error codes */
-    if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
+    if (err == 0) {
+        quic_error_code = 0;
+        frame_type = QUICLY_FRAME_TYPE_PADDING;
+    } else if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
     } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
