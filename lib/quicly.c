@@ -775,7 +775,7 @@ void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src,
         int handshake_result = ptls_handle_message(conn->crypto.tls, &output, epoch_offsets, in_epoch, input.base, input.len,
                                                    &conn->crypto.handshake_properties);
         quicly_streambuf_ingress_shift(stream, input.len);
-        QUICLY_PROBE(CRYPTO_HANDSHAKE, conn, handshake_result);
+        QUICLY_PROBE(CRYPTO_HANDSHAKE, conn, probe_now(), handshake_result);
         switch (handshake_result) {
         case 0:
         case PTLS_ERROR_IN_PROGRESS:
@@ -1240,7 +1240,7 @@ static int update_1rtt_egress_key(quicly_conn_t *conn)
     space->cipher.egress.key_update_pn.last = conn->egress.packet_number;
     space->cipher.egress.key_update_pn.next = UINT64_MAX;
 
-    QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE, conn, space->cipher.egress.key_phase,
+    QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE, conn, probe_now(), space->cipher.egress.key_phase,
                  QUICLY_PROBE_HEXDUMP(space->cipher.egress.secret, cipher->hash->digest_size));
 
     return 0;
@@ -1255,7 +1255,7 @@ static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key
 
     space->cipher.ingress.key_phase.decrypted = newly_decrypted_key_phase;
 
-    QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, space->cipher.ingress.key_phase.decrypted,
+    QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, probe_now(), space->cipher.ingress.key_phase.decrypted,
                  QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, ptls_get_cipher(conn->crypto.tls)->hash->digest_size));
 
     if (space->cipher.egress.key_phase < space->cipher.ingress.key_phase.decrypted) {
@@ -1888,7 +1888,7 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
         if ((ret = update_1rtt_key(conn, cipher, 0, &space->cipher.ingress.aead[aead_index], space->cipher.ingress.secret)) != 0)
             return ret;
         ++space->cipher.ingress.key_phase.prepared;
-        QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, space->cipher.ingress.key_phase.prepared,
+        QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, probe_now(), space->cipher.ingress.key_phase.prepared,
                      QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
     }
     }
@@ -3333,7 +3333,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         {NULL, NULL, "QUIC_SERVER_HANDSHAKE_TRAFFIC_SECRET", "QUIC_SERVER_TRAFFIC_SECRET_0"}};
     const char *log_label = log_labels[ptls_is_server(tls) == is_enc][epoch];
 
-    QUICLY_PROBE(CRYPTO_UPDATE_SECRET, conn, is_enc, epoch, log_label, QUICLY_PROBE_HEXDUMP(secret, cipher->hash->digest_size));
+    QUICLY_PROBE(CRYPTO_UPDATE_SECRET, conn, probe_now(), is_enc, epoch, log_label, QUICLY_PROBE_HEXDUMP(secret, cipher->hash->digest_size));
 
     if (tlsctx->log_event != NULL) {
         char hexbuf[PTLS_MAX_DIGEST_SIZE * 2 + 1];
@@ -3881,7 +3881,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                                 space->cipher.egress.key_update_pn.last = UINT64_MAX;
                                 space->cipher.egress.key_update_pn.next =
                                     conn->egress.packet_number + conn->super.ctx->max_packets_per_key;
-                                QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, space->cipher.egress.key_update_pn.next);
+                                QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, probe_now(), space->cipher.egress.key_update_pn.next);
                             }
                         }
                     } else {
@@ -4452,7 +4452,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
     QUICLY_PROBE(ACCEPT, *conn, probe_now(), QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len),
                  address_token);
-    QUICLY_PROBE(CRYPTO_DECRYPT, *conn, pn, payload.base, payload.len);
+    QUICLY_PROBE(CRYPTO_DECRYPT, *conn, probe_now(), pn, payload.base, payload.len);
     QUICLY_PROBE(QUICTRACE_RECV, *conn, probe_now(), pn);
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
@@ -4634,11 +4634,11 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, &(*space)->next_expected_packet_number, packet, &pn,
                               &payload)) != 0) {
         ++conn->super.stats.num_packets.decryption_failed;
-        QUICLY_PROBE(CRYPTO_DECRYPT, conn, pn, NULL, 0);
+        QUICLY_PROBE(CRYPTO_DECRYPT, conn, probe_now(), pn, NULL, 0);
         goto Exit;
     }
 
-    QUICLY_PROBE(CRYPTO_DECRYPT, conn, pn, payload.base, payload.len);
+    QUICLY_PROBE(CRYPTO_DECRYPT, conn, probe_now(), pn, payload.base, payload.len);
     QUICLY_PROBE(QUICTRACE_RECV, conn, probe_now(), pn);
 
     /* update states */
