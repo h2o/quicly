@@ -33,7 +33,7 @@ provider quicly {
     probe receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const void *bytes, size_t num_bytes);
     probe version_switch(struct st_quicly_conn_t *conn, int64_t at, uint32_t new_version);
     probe idle_timeout(struct st_quicly_conn_t *conn, int64_t at);
-    probe stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t now);
+    probe stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t at);
 
     probe crypto_decrypt(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, const void *decrypted, size_t decrypted_len);
     probe crypto_handshake(struct st_quicly_conn_t *conn, int64_t at, int ret);
