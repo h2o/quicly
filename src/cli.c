@@ -37,7 +37,7 @@
 
 FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
-static int suppress_output = 0;
+static int suppress_output = 0, use_bound_sockets = 0;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
 
 static void hexdump(const char *title, const uint8_t *p, size_t l)
@@ -389,19 +389,27 @@ static quicly_generate_resumption_token_t generate_resumption_token = {&on_gener
 static int send_one(int fd, quicly_datagram_t *p)
 {
     int ret;
-    struct msghdr mess;
-    struct iovec vec;
-    memset(&mess, 0, sizeof(mess));
-    mess.msg_name = &p->dest.sa;
-    mess.msg_namelen = quicly_get_socklen(&p->dest.sa);
-    vec.iov_base = p->data.base;
-    vec.iov_len = p->data.len;
-    mess.msg_iov = &vec;
-    mess.msg_iovlen = 1;
+
     if (verbosity >= 2)
-        hexdump("sendmsg", vec.iov_base, vec.iov_len);
-    while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-        ;
+        hexdump("sendmsg", p->data.base, p->data.len);
+
+    if (use_bound_sockets) {
+        while ((ret = (int)send(fd, p->data.base, p->data.len, 0)) == -1 && errno == EINTR)
+            ;
+    } else {
+        struct msghdr mess;
+        struct iovec vec;
+        memset(&mess, 0, sizeof(mess));
+        mess.msg_name = &p->dest.sa;
+        mess.msg_namelen = quicly_get_socklen(&p->dest.sa);
+        vec.iov_base = p->data.base;
+        vec.iov_len = p->data.len;
+        mess.msg_iov = &vec;
+        mess.msg_iovlen = 1;
+        while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+            ;
+    }
+
     return ret;
 }
 
@@ -454,17 +462,24 @@ static void enqueue_requests(quicly_conn_t *conn)
     enqueue_requests_at = INT64_MAX;
 }
 
-static int run_client(int fd, struct sockaddr *sa, const char *host)
+static int run_client(int fd, struct sockaddr *sa, socklen_t salen, const char *host)
 {
-    struct sockaddr_in local;
-    int ret;
     quicly_conn_t *conn = NULL;
+    int ret;
 
-    memset(&local, 0, sizeof(local));
-    local.sin_family = AF_INET;
-    if (bind(fd, (void *)&local, sizeof(local)) != 0) {
-        perror("bind(2) failed");
-        return 1;
+    if (use_bound_sockets) {
+        if (connect(fd, sa, salen) != 0) {
+            perror("connect(2) failed");
+            return 1;
+        }
+    } else {
+        struct sockaddr_in local;
+        memset(&local, 0, sizeof(local));
+        local.sin_family = AF_INET;
+        if (bind(fd, (void *)&local, sizeof(local)) != 0) {
+            perror("bind(2) failed");
+            return 1;
+        }
     }
     ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params);
     assert(ret == 0);
@@ -884,7 +899,11 @@ static void usage(const char *cmd)
            "Options:\n"
            "  -a <alpn>                 ALPN identifier; repeat the option to set multiple\n"
            "                            candidates\n"
-           "  -b <buffer-size>          specifies the size of the send / receive buffer in bytes\n"
+           "  -B                        use bound (i.e. connected) sockets; setting this\n"
+           "                            option improves performance, however the server can\n"
+           "                            serve only one connection at a time\n"
+           "  -b <buffer-size>          specifies the size of the send / receive buffer in\n"
+           "                            bytes\n"
            "  -C <cid-key>              CID encryption key (server-only). Randomly generated\n"
            "                            if omitted.\n"
            "  -c certificate-file\n"
@@ -902,7 +921,8 @@ static void usage(const char *cmd)
            "  -n                        enforce version negotiation (client-only)\n"
            "  -O                        suppress output\n"
            "  -p path                   path to request (can be set multiple times)\n"
-           "  -P path                   path to request, store response to file (can be set multiple times)\n"
+           "  -P path                   path to request, store response to file (can be set\n"
+           "                            multiple times)\n"
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
@@ -954,11 +974,14 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:i:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:Bb:C:c:k:K:Ee:i:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < sizeof(negotiated_protocols.list) / sizeof(negotiated_protocols.list[0]));
             negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init(optarg, strlen(optarg));
+            break;
+        case 'B':
+            use_bound_sockets = 1;
             break;
         case 'b':
             if (sscanf(optarg, "%u", &udpbufsize) != 1) {
@@ -1159,5 +1182,5 @@ int main(int argc, char **argv)
         }
     }
 
-    return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, host);
+    return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, salen, host);
 }
