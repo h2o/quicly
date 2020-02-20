@@ -832,6 +832,8 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     quicly_linklist_init(&stream->_send_aux.pending_link.default_scheduler);
 
     stream->_recv_aux.window = initial_max_stream_data_local;
+    if ((stream->_recv_aux.max_ranges = initial_max_stream_data_local / 1024) < 63)
+        stream->_recv_aux.max_ranges = 63;
 }
 
 static void dispose_stream_properties(quicly_stream_t *stream)
@@ -1057,6 +1059,8 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
 
 static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
 {
+    int ret;
+
     *is_out_of_order = 0;
 
     if (ranges->num_ranges != 0) {
@@ -1068,10 +1072,13 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
         *is_out_of_order = 1;
     }
 
-    /* slow path; we shrink then add, to avoid exceeding the QUICLY_MAX_RANGES */
-    if (ranges->num_ranges == QUICLY_MAX_RANGES)
-        quicly_ranges_drop_smallest_range(ranges);
-    return quicly_ranges_add(ranges, pn, pn + 1);
+    /* slow path; we add, then remove the oldest ranges when the number of ranges exceed the maximum */
+    if ((ret = quicly_ranges_add(ranges, pn, pn + 1)) != 0)
+        return ret;
+    if (ranges->num_ranges > QUICLY_MAX_ACK_BLOCKS)
+        quicly_ranges_drop_by_range_indices(ranges, ranges->num_ranges - QUICLY_MAX_ACK_BLOCKS, ranges->num_ranges);
+
+    return 0;
 }
 
 static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
@@ -1380,7 +1387,8 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 
     /* update recvbuf */
     size_t apply_len = frame->data.len;
-    if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin)) != 0)
+    if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin,
+                                       stream->_recv_aux.max_ranges)) != 0)
         return ret;
 
     if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
@@ -2025,16 +2033,16 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
             assert(!"FIXME");
             return QUICLY_TRANSPORT_ERROR_INTERNAL;
         }
-        /* Subtracting an ACK range might end up in splitting an existing range. By shrinking the number of ranges to MAX-1, we make
-         * sure that the potential split would not lead to an error. */
-        if (space->ack_queue.num_ranges == QUICLY_MAX_RANGES)
-            quicly_ranges_drop_smallest_range(&space->ack_queue);
+        /* subtract given ACK range, then make adjustments */
         int ret;
         if ((ret = quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end)) != 0)
             return ret;
         if (space->ack_queue.num_ranges == 0) {
             space->largest_pn_received_at = INT64_MAX;
             space->unacked_count = 0;
+        } else if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS) {
+            quicly_ranges_drop_by_range_indices(&space->ack_queue, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS,
+                                                space->ack_queue.num_ranges);
         }
     }
 
