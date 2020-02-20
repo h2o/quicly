@@ -37,6 +37,7 @@
 
 FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
+static int suppress_output = 0;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
 
 static void hexdump(const char *title, const uint8_t *p, size_t l)
@@ -323,9 +324,11 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
         return;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
-        FILE *out = (stream_data->outfp == NULL) ? stdout : stream_data->outfp;
-        fwrite(input.base, 1, input.len, out);
-        fflush(out);
+        if (!suppress_output) {
+            FILE *out = (stream_data->outfp == NULL) ? stdout : stream_data->outfp;
+            fwrite(input.base, 1, input.len, out);
+            fflush(out);
+        }
         quicly_streambuf_ingress_shift(stream, input.len);
     }
 
@@ -438,7 +441,7 @@ static void enqueue_requests(quicly_conn_t *conn)
         send_str(stream, req);
         quicly_streambuf_egress_shutdown(stream);
 
-        if (reqs[i].to_file) {
+        if (reqs[i].to_file && !suppress_output) {
             struct st_stream_data_t *stream_data = stream->data;
             sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
             stream_data->outfp = fopen(destfile, "w");
@@ -897,6 +900,7 @@ static void usage(const char *cmd)
            "  -m <bytes>                max data (in bytes; default: 16MB)\n"
            "  -N                        enforce HelloRetryRequest (client-only)\n"
            "  -n                        enforce version negotiation (client-only)\n"
+           "  -O                        suppress output\n"
            "  -p path                   path to request (can be set multiple times)\n"
            "  -P path                   path to request, store response to file (can be set multiple times)\n"
            "  -R                        require Retry (server only)\n"
@@ -950,7 +954,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:i:I:l:M:m:Nnp:P:Rr:S:s:Vvx:X:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:i:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < sizeof(negotiated_protocols.list) / sizeof(negotiated_protocols.list[0]));
@@ -1022,6 +1026,9 @@ int main(int argc, char **argv)
             break;
         case 'n':
             ctx.enforce_version_negotiation = 1;
+            break;
+        case 'O':
+            suppress_output = 1;
             break;
         case 'p':
         case 'P': {
