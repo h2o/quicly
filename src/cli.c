@@ -408,21 +408,18 @@ static int send_one(int fd, quicly_datagram_t *p)
 static int send_pending(int fd, quicly_conn_t *conn)
 {
     quicly_datagram_t *packets[16];
-    size_t num_packets, i;
+    size_t num_packets = sizeof(packets) / sizeof(packets[0]), i;
     int ret;
 
-    do {
-        num_packets = sizeof(packets) / sizeof(packets[0]);
-        if ((ret = quicly_send(conn, packets, &num_packets)) == 0) {
-            for (i = 0; i != num_packets; ++i) {
-                if ((ret = send_one(fd, packets[i])) == -1)
-                    perror("sendmsg failed");
-                ret = 0;
-                quicly_packet_allocator_t *pa = quicly_get_context(conn)->packet_allocator;
-                pa->free_packet(pa, packets[i]);
-            }
+    if ((ret = quicly_send(conn, packets, &num_packets)) == 0) {
+        for (i = 0; i != num_packets; ++i) {
+            if ((ret = send_one(fd, packets[i])) == -1)
+                perror("sendmsg failed");
+            ret = 0;
+            quicly_packet_allocator_t *pa = quicly_get_context(conn)->packet_allocator;
+            pa->free_packet(pa, packets[i]);
         }
-    } while (ret == 0 && num_packets == sizeof(packets) / sizeof(packets[0]));
+    }
 
     return ret;
 }
