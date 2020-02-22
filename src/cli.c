@@ -497,30 +497,34 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         if (enqueue_requests_at <= ctx.now->cb(ctx.now))
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
-            uint8_t buf[4096];
-            struct msghdr mess;
-            struct sockaddr sa;
-            struct iovec vec;
-            memset(&mess, 0, sizeof(mess));
-            mess.msg_name = &sa;
-            mess.msg_namelen = sizeof(sa);
-            vec.iov_base = buf;
-            vec.iov_len = sizeof(buf);
-            mess.msg_iov = &vec;
-            mess.msg_iovlen = 1;
-            ssize_t rret;
-            while ((rret = recvmsg(fd, &mess, 0)) <= 0)
-                ;
-            if (verbosity >= 2)
-                hexdump("recvmsg", buf, rret);
-            size_t off = 0;
-            while (off != rret) {
-                quicly_decoded_packet_t packet;
-                size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
-                if (plen == SIZE_MAX)
+            while (1) {
+                uint8_t buf[4096];
+                struct msghdr mess;
+                struct sockaddr sa;
+                struct iovec vec;
+                memset(&mess, 0, sizeof(mess));
+                mess.msg_name = &sa;
+                mess.msg_namelen = sizeof(sa);
+                vec.iov_base = buf;
+                vec.iov_len = sizeof(buf);
+                mess.msg_iov = &vec;
+                mess.msg_iovlen = 1;
+                ssize_t rret;
+                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+                    ;
+                if (rret <= 0)
                     break;
-                quicly_receive(conn, NULL, &sa, &packet);
-                off += plen;
+                if (verbosity >= 2)
+                    hexdump("recvmsg", buf, rret);
+                size_t off = 0;
+                while (off != rret) {
+                    quicly_decoded_packet_t packet;
+                    size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
+                    if (plen == SIZE_MAX)
+                        break;
+                    quicly_receive(conn, NULL, &sa, &packet);
+                    off += plen;
+                }
             }
         }
         if (conn != NULL) {
@@ -635,99 +639,104 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
             FD_SET(fd, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (FD_ISSET(fd, &readfds)) {
-            uint8_t buf[4096];
-            struct msghdr mess;
-            struct sockaddr sa;
-            struct iovec vec;
-            memset(&mess, 0, sizeof(mess));
-            mess.msg_name = &sa;
-            mess.msg_namelen = sizeof(sa);
-            vec.iov_base = buf;
-            vec.iov_len = sizeof(buf);
-            mess.msg_iov = &vec;
-            mess.msg_iovlen = 1;
-            ssize_t rret;
-            while ((rret = recvmsg(fd, &mess, 0)) <= 0)
-                ;
-            if (verbosity >= 2)
-                hexdump("recvmsg", buf, rret);
-            size_t off = 0;
-            while (off != rret) {
-                quicly_decoded_packet_t packet;
-                size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
-                if (plen == SIZE_MAX)
+            while (1) {
+                uint8_t buf[4096];
+                struct msghdr mess;
+                struct sockaddr sa;
+                struct iovec vec;
+                memset(&mess, 0, sizeof(mess));
+                mess.msg_name = &sa;
+                mess.msg_namelen = sizeof(sa);
+                vec.iov_base = buf;
+                vec.iov_len = sizeof(buf);
+                mess.msg_iov = &vec;
+                mess.msg_iovlen = 1;
+                ssize_t rret;
+                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+                    ;
+                if (rret == -1)
                     break;
-                if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
-                    if (packet.version != QUICLY_PROTOCOL_VERSION) {
-                        quicly_datagram_t *rp =
-                            quicly_send_version_negotiation(&ctx, &sa, packet.cid.src, NULL, packet.cid.dest.encrypted);
-                        assert(rp != NULL);
-                        if (send_one(fd, rp) == -1)
-                            perror("sendmsg failed");
+                if (verbosity >= 2)
+                    hexdump("recvmsg", buf, rret);
+                size_t off = 0;
+                while (off != rret) {
+                    quicly_decoded_packet_t packet;
+                    size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
+                    if (plen == SIZE_MAX)
                         break;
+                    if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
+                        if (packet.version != QUICLY_PROTOCOL_VERSION) {
+                            quicly_datagram_t *rp =
+                                quicly_send_version_negotiation(&ctx, &sa, packet.cid.src, NULL, packet.cid.dest.encrypted);
+                            assert(rp != NULL);
+                            if (send_one(fd, rp) == -1)
+                                perror("sendmsg failed");
+                            break;
+                        }
+                        /* there is no way to send response to these v1 packets */
+                        if (packet.cid.dest.encrypted.len > QUICLY_MAX_CID_LEN_V1 || packet.cid.src.len > QUICLY_MAX_CID_LEN_V1)
+                            break;
                     }
-                    /* there is no way to send response to these v1 packets */
-                    if (packet.cid.dest.encrypted.len > QUICLY_MAX_CID_LEN_V1 || packet.cid.src.len > QUICLY_MAX_CID_LEN_V1)
-                        break;
-                }
 
-                quicly_conn_t *conn = NULL;
-                size_t i;
-                for (i = 0; i != num_conns; ++i) {
-                    if (quicly_is_destination(conns[i], NULL, &sa, &packet)) {
-                        conn = conns[i];
-                        break;
-                    }
-                }
-                if (conn != NULL) {
-                    /* existing connection */
-                    quicly_receive(conn, NULL, &sa, &packet);
-                } else if (QUICLY_PACKET_IS_INITIAL(packet.octets.base[0])) {
-                    /* long header packet; potentially a new connection */
-                    quicly_address_token_plaintext_t *token = NULL, token_buf;
-                    if (packet.token.len != 0 &&
-                        quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base, packet.token.len, 0) ==
-                            0 &&
-                        validate_token(&sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf))
-                        token = &token_buf;
-                    if (enforce_retry && token == NULL && packet.cid.dest.encrypted.len >= 8) {
-                        /* unbound connection; send a retry token unless the client has supplied the correct one, but not too many
-                         */
-                        uint8_t new_server_cid[8];
-                        memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
-                        new_server_cid[0] ^= 0xff;
-                        quicly_datagram_t *rp =
-                            quicly_send_retry(&ctx, address_token_aead.enc, &sa, packet.cid.src, NULL,
-                                              ptls_iovec_init(new_server_cid, sizeof(new_server_cid)), packet.cid.dest.encrypted,
-                                              ptls_iovec_init(NULL, 0), ptls_iovec_init(NULL, 0), NULL);
-                        assert(rp != NULL);
-                        if (send_one(fd, rp) == -1)
-                            perror("sendmsg failed");
-                        break;
-                    } else {
-                        /* new connection */
-                        int ret = quicly_accept(&conn, &ctx, NULL, &sa, &packet, token, &next_cid, NULL);
-                        if (ret == 0) {
-                            assert(conn != NULL);
-                            ++next_cid.master_id;
-                            conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
-                            assert(conns != NULL);
-                            conns[num_conns++] = conn;
-                        } else {
-                            assert(conn == NULL);
+                    quicly_conn_t *conn = NULL;
+                    size_t i;
+                    for (i = 0; i != num_conns; ++i) {
+                        if (quicly_is_destination(conns[i], NULL, &sa, &packet)) {
+                            conn = conns[i];
+                            break;
                         }
                     }
-                } else if (!QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
-                    /* short header packet; potentially a dead connection. No need to check the length of the incoming packet,
-                     * because loop is prevented by authenticating the CID (by checking node_id and thread_id). If the peer is also
-                     * sending a reset, then the next CID is highly likely to contain a non-authenticating CID, ... */
-                    if (packet.cid.dest.plaintext.node_id == 0 && packet.cid.dest.plaintext.thread_id == 0) {
-                        quicly_datagram_t *dgram = quicly_send_stateless_reset(&ctx, &sa, NULL, packet.cid.dest.encrypted.base);
-                        if (send_one(fd, dgram) == -1)
-                            perror("sendmsg failed");
+                    if (conn != NULL) {
+                        /* existing connection */
+                        quicly_receive(conn, NULL, &sa, &packet);
+                    } else if (QUICLY_PACKET_IS_INITIAL(packet.octets.base[0])) {
+                        /* long header packet; potentially a new connection */
+                        quicly_address_token_plaintext_t *token = NULL, token_buf;
+                        if (packet.token.len != 0 &&
+                            quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base, packet.token.len,
+                                                         0) == 0 &&
+                            validate_token(&sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf))
+                            token = &token_buf;
+                        if (enforce_retry && token == NULL && packet.cid.dest.encrypted.len >= 8) {
+                            /* unbound connection; send a retry token unless the client has supplied the correct one, but not too
+                             * many
+                             */
+                            uint8_t new_server_cid[8];
+                            memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
+                            new_server_cid[0] ^= 0xff;
+                            quicly_datagram_t *rp = quicly_send_retry(&ctx, address_token_aead.enc, &sa, packet.cid.src, NULL,
+                                                                      ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
+                                                                      packet.cid.dest.encrypted, ptls_iovec_init(NULL, 0),
+                                                                      ptls_iovec_init(NULL, 0), NULL);
+                            assert(rp != NULL);
+                            if (send_one(fd, rp) == -1)
+                                perror("sendmsg failed");
+                            break;
+                        } else {
+                            /* new connection */
+                            int ret = quicly_accept(&conn, &ctx, NULL, &sa, &packet, token, &next_cid, NULL);
+                            if (ret == 0) {
+                                assert(conn != NULL);
+                                ++next_cid.master_id;
+                                conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
+                                assert(conns != NULL);
+                                conns[num_conns++] = conn;
+                            } else {
+                                assert(conn == NULL);
+                            }
+                        }
+                    } else if (!QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
+                        /* short header packet; potentially a dead connection. No need to check the length of the incoming packet,
+                         * because loop is prevented by authenticating the CID (by checking node_id and thread_id). If the peer is
+                         * also sending a reset, then the next CID is highly likely to contain a non-authenticating CID, ... */
+                        if (packet.cid.dest.plaintext.node_id == 0 && packet.cid.dest.plaintext.thread_id == 0) {
+                            quicly_datagram_t *dgram = quicly_send_stateless_reset(&ctx, &sa, NULL, packet.cid.dest.encrypted.base);
+                            if (send_one(fd, dgram) == -1)
+                                perror("sendmsg failed");
+                        }
                     }
+                    off += plen;
                 }
-                off += plen;
             }
         }
         {
@@ -1173,6 +1182,7 @@ int main(int argc, char **argv)
         perror("socket(2) failed");
         return 1;
     }
+    fcntl(fd, F_SETFL, O_NONBLOCK);
     {
         int on = 1;
         if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
