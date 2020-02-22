@@ -1103,6 +1103,12 @@ int main(int argc, char **argv)
             size_t i;
             for (i = 0; cipher_suites[i] != NULL; ++i)
                 ;
+            if (cipher_suites[i] == NULL && strcasecmp(optarg, "aes128gcmsha256") == 0) {
+                extern ptls_aead_algorithm_t ptls_ipp_aes128gcm;
+                static ptls_cipher_suite_t aes128gcmsha256 = {PTLS_CIPHER_SUITE_AES_128_GCM_SHA256, &ptls_ipp_aes128gcm,
+                                                              &ptls_openssl_sha256};
+                cipher_suites[i] = &aes128gcmsha256;
+            }
 #define MATCH(name)                                                                                                                \
     if (cipher_suites[i] == NULL && strcasecmp(optarg, #name) == 0)                                                                \
     cipher_suites[i] = &ptls_openssl_##name

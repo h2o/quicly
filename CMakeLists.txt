@@ -19,6 +19,7 @@ ENDIF ()
 SET(CMAKE_C_FLAGS "-std=c99 -Wall -O2 -g ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
 INCLUDE_DIRECTORIES(
     ${OPENSSL_INCLUDE_DIR}
+    /usr/local/ipp-crypto/include
     deps/klib
     deps/picotls/include
     deps/picotest include
@@ -26,6 +27,7 @@ INCLUDE_DIRECTORIES(
 
 SET(PICOTLS_OPENSSL_FILES
     deps/picotls/lib/openssl.c
+    deps/picotls/lib/ipp-crypto.c
     deps/picotls/lib/pembase64.c
     deps/picotls/lib/picotls.c)
 
@@ -74,7 +76,7 @@ ADD_CUSTOM_COMMAND(
     VERBATIM)
 ADD_EXECUTABLE(cli ${PICOTLS_OPENSSL_FILES} ${QUICLY_LIBRARY_FILES} src/cli.c embedded-probes.h)
 SET_TARGET_PROPERTIES(cli PROPERTIES COMPILE_FLAGS -DQUICLY_USE_EMBEDDED_PROBES=1)
-TARGET_LINK_LIBRARIES(cli ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+TARGET_LINK_LIBRARIES(cli ${OPENSSL_LIBRARIES} /usr/local/ipp-crypto/lib/libippcp.a ${CMAKE_DL_LIBS})
 
 ADD_EXECUTABLE(test.t ${PICOTLS_OPENSSL_FILES} ${UNITTEST_SOURCE_FILES})
 TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
