@@ -72,11 +72,12 @@ static ptls_save_ticket_t save_session_ticket = {save_session_ticket_cb};
 static ptls_on_client_hello_t on_client_hello = {on_client_hello_cb};
 static int enforce_retry;
 
-ptls_key_exchange_algorithm_t *key_exchanges[128];
+static ptls_key_exchange_algorithm_t *key_exchanges[128];
+static ptls_cipher_suite_t *cipher_suites[128];
 static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .get_time = &ptls_get_time,
                                 .key_exchanges = key_exchanges,
-                                .cipher_suites = ptls_openssl_cipher_suites,
+                                .cipher_suites = cipher_suites,
                                 .require_dhe_on_psk = 1,
                                 .save_ticket = &save_session_ticket,
                                 .on_client_hello = &on_client_hello};
@@ -908,6 +909,7 @@ static void usage(const char *cmd)
            "  -v                        verbose mode (-vv emits packet dumps as well)\n"
            "  -x named-group            named group to be used (default: secp256r1)\n"
            "  -X                        max bidirectional stream count (default: 100)\n"
+           "  -y cipher-suite           cipher-suite to be used (default: all)\n"
            "  -h                        print this help\n"
            "\n",
            cmd);
@@ -951,7 +953,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:i:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:i:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < sizeof(negotiated_protocols.list) / sizeof(negotiated_protocols.list[0]));
@@ -1088,6 +1090,24 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
+        case 'y': {
+            size_t i;
+            for (i = 0; cipher_suites[i] != NULL; ++i)
+                ;
+#define MATCH(name)                                                                                                                \
+    if (cipher_suites[i] == NULL && strcasecmp(optarg, #name) == 0)                                                                \
+    cipher_suites[i] = &ptls_openssl_##name
+            MATCH(aes128gcmsha256);
+            MATCH(aes256gcmsha384);
+#if PTLS_OPENSSL_HAVE_CHACHA20_POLY1305
+            MATCH(chacha20poly1305sha256);
+#endif
+#undef MATCH
+            if (cipher_suites[i] == NULL) {
+                fprintf(stderr, "unknown cipher-suite: %s\n", optarg);
+                exit(1);
+            }
+        } break;
         default:
             usage(argv[0]);
             exit(1);
@@ -1101,6 +1121,23 @@ int main(int argc, char **argv)
 
     if (key_exchanges[0] == NULL)
         key_exchanges[0] = &ptls_openssl_secp256r1;
+
+    /* Amend cipher-suites. Copy the defaults when `-y` option is not used. Otherwise, complain if aes128gcmsha256 is not specified
+     */
+    if (cipher_suites[0] == NULL) {
+        size_t i;
+        for (i = 0; ptls_openssl_cipher_suites[i] != NULL; ++i)
+            cipher_suites[i] = ptls_openssl_cipher_suites[i];
+    } else {
+        size_t i;
+        for (i = 0; cipher_suites[i] != NULL; ++i) {
+            if (cipher_suites[i]->id == PTLS_CIPHER_SUITE_AES_128_GCM_SHA256)
+                goto MandatoryCipherFound;
+        }
+        fprintf(stderr, "aes128gcmsha256 MUST be one of the cipher-suites specified using `-y`\n");
+        return 1;
+    MandatoryCipherFound:;
+    }
 
     if (ctx.tls->certificates.count != 0 || ctx.tls->sign_certificate != NULL) {
         /* server */
