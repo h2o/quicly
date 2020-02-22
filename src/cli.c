@@ -497,30 +497,34 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         if (enqueue_requests_at <= ctx.now->cb(ctx.now))
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
-            uint8_t buf[4096];
-            struct msghdr mess;
-            struct sockaddr sa;
-            struct iovec vec;
-            memset(&mess, 0, sizeof(mess));
-            mess.msg_name = &sa;
-            mess.msg_namelen = sizeof(sa);
-            vec.iov_base = buf;
-            vec.iov_len = sizeof(buf);
-            mess.msg_iov = &vec;
-            mess.msg_iovlen = 1;
-            ssize_t rret;
-            while ((rret = recvmsg(fd, &mess, 0)) <= 0)
-                ;
-            if (verbosity >= 2)
-                hexdump("recvmsg", buf, rret);
-            size_t off = 0;
-            while (off != rret) {
-                quicly_decoded_packet_t packet;
-                size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
-                if (plen == SIZE_MAX)
+            while (1) {
+                uint8_t buf[4096];
+                struct msghdr mess;
+                struct sockaddr sa;
+                struct iovec vec;
+                memset(&mess, 0, sizeof(mess));
+                mess.msg_name = &sa;
+                mess.msg_namelen = sizeof(sa);
+                vec.iov_base = buf;
+                vec.iov_len = sizeof(buf);
+                mess.msg_iov = &vec;
+                mess.msg_iovlen = 1;
+                ssize_t rret;
+                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+                    ;
+                if (rret <= 0)
                     break;
-                quicly_receive(conn, NULL, &sa, &packet);
-                off += plen;
+                if (verbosity >= 2)
+                    hexdump("recvmsg", buf, rret);
+                size_t off = 0;
+                while (off != rret) {
+                    quicly_decoded_packet_t packet;
+                    size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
+                    if (plen == SIZE_MAX)
+                        break;
+                    quicly_receive(conn, NULL, &sa, &packet);
+                    off += plen;
+                }
             }
         }
         if (conn != NULL) {
@@ -1173,6 +1177,7 @@ int main(int argc, char **argv)
         perror("socket(2) failed");
         return 1;
     }
+    fcntl(fd, F_SETFL, O_NONBLOCK);
     {
         int on = 1;
         if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
