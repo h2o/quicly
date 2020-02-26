@@ -832,6 +832,12 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     quicly_linklist_init(&stream->_send_aux.pending_link.default_scheduler);
 
     stream->_recv_aux.window = initial_max_stream_data_local;
+
+    /* Set the number of max ranges to be capable of handling following case:
+     * * every one of the two packets being sent are lost
+     * * average size of a STREAM frame found in a packet is >= ~512 bytes
+     * See also: the doc-comment on `_recv_aux.max_ranges`.
+     */
     if ((stream->_recv_aux.max_ranges = initial_max_stream_data_local / 1024) < 63)
         stream->_recv_aux.max_ranges = 63;
 }
