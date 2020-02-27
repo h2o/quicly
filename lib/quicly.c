@@ -1098,9 +1098,11 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
     if (!is_ack_only) {
         space->unacked_count++;
         /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
-        if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK || epoch == QUICLY_EPOCH_INITIAL ||
-            epoch == QUICLY_EPOCH_HANDSHAKE)
+        if (epoch == QUICLY_EPOCH_INITIAL || epoch == QUICLY_EPOCH_HANDSHAKE) {
             ack_now = 1;
+        } else if (space->unacked_count >= (pn < 1000 ? 2 : 10)) {
+            ack_now = 1;
+        }
     }
 
     if (ack_now) {
