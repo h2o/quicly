@@ -360,7 +360,15 @@ static int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, con
 static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
 static const quicly_transport_parameters_t default_transport_params = {
-    {0, 0, 0}, 0, 0, 0, 0, QUICLY_DEFAULT_ACK_DELAY_EXPONENT, QUICLY_DEFAULT_MAX_ACK_DELAY};
+    .max_stream_data = {0, 0, 0},
+    .max_data = 0,
+    .max_idle_timeout = 0,
+    .max_streams_bidi = 0,
+    .max_streams_uni = 0,
+    .ack_delay_exponent = QUICLY_DEFAULT_ACK_DELAY_EXPONENT,
+    .max_ack_delay = QUICLY_DEFAULT_MAX_ACK_DELAY,
+    .disable_active_migration = 0,
+};
 
 static __thread int64_t now;
 
