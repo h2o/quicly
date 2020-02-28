@@ -4228,6 +4228,11 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
     }
 
     if (conn->super.ctx->cid_encryptor != NULL) {
+        /* Note on multiple CIDs
+         * Multiple CIDs issued by this host are always based on the same 3-tuple (master_id, thread_id, node_id)
+         * and the only difference is path_id. Therefore comparing the 3-tuple is enough to cover all CIDs issued by
+         * this host.
+         */
         if (conn->super.master_id.master_id == decoded->cid.dest.plaintext.master_id &&
             conn->super.master_id.thread_id == decoded->cid.dest.plaintext.thread_id &&
             conn->super.master_id.node_id == decoded->cid.dest.plaintext.node_id)
