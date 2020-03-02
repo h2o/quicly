@@ -71,9 +71,14 @@ extern "C" {
 #define QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STOP_SENDING_FRAME_CAPACITY (1 + 8 + 8)
 #define QUICLY_ACK_MAX_GAPS 256
-#define QUICLY_ACK_FRAME_CAPACITY (1 + 8 + 8 + 1 + 8)
+#define QUICLY_ACK_FRAME_CAPACITY (1 + 8 + 8 + 1)
 #define QUICLY_PATH_CHALLENGE_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STREAM_FRAME_CAPACITY (1 + 8 + 8 + 1)
+
+/**
+ * maximum number of ACK blocks (inclusive)
+ */
+#define QUICLY_MAX_ACK_BLOCKS 64
 
 static uint16_t quicly_decode16(const uint8_t **src);
 static uint32_t quicly_decode24(const uint8_t **src);

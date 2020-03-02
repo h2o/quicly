@@ -22,6 +22,8 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+#include "picotls.h"
+#include "quicly/constants.h"
 #include "quicly/ranges.h"
 
 #define COPY(dst, src, n)                                                                                                          \
@@ -40,14 +42,10 @@
 static int insert_at(quicly_ranges_t *ranges, uint64_t start, uint64_t end, size_t slot)
 {
     if (ranges->num_ranges == ranges->capacity) {
-        if (ranges->num_ranges == QUICLY_MAX_RANGES)
-            return -1;
         size_t new_capacity = ranges->capacity < 4 ? 4 : ranges->capacity * 2;
-        if (new_capacity > QUICLY_MAX_RANGES)
-            new_capacity = QUICLY_MAX_RANGES;
         quicly_range_t *new_ranges = malloc(new_capacity * sizeof(*new_ranges));
         if (new_ranges == NULL)
-            return -1;
+            return PTLS_ERROR_NO_MEMORY;
         COPY(new_ranges, ranges->ranges, slot);
         COPY(new_ranges + slot + 1, ranges->ranges + slot, ranges->num_ranges - slot);
         if (ranges->ranges != &ranges->_initial)
@@ -62,7 +60,7 @@ static int insert_at(quicly_ranges_t *ranges, uint64_t start, uint64_t end, size
     return 0;
 }
 
-static void shrink_ranges(quicly_ranges_t *ranges, size_t begin_range_index, size_t end_range_index)
+void quicly_ranges_drop_by_range_indices(quicly_ranges_t *ranges, size_t begin_range_index, size_t end_range_index)
 {
     assert(begin_range_index < end_range_index);
 
@@ -85,7 +83,7 @@ static inline int merge_update(quicly_ranges_t *ranges, uint64_t start, uint64_t
     ranges->ranges[slot].end = end < ranges->ranges[end_slot].end ? ranges->ranges[end_slot].end : end;
 
     if (slot != end_slot)
-        shrink_ranges(ranges, slot + 1, end_slot + 1);
+        quicly_ranges_drop_by_range_indices(ranges, slot + 1, end_slot + 1);
 
     return 0;
 }
@@ -167,14 +165,15 @@ int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end
             ranges->ranges[slot].end = start;
         } else {
             /* split */
-            if (insert_at(ranges, end, ranges->ranges[slot].end, slot + 1) != 0)
-                return -1;
+            int ret;
+            if ((ret = insert_at(ranges, end, ranges->ranges[slot].end, slot + 1)) != 0)
+                return ret;
             ranges->ranges[slot].end = start;
             return 0;
         }
         /* remove the slot if the range has become empty */
         if (ranges->ranges[slot].start == ranges->ranges[slot].end)
-            shrink_ranges(ranges, slot, slot + 1);
+            quicly_ranges_drop_by_range_indices(ranges, slot, slot + 1);
         return 0;
     }
 
@@ -198,13 +197,7 @@ int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end
 
     /* remove shrink_from..slot */
     if (shrink_from != slot)
-        shrink_ranges(ranges, shrink_from, slot);
+        quicly_ranges_drop_by_range_indices(ranges, shrink_from, slot);
 
     return 0;
-}
-
-void quicly_ranges_drop_smallest_range(quicly_ranges_t *ranges)
-{
-    assert(ranges->num_ranges != 0);
-    shrink_ranges(ranges, 0, 1);
 }
