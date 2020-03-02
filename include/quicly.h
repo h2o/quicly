@@ -61,7 +61,7 @@ extern "C" {
 
 #define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
 
-#define QUICLY_PROTOCOL_VERSION 0xff000019
+#define QUICLY_PROTOCOL_VERSION 0xff00001b
 
 #define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte)&0xf0) == 0xc0)
 
