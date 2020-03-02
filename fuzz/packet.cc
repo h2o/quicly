@@ -71,6 +71,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
                     if ((ret = quicly_decode_max_streams_frame(&src, end, &frame)) != 0)
                         return 0;
                 } break;
+	        case QUICLY_FRAME_TYPE_PADDING:
                 case QUICLY_FRAME_TYPE_PING:
                     ret = 0;
                     break;
