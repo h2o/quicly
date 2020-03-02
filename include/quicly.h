@@ -247,6 +247,10 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint8_t disable_active_migration : 1;
+    /**
+     *
+     */
+    uint64_t active_connection_id_limit;
 } quicly_transport_parameters_t;
 
 struct st_quicly_cid_t {

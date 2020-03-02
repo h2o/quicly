@@ -59,6 +59,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY 11
 #define QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION 12
 #define QUICLY_TRANSPORT_PARAMETER_ID_PREFERRED_ADDRESS 13
+#define QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT 14
 
 #define QUICLY_EPOCH_INITIAL 0
 #define QUICLY_EPOCH_0RTT 1
@@ -368,6 +369,7 @@ static const quicly_transport_parameters_t default_transport_params = {
     .ack_delay_exponent = QUICLY_DEFAULT_ACK_DELAY_EXPONENT,
     .max_ack_delay = QUICLY_DEFAULT_MAX_ACK_DELAY,
     .disable_active_migration = 0,
+    .active_connection_id_limit = QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT,
 };
 
 static __thread int64_t now;
@@ -1466,6 +1468,9 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
+    if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
+        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
+                { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); });
     /* if requested, add a greasing TP of 1 MTU size so that CH spans across multiple packets */
     if (expand) {
         PUSH_TP(buf, 31 * 100 + 27, {
@@ -1599,6 +1604,18 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
             case QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION:
                 params->disable_active_migration = 1;
                 break;
+            case QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT: {
+                uint64_t v;
+                if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+                if (v < QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT) {
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+                params->active_connection_id_limit = v;
+            } break;
             default:
                 src = end;
                 break;
