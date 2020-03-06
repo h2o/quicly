@@ -3871,6 +3871,10 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     size_t gap_index = frame.num_gaps;
     while (1) {
         assert(frame.ack_block_lengths[gap_index] != 0);
+        /* Ack blocks are organized in the ACK frame and consequently in the ack_block_lengths array from the 
+         * largest acked down. Processing acks in packet number order requires processing the ack blocks in
+         * reverse order.
+         */
         uint64_t pn_block_max = pn_acked + frame.ack_block_lengths[gap_index] - 1;
         QUICLY_PROBE(QUICTRACE_RECV_ACK, conn, probe_now(), pn_acked, pn_block_max);
         while (quicly_sentmap_get(&iter)->packet_number < pn_acked)
