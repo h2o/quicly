@@ -3880,7 +3880,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
             uint64_t pn_sent = sent->packet_number;
             assert(pn_acked <= pn_sent);
             if (pn_acked < pn_sent) {
-                /* move pn_sent to pn_acked, or to the end of the ack block */
+                /* set pn_acked to pn_sent; or past the end of the ack block, for use with the next ack block */
                 if (pn_sent <= pn_block_max) {
                     pn_acked = pn_sent;
                 } else {
