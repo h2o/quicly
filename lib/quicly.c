@@ -4911,6 +4911,9 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
 {
     int ret;
 
+    if (start_off < sizeof(quicly_address_token_plaintext_t))
+	goto Exit; 
+
     /* IV */
     if ((ret = ptls_buffer_reserve(buf, aead->algo->iv_size)) != 0)
         goto Exit;
