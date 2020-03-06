@@ -4909,7 +4909,7 @@ void quicly_amend_ptls_context(ptls_context_t *ptls)
 int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead_context_t *aead, ptls_buffer_t *buf,
                                  size_t start_off, const quicly_address_token_plaintext_t *plaintext)
 {
-    int ret;
+    int ret = 0;
 
     if (start_off < sizeof(quicly_address_token_plaintext_t))
 	goto Exit; 
