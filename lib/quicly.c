@@ -502,9 +502,8 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
             packet->cid.dest.might_be_client_generated = 0;
             break;
         }
-        if (!(packet->version == QUICLY_PROTOCOL_VERSION ||
-              (packet->version & 0xffffff00) == 0xff000000 /* TODO remove this code that is used to test other draft versions */)) {
-            /* version negotiation packet does not have the length field nor is ever coalesced */
+        if (packet->version != QUICLY_PROTOCOL_VERSION) {
+            /* VN packet or packets of unknown version cannot be parsed. `encrypted_off` is set to the first byte after SCID. */
             packet->encrypted_off = src - packet->octets.base;
         } else if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_RETRY) {
             /* retry */
@@ -4542,11 +4541,9 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             if (packet->version == 0)
                 return handle_version_negotiation_packet(conn, packet);
         }
-        if (!(packet->version == QUICLY_PROTOCOL_VERSION ||
-                    (packet->version & 0xffffff00) == 0xff000000)) {
+        if (packet->version != QUICLY_PROTOCOL_VERSION) {
             ret = QUICLY_ERROR_PACKET_IGNORED;
             goto Exit;
-
         }
         switch (packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) {
         case QUICLY_PACKET_TYPE_RETRY: {
