@@ -4542,6 +4542,12 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             if (packet->version == 0)
                 return handle_version_negotiation_packet(conn, packet);
         }
+        if (!(packet->version == QUICLY_PROTOCOL_VERSION ||
+                    (packet->version & 0xffffff00) == 0xff000000)) {
+            ret = QUICLY_ERROR_PACKET_IGNORED;
+            goto Exit;
+
+        }
         switch (packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) {
         case QUICLY_PACKET_TYPE_RETRY: {
             assert(packet->encrypted_off + PTLS_AESGCM_TAG_SIZE == packet->octets.len);
