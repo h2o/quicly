@@ -387,40 +387,39 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
-static int send_one(int fd, quicly_datagram_t *p)
+static void send_packets(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
-    int ret;
-    struct msghdr mess;
-    struct iovec vec;
-    memset(&mess, 0, sizeof(mess));
-    mess.msg_name = &p->dest.sa;
-    mess.msg_namelen = quicly_get_socklen(&p->dest.sa);
-    vec.iov_base = p->data.base;
-    vec.iov_len = p->data.len;
-    mess.msg_iov = &vec;
-    mess.msg_iovlen = 1;
-    if (verbosity >= 2)
-        hexdump("sendmsg", vec.iov_base, vec.iov_len);
-    while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-        ;
-    return ret;
+    for (size_t i = 0; i != num_packets; ++i) {
+        struct msghdr mess;
+        struct iovec vec;
+        memset(&mess, 0, sizeof(mess));
+        mess.msg_name = &packets[i]->dest.sa;
+        mess.msg_namelen = quicly_get_socklen(&packets[i]->dest.sa);
+        vec.iov_base = packets[i]->data.base;
+        vec.iov_len = packets[i]->data.len;
+        mess.msg_iov = &vec;
+        mess.msg_iovlen = 1;
+        if (verbosity >= 2)
+            hexdump("sendmsg", vec.iov_base, vec.iov_len);
+        int ret;
+        while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+            ;
+        if (ret == -1)
+            perror("sendmsg failed");
+    }
+
+    for (size_t i = 0; i != num_packets; ++i)
+        pa->free_packet(pa, packets[i]);
 }
 
 static int send_pending(int fd, quicly_conn_t *conn)
 {
     quicly_datagram_t *packets[16];
-    size_t num_packets = sizeof(packets) / sizeof(packets[0]), i;
+    size_t num_packets = sizeof(packets) / sizeof(packets[0]);
     int ret;
 
-    if ((ret = quicly_send(conn, packets, &num_packets)) == 0) {
-        for (i = 0; i != num_packets; ++i) {
-            if ((ret = send_one(fd, packets[i])) == -1)
-                perror("sendmsg failed");
-            ret = 0;
-            quicly_packet_allocator_t *pa = quicly_get_context(conn)->packet_allocator;
-            pa->free_packet(pa, packets[i]);
-        }
-    }
+    if ((ret = quicly_send(conn, packets, &num_packets)) == 0 && num_packets != 0)
+        send_packets(fd, packets, num_packets, quicly_get_context(conn)->packet_allocator);
 
     return ret;
 }
@@ -669,8 +668,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             quicly_datagram_t *rp =
                                 quicly_send_version_negotiation(&ctx, &sa, packet.cid.src, NULL, packet.cid.dest.encrypted);
                             assert(rp != NULL);
-                            if (send_one(fd, rp) == -1)
-                                perror("sendmsg failed");
+                            send_packets(fd, &rp, 1, ctx.packet_allocator);
                             break;
                         }
                         /* there is no way to send response to these v1 packets */
@@ -709,8 +707,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                                                       packet.cid.dest.encrypted, ptls_iovec_init(NULL, 0),
                                                                       ptls_iovec_init(NULL, 0), NULL);
                             assert(rp != NULL);
-                            if (send_one(fd, rp) == -1)
-                                perror("sendmsg failed");
+                            send_packets(fd, &rp, 1, ctx.packet_allocator);
                             break;
                         } else {
                             /* new connection */
@@ -731,8 +728,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                          * also sending a reset, then the next CID is highly likely to contain a non-authenticating CID, ... */
                         if (packet.cid.dest.plaintext.node_id == 0 && packet.cid.dest.plaintext.thread_id == 0) {
                             quicly_datagram_t *dgram = quicly_send_stateless_reset(&ctx, &sa, NULL, packet.cid.dest.encrypted.base);
-                            if (send_one(fd, dgram) == -1)
-                                perror("sendmsg failed");
+                            send_packets(fd, &dgram, 1, ctx.packet_allocator);
                         }
                     }
                     off += plen;
