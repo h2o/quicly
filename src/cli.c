@@ -22,6 +22,7 @@
 #include <getopt.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <netinet/udp.h>
 #include <stdio.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -387,6 +388,67 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
+#if defined(__linux__) && defined(UDP_SEGMENT)
+
+static void send_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
+{
+    struct msghdr mess = {};
+    struct iovec vecs[num_packets];
+    union {
+        struct cmsghdr hdr;
+        char buf[CMSG_SPACE(sizeof(uint16_t))];
+    } cmsg = {};
+
+    mess.msg_name = &packets[0]->dest.sa; /* TODO quicly might start sending packets going to different paths? */
+    mess.msg_namelen = quicly_get_socklen(&packets[0]->dest.sa);
+
+    for (size_t i = 0; i != num_packets; ++i) {
+        vecs[i].iov_base = packets[i]->data.base;
+        vecs[i].iov_len = packets[i]->data.len;
+    }
+    mess.msg_iov = vecs;
+    mess.msg_iovlen = num_packets;
+
+    if (num_packets != 1) {
+        cmsg.hdr.cmsg_level = SOL_UDP;
+        cmsg.hdr.cmsg_type = UDP_SEGMENT;
+        cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(uint16_t));
+        *(uint16_t *)CMSG_DATA(&cmsg.hdr) = vecs[0].iov_len;
+        mess.msg_control = &cmsg;
+        mess.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(uint16_t));
+    }
+
+    int ret;
+    while ((ret = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+        ;
+    if (ret == -1)
+        perror("sendmsg failed");
+
+    for (size_t i = 0; i != num_packets; ++i)
+	 pa->free_packet(pa, packets[i]);
+}
+
+static void send_packets(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
+{
+    /* send packets using GSO, coalescing up to 10 same-sized datagrams, with the exception that the last datagram might be of
+     * different size */
+    size_t gso_from = 0;
+    for (size_t i = 1; i < num_packets; ++i) {
+        if (packets[i]->data.len > packets[gso_from]->data.len) {
+            send_gso(fd, packets + gso_from, i - gso_from, pa);
+            gso_from = i;
+        } else if (packets[i]->data.len != packets[gso_from]->data.len || i + 1 - gso_from >= 10) {
+            send_gso(fd, packets + gso_from, i + 1 - gso_from, pa);
+            gso_from = i + 1;
+            i = i + 1;
+        }
+    }
+    if (gso_from < num_packets)
+        send_gso(fd, packets + gso_from, num_packets - gso_from, pa);
+}
+
+#else
+
 static void send_packets(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
     for (size_t i = 0; i != num_packets; ++i) {
@@ -411,6 +473,8 @@ static void send_packets(int fd, quicly_datagram_t **packets, size_t num_packets
     for (size_t i = 0; i != num_packets; ++i)
         pa->free_packet(pa, packets[i]);
 }
+
+#endif
 
 static int send_pending(int fd, quicly_conn_t *conn)
 {
