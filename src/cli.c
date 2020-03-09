@@ -393,8 +393,8 @@ static int send_one(int fd, quicly_datagram_t *p)
     struct msghdr mess;
     struct iovec vec;
     memset(&mess, 0, sizeof(mess));
-    mess.msg_name = &p->dest.sa;
-    mess.msg_namelen = quicly_get_socklen(&p->dest.sa);
+//    mess.msg_name = &p->dest.sa;
+//    mess.msg_namelen = quicly_get_socklen(&p->dest.sa);
     vec.iov_base = p->data.base;
     vec.iov_len = p->data.len;
     mess.msg_iov = &vec;
@@ -721,6 +721,8 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                 conns = realloc(conns, sizeof(*conns) * (num_conns + 1));
                                 assert(conns != NULL);
                                 conns[num_conns++] = conn;
+                                ret = connect(fd, &sa, sizeof(struct sockaddr_in));
+                                assert(ret == 0);
                             } else {
                                 assert(conn == NULL);
                             }
