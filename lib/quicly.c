@@ -3854,7 +3854,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     quicly_ack_frame_t frame;
     quicly_sentmap_iter_t iter;
     struct {
-        uint64_t packet_number;
+        uint64_t pn;
         int64_t sent_at;
     } largest_newly_acked = {UINT64_MAX, INT64_MAX};
     size_t bytes_acked = 0;
@@ -3863,7 +3863,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     if ((ret = quicly_decode_ack_frame(&state->src, state->end, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
         return ret;
 
-    uint64_t packet_number = frame.smallest_acknowledged;
+    uint64_t pn_acked = frame.smallest_acknowledged;
 
     switch (state->epoch) {
     case QUICLY_EPOCH_0RTT:
@@ -3881,52 +3881,66 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     size_t gap_index = frame.num_gaps;
     while (1) {
-        uint64_t block_length = frame.ack_block_lengths[gap_index];
-        if (block_length != 0) {
-            QUICLY_PROBE(QUICTRACE_RECV_ACK, conn, probe_now(), packet_number, packet_number + block_length - 1);
-            while (quicly_sentmap_get(&iter)->packet_number < packet_number)
-                quicly_sentmap_skip(&iter);
-            do {
-                const quicly_sent_packet_t *sent;
-                if ((sent = quicly_sentmap_get(&iter))->packet_number == packet_number) {
-                    ++conn->super.stats.num_packets.ack_received;
-                    if (state->epoch == sent->ack_epoch) {
-                        largest_newly_acked.packet_number = packet_number;
-                        largest_newly_acked.sent_at = sent->sent_at;
-                        includes_ack_eliciting |= sent->ack_eliciting;
-                        QUICLY_PROBE(PACKET_ACKED, conn, probe_now(), packet_number, 1);
-                        if (sent->bytes_in_flight != 0) {
-                            bytes_acked += sent->bytes_in_flight;
-                        }
-                        if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED, conn)) != 0)
-                            return ret;
-                        if (state->epoch == QUICLY_EPOCH_1RTT) {
-                            struct st_quicly_application_space_t *space = conn->application;
-                            if (space->cipher.egress.key_update_pn.last <= packet_number) {
-                                space->cipher.egress.key_update_pn.last = UINT64_MAX;
-                                space->cipher.egress.key_update_pn.next =
-                                    conn->egress.packet_number + conn->super.ctx->max_packets_per_key;
-                                QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, probe_now(), space->cipher.egress.key_update_pn.next);
-                            }
-                        }
-                    } else {
-                        quicly_sentmap_skip(&iter);
+        assert(frame.ack_block_lengths[gap_index] != 0);
+        /* Ack blocks are organized in the ACK frame and consequently in the ack_block_lengths array from the 
+         * largest acked down. Processing acks in packet number order requires processing the ack blocks in
+         * reverse order.
+         */
+        uint64_t pn_block_max = pn_acked + frame.ack_block_lengths[gap_index] - 1;
+        QUICLY_PROBE(QUICTRACE_RECV_ACK, conn, probe_now(), pn_acked, pn_block_max);
+        while (quicly_sentmap_get(&iter)->packet_number < pn_acked)
+            quicly_sentmap_skip(&iter);
+        do {
+            const quicly_sent_packet_t *sent = quicly_sentmap_get(&iter);
+            uint64_t pn_sent = sent->packet_number;
+            assert(pn_acked <= pn_sent);
+            if (pn_acked < pn_sent) {
+                /* set pn_acked to pn_sent; or past the end of the ack block, for use with the next ack block */
+                if (pn_sent <= pn_block_max) {
+                    pn_acked = pn_sent;
+                } else {
+                    pn_acked = pn_block_max + 1;
+                    break;
+                }
+            }
+            /* process newly acked packet */
+            ++conn->super.stats.num_packets.ack_received;
+            if (state->epoch == sent->ack_epoch) {
+                largest_newly_acked.pn = pn_acked;
+                largest_newly_acked.sent_at = sent->sent_at;
+                includes_ack_eliciting |= sent->ack_eliciting;
+                QUICLY_PROBE(PACKET_ACKED, conn, probe_now(), pn_acked, 1);
+                if (sent->bytes_in_flight != 0) {
+                    bytes_acked += sent->bytes_in_flight;
+                }
+                if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED, conn)) != 0)
+                    return ret;
+                if (state->epoch == QUICLY_EPOCH_1RTT) {
+                    struct st_quicly_application_space_t *space = conn->application;
+                    if (space->cipher.egress.key_update_pn.last <= pn_acked) {
+                        space->cipher.egress.key_update_pn.last = UINT64_MAX;
+                        space->cipher.egress.key_update_pn.next = conn->egress.packet_number + conn->super.ctx->max_packets_per_key;
+                        QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, probe_now(), space->cipher.egress.key_update_pn.next);
                     }
                 }
-                ++packet_number;
-            } while (--block_length != 0);
-        }
+            } else {
+                /* TODO isn't this a procotol violation? */
+                quicly_sentmap_skip(&iter);
+            }
+            ++pn_acked;
+        } while (pn_acked <= pn_block_max);
+        assert(pn_acked == pn_block_max + 1);
         if (gap_index-- == 0)
             break;
-        packet_number += frame.gaps[gap_index];
+        pn_acked += frame.gaps[gap_index];
     }
 
     QUICLY_PROBE(QUICTRACE_RECV_ACK_DELAY, conn, probe_now(), frame.ack_delay);
 
     /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
      * so far. So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
-    quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.packet_number, now, largest_newly_acked.sent_at,
-                                frame.ack_delay, includes_ack_eliciting);
+    quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.pn, now, largest_newly_acked.sent_at, frame.ack_delay,
+                                includes_ack_eliciting);
 
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
