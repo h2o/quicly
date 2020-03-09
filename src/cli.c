@@ -388,9 +388,13 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
-#if defined(__linux__) && defined(UDP_SEGMENT)
+#ifdef __linux__
 
-static void send_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
+#ifndef UDP_SEGMENT
+#define UDP_SEGMENT 103
+#endif
+
+static void do_send_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
     struct msghdr mess = {};
     struct iovec vecs[num_packets];
@@ -428,28 +432,28 @@ static void send_gso(int fd, quicly_datagram_t **packets, size_t num_packets, qu
 	 pa->free_packet(pa, packets[i]);
 }
 
-static void send_packets(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
+static void send_packets_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
     /* send packets using GSO, coalescing up to 10 same-sized datagrams, with the exception that the last datagram might be of
      * different size */
     size_t gso_from = 0;
     for (size_t i = 1; i < num_packets; ++i) {
         if (packets[i]->data.len > packets[gso_from]->data.len) {
-            send_gso(fd, packets + gso_from, i - gso_from, pa);
+            do_send_gso(fd, packets + gso_from, i - gso_from, pa);
             gso_from = i;
         } else if (packets[i]->data.len != packets[gso_from]->data.len || i + 1 - gso_from >= 10) {
-            send_gso(fd, packets + gso_from, i + 1 - gso_from, pa);
+            do_send_gso(fd, packets + gso_from, i + 1 - gso_from, pa);
             gso_from = i + 1;
             i = i + 1;
         }
     }
     if (gso_from < num_packets)
-        send_gso(fd, packets + gso_from, num_packets - gso_from, pa);
+        do_send_gso(fd, packets + gso_from, num_packets - gso_from, pa);
 }
 
-#else
+#endif
 
-static void send_packets(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
+static void send_packets_default(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
     for (size_t i = 0; i != num_packets; ++i) {
         struct msghdr mess;
@@ -474,7 +478,7 @@ static void send_packets(int fd, quicly_datagram_t **packets, size_t num_packets
         pa->free_packet(pa, packets[i]);
 }
 
-#endif
+static void (*send_packets)(int, quicly_datagram_t **, size_t, quicly_packet_allocator_t *) = send_packets_default;
 
 static int send_pending(int fd, quicly_conn_t *conn)
 {
@@ -960,6 +964,7 @@ static void usage(const char *cmd)
            "  -K num-packets            perform key update every num-packets packets\n"
            "  -e event-log-file         file to log events\n"
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
+           "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
            "  -l log-file               file to log traffic secrets\n"
@@ -1022,7 +1027,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:i:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:Gi:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < sizeof(negotiated_protocols.list) / sizeof(negotiated_protocols.list[0]));
@@ -1039,6 +1044,14 @@ int main(int argc, char **argv)
             break;
         case 'c':
             load_certificate_chain(ctx.tls, optarg);
+            break;
+        case 'G':
+#ifdef __linux__
+            send_packets = send_packets_gso;
+#else
+            fprintf(stderr, "UDP GSO only supported on linux\n");
+            exit(1);
+#endif
             break;
         case 'k':
             load_private_key(ctx.tls, optarg);
