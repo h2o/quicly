@@ -36,6 +36,8 @@
 #include "quicly/streambuf.h"
 #include "../deps/picotls/t/util.h"
 
+#define MAX_BURST_PACKETS 10
+
 FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
 static int suppress_output = 0;
@@ -441,7 +443,7 @@ static void send_packets_gso(int fd, quicly_datagram_t **packets, size_t num_pac
         if (packets[i]->data.len > packets[gso_from]->data.len) {
             do_send_gso(fd, packets + gso_from, i - gso_from, pa);
             gso_from = i;
-        } else if (packets[i]->data.len != packets[gso_from]->data.len || i + 1 - gso_from >= 10) {
+        } else if (packets[i]->data.len != packets[gso_from]->data.len || i + 1 - gso_from >= MAX_BURST_PACKETS) {
             do_send_gso(fd, packets + gso_from, i + 1 - gso_from, pa);
             gso_from = i + 1;
             i = i + 1;
@@ -482,7 +484,7 @@ static void (*send_packets)(int, quicly_datagram_t **, size_t, quicly_packet_all
 
 static int send_pending(int fd, quicly_conn_t *conn)
 {
-    quicly_datagram_t *packets[16];
+    quicly_datagram_t *packets[MAX_BURST_PACKETS];
     size_t num_packets = sizeof(packets) / sizeof(packets[0]);
     int ret;
 
