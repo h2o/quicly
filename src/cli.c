@@ -436,7 +436,7 @@ static void do_send_gso(int fd, quicly_datagram_t **packets, size_t num_packets,
 
 static void send_packets_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
-    /* send packets using GSO, coalescing up to 10 same-sized datagrams, with the exception that the last datagram might be of
+    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram might be of
      * different size */
     size_t gso_from = 0;
     for (size_t i = 1; i < num_packets; ++i) {
