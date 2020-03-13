@@ -2431,7 +2431,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
 
     QUICLY_PROBE(PACKET_COMMIT, conn, probe_now(), conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  !s->target.ack_eliciting);
-    QUICLY_PROBE(QUICTRACE_SENT, conn, probe_now(), conn->egress.packet_number, s->target.packet->data.len,
+    QUICLY_PROBE(QUICTRACE_SENT, conn, probe_now(), conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  get_epoch(*s->target.first_byte_at));
 
     ++conn->egress.packet_number;
@@ -2860,9 +2860,7 @@ UpdateState:
  */
 static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
 {
-    return quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.peer.transport_params.max_ack_delay,
-                              conn->egress.loss.conf->min_pto) *
-           4;
+    return quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->egress.loss.conf, conn->super.peer.transport_params.max_ack_delay) * 4;
 }
 
 static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)

@@ -77,7 +77,7 @@ typedef struct quicly_rtt_t {
 
 static void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, uint32_t initial_rtt);
 static void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay);
-static uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto);
+static uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, uint32_t max_ack_delay);
 
 typedef struct quicly_loss_t {
     /**
@@ -173,6 +173,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     if (rtt->smoothed == 0) {
         /* first RTT sample */
         rtt->smoothed = rtt->latest;
+        rtt->variance = rtt->latest / 2;
     } else {
         uint32_t absdiff = rtt->smoothed >= rtt->latest ? rtt->smoothed - rtt->latest : rtt->latest - rtt->smoothed;
         rtt->variance = (rtt->variance * 3 + absdiff) / 4;
@@ -181,9 +182,11 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     assert(rtt->smoothed != 0);
 }
 
-inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto)
+inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, uint32_t max_ack_delay)
 {
-    return rtt->smoothed + (rtt->variance != 0 ? rtt->variance * 4 : min_pto) + max_ack_delay;
+    if (rtt->smoothed == 0)
+        return 2 * conf->default_initial_rtt;
+    return  rtt->smoothed  + (rtt->variance != 0 ? rtt->variance * 4 : conf->min_pto) + max_ack_delay;
 }
 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
@@ -243,14 +246,14 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         if (r->pto_count < 0) {
             /* Speculative probes sent under an RTT do not need to account for ack delay, since there is no expectation
              * of an ack being received before the probe is sent. */
-            alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
+            alarm_duration = quicly_rtt_get_pto(&r->rtt, &r->conf, 0);
             alarm_duration >>= -r->pto_count;
             if (alarm_duration < r->conf->min_pto)
                 alarm_duration = r->conf->min_pto;
         } else {
             /* Ordinary PTO. The bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or
              * pto_count, even when the timer granularity is nanosecond */
-            alarm_duration = quicly_rtt_get_pto(&r->rtt, handshake_is_in_progress ? 0 : *r->max_ack_delay, r->conf->min_pto);
+            alarm_duration = quicly_rtt_get_pto(&r->rtt, &r->conf, handshake_is_in_progress ? 0 : *r->max_ack_delay);
             alarm_duration <<= r->pto_count;
         }
     }
