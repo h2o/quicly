@@ -246,14 +246,14 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         if (r->pto_count < 0) {
             /* Speculative probes sent under an RTT do not need to account for ack delay, since there is no expectation
              * of an ack being received before the probe is sent. */
-            alarm_duration = quicly_rtt_get_pto(&r->rtt, &r->conf, 0);
+            alarm_duration = quicly_rtt_get_pto(&r->rtt, r->conf, 0);
             alarm_duration >>= -r->pto_count;
             if (alarm_duration < r->conf->min_pto)
                 alarm_duration = r->conf->min_pto;
         } else {
             /* Ordinary PTO. The bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or
              * pto_count, even when the timer granularity is nanosecond */
-            alarm_duration = quicly_rtt_get_pto(&r->rtt, &r->conf, handshake_is_in_progress ? 0 : *r->max_ack_delay);
+            alarm_duration = quicly_rtt_get_pto(&r->rtt, r->conf, handshake_is_in_progress ? 0 : *r->max_ack_delay);
             alarm_duration <<= r->pto_count;
         }
     }
