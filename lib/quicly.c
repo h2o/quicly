@@ -645,7 +645,7 @@ static int stream_is_destroyable(quicly_stream_t *stream)
         return 0;
     if (!quicly_sendstate_transfer_complete(&stream->sendstate))
         return 0;
-    switch (stream->_send_aux.rst.sender_state) {
+    switch (stream->_send_aux.reset_stream.sender_state) {
     case QUICLY_SENDER_STATE_NONE:
     case QUICLY_SENDER_STATE_ACKED:
         break;
@@ -824,8 +824,8 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     stream->_send_aux.max_stream_data = initial_max_stream_data_remote;
     stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_NONE;
     stream->_send_aux.stop_sending.error_code = 0;
-    stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_NONE;
-    stream->_send_aux.rst.error_code = 0;
+    stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_NONE;
+    stream->_send_aux.reset_stream.error_code = 0;
     quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender, initial_max_stream_data_local);
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
     quicly_linklist_init(&stream->_send_aux.pending_link.default_scheduler);
@@ -2095,14 +2095,14 @@ static int on_ack_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet
             stream->callbacks->on_send_shift(stream, bytes_to_shift);
         if (stream_is_destroyable(stream)) {
             destroy_stream(stream, 0);
-        } else if (stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE) {
+        } else if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE) {
             resched_stream_data(stream);
         }
     } else {
         /* FIXME handle rto error */
         if ((ret = quicly_sendstate_lost(&stream->sendstate, &sent->data.stream.args)) != 0)
             return ret;
-        if (stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE)
+        if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE)
             resched_stream_data(stream);
     }
 
@@ -2178,13 +2178,13 @@ static void on_ack_stream_state_sender(quicly_sender_state_t *sender_state, int 
     *sender_state = acked ? QUICLY_SENDER_STATE_ACKED : QUICLY_SENDER_STATE_SEND;
 }
 
-static int on_ack_rst_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
-                             quicly_sentmap_event_t event)
+static int on_ack_reset_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+                               quicly_sentmap_event_t event)
 {
     if (event != QUICLY_SENTMAP_EVENT_EXPIRED) {
         quicly_stream_t *stream;
         if ((stream = quicly_get_stream(conn, sent->data.stream_state_sender.stream_id)) != NULL) {
-            on_ack_stream_state_sender(&stream->_send_aux.rst.sender_state, event == QUICLY_SENTMAP_EVENT_ACKED);
+            on_ack_stream_state_sender(&stream->_send_aux.reset_stream.sender_state, event == QUICLY_SENTMAP_EVENT_ACKED);
             if (stream_is_destroyable(stream))
                 destroy_stream(stream, 0);
         }
@@ -2699,13 +2699,13 @@ static int send_stream_control_frames(quicly_stream_t *stream, quicly_send_conte
         QUICLY_PROBE(MAX_STREAM_DATA_SEND, stream->conn, probe_now(), stream, new_value);
     }
 
-    /* send RST_STREAM if necessary */
-    if (stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_SEND) {
-        if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.rst.sender_state, s, QUICLY_RST_FRAME_CAPACITY,
-                                               on_ack_rst_stream)) != 0)
+    /* send RESET_STREAM if necessary */
+    if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_SEND) {
+        if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.reset_stream.sender_state, s, QUICLY_RST_FRAME_CAPACITY,
+                                               on_ack_reset_stream)) != 0)
             return ret;
-        s->dst = quicly_encode_rst_stream_frame(s->dst, stream->stream_id, stream->_send_aux.rst.error_code,
-                                                stream->sendstate.size_inflight);
+        s->dst = quicly_encode_reset_stream_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
+                                                  stream->sendstate.size_inflight);
     }
 
     return 0;
@@ -2799,7 +2799,7 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     stream->callbacks->on_send_emit(stream, (size_t)(off - stream->sendstate.acked.ranges[0].end), s->dst, &len, &wrote_all);
     if (stream->conn->super.state >= QUICLY_STATE_CLOSING) {
         return QUICLY_ERROR_IS_CLOSING;
-    } else if (stream->_send_aux.rst.sender_state != QUICLY_SENDER_STATE_NONE) {
+    } else if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE) {
         return 0;
     }
     assert(len <= capacity);
@@ -3358,7 +3358,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         {NULL, NULL, "QUIC_SERVER_HANDSHAKE_TRAFFIC_SECRET", "QUIC_SERVER_TRAFFIC_SECRET_0"}};
     const char *log_label = log_labels[ptls_is_server(tls) == is_enc][epoch];
 
-    QUICLY_PROBE(CRYPTO_UPDATE_SECRET, conn, probe_now(), is_enc, epoch, log_label, QUICLY_PROBE_HEXDUMP(secret, cipher->hash->digest_size));
+    QUICLY_PROBE(CRYPTO_UPDATE_SECRET, conn, probe_now(), is_enc, epoch, log_label,
+                 QUICLY_PROBE_HEXDUMP(secret, cipher->hash->digest_size));
 
     if (tlsctx->log_event != NULL) {
         char hexbuf[PTLS_MAX_DIGEST_SIZE * 2 + 1];
@@ -3836,7 +3837,7 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
 
     if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t bytes_missing;
-        if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_offset, &bytes_missing)) != 0)
+        if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, &bytes_missing)) != 0)
             return ret;
         stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
         stream->callbacks->on_receive_reset(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code));
@@ -3882,10 +3883,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     size_t gap_index = frame.num_gaps;
     while (1) {
         assert(frame.ack_block_lengths[gap_index] != 0);
-        /* Ack blocks are organized in the ACK frame and consequently in the ack_block_lengths array from the 
-         * largest acked down. Processing acks in packet number order requires processing the ack blocks in
-         * reverse order.
-         */
+        /* Ack blocks are organized in the ACK frame and consequently in the ack_block_lengths array from the largest acked down.
+         * Processing acks in packet number order requires processing the ack blocks in reverse order. */
         uint64_t pn_block_max = pn_acked + frame.ack_block_lengths[gap_index] - 1;
         QUICLY_PROBE(QUICTRACE_RECV_ACK, conn, probe_now(), pn_acked, pn_block_max);
         while (quicly_sentmap_get(&iter)->packet_number < pn_acked)
@@ -3978,7 +3977,7 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, struct st_quicly_ha
         return 0;
     stream->_send_aux.max_stream_data = frame.max_stream_data;
 
-    if (stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE)
+    if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE)
         resched_stream_data(stream);
 
     return 0;
@@ -4811,15 +4810,15 @@ void quicly_reset_stream(quicly_stream_t *stream, int err)
 {
     assert(quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id));
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
-    assert(stream->_send_aux.rst.sender_state == QUICLY_SENDER_STATE_NONE);
+    assert(stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE);
     assert(!quicly_sendstate_transfer_complete(&stream->sendstate));
 
     /* dispose sendbuf state */
     quicly_sendstate_reset(&stream->sendstate);
 
-    /* setup RST_STREAM */
-    stream->_send_aux.rst.sender_state = QUICLY_SENDER_STATE_SEND;
-    stream->_send_aux.rst.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+    /* setup RESET_STREAM */
+    stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_SEND;
+    stream->_send_aux.reset_stream.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
 
     /* schedule for delivery */
     sched_stream_control(stream);
