@@ -3906,11 +3906,18 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
             /* process newly acked packet */
             if (state->epoch != sent->ack_epoch)
                 return QUICLY_PROTOCOL_VERSION;
+            int is_late_ack = 0;
+            if (sent->ack_eliciting) {
+                includes_ack_eliciting = 1;
+                if (sent->bytes_in_flight == 0) {
+                    is_late_ack = 1;
+                    ++conn->super.stats.num_packets.late_acked;
+                }
+            }
             ++conn->super.stats.num_packets.ack_received;
             largest_newly_acked.pn = pn_acked;
             largest_newly_acked.sent_at = sent->sent_at;
-            includes_ack_eliciting |= sent->ack_eliciting;
-            QUICLY_PROBE(PACKET_ACKED, conn, probe_now(), pn_acked, 1);
+            QUICLY_PROBE(PACKET_ACKED, conn, probe_now(), pn_acked, is_late_ack);
             if (sent->bytes_in_flight != 0) {
                 bytes_acked += sent->bytes_in_flight;
             }
