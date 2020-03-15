@@ -145,7 +145,7 @@ for my $probe (@probes) {
             } elsif ($type =~ /\s+\*$/) {
                 # emit the address for other pointers
                 push @fmt, qq!"name":"0x%llx"!;
-                push @ap, "(unsigned long long)arg$i";
+                push @ap, "(unsigned long long)(uintptr_t)arg$i";
             } else {
                 die "can't handle type: $type";
             }
