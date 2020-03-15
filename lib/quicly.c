@@ -2635,11 +2635,14 @@ Emit: /* emit an ACK frame */
     }
 
     /* when there are no less than QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK (8) gaps, bundle PING once every 4 packets being sent */
-    if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 4 == 0 &&
-        dst < s->dst_end)
+    int bundle_ping = space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK &&
+                      conn->egress.packet_number % 4 == 0 && dst < s->dst_end;
+    if (bundle_ping)
         *dst++ = QUICLY_FRAME_TYPE_PING;
 
     s->dst = dst;
+
+    QUICLY_PROBE(ACK_SEND, conn, probe_now(), bundle_ping);
 
     { /* save what's inflight */
         size_t i;
@@ -2681,6 +2684,7 @@ static int send_stream_control_frames(quicly_stream_t *stream, quicly_send_conte
                                                QUICLY_STOP_SENDING_FRAME_CAPACITY, on_ack_stop_sending)) != 0)
             return ret;
         s->dst = quicly_encode_stop_sending_frame(s->dst, stream->stream_id, stream->_send_aux.stop_sending.error_code);
+        QUICLY_PROBE(STOP_SENDING_SEND, stream->conn, probe_now(), stream, stream->_send_aux.stop_sending.error_code);
     }
 
     /* send MAX_STREAM_DATA if necessary */
@@ -2706,6 +2710,8 @@ static int send_stream_control_frames(quicly_stream_t *stream, quicly_send_conte
             return ret;
         s->dst = quicly_encode_reset_stream_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
                                                   stream->sendstate.size_inflight);
+        QUICLY_PROBE(RESET_STREAM_SEND, stream->conn, probe_now(), stream, stream->_send_aux.reset_stream.error_code,
+                     stream->sendstate.size_inflight);
     }
 
     return 0;
@@ -3517,6 +3523,11 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         if ((ret = allocate_frame(conn, s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY)) != 0)
                             goto Exit;
                         s->dst = quicly_encode_path_challenge_frame(s->dst, c->is_response, c->data);
+                        if (c->is_response) {
+                            QUICLY_PROBE(PATH_CHALLENGE_SEND, conn, probe_now(), c->data);
+                        } else {
+                            QUICLY_PROBE(PATH_RESPONSE_SEND, conn, probe_now(), c->data);
+                        }
                         conn->egress.path_challenge.head = c->next;
                         free(c);
                     } while (conn->egress.path_challenge.head != NULL);
