@@ -64,8 +64,12 @@ provider quicly {
 
     probe reset_stream_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, unsigned error_code,
                             uint64_t final_size);
+    probe reset_stream_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t stream_id,
+                               unsigned error_code, uint64_t final_size);
 
     probe stop_sending_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, unsigned error_code);
+    probe stop_sending_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t stream_id,
+                               unsigned error_code);
 
     probe stream_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off, size_t len,
                       int is_fin);

@@ -3840,12 +3840,18 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
     quicly_stream_t *stream;
     int ret;
 
+    /* decode and determine the stream */
     if ((ret = quicly_decode_reset_stream_frame(&state->src, state->end, &frame)) != 0)
         return ret;
+    ret = get_stream_or_open_if_new(conn, frame.stream_id, &stream);
 
-    if ((ret = get_stream_or_open_if_new(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
+    QUICLY_PROBE(RESET_STREAM_RECEIVE, conn, probe_now(), stream, frame.stream_id, frame.app_error_code, frame.final_size);
+
+    /* nothing to do if stream has not been found (or in case of an error) */
+    if (stream == NULL)
         return ret;
 
+    /* process the reset */
     if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t bytes_missing;
         if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, &bytes_missing)) != 0)
@@ -4117,12 +4123,18 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, struct st_quicly_handl
     quicly_stream_t *stream;
     int ret;
 
+    /* decode the frame and determine the offending stream */
     if ((ret = quicly_decode_stop_sending_frame(&state->src, state->end, &frame)) != 0)
         return ret;
+    ret = get_stream_or_open_if_new(conn, frame.stream_id, &stream);
 
-    if ((ret = get_stream_or_open_if_new(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
+    QUICLY_PROBE(STOP_SENDING_RECEIVE, conn, probe_now(), stream, frame.stream_id, frame.app_error_code);
+
+    /* nothing to do if stream has not been found (or in case of an error) */
+    if (stream == NULL)
         return ret;
 
+    /* process the request */
     if (quicly_sendstate_is_open(&stream->sendstate)) {
         /* reset the stream, then notify the application */
         int err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code);
