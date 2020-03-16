@@ -4079,11 +4079,22 @@ static int handle_path_challenge_frame(quicly_conn_t *conn, struct st_quicly_han
 
     if ((ret = quicly_decode_path_challenge_frame(&state->src, state->end, &frame)) != 0)
         return ret;
+
+    QUICLY_PROBE(PATH_CHALLENGE_RECEIVE, conn, probe_now(), frame.data);
+
     return schedule_path_challenge(conn, 1, frame.data);
 }
 
 static int handle_path_response_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
+    quicly_path_challenge_frame_t frame;
+    int ret;
+
+    if ((ret = quicly_decode_path_challenge_frame(&state->src, state->end, &frame)) != 0)
+        return ret;
+
+    QUICLY_PROBE(PATH_RESPONSE_RECEIVE, conn, probe_now(), frame.data);
+
     return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 }
 
