@@ -591,7 +591,7 @@ struct st_quicly_stream_t {
             uint16_t error_code;
         } stop_sending;
         /**
-         * rst_stream
+         * reset_stream
          */
         struct {
             /**
@@ -599,7 +599,7 @@ struct st_quicly_stream_t {
              */
             quicly_sender_state_t sender_state;
             uint16_t error_code;
-        } rst;
+        } reset_stream;
         /**
          * sends receive window updates to peer
          */
