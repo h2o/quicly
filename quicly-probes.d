@@ -90,11 +90,11 @@ provider quicly {
     probe new_token_acked(struct st_quicly_conn_t *conn, int64_t at, uint64_t generation);
     probe new_token_receive(struct st_quicly_conn_t *conn, int64_t at, uint8_t *token, size_t len);
 
-    probe path_challenge_send(struct st_quicly_conn_t *conn, int64_t at, uint8_t *data);
-    probe path_challenge_receive(struct st_quicly_conn_t *conn, int64_t at, uint8_t *data);
+    probe path_challenge_send(struct st_quicly_conn_t *conn, int64_t at, const uint8_t *data);
+    probe path_challenge_receive(struct st_quicly_conn_t *conn, int64_t at, const uint8_t *data);
 
-    probe path_response_send(struct st_quicly_conn_t *conn, int64_t at, uint8_t *data);
-    probe path_response_receive(struct st_quicly_conn_t *conn, int64_t at, uint8_t *data);
+    probe path_response_send(struct st_quicly_conn_t *conn, int64_t at, const uint8_t *data);
+    probe path_response_receive(struct st_quicly_conn_t *conn, int64_t at, const uint8_t *data);
 
     probe handshake_done_send(struct st_quicly_conn_t *conn, int64_t at);
     probe handshake_done_receive(struct st_quicly_conn_t *conn, int64_t at);
