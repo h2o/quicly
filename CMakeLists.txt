@@ -16,6 +16,10 @@ IF (WITH_DTRACE)
     MESSAGE(STATUS "Enabling USDT support")
 ENDIF ()
 
+# CMake defaults to a Debug build, whereas quicly defaults to an optimized (Release) build
+IF(NOT CMAKE_BUILD_TYPE)
+    SET(CMAKE_BUILD_TYPE Release)
+ENDIF(NOT CMAKE_BUILD_TYPE)
 SET(CMAKE_C_FLAGS "-std=c99 -Wall -g ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
 SET(CMAKE_C_FLAGS_DEBUG "-O0")
 SET(CMAKE_C_FLAGS_RELEASE "-O2")
