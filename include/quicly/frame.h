@@ -558,6 +558,9 @@ inline int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint
         goto Fail;
     if ((frame->retire_prior_to = quicly_decodev(src, end)) == UINT64_MAX)
         goto Fail;
+    /* The Retire Prior To field MUST be less than or equal to the Sequence Number field. */
+    if (frame->sequence < frame->retire_prior_to)
+        goto Fail;
     if (end - *src < 1)
         goto Fail;
 
