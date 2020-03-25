@@ -435,6 +435,11 @@ struct st_quicly_default_scheduler_state_t {
     quicly_linklist_t blocked;
 };
 
+struct st_quicly_stateless_reset_t {
+    uint8_t *token;
+    uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
+};
+
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
@@ -474,10 +479,7 @@ struct _st_quicly_conn_public_t {
         /**
          * stateless reset token corresponding to the CID
          */
-        struct {
-            uint8_t *token;
-            uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
-        } stateless_reset;
+        struct st_quicly_stateless_reset_t stateless_reset;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
