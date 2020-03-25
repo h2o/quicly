@@ -284,7 +284,7 @@ struct st_quicly_conn_t {
          */
         int64_t send_ack_at;
         /**
-         *
+         * congestion control
          */
         quicly_cc_t cc;
     } egress;
