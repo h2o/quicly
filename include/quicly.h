@@ -440,6 +440,19 @@ struct st_quicly_stateless_reset_t {
     uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
 };
 
+/**
+ * records an extra CID given by the peer via NEW_CONNECTION_ID frame
+ */
+struct st_quicly_spare_cid_t {
+    /**
+     * indicates whether this record holds an active (given by peer and not retired) CID
+     */
+    int is_active;
+    uint64_t sequence;
+    quicly_cid_t cid;
+    struct st_quicly_stateless_reset_t stateless_reset;
+};
+
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
@@ -466,6 +479,7 @@ struct _st_quicly_conn_public_t {
          */
         quicly_cid_t offered_cid;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
+        uint32_t n_retired_cids;
     } host;
     struct {
         /**
@@ -480,12 +494,24 @@ struct _st_quicly_conn_public_t {
          * stateless reset token corresponding to the CID
          */
         struct st_quicly_stateless_reset_t stateless_reset;
+        /**
+         * sequence number associated with the current CID
+         */
+        uint64_t cid_sequence;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
             unsigned validated : 1;
             unsigned send_probe : 1;
         } address_validation;
+        /**
+         * additional CIDs offered by the peer
+         */
+        struct st_quicly_spare_cid_t spare_cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1];
+        /**
+         * maximum value of Retire Prior To field observed so far
+         */
+        uint64_t max_retire_prior_to;
     } peer;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {

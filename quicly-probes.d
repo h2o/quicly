@@ -85,6 +85,12 @@ provider quicly {
     probe streams_blocked_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t limit, int is_unidirectional);
     probe streams_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t limit, int is_unidirectional);
 
+    probe new_connection_id_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence, uint64_t retire_prior_to);
+    probe new_connection_id_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence, uint64_t retire_prior_to);
+
+    probe retire_connection_id_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence);
+    probe retire_connection_id_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence);
+
     probe data_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t off);
 
     probe stream_data_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t limit);
