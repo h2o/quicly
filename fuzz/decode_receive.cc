@@ -39,7 +39,7 @@ static ptls_on_client_hello_t on_client_hello = {on_client_hello_cb};
 static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .get_time = &ptls_get_time,
                                 .key_exchanges = key_exchanges,
-                                .cipher_suites = cipher_suites,
+                                .cipher_suites = ptls_openssl_cipher_suites,
                                 .require_dhe_on_psk = 1 , 
                                 .save_ticket = &save_session_ticket,
                                 .on_client_hello = &on_client_hello};
@@ -57,7 +57,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
 
 	ctx = quicly_spec_context;
 	ctx.tls = &tlsctx;
-
+	
 	quicly_conn_t *conn = NULL;
 	quicly_cid_plaintext_t next_cid;
 	const char* host = "127.0.0.1";
