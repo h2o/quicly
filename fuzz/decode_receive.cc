@@ -17,11 +17,6 @@ static struct {
 
 int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src)
 {
-    free(session_info.tls_ticket.base);
-    session_info.tls_ticket = ptls_iovec_init(malloc(src.len), src.len);
-    memcpy(session_info.tls_ticket.base, src.base, src.len);
-
-    quicly_conn_t *conn = (quicly_conn_t *) *ptls_get_data_ptr(tls);
     return 0; 
 }
 
