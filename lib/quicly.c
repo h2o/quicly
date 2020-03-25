@@ -4429,6 +4429,17 @@ static int handle_stateless_reset(quicly_conn_t *conn)
     return handle_close(conn, QUICLY_ERROR_RECEIVED_STATELESS_RESET, UINT64_MAX, ptls_iovec_init("", 0));
 }
 
+static int validate_retry_tag(quicly_decoded_packet_t *packet, quicly_cid_t *odcid, ptls_aead_context_t *retry_aead)
+{
+    size_t pseudo_packet_len = 1 + odcid->len + packet->encrypted_off;
+    uint8_t pseudo_packet[pseudo_packet_len];
+    pseudo_packet[0] = odcid->len;
+    memcpy(pseudo_packet + 1, odcid->cid, odcid->len);
+    memcpy(pseudo_packet + 1 + odcid->len, packet->octets.base, packet->encrypted_off);
+    return ptls_aead_decrypt(retry_aead, packet->octets.base + packet->encrypted_off, packet->octets.base + packet->encrypted_off,
+                             PTLS_AESGCM_TAG_SIZE, 0, pseudo_packet, pseudo_packet_len) == 0;
+}
+
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
                   const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties)
@@ -4568,21 +4579,12 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            { /* validate the AEAD tag */
-                size_t pseudo_packet_len = 1 + conn->super.peer.cid.len + packet->encrypted_off;
-                uint8_t pseudo_packet[pseudo_packet_len];
-                pseudo_packet[0] = (uint8_t)conn->super.peer.cid.len;
-                memcpy(pseudo_packet + 1, conn->super.peer.cid.cid, conn->super.peer.cid.len);
-                memcpy(pseudo_packet + 1 + conn->super.peer.cid.len, packet->octets.base, packet->encrypted_off);
-                ptls_aead_context_t *aead = create_retry_aead(conn->super.ctx, 0);
-                int aead_ok = ptls_aead_decrypt(aead, packet->octets.base + packet->encrypted_off,
-                                                packet->octets.base + packet->encrypted_off, PTLS_AESGCM_TAG_SIZE, 0, pseudo_packet,
-                                                pseudo_packet_len) == 0;
-                ptls_aead_free(aead);
-                if (!aead_ok) {
-                    ret = QUICLY_ERROR_PACKET_IGNORED;
-                    goto Exit;
-                }
+            ptls_aead_context_t *retry_aead = create_retry_aead(conn->super.ctx, 0);
+            int retry_ok = validate_retry_tag(packet, &conn->super.peer.cid, retry_aead);
+            ptls_aead_free(retry_aead);
+            if (!retry_ok) {
+                ret = QUICLY_ERROR_PACKET_IGNORED;
+                goto Exit;
             }
             /* check size of the Retry packet */
             if (packet->token.len > QUICLY_MAX_TOKEN_LEN) {
