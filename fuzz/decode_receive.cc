@@ -78,10 +78,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
 	ret = quicly_decode_packet(&ctx, &p, Data, Size);
 
 	if (ret != Size)
-		return 0;
+		goto Exit;	
 
 	quicly_receive(conn, NULL, &sa, &p);
-   
+ 
+Exit: 
+	freeaddrinfo(res); 
 	free(resumption_token);
 	quicly_free(conn);
 		
