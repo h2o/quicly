@@ -565,15 +565,14 @@ inline int quicly_decode_streams_blocked_frame(const uint8_t **src, const uint8_
     return 0;
 }
 
-static inline size_t quicly_new_connection_id_frame_capacity(uint64_t sequence, uint64_t retire_prior_to, uint8_t cid_len)
+inline size_t quicly_new_connection_id_frame_capacity(uint64_t sequence, uint64_t retire_prior_to, uint8_t cid_len)
 {
     return 1 + quicly_encodev_capacity(sequence) + quicly_encodev_capacity(retire_prior_to) + cid_len +
            QUICLY_STATELESS_RESET_TOKEN_LEN;
 }
 
-static inline uint8_t *quicly_encode_new_connection_id_frame(uint8_t *dst, uint64_t sequence, uint64_t retire_prior_to,
-                                                             const uint8_t *cid, uint8_t cid_len,
-                                                             const uint8_t *stateless_reset_token)
+inline uint8_t *quicly_encode_new_connection_id_frame(uint8_t *dst, uint64_t sequence, uint64_t retire_prior_to, const uint8_t *cid,
+                                                      uint8_t cid_len, const uint8_t *stateless_reset_token)
 {
     *dst++ = QUICLY_FRAME_TYPE_NEW_CONNECTION_ID;
     dst = quicly_encodev(dst, sequence);
@@ -587,12 +586,12 @@ static inline uint8_t *quicly_encode_new_connection_id_frame(uint8_t *dst, uint6
     return dst;
 }
 
-static inline size_t quicly_retire_connection_id_frame_capacity(uint64_t sequence)
+inline size_t quicly_retire_connection_id_frame_capacity(uint64_t sequence)
 {
     return 1 + quicly_encodev_capacity(sequence);
 }
 
-static inline uint8_t *quicly_encode_retire_connection_id_frame(uint8_t *dst, uint64_t sequence)
+inline uint8_t *quicly_encode_retire_connection_id_frame(uint8_t *dst, uint64_t sequence)
 {
     *dst++ = QUICLY_FRAME_TYPE_RETIRE_CONNECTION_ID;
     dst = quicly_encodev(dst, sequence);
