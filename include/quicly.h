@@ -435,11 +435,6 @@ struct st_quicly_default_scheduler_state_t {
     quicly_linklist_t blocked;
 };
 
-struct st_quicly_stateless_reset_t {
-    uint8_t *token;
-    uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
-};
-
 /**
  * records an extra CID given by the peer via NEW_CONNECTION_ID frame
  */
@@ -450,7 +445,7 @@ struct st_quicly_spare_cid_t {
     int is_active;
     uint64_t sequence;
     quicly_cid_t cid;
-    struct st_quicly_stateless_reset_t stateless_reset;
+    uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
 };
 
 struct _st_quicly_conn_public_t {
@@ -493,7 +488,13 @@ struct _st_quicly_conn_public_t {
         /**
          * stateless reset token corresponding to the CID
          */
-        struct st_quicly_stateless_reset_t stateless_reset;
+        struct st_quicly_stateless_reset_t {
+            /**
+             * points to either _buf or NULL. NULL indicates the token is not available yet.
+             */
+            uint8_t *token;
+            uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
+        } stateless_reset;
         /**
          * sequence number associated with the current CID
          */

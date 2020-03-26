@@ -4638,7 +4638,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         /* replace with the picked one */
         spare_cid->is_active = 0;
         conn->super.peer.cid = spare_cid->cid;
-        memcpy(conn->super.peer.stateless_reset._buf, spare_cid->stateless_reset._buf, QUICLY_STATELESS_RESET_TOKEN_LEN);
+        memcpy(conn->super.peer.stateless_reset._buf, spare_cid->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
         conn->super.peer.stateless_reset.token = conn->super.peer.stateless_reset._buf;
         conn->super.peer.cid_sequence = spare_cid->sequence;
     }
@@ -4654,7 +4654,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
              */
             if (cmp_cid(&spare_cid->cid, frame.cid) == 0) {
                 if (spare_cid->sequence == frame.sequence &&
-                    memcmp(spare_cid->stateless_reset._buf, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0) {
+                    memcmp(spare_cid->stateless_reset_token, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0) {
                     /* likely a duplicate due to retransmission */
                     return 0;
                 } else {
@@ -4669,7 +4669,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         }
         spare_cid->sequence = frame.sequence;
         set_cid(&spare_cid->cid, frame.cid);
-        memcpy(spare_cid->stateless_reset._buf, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
+        memcpy(spare_cid->stateless_reset_token, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
         spare_cid->is_active = 1;
         return 0;
     }
