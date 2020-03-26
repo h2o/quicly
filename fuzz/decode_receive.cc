@@ -44,15 +44,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
 	int ret;
 	quicly_context_t ctx;
 	ctx = quicly_spec_context;
+	ctx.tls = &tlsctx;
 
 	quicly_decoded_packet_t p;
 
 	struct sockaddr sa;
 	socklen_t salen;
-
-	ctx = quicly_spec_context;
-	ctx.tls = &tlsctx;
-	
+		
 	quicly_conn_t *conn = NULL;
 	quicly_cid_plaintext_t next_cid;
 	const char* host = "127.0.0.1";
@@ -71,7 +69,6 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
 	getaddrinfo(host, port, &hint, &res);
 
 	memcpy(&sa, res->ai_addr, res->ai_addrlen);
-
 	
 	resumption_token->len = 0;
 
