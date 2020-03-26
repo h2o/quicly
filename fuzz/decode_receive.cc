@@ -10,11 +10,6 @@ void __sanitizer_cov_trace_pc(void)
 {
 }
 
-static struct {
-    ptls_iovec_t tls_ticket;
-    ptls_iovec_t address_token;
-} session_info;
-
 int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src)
 {
     return 0; 
@@ -31,7 +26,10 @@ static ptls_cipher_suite_t *cipher_suites[128];
 static ptls_save_ticket_t save_session_ticket = {save_session_ticket_cb};
 static ptls_on_client_hello_t on_client_hello = {on_client_hello_cb};
 
-static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
+extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
+{
+
+	ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .get_time = &ptls_get_time,
                                 .key_exchanges = key_exchanges,
                                 .cipher_suites = ptls_openssl_cipher_suites,
@@ -39,8 +37,7 @@ static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .save_ticket = &save_session_ticket,
                                 .on_client_hello = &on_client_hello};
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
-{
+
 	int ret;
 	quicly_context_t ctx;
 	ctx = quicly_spec_context;
@@ -56,7 +53,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
 	const char* host = "127.0.0.1";
 	const char* port = "4422";
 	ptls_iovec_t *resumption_token = (ptls_iovec_t *)malloc(sizeof(ptls_iovec_t));
-	ptls_handshake_properties_t hs_properties;
+	ptls_handshake_properties_t hs_properties = (ptls_handshake_properties_t){{{{NULL}}}};
 	quicly_transport_parameters_t resumed_transport_params;
 
 	struct addrinfo hint, *res;
