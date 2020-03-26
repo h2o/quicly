@@ -72,6 +72,10 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *Data, size_t Size)
 	
 	resumption_token->len = 0;
 
+	hs_properties.additional_extensions = NULL;
+	hs_properties.collect_extension = NULL;
+	hs_properties.collected_extensions = NULL;
+
 	ret = quicly_connect(&conn, &ctx, host, &sa, NULL, &next_cid, *resumption_token, &hs_properties, &resumed_transport_params);
 
 	ret = quicly_decode_packet(&ctx, &p, Data, Size);
