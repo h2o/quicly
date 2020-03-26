@@ -392,7 +392,7 @@ struct st_quicly_conn_streamgroup_state_t {
 
 /**
  * Values that do not need to be gathered upon the invocation of `quicly_get_stats`. We use typedef to define the same fields in
- * the same order for quicly_stats_t and `struct st_quicly_public_conn_t::stats`.
+ * the same order for quicly_stats_t and `struct st_quicly_conn_public_t::stats`.
  */
 #define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
     struct {                                                                                                                       \
