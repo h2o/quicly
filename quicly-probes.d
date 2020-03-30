@@ -45,7 +45,7 @@ provider quicly {
 
     probe packet_prepare(struct st_quicly_conn_t *conn, int64_t at, uint8_t first_octet, const char *dcid);
     probe packet_commit(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, size_t len, int ack_only);
-    probe packet_acked(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, int newly_acked);
+    probe packet_acked(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, int is_late_ack);
     probe packet_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
 
     probe pto(struct st_quicly_conn_t *conn, int64_t at, size_t inflight, uint32_t cwnd, int8_t pto_count);

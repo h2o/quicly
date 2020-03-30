@@ -401,6 +401,7 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t sent;                                                                                                             \
         uint64_t lost;                                                                                                             \
         uint64_t ack_received;                                                                                                     \
+        uint64_t late_acked;                                                                                                       \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         uint64_t received;                                                                                                         \
@@ -729,7 +730,7 @@ typedef struct st_quicly_decoded_packet_t {
 } quicly_decoded_packet_t;
 
 struct st_quicly_address_token_plaintext_t {
-    int is_retry;
+    enum { QUICLY_ADDRESS_TOKEN_TYPE_RETRY, QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION } type;
     uint64_t issued_at;
     quicly_address_t local, remote;
     union {
@@ -880,6 +881,11 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 /**
  *
  */
+quicly_datagram_t *quicly_send_close_invalid_token(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
+                                                   struct sockaddr *src_addr, ptls_iovec_t src_cid, const char *err_desc);
+/**
+ *
+ */
 quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                                                const void *src_cid);
 /**
@@ -992,9 +998,11 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
                                  size_t start_off, const quicly_address_token_plaintext_t *plaintext);
 /**
  * Decrypts an address token.
+ * If decryption succeeds, returns zero. If the token is unusable due to decryption failure, returns PTLS_DECODE_ERROR. If the token
+ * is unusable and the connection should be reset, returns QUICLY_ERROR_INVALID_TOKEN.
  */
 int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token_plaintext_t *plaintext, const void *src,
-                                 size_t len, size_t prefix_len);
+                                 size_t len, size_t prefix_len, const char **err_desc);
 /**
  *
  */

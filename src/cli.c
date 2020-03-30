@@ -127,10 +127,11 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
     quicly_get_stats(conn, &stats);
     fprintf(fp,
             "packets-received: %" PRIu64 ", packets-decryption-failed: %" PRIu64 ", packets-sent: %" PRIu64
-            ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64
-            ", srtt: %" PRIu32 "\n",
+            ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64
+            ", bytes-sent: %" PRIu64 ", srtt: %" PRIu32 "\n",
             stats.num_packets.received, stats.num_packets.decryption_failed, stats.num_packets.sent, stats.num_packets.lost,
-            stats.num_packets.ack_received, stats.num_bytes.received, stats.num_bytes.sent, stats.rtt.smoothed);
+            stats.num_packets.ack_received, stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent,
+            stats.rtt.smoothed);
 }
 
 static int validate_path(const char *path)
@@ -431,13 +432,13 @@ static void do_send_gso(int fd, quicly_datagram_t **packets, size_t num_packets,
         perror("sendmsg failed");
 
     for (size_t i = 0; i != num_packets; ++i)
-	 pa->free_packet(pa, packets[i]);
+        pa->free_packet(pa, packets[i]);
 }
 
 static void send_packets_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
-    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram might be of
-     * different size */
+    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram
+     * might be of different size */
     size_t gso_from = 0;
     for (size_t i = 1; i < num_packets; ++i) {
         if (packets[i]->data.len > packets[gso_from]->data.len) {
@@ -628,46 +629,77 @@ static void on_signal(int signo)
 }
 
 static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
-                          quicly_address_token_plaintext_t *token)
+                          quicly_address_token_plaintext_t *token, const char **err_desc)
 {
     int64_t age;
     int port_is_equal;
 
+    /* calculate and normalize age */
     if ((age = ctx.now->cb(ctx.now) - token->issued_at) < 0)
         age = 0;
+
+    /* check address, deferring the use of port number match to type-specific checks */
     if (remote->sa_family != token->remote.sa.sa_family)
-        return 0;
+        goto AddressMismatch;
     switch (remote->sa_family) {
     case AF_INET: {
         struct sockaddr_in *sin = (struct sockaddr_in *)remote;
         if (sin->sin_addr.s_addr != token->remote.sin.sin_addr.s_addr)
-            return 0;
+            goto AddressMismatch;
         port_is_equal = sin->sin_port == token->remote.sin.sin_port;
     } break;
     case AF_INET6: {
         struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)remote;
         if (memcmp(&sin6->sin6_addr, &token->remote.sin6.sin6_addr, sizeof(sin6->sin6_addr)) != 0)
-            return 0;
+            goto AddressMismatch;
         port_is_equal = sin6->sin6_port == token->remote.sin6.sin6_port;
     } break;
     default:
-        return 0;
+        goto UnknownAddressType;
     }
-    if (token->is_retry) {
+
+    /* type-specific checks */
+    switch (token->type) {
+    case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
         if (age > 30000)
-            return 0;
+            goto Expired;
         if (!port_is_equal)
-            return 0;
+            goto AddressMismatch;
         uint64_t cidhash_actual;
         if (quicly_retry_calc_cidpair_hash(&ptls_openssl_sha256, client_cid, server_cid, &cidhash_actual) != 0)
-            return 0;
+            goto InternalError;
         if (token->retry.cidpair_hash != cidhash_actual)
-            return 0;
-    } else {
+            goto CIDMismatch;
+        break;
+    case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
         if (age > 10 * 60 * 1000)
-            return 0;
+            goto Expired;
+        break;
+    default:
+        assert(!"unexpected token type");
+        abort();
+        break;
     }
+
+    /* success */
+    *err_desc = NULL;
     return 1;
+
+AddressMismatch:
+    *err_desc = "token address mismatch";
+    return 0;
+UnknownAddressType:
+    *err_desc = "unknown address type";
+    return 0;
+Expired:
+    *err_desc = "token expired";
+    return 0;
+InternalError:
+    *err_desc = "internal error";
+    return 0;
+CIDMismatch:
+    *err_desc = "CID mismatch";
+    return 0;
 }
 
 static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
@@ -760,11 +792,22 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     } else if (QUICLY_PACKET_IS_INITIAL(packet.octets.base[0])) {
                         /* long header packet; potentially a new connection */
                         quicly_address_token_plaintext_t *token = NULL, token_buf;
-                        if (packet.token.len != 0 &&
-                            quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base, packet.token.len,
-                                                         0) == 0 &&
-                            validate_token(&sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf))
-                            token = &token_buf;
+                        if (packet.token.len != 0) {
+                            const char *err_desc = NULL;
+                            int ret = quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base,
+                                                                   packet.token.len, 0, &err_desc);
+                            if (ret == 0 && validate_token(&sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf, &err_desc)) {
+                                token = &token_buf;
+                            } else if (enforce_retry && (ret == QUICLY_TRANSPORT_ERROR_INVALID_TOKEN ||
+                                                         (ret == 0 && token_buf.type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY))) {
+                                /* Token that looks like retry was unusable, and we require retry. There's no chance of the
+                                 * handshake succeeding. Therefore, send close without aquiring state. */
+                                quicly_datagram_t *p = quicly_send_close_invalid_token(&ctx, &sa, packet.cid.src, NULL,
+                                                                                       packet.cid.dest.encrypted, err_desc);
+                                assert(p != NULL);
+                                send_packets(fd, &p, 1, ctx.packet_allocator);
+                            }
+                        }
                         if (enforce_retry && token == NULL && packet.cid.dest.encrypted.len >= 8) {
                             /* unbound connection; send a retry token unless the client has supplied the correct one, but not too
                              * many
@@ -844,19 +887,19 @@ static void load_session(void)
         const uint8_t *src = buf, *end = buf + len;
         ptls_iovec_t ticket;
         ptls_decode_open_block(src, end, 2, {
+            if ((resumption_token.len = end - src) != 0) {
+                resumption_token.base = malloc(resumption_token.len);
+                memcpy(resumption_token.base, src, resumption_token.len);
+            }
+            src = end;
+        });
+        ptls_decode_open_block(src, end, 2, {
             ticket = ptls_iovec_init(src, end - src);
             src = end;
         });
         ptls_decode_open_block(src, end, 2, {
             if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, 1, src, end)) != 0)
                 goto Exit;
-            src = end;
-        });
-        ptls_decode_open_block(src, end, 2, {
-            if ((resumption_token.len = end - src) != 0) {
-                resumption_token.base = malloc(resumption_token.len);
-                memcpy(resumption_token.base, src, resumption_token.len);
-            }
             src = end;
         });
         hs_properties.client.session_ticket = ticket;
@@ -882,12 +925,12 @@ int save_session(const quicly_transport_parameters_t *transport_params)
     ptls_buffer_init(&buf, "", 0);
 
     /* build data (session ticket and transport parameters) */
+    ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.address_token.base, session_info.address_token.len); });
     ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.tls_ticket.base, session_info.tls_ticket.len); });
     ptls_buffer_push_block(&buf, 2, {
         if ((ret = quicly_encode_transport_parameter_list(&buf, 1, transport_params, NULL, NULL, 0)) != 0)
             goto Exit;
     });
-    ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.address_token.base, session_info.address_token.len); });
 
     /* write file */
     if ((fp = fopen(session_file, "wb")) == NULL) {

@@ -85,14 +85,14 @@
 
 static void on_destroy(quicly_stream_t *stream, int err);
 static void on_egress_stop(quicly_stream_t *stream, int err);
-static void on_ingress_receive(quicly_stream_t *stream,  size_t off, const void *src, size_t len);
+static void on_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 static void on_ingress_reset(quicly_stream_t *stream, int err);
 
 quicly_address_t fake_address;
 int64_t quic_now;
 quicly_context_t quic_ctx;
-quicly_stream_callbacks_t stream_callbacks = {on_destroy,     quicly_streambuf_egress_shift,    quicly_streambuf_egress_emit,
-                                              on_egress_stop, on_ingress_receive, on_ingress_reset};
+quicly_stream_callbacks_t stream_callbacks = {
+    on_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_egress_stop, on_ingress_receive, on_ingress_reset};
 size_t on_destroy_callcnt;
 
 static int64_t get_now_cb(quicly_now_t *self)
@@ -116,7 +116,7 @@ void on_egress_stop(quicly_stream_t *stream, int err)
     sbuf->error_received.stop_sending = err;
 }
 
-void on_ingress_receive(quicly_stream_t *stream,  size_t off, const void *src, size_t len)
+void on_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     quicly_streambuf_ingress_receive(stream, off, src, len);
 }
@@ -353,8 +353,9 @@ static void test_address_token_codec(void)
                         *dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, zero_key, "");
     quicly_address_token_plaintext_t input, output;
     ptls_buffer_t buf;
+    const char *err_desc;
 
-    input = (quicly_address_token_plaintext_t){1, 234};
+    input = (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RETRY, 234};
     input.remote.sin.sin_family = AF_INET;
     input.remote.sin.sin_addr.s_addr = htonl(0x7f000001);
     input.remote.sin.sin_port = htons(443);
@@ -365,10 +366,11 @@ static void test_address_token_codec(void)
     ptls_buffer_init(&buf, "", 0);
 
     ok(quicly_encrypt_address_token(ptls_openssl_random_bytes, enc, &buf, 0, &input) == 0);
-    ptls_openssl_random_bytes(&output, sizeof(output));
-    ok(quicly_decrypt_address_token(dec, &output, buf.base, buf.off, 0) == 0);
 
-    ok(input.is_retry == output.is_retry);
+    /* check that the output is ok */
+    ptls_openssl_random_bytes(&output, sizeof(output));
+    ok(quicly_decrypt_address_token(dec, &output, buf.base, buf.off, 0, &err_desc) == 0);
+    ok(input.type == output.type);
     ok(input.issued_at == output.issued_at);
     ok(input.remote.sa.sa_family == output.remote.sa.sa_family);
     ok(input.remote.sin.sin_addr.s_addr == output.remote.sin.sin_addr.s_addr);
@@ -378,6 +380,18 @@ static void test_address_token_codec(void)
     ok(input.retry.cidpair_hash == output.retry.cidpair_hash);
     ok(input.appdata.len == output.appdata.len);
     ok(memcmp(input.appdata.bytes, output.appdata.bytes, input.appdata.len) == 0);
+
+    /* failure to decrypt a Retry token is a hard error */
+    ptls_openssl_random_bytes(&output, sizeof(output));
+    buf.base[buf.off - 1] ^= 0x80;
+    ok(quicly_decrypt_address_token(dec, &output, buf.base, buf.off, 0, &err_desc) == QUICLY_TRANSPORT_ERROR_INVALID_TOKEN);
+    buf.base[buf.off - 1] ^= 0x80;
+
+    /* failure to decrypt a token that is not a Retry is a soft error */
+    ptls_openssl_random_bytes(&output, sizeof(output));
+    buf.base[0] ^= 0x80;
+    ok(quicly_decrypt_address_token(dec, &output, buf.base, buf.off, 0, &err_desc) == PTLS_ALERT_DECODE_ERROR);
+    buf.base[0] ^= 0x80;
 
     ptls_buffer_dispose(&buf);
     ptls_aead_free(enc);
