@@ -3625,23 +3625,24 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
             ret = quicly_send_resumption_token(conn);
             assert(ret == 0);
         }
-    }
 
-    /* NEW_CONNECTION_ID */
-    /** active CIDs the peer currently has */
-    uint32_t n_cids_active = conn->egress.new_cid.last_path_id - conn->super.host.n_retired_cids;
-    /** how many CIDs can we additionally offer to the peer? active_connection_id_limit is uint64_t, hence this too */
-    uint64_t cids_window = conn->super.peer.transport_params.active_connection_id_limit - n_cids_active;
-    /** new upper limit of path_id to which we can issue */
-    uint64_t path_id_limit = conn->egress.new_cid.last_path_id + cids_window;
-    if (path_id_limit > QUICLY_MAX_PATH_ID)
-        path_id_limit = QUICLY_MAX_PATH_ID;
+        /* schedule NEW_CONNECTION_IDs */
 
-    while (conn->egress.new_cid.last_path_id < path_id_limit) {
-        int ret = schedule_new_connection_id(conn, conn->egress.new_cid.last_path_id);
-        if (ret != 0)
-            return ret;
-        conn->egress.new_cid.last_path_id++;
+        /** active CIDs the peer currently has */
+        uint32_t n_cids_active = conn->egress.new_cid.last_path_id - conn->super.host.n_retired_cids;
+        /** how many CIDs can we additionally offer to the peer? active_connection_id_limit is uint64_t, hence this too */
+        uint64_t cids_window = conn->super.peer.transport_params.active_connection_id_limit - n_cids_active;
+        /** new upper limit of path_id to which we can issue */
+        uint64_t path_id_limit = conn->egress.new_cid.last_path_id + cids_window;
+        if (path_id_limit > QUICLY_MAX_PATH_ID)
+            path_id_limit = QUICLY_MAX_PATH_ID;
+
+        while (conn->egress.new_cid.last_path_id < path_id_limit) {
+            int ret = schedule_new_connection_id(conn, conn->egress.new_cid.last_path_id);
+            if (ret != 0)
+                return ret;
+            conn->egress.new_cid.last_path_id++;
+        }
     }
 
     return 0;
