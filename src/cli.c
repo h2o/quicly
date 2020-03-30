@@ -629,46 +629,77 @@ static void on_signal(int signo)
 }
 
 static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
-                          quicly_address_token_plaintext_t *token)
+                          quicly_address_token_plaintext_t *token, const char **err_desc)
 {
     int64_t age;
     int port_is_equal;
 
+    /* calculate and normalize age */
     if ((age = ctx.now->cb(ctx.now) - token->issued_at) < 0)
         age = 0;
+
+    /* check address, deferring the use of port number match to type-specific checks */
     if (remote->sa_family != token->remote.sa.sa_family)
-        return 0;
+        goto AddressMismatch;
     switch (remote->sa_family) {
     case AF_INET: {
         struct sockaddr_in *sin = (struct sockaddr_in *)remote;
         if (sin->sin_addr.s_addr != token->remote.sin.sin_addr.s_addr)
-            return 0;
+            goto AddressMismatch;
         port_is_equal = sin->sin_port == token->remote.sin.sin_port;
     } break;
     case AF_INET6: {
         struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)remote;
         if (memcmp(&sin6->sin6_addr, &token->remote.sin6.sin6_addr, sizeof(sin6->sin6_addr)) != 0)
-            return 0;
+            goto AddressMismatch;
         port_is_equal = sin6->sin6_port == token->remote.sin6.sin6_port;
     } break;
     default:
-        return 0;
+        goto UnknownAddressType;
     }
-    if (token->is_retry) {
+
+    /* type-specific checks */
+    switch (token->type) {
+    case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
         if (age > 30000)
-            return 0;
+            goto Expired;
         if (!port_is_equal)
-            return 0;
+            goto AddressMismatch;
         uint64_t cidhash_actual;
         if (quicly_retry_calc_cidpair_hash(&ptls_openssl_sha256, client_cid, server_cid, &cidhash_actual) != 0)
-            return 0;
+            goto InternalError;
         if (token->retry.cidpair_hash != cidhash_actual)
-            return 0;
-    } else {
+            goto CIDMismatch;
+        break;
+    case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
         if (age > 10 * 60 * 1000)
-            return 0;
+            goto Expired;
+        break;
+    default:
+        assert(!"unexpected token type");
+        abort();
+        break;
     }
+
+    /* success */
+    *err_desc = NULL;
     return 1;
+
+AddressMismatch:
+    *err_desc = "token address mismatch";
+    return 0;
+UnknownAddressType:
+    *err_desc = "unknown address type";
+    return 0;
+Expired:
+    *err_desc = "token expired";
+    return 0;
+InternalError:
+    *err_desc = "internal error";
+    return 0;
+CIDMismatch:
+    *err_desc = "CID mismatch";
+    return 0;
 }
 
 static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
@@ -761,11 +792,22 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     } else if (QUICLY_PACKET_IS_INITIAL(packet.octets.base[0])) {
                         /* long header packet; potentially a new connection */
                         quicly_address_token_plaintext_t *token = NULL, token_buf;
-                        if (packet.token.len != 0 &&
-                            quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base, packet.token.len,
-                                                         0) == 0 &&
-                            validate_token(&sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf))
-                            token = &token_buf;
+                        if (packet.token.len != 0) {
+                            const char *err_desc = NULL;
+                            int ret = quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base,
+                                                                   packet.token.len, 0, &err_desc);
+                            if (ret == 0 && validate_token(&sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf, &err_desc)) {
+                                token = &token_buf;
+                            } else if (enforce_retry && (ret == QUICLY_TRANSPORT_ERROR_INVALID_TOKEN ||
+                                                         (ret == 0 && token_buf.type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY))) {
+                                /* Token that looks like retry was unusable, and we require retry. There's no chance of the
+                                 * handshake succeeding. Therefore, send close without aquiring state. */
+                                quicly_datagram_t *p = quicly_send_close_invalid_token(&ctx, &sa, packet.cid.src, NULL,
+                                                                                       packet.cid.dest.encrypted, err_desc);
+                                assert(p != NULL);
+                                send_packets(fd, &p, 1, ctx.packet_allocator);
+                            }
+                        }
                         if (enforce_retry && token == NULL && packet.cid.dest.encrypted.len >= 8) {
                             /* unbound connection; send a retry token unless the client has supplied the correct one, but not too
                              * many
