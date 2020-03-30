@@ -93,6 +93,33 @@ subtest "0-rtt" => sub {
     like $events, qr/"type":"cc-ack-received".*"largest-acked":1,/m, "pn 1 acked";
 };
 
+unlink "$tempdir/session";
+
+# obtain NEW_TOKEN token, rewrite it to Retry token (by trimming the saved file by one byte; this hack relies on the format of our
+# session file storing the token at the beginning, and the type of the ticket being stored at the beginning of the token.
+subtest "retry-invalid-token" => sub {
+    my $guard = spawn_server("-R");
+    # obtain NEW_TOKEN token
+    my $resp = `$cli -s $tempdir/session -p /12 127.0.0.1 $port 2> /dev/null`;
+    is $resp, "hello world\n";
+    ok -e "$tempdir/session", "session saved";
+    # rewrite the token stored in the session file to a broken Retry token
+    my $session = slurp_file("$tempdir/session");
+    my $type = ord substr $session, 2, 1;
+    is $type, 1;
+    open my $fh, '>', "$tempdir/session"
+        or die "failed to open $tempdir/session:$!";
+    print $fh substr $session, 0, 2;
+    print $fh "\0"; # type = Retry
+    print $fh substr $session, 3;
+    close $fh;
+    # reconnect
+    $resp = `$cli -e $tempdir/events -s $tempdir/session -p /12 127.0.0.1 $port 2> /dev/null`;
+    isnt $resp, "hello world\n", "not a valid response";
+    my $events = slurp_file("$tempdir/events");
+    like $events, qr/"type":"transport-close-receive",.*"error-code":11,.*"reason-phrase":"token decryption failure"/m, "received token decryption failure";
+};
+
 subtest "stateless-reset" => sub {
     my $guard = spawn_server(qw(-C deadbeef));
     my $pid = fork;
