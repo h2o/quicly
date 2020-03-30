@@ -2532,6 +2532,10 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
             return 0;
         if (scheduler_can_send(conn))
             return 0;
+        if (conn->egress.new_cid.n_pending > 0)
+            return 0;
+        if (conn->egress.retire_cid.n_pending > 0)
+            return 0;
     } else if (!conn->super.peer.address_validation.validated) {
         return conn->idle_timeout.at;
     }
