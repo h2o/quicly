@@ -38,7 +38,6 @@ extern "C" {
 struct st_quicly_conn_t;
 typedef struct st_quicly_sent_t quicly_sent_t;
 struct st_quicly_pending_new_cid_t;
-struct st_quicly_pending_retire_cid_t;
 
 typedef struct st_quicly_sent_packet_t {
     /**
@@ -118,7 +117,7 @@ struct st_quicly_sent_t {
             struct st_quicly_pending_new_cid_t *new_cid;
         } new_connection_id;
         struct {
-            struct st_quicly_pending_retire_cid_t *retire_cid;
+            uint64_t sequence;
         } retire_connection_id;
     } data;
 };
