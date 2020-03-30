@@ -3100,7 +3100,8 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
     ptls_buffer_init(&tokenbuf, tokenbuf_small, sizeof(tokenbuf_small));
 
     /* build token */
-    token = (quicly_address_token_plaintext_t){0, conn->super.ctx->now->cb(conn->super.ctx->now)};
+    token =
+        (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION, conn->super.ctx->now->cb(conn->super.ctx->now)};
     token.remote = conn->super.peer.address;
     /* TODO fill token.resumption */
 
