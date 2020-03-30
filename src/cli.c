@@ -432,13 +432,13 @@ static void do_send_gso(int fd, quicly_datagram_t **packets, size_t num_packets,
         perror("sendmsg failed");
 
     for (size_t i = 0; i != num_packets; ++i)
-	 pa->free_packet(pa, packets[i]);
+        pa->free_packet(pa, packets[i]);
 }
 
 static void send_packets_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
-    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram might be of
-     * different size */
+    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram
+     * might be of different size */
     size_t gso_from = 0;
     for (size_t i = 1; i < num_packets; ++i) {
         if (packets[i]->data.len > packets[gso_from]->data.len) {

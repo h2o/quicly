@@ -365,7 +365,7 @@ int main(int argc, char **argv)
         perror("socket(2) failed");
         exit(1);
     }
-    //fcntl(fd, F_SETFL, O_NONBLOCK);
+    // fcntl(fd, F_SETFL, O_NONBLOCK);
     if (is_server()) {
         int reuseaddr = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr));
