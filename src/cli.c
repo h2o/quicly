@@ -887,19 +887,19 @@ static void load_session(void)
         const uint8_t *src = buf, *end = buf + len;
         ptls_iovec_t ticket;
         ptls_decode_open_block(src, end, 2, {
+            if ((resumption_token.len = end - src) != 0) {
+                resumption_token.base = malloc(resumption_token.len);
+                memcpy(resumption_token.base, src, resumption_token.len);
+            }
+            src = end;
+        });
+        ptls_decode_open_block(src, end, 2, {
             ticket = ptls_iovec_init(src, end - src);
             src = end;
         });
         ptls_decode_open_block(src, end, 2, {
             if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, 1, src, end)) != 0)
                 goto Exit;
-            src = end;
-        });
-        ptls_decode_open_block(src, end, 2, {
-            if ((resumption_token.len = end - src) != 0) {
-                resumption_token.base = malloc(resumption_token.len);
-                memcpy(resumption_token.base, src, resumption_token.len);
-            }
             src = end;
         });
         hs_properties.client.session_ticket = ticket;
@@ -925,12 +925,12 @@ int save_session(const quicly_transport_parameters_t *transport_params)
     ptls_buffer_init(&buf, "", 0);
 
     /* build data (session ticket and transport parameters) */
+    ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.address_token.base, session_info.address_token.len); });
     ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.tls_ticket.base, session_info.tls_ticket.len); });
     ptls_buffer_push_block(&buf, 2, {
         if ((ret = quicly_encode_transport_parameter_list(&buf, 1, transport_params, NULL, NULL, 0)) != 0)
             goto Exit;
     });
-    ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.address_token.base, session_info.address_token.len); });
 
     /* write file */
     if ((fp = fopen(session_file, "wb")) == NULL) {
