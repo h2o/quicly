@@ -3672,7 +3672,8 @@ quicly_datagram_t *quicly_send_close_invalid_token(quicly_context_t *ctx, struct
     *dst++ = 0;        /* PN = 0 */
     *dst++ = 0;        /* ditto */
     uint8_t *payload_from = dst;
-    dst = quicly_encode_close_frame(dst, QUICLY_FRAME_TYPE_PADDING, QUICLY_TRANSPORT_ERROR_INVALID_TOKEN, err_desc);
+    dst = quicly_encode_close_frame(dst, QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INVALID_TOKEN),
+                                    QUICLY_FRAME_TYPE_PADDING, err_desc);
 
     /* determine the size of the packet, make adjustments */
     dst += egress.aead->algo->tag_size;
