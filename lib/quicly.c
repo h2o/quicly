@@ -5084,19 +5084,20 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         return PTLS_ALERT_DECODE_ERROR;
     }
 
+    /* `goto Exit` can only happen below this line, and that is guaranteed by declaring `ret` here */
+    int ret;
+
     /* decrypt */
     if ((ptlen = aead->do_decrypt(aead, ptbuf, token + prefix_len + 1 + aead->algo->iv_size,
                                   len - (prefix_len + 1 + aead->algo->iv_size), token + prefix_len + 1, token,
                                   prefix_len + 1 + aead->algo->iv_size)) == SIZE_MAX) {
+        ret = PTLS_ALERT_DECRYPT_ERROR;
         *err_desc = "token decryption failure";
-        /* when the token looks like retry, and we fail to decrypt, let the server close the connection immediately. Otherwise, it
-         * is a soft error */
-        return plaintext->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY ? QUICLY_TRANSPORT_ERROR_INVALID_TOKEN : PTLS_ALERT_DECODE_ERROR;
+        goto Exit;
     }
 
     /* parse */
     const uint8_t *src = ptbuf, *end = src + ptlen;
-    int ret;
     if ((ret = ptls_decode64(&plaintext->issued_at, &src, end)) != 0)
         goto Exit;
     {
@@ -5158,8 +5159,13 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
     ret = 0;
 
 Exit:
-    if (ret != 0 && *err_desc == NULL)
-        *err_desc = "token decode error";
+    if (ret != 0) {
+        if (*err_desc == NULL)
+            *err_desc = "token decode error";
+        /* promote the error to one that triggers the emission of INVALID_TOKEN_ERROR, if the token looked like a retry */
+        if (plaintext->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY)
+            ret = QUICLY_TRANSPORT_ERROR_INVALID_TOKEN;
+    }
     return ret;
 }
 
