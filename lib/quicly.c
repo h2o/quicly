@@ -5128,7 +5128,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
     switch (plaintext->type) {
     case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
         ptls_decode_open_block(src, end, 1, {
-            if ((plaintext->retry.odcid.len = end - src) >= sizeof(plaintext->retry.odcid.cid)) {
+            if ((plaintext->retry.odcid.len = end - src) > sizeof(plaintext->retry.odcid.cid)) {
                 ret = PTLS_ALERT_DECODE_ERROR;
                 goto Exit;
             }
