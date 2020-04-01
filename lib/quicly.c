@@ -363,13 +363,15 @@ static const quicly_transport_parameters_t default_transport_params = {
     {0, 0, 0}, 0, 0, 0, 0, QUICLY_DEFAULT_ACK_DELAY_EXPONENT, QUICLY_DEFAULT_MAX_ACK_DELAY};
 
 static __thread int64_t now;
+static __thread size_t in_quicly_send_cnt;
 
 static void update_now(quicly_context_t *ctx)
 {
-    int64_t newval = ctx->now->cb(ctx->now);
-
-    if (now < newval)
-        now = newval;
+    if (in_quicly_send_cnt == 0) {
+        int64_t newval = ctx->now->cb(ctx->now);
+        if (now < newval)
+            now = newval;
+    }
 }
 
 /**
@@ -3580,10 +3582,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     update_now(conn->super.ctx);
 
+    ++in_quicly_send_cnt;
+
     /* bail out if there's nothing is scheduled to be sent */
     if (now < quicly_get_first_timeout(conn)) {
-        *num_packets = 0;
-        return 0;
+        ret = 0;
+        goto Exit;
     }
 
     QUICLY_PROBE(SEND, conn, probe_now(), conn->super.state,
@@ -3594,8 +3598,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         init_acks_iter(conn, &iter);
         /* check if the connection can be closed now (after 3 pto) */
         if (conn->super.state == QUICLY_STATE_DRAINING || conn->egress.connection_close.num_sent != 0) {
-            if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX)
-                return QUICLY_ERROR_FREE_CONNECTION;
+            if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX) {
+                ret = QUICLY_ERROR_FREE_CONNECTION;
+                goto Exit;
+            }
         }
         if (conn->super.state == QUICLY_STATE_CLOSING && conn->egress.send_ack_at <= now) {
             destroy_all_streams(conn, 0, 0); /* delayed until the emission of CONNECTION_CLOSE frame to allow quicly_close to be
@@ -3611,24 +3617,26 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                 s.current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
             }
             if ((ret = send_connection_close(conn, &s)) != 0)
-                return ret;
+                goto Exit;
             if ((ret = commit_send_packet(conn, &s, 0)) != 0)
-                return ret;
+                goto Exit;
         }
         /* wait at least 1ms */
         if ((conn->egress.send_ack_at = quicly_sentmap_get(&iter)->sent_at + get_sentmap_expiration_time(conn)) <= now)
             conn->egress.send_ack_at = now + 1;
-        *num_packets = s.num_packets;
-        return 0;
+        ret = 0;
+        goto Exit;
     }
 
     /* emit packets */
     if ((ret = do_send(conn, &s)) != 0)
-        return ret;
+        goto Exit;
 
     assert_consistency(conn, 1);
 
+Exit:
     *num_packets = s.num_packets;
+    --in_quicly_send_cnt;
     return ret;
 }
 
