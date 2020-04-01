@@ -3624,15 +3624,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     /* emit packets */
     if ((ret = do_send(conn, &s)) != 0)
         return ret;
-    /* We might see the timer going back to the past, if time-threshold loss timer fires first without being able to make any
-     * progress (i.e. due to the payload of lost packet being cancelled), then PTO for the previously sent packet.  To accomodate
-     * that, we allow to rerun the do_send function just once.
-     */
-    if (s.num_packets == 0 && conn->egress.loss.alarm_at <= now) {
-        assert(conn->egress.loss.alarm_at == now);
-        if ((ret = do_send(conn, &s)) != 0)
-            return ret;
-    }
+
     assert_consistency(conn, 1);
 
     *num_packets = s.num_packets;
