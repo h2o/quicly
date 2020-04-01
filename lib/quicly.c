@@ -1008,12 +1008,12 @@ static int scheduler_can_send(quicly_conn_t *conn)
     return conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, conn_is_saturated);
 }
 
-static void update_loss_alarm(quicly_conn_t *conn)
+static void update_loss_alarm(quicly_conn_t *conn, int is_after_send)
 {
     int has_outstanding = conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe,
         handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
     quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at, has_outstanding,
-                             scheduler_can_send(conn), handshake_is_in_progress, conn->egress.max_data.sent);
+                             scheduler_can_send(conn), handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -3566,7 +3566,7 @@ Exit:
     if (ret == 0) {
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
-        update_loss_alarm(conn);
+        update_loss_alarm(conn, 1);
         if (s->num_packets != 0)
             update_idle_timeout(conn, 0);
     }
@@ -3753,7 +3753,7 @@ static int enter_close(quicly_conn_t *conn, int host_is_initiating, int wait_dra
         conn->egress.send_ack_at = wait_draining ? now + get_sentmap_expiration_time(conn) : 0;
     }
 
-    update_loss_alarm(conn);
+    update_loss_alarm(conn, 0);
 
     return 0;
 }
@@ -4003,7 +4003,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     /* loss-detection  */
     quicly_loss_detect_loss(&conn->egress.loss, frame.largest_acknowledged, do_detect_loss);
-    update_loss_alarm(conn);
+    update_loss_alarm(conn, 0);
 
     return 0;
 }
@@ -4387,7 +4387,7 @@ static int handle_handshake_done_frame(quicly_conn_t *conn, struct st_quicly_han
     conn->super.peer.address_validation.send_probe = 0;
     if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
         return ret;
-    update_loss_alarm(conn);
+    update_loss_alarm(conn, 0);
     return 0;
 }
 
@@ -4746,7 +4746,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
          * in the Handshake packet setting a loss timer for the Initial packet. */
         if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
             goto Exit;
-        update_loss_alarm(conn);
+        update_loss_alarm(conn, 0);
         conn->super.peer.address_validation.validated = 1;
     }
 
@@ -4765,7 +4765,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         if (quicly_is_client(conn) && conn->handshake != NULL && conn->handshake->cipher.egress.aead != NULL) {
             if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
                 goto Exit;
-            update_loss_alarm(conn);
+            update_loss_alarm(conn, 0);
         }
         break;
     case QUICLY_EPOCH_HANDSHAKE:
