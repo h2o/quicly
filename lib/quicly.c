@@ -2980,6 +2980,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
     /* schedule time-threshold alarm if there is a packet outstanding that is smaller than largest_acked */
     while (sent->packet_number < largest_acked && sent->sent_at != INT64_MAX) {
         if (sent->bytes_in_flight != 0) {
+            assert(now < sent->sent_at + delay_until_lost);
             *loss_time = sent->sent_at + delay_until_lost;
             break;
         }
