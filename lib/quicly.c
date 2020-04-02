@@ -3701,7 +3701,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         /* schedule NEW_CONNECTION_IDs */
 
         /** active CIDs the peer currently has */
-        uint32_t num_cids_active = conn->egress.new_cid.last_path_id - conn->super.host.num_retired_cids;
+        uint64_t num_cids_active = conn->egress.new_cid.last_path_id - conn->super.host.num_retired_cids;
         /** how many CIDs can we additionally offer to the peer? active_connection_id_limit is uint64_t, hence this too */
         uint64_t cids_window = conn->super.peer.transport_params.active_connection_id_limit - num_cids_active;
         /** new upper limit of path_id to which we can issue */
