@@ -363,7 +363,7 @@ struct st_quicly_conn_t {
             /**
              * # of elements in cids whose state is READY_TO_SEND
              */
-            uint64_t n_pending;
+            uint64_t num_pending;
         } new_cid;
         /**
          * pending RETIRE_CONNECTION_ID frames to be sent, as a response to retire prior to in NEW_CONNECTION_ID
@@ -376,7 +376,7 @@ struct st_quicly_conn_t {
             /**
              * # of active elements in sequences
              */
-            uint64_t n_pending;
+            uint64_t num_pending;
         } retire_cid;
     } egress;
     /**
@@ -836,8 +836,8 @@ static int schedule_new_connection_id(quicly_conn_t *conn, uint32_t path_id)
     plain_cid.path_id = path_id;
     cid_encryptor->encrypt_cid(cid_encryptor, &ncid->cid, ncid->stateless_reset_token, &plain_cid);
     ncid->state = QUICLY_PENDING_NEW_CID_STATE_READY_TO_SEND;
-    assert(conn->egress.new_cid.n_pending < conn->egress.new_cid.capacity);
-    conn->egress.new_cid.n_pending++;
+    assert(conn->egress.new_cid.num_pending < conn->egress.new_cid.capacity);
+    conn->egress.new_cid.num_pending++;
 
     return 0;
 }
@@ -847,7 +847,7 @@ static int schedule_new_connection_id(quicly_conn_t *conn, uint32_t path_id)
  */
 static int schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
 {
-    if (conn->egress.retire_cid.n_pending == QUICLY_RETIRE_CONNECTION_ID_LIMIT) {
+    if (conn->egress.retire_cid.num_pending == QUICLY_RETIRE_CONNECTION_ID_LIMIT) {
         /* in case we don't find an empty slot, we'll just drop this sequence (never send RETIRE_CONNECTION_ID frame) */
         return 0;
     }
@@ -857,8 +857,8 @@ static int schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
             continue;
 
         conn->egress.retire_cid.sequences[i] = sequence;
-        assert(conn->egress.retire_cid.n_pending < QUICLY_RETIRE_CONNECTION_ID_LIMIT);
-        conn->egress.retire_cid.n_pending++;
+        assert(conn->egress.retire_cid.num_pending < QUICLY_RETIRE_CONNECTION_ID_LIMIT);
+        conn->egress.retire_cid.num_pending++;
         return 0;
     }
 
@@ -1838,7 +1838,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         conn->_.egress.new_cid.cids[i].state = QUICLY_PENDING_NEW_CID_STATE_VACANT;
     }
 
-    conn->_.egress.new_cid.n_pending = 0;
+    conn->_.egress.new_cid.num_pending = 0;
     conn->_.super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
         ctx->tls->random_bytes(conn->_.super.peer.cid.cid, QUICLY_MIN_INITIAL_DCID_LEN);
@@ -1885,7 +1885,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
     conn->_.egress.send_ack_at = INT64_MAX;
     quicly_cc_init(&conn->_.egress.cc);
-    conn->_.egress.retire_cid.n_pending = 0;
+    conn->_.egress.retire_cid.num_pending = 0;
     for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++)
         conn->_.egress.retire_cid.sequences[i] = QUICLY_PENDING_RETIRE_CID_EMPTY;
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.uni);
@@ -2468,8 +2468,8 @@ static int on_ack_new_connection_id(quicly_conn_t *conn, const quicly_sent_packe
         new_cid->state = QUICLY_PENDING_NEW_CID_STATE_VACANT;
     } else if (event == QUICLY_SENTMAP_EVENT_LOST) {
         new_cid->state = QUICLY_PENDING_NEW_CID_STATE_READY_TO_SEND;
-        assert(conn->egress.new_cid.n_pending < conn->egress.new_cid.capacity);
-        conn->egress.new_cid.n_pending++;
+        assert(conn->egress.new_cid.num_pending < conn->egress.new_cid.capacity);
+        conn->egress.new_cid.num_pending++;
     }
 
     return 0;
@@ -2542,9 +2542,9 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
             return 0;
         if (scheduler_can_send(conn))
             return 0;
-        if (conn->egress.new_cid.n_pending > 0)
+        if (conn->egress.new_cid.num_pending > 0)
             return 0;
-        if (conn->egress.retire_cid.n_pending > 0)
+        if (conn->egress.retire_cid.num_pending > 0)
             return 0;
     } else if (!conn->super.peer.address_validation.validated) {
         return conn->idle_timeout.at;
@@ -3701,9 +3701,9 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         /* schedule NEW_CONNECTION_IDs */
 
         /** active CIDs the peer currently has */
-        uint32_t n_cids_active = conn->egress.new_cid.last_path_id - conn->super.host.n_retired_cids;
+        uint32_t num_cids_active = conn->egress.new_cid.last_path_id - conn->super.host.num_retired_cids;
         /** how many CIDs can we additionally offer to the peer? active_connection_id_limit is uint64_t, hence this too */
-        uint64_t cids_window = conn->super.peer.transport_params.active_connection_id_limit - n_cids_active;
+        uint64_t cids_window = conn->super.peer.transport_params.active_connection_id_limit - num_cids_active;
         /** new upper limit of path_id to which we can issue */
         uint64_t path_id_limit = conn->egress.new_cid.last_path_id + cids_window;
         if (path_id_limit > QUICLY_MAX_PATH_ID)
@@ -3833,24 +3833,24 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     (ret = send_resumption_token(conn, s)) != 0)
                     goto Exit;
                 /* send NEW_CONNECTION_ID */
-                for (uint64_t i = 0; i < conn->egress.new_cid.capacity && conn->egress.new_cid.n_pending > 0; i++) {
+                for (uint64_t i = 0; i < conn->egress.new_cid.capacity && conn->egress.new_cid.num_pending > 0; i++) {
                     struct st_quicly_pending_new_cid_t *c = &conn->egress.new_cid.cids[i];
                     if (c->state == QUICLY_PENDING_NEW_CID_STATE_READY_TO_SEND) {
                         if ((ret = send_new_connection_id(conn, s, c)) != 0)
                             goto Exit;
                         c->state = QUICLY_PENDING_NEW_CID_STATE_INFLIGHT;
-                        conn->egress.new_cid.n_pending--;
+                        conn->egress.new_cid.num_pending--;
                     }
                 }
                 /* send RETIRE_CONNECTION_ID */
-                for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT && conn->egress.retire_cid.n_pending > 0; i++) {
+                for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT && conn->egress.retire_cid.num_pending > 0; i++) {
                     uint64_t sequence = conn->egress.retire_cid.sequences[i];
                     if (sequence == UINT64_MAX)
                         continue; /* empty slot */
                     if ((ret = send_retire_connection_id(conn, s, sequence)) != 0)
                         goto Exit;
                     conn->egress.retire_cid.sequences[i] = QUICLY_PENDING_RETIRE_CID_EMPTY;
-                    conn->egress.retire_cid.n_pending--;
+                    conn->egress.retire_cid.num_pending--;
                 }
             }
             /* send stream-level control frames */
