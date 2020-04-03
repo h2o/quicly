@@ -83,11 +83,6 @@
  * up to how many RETIRE_CONNECTION_IDs to keep for retransmission
  */
 #define QUICLY_RETIRE_CONNECTION_ID_LIMIT (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * 2)
-/**
- * indicates there's nothing to send in this retire CID slot
- * see quicly_conn_t::egress::retire_cid
- */
-#define QUICLY_PENDING_RETIRE_CID_EMPTY UINT64_MAX
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
@@ -370,7 +365,7 @@ struct st_quicly_conn_t {
          */
         struct {
             /**
-             * sequence numbers to ask for retirement -- QUICLY_PENDING_RETIRE_CID_EMPTY indicates empty slot
+             * sequence numbers to ask for retirement -- UINT64_MAX indicates empty slot
              */
             uint64_t sequences[QUICLY_RETIRE_CONNECTION_ID_LIMIT];
             /**
@@ -853,7 +848,7 @@ static int schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
     }
 
     for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++) {
-        if (conn->egress.retire_cid.sequences[i] != QUICLY_PENDING_RETIRE_CID_EMPTY)
+        if (conn->egress.retire_cid.sequences[i] != UINT64_MAX)
             continue;
 
         conn->egress.retire_cid.sequences[i] = sequence;
@@ -1887,7 +1882,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_cc_init(&conn->_.egress.cc);
     conn->_.egress.retire_cid.num_pending = 0;
     for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++)
-        conn->_.egress.retire_cid.sequences[i] = QUICLY_PENDING_RETIRE_CID_EMPTY;
+        conn->_.egress.retire_cid.sequences[i] = UINT64_MAX;
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->_.egress.pending_streams.control);
@@ -3849,7 +3844,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         continue; /* empty slot */
                     if ((ret = send_retire_connection_id(conn, s, sequence)) != 0)
                         goto Exit;
-                    conn->egress.retire_cid.sequences[i] = QUICLY_PENDING_RETIRE_CID_EMPTY;
+                    conn->egress.retire_cid.sequences[i] = UINT64_MAX;
                     conn->egress.retire_cid.num_pending--;
                 }
             }
