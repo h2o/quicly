@@ -489,7 +489,7 @@ struct _st_quicly_conn_public_t {
         /**
          * stateless reset token corresponding to the CID
          */
-        struct st_quicly_stateless_reset_t {
+        struct {
             /**
              * points to either _buf or NULL. NULL indicates the token is not available yet.
              */
