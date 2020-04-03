@@ -579,7 +579,9 @@ inline int quicly_decode_streams_blocked_frame(const uint8_t **src, const uint8_
 
 inline size_t quicly_new_connection_id_frame_capacity(uint64_t sequence, uint64_t retire_prior_to, uint8_t cid_len)
 {
-    return 1 + quicly_encodev_capacity(sequence) + quicly_encodev_capacity(retire_prior_to) + cid_len +
+    size_t frame_type_len = 1; /* capacity to store the frame type field */
+    size_t length_len = 1;     /* capacity to store the length field (length of CID) */
+    return frame_type_len + quicly_encodev_capacity(sequence) + quicly_encodev_capacity(retire_prior_to) + length_len + cid_len +
            QUICLY_STATELESS_RESET_TOKEN_LEN;
 }
 
