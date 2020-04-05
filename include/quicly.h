@@ -244,6 +244,10 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint16_t max_ack_delay;
     /**
+     * quicly ignores the value set for quicly_context_t::transport_parameters. Set to UINT64_MAX when not specified by peer.
+     */
+    uint64_t min_ack_delay_usec;
+    /**
      *
      */
     uint8_t disable_active_migration : 1;
