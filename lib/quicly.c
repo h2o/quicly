@@ -287,22 +287,9 @@ struct st_quicly_conn_t {
          *
          */
         quicly_cc_t cc;
-    } egress;
-    /**
-     * crypto data
-     */
-    struct {
-        ptls_t *tls;
-        ptls_handshake_properties_t handshake_properties;
-        struct {
-            ptls_raw_extension_t ext[2];
-            ptls_buffer_t buf;
-        } transport_params;
-    } crypto;
-    /**
-     * contains things to be sent, that are covered by flow control, but not by the stream scheduler
-     */
-    struct {
+        /**
+         * things to be sent at the stream-level, that are not governed by the stream scheduler
+         */
         struct {
             /**
              * list of blocked streams (sorted in ascending order of stream_ids)
@@ -315,14 +302,25 @@ struct st_quicly_conn_t {
              * list of streams with pending control data (e.g., RESET_STREAM)
              */
             quicly_linklist_t control;
-        } streams;
+        } pending_streams;
         /**
          * bit vector indicating if there's any pending crypto data (the insignificant 4 bits), or other non-stream data
          */
-        uint8_t flows;
+        uint8_t pending_flows;
 #define QUICLY_PENDING_FLOW_NEW_TOKEN_BIT (1 << 5)
 #define QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT (1 << 6)
-    } pending;
+    } egress;
+    /**
+     * crypto data
+     */
+    struct {
+        ptls_t *tls;
+        ptls_handshake_properties_t handshake_properties;
+        struct {
+            ptls_raw_extension_t ext[2];
+            ptls_buffer_t buf;
+        } transport_params;
+    } crypto;
     /**
      * retry token (if the token is a Retry token can be determined by consulting the length of retry_odcid)
      */
@@ -660,7 +658,7 @@ static void sched_stream_control(quicly_stream_t *stream)
     assert(stream->stream_id >= 0);
 
     if (!quicly_linklist_is_linked(&stream->_send_aux.pending_link.control))
-        quicly_linklist_insert(stream->conn->pending.streams.control.prev, &stream->_send_aux.pending_link.control);
+        quicly_linklist_insert(stream->conn->egress.pending_streams.control.prev, &stream->_send_aux.pending_link.control);
 }
 
 static void resched_stream_data(quicly_stream_t *stream)
@@ -669,9 +667,9 @@ static void resched_stream_data(quicly_stream_t *stream)
         assert(-4 <= stream->stream_id);
         uint8_t mask = 1 << -(1 + stream->stream_id);
         if (stream->sendstate.pending.num_ranges != 0) {
-            stream->conn->pending.flows |= mask;
+            stream->conn->egress.pending_flows |= mask;
         } else {
-            stream->conn->pending.flows &= ~mask;
+            stream->conn->egress.pending_flows &= ~mask;
         }
         return;
     }
@@ -907,7 +905,7 @@ static void destroy_stream(quicly_stream_t *stream, int err)
 
     if (stream->stream_id < 0) {
         size_t epoch = -(1 + stream->stream_id);
-        stream->conn->pending.flows &= ~(uint8_t)(1 << epoch);
+        stream->conn->egress.pending_flows &= ~(uint8_t)(1 << epoch);
     } else {
         struct st_quicly_conn_streamgroup_state_t *group = get_streamgroup_state(conn, stream->stream_id);
         --group->num_streams;
@@ -1297,9 +1295,9 @@ void quicly_free(quicly_conn_t *conn)
 
     kh_destroy(quicly_stream_t, conn->streams);
 
-    assert(!quicly_linklist_is_linked(&conn->pending.streams.blocked.uni));
-    assert(!quicly_linklist_is_linked(&conn->pending.streams.blocked.bidi));
-    assert(!quicly_linklist_is_linked(&conn->pending.streams.control));
+    assert(!quicly_linklist_is_linked(&conn->egress.pending_streams.blocked.uni));
+    assert(!quicly_linklist_is_linked(&conn->egress.pending_streams.blocked.bidi));
+    assert(!quicly_linklist_is_linked(&conn->egress.pending_streams.control));
     assert(!quicly_linklist_is_linked(&conn->super._default_scheduler.active));
     assert(!quicly_linklist_is_linked(&conn->super._default_scheduler.blocked));
 
@@ -1695,6 +1693,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
     conn->_.egress.send_ack_at = INT64_MAX;
     quicly_cc_init(&conn->_.egress.cc);
+    quicly_linklist_init(&conn->_.egress.pending_streams.blocked.uni);
+    quicly_linklist_init(&conn->_.egress.pending_streams.blocked.bidi);
+    quicly_linklist_init(&conn->_.egress.pending_streams.control);
     conn->_.crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -1705,9 +1706,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         conn->_.crypto.handshake_properties = (ptls_handshake_properties_t){{{{NULL}}}};
     }
     conn->_.crypto.handshake_properties.collect_extension = collect_transport_parameters;
-    quicly_linklist_init(&conn->_.pending.streams.blocked.uni);
-    quicly_linklist_init(&conn->_.pending.streams.blocked.bidi);
-    quicly_linklist_init(&conn->_.pending.streams.control);
     conn->_.idle_timeout.at = INT64_MAX;
     conn->_.idle_timeout.should_rearm_on_send = 1;
 
@@ -2236,7 +2234,7 @@ static int on_ack_handshake_done(quicly_conn_t *conn, const quicly_sent_packet_t
 {
     /* When HANDSHAKE_DONE is deemed lost, schedule retransmission. */
     if (event == QUICLY_SENTMAP_EVENT_LOST)
-        conn->pending.flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
     return 0;
 }
 
@@ -2258,7 +2256,7 @@ static int on_ack_new_token(quicly_conn_t *conn, const quicly_sent_packet_t *pac
     }
 
     if (conn->egress.new_token.num_inflight == 0 && conn->egress.new_token.max_acked < conn->egress.new_token.generation)
-        conn->pending.flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
 
     return 0;
 }
@@ -2308,9 +2306,9 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         return conn->egress.send_ack_at;
 
     if (calc_send_window(conn, 0, 0) > 0) {
-        if (conn->pending.flows != 0)
+        if (conn->egress.pending_flows != 0)
             return 0;
-        if (quicly_linklist_is_linked(&conn->pending.streams.control))
+        if (quicly_linklist_is_linked(&conn->egress.pending_streams.control))
             return 0;
         if (scheduler_can_send(conn))
             return 0;
@@ -3018,7 +3016,7 @@ static int send_max_streams(quicly_conn_t *conn, int uni, quicly_send_context_t 
 
 static int send_streams_blocked(quicly_conn_t *conn, int uni, quicly_send_context_t *s)
 {
-    quicly_linklist_t *blocked_list = uni ? &conn->pending.streams.blocked.uni : &conn->pending.streams.blocked.bidi;
+    quicly_linklist_t *blocked_list = uni ? &conn->egress.pending_streams.blocked.uni : &conn->egress.pending_streams.blocked.bidi;
     int ret;
 
     if (!quicly_linklist_is_linked(blocked_list))
@@ -3051,10 +3049,10 @@ static void open_blocked_streams(quicly_conn_t *conn, int uni)
 
     if (uni) {
         count = conn->egress.max_streams.uni.count;
-        anchor = &conn->pending.streams.blocked.uni;
+        anchor = &conn->egress.pending_streams.blocked.uni;
     } else {
         count = conn->egress.max_streams.bidi.count;
-        anchor = &conn->pending.streams.blocked.bidi;
+        anchor = &conn->egress.pending_streams.blocked.bidi;
     }
 
     while (quicly_linklist_is_linked(anchor)) {
@@ -3081,7 +3079,7 @@ static int send_handshake_done(quicly_conn_t *conn, quicly_send_context_t *s)
     if ((ret = allocate_ack_eliciting_frame(conn, s, 1, &sent, on_ack_handshake_done)) != 0)
         goto Exit;
     *s->dst++ = QUICLY_FRAME_TYPE_HANDSHAKE_DONE;
-    conn->pending.flows &= ~QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
+    conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
     QUICLY_PROBE(HANDSHAKE_DONE_SEND, conn, probe_now());
 
     ret = 0;
@@ -3116,7 +3114,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
         goto Exit;
     sent->data.new_token.generation = conn->egress.new_token.generation;
     s->dst = quicly_encode_new_token_frame(s->dst, ptls_iovec_init(tokenbuf.base, tokenbuf.off));
-    conn->pending.flows &= ~QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
+    conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
 
     QUICLY_PROBE(NEW_TOKEN_SEND, conn, probe_now(), tokenbuf.base, tokenbuf.off, sent->data.new_token.generation);
     ret = 0;
@@ -3292,7 +3290,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
 
     if (!ack_only) {
         /* send data */
-        while ((conn->pending.flows & (uint8_t)(1 << epoch)) != 0) {
+        while ((conn->egress.pending_flows & (uint8_t)(1 << epoch)) != 0) {
             quicly_stream_t *stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + epoch));
             assert(stream != NULL);
             if ((ret = quicly_send_stream(stream, s)) != 0)
@@ -3496,11 +3494,11 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             /* take actions only permitted for short header packets */
             if (conn->application->one_rtt_writable) {
                 /* send HANDSHAKE_DONE */
-                if ((conn->pending.flows & QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT) != 0 &&
+                if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT) != 0 &&
                     (ret = send_handshake_done(conn, s)) != 0)
                     goto Exit;
                 /* post-handshake messages */
-                if ((conn->pending.flows & (uint8_t)(1 << QUICLY_EPOCH_1RTT)) != 0) {
+                if ((conn->egress.pending_flows & (uint8_t)(1 << QUICLY_EPOCH_1RTT)) != 0) {
                     quicly_stream_t *stream = quicly_get_stream(conn, -(1 + QUICLY_EPOCH_1RTT));
                     assert(stream != NULL);
                     if ((ret = quicly_send_stream(stream, s)) != 0)
@@ -3540,12 +3538,13 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if ((ret = send_streams_blocked(conn, 0, s)) != 0)
                     goto Exit;
                 /* send NEW_TOKEN */
-                if ((conn->pending.flows & QUICLY_PENDING_FLOW_NEW_TOKEN_BIT) != 0 && (ret = send_resumption_token(conn, s)) != 0)
+                if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_NEW_TOKEN_BIT) != 0 &&
+                    (ret = send_resumption_token(conn, s)) != 0)
                     goto Exit;
             }
             /* send stream-level control frames */
-            while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->pending.streams.control)) {
-                quicly_stream_t *stream = (void *)((char *)conn->pending.streams.control.next -
+            while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->egress.pending_streams.control)) {
+                quicly_stream_t *stream = (void *)((char *)conn->egress.pending_streams.control.next -
                                                    offsetof(quicly_stream_t, _send_aux.pending_link.control));
                 if ((ret = send_stream_control_frames(stream, s)) != 0)
                     goto Exit;
@@ -3723,7 +3722,7 @@ int quicly_send_resumption_token(quicly_conn_t *conn)
 {
     if (conn->super.state <= QUICLY_STATE_CONNECTED) {
         ++conn->egress.new_token.generation;
-        conn->pending.flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
     }
     return 0;
 }
@@ -4789,7 +4788,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
                     goto Exit;
                 assert(conn->handshake == NULL);
-                conn->pending.flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
+                conn->egress.pending_flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
             }
         }
         break;
@@ -4855,7 +4854,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
     /* adjust blocked */
     if (stream->stream_id / 4 >= *max_stream_count) {
         stream->streams_blocked = 1;
-        quicly_linklist_insert((uni ? &conn->pending.streams.blocked.uni : &conn->pending.streams.blocked.bidi)->prev,
+        quicly_linklist_insert((uni ? &conn->egress.pending_streams.blocked.uni : &conn->egress.pending_streams.blocked.bidi)->prev,
                                &stream->_send_aux.pending_link.control);
     }
 
