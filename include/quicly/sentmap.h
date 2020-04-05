@@ -163,7 +163,7 @@ typedef struct st_quicly_sentmap_t {
      */
     size_t bytes_in_flight;
     /**
-     * is non-NULL between prepare and commit, pointing to the packet header that is being written to
+     * whether a new packet has been allocated and frames can be added to it
      */
     uint8_t is_open;
 
@@ -181,7 +181,6 @@ void quicly_sentmap_init(quicly_sentmap_t *map);
  * frees all the data contained in the sentmap
  */
 void quicly_sentmap_dispose(quicly_sentmap_t *map);
-
 /**
  * if transaction is open (i.e. between prepare and commit)
  */

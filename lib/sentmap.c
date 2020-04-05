@@ -28,8 +28,8 @@
 void quicly_sentmap_init(quicly_sentmap_t *map)
 {
     *map = (quicly_sentmap_t){NULL};
-    map->_.pkt_list.next = &(map->_.pkt_list);
-    map->_.pkt_list.prev = &(map->_.pkt_list);
+    map->_.pkt_list.next = &map->_.pkt_list;
+    map->_.pkt_list.prev = &map->_.pkt_list;
     map->_.packet_number = UINT64_MAX;
     map->_.sent_at = INT64_MAX;
 }
@@ -68,8 +68,8 @@ quicly_sent_frame_t *quicly_sentmap_allocate_frame(quicly_sentmap_t *map, quicly
             return NULL;
         memcpy(new_p, p, offsetof(quicly_sent_packet_t, frames) + p->frame_capacity * sizeof(quicly_sent_frame_t));
         new_p->frame_capacity = p->frame_capacity * 2;
-        p->pkt_list.prev->next = &(new_p->pkt_list);
-        p->pkt_list.next->prev = &(new_p->pkt_list);
+        p->pkt_list.prev->next = &new_p->pkt_list;
+        p->pkt_list.next->prev = &new_p->pkt_list;
         p = new_p;
     }
 
@@ -92,10 +92,10 @@ int quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_
     new_packet->sent_at = now;
     new_packet->ack_epoch = ack_epoch;
 
-    map->_.pkt_list.prev->next = &(new_packet->pkt_list);
+    map->_.pkt_list.prev->next = &new_packet->pkt_list;
     new_packet->pkt_list.prev = map->_.pkt_list.prev;
-    map->_.pkt_list.prev = &(new_packet->pkt_list);
-    new_packet->pkt_list.next = &(map->_.pkt_list);
+    map->_.pkt_list.prev = &new_packet->pkt_list;
+    new_packet->pkt_list.next = &map->_.pkt_list;
 
     map->is_open = 1;
     return 0;
@@ -104,7 +104,7 @@ int quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_
 static inline void discard_packet(quicly_sentmap_t *map, quicly_sent_packet_t *packet)
 {
     assert(packet);
-    assert(&(packet->pkt_list) != &(map->_.pkt_list)); /* not the end of the list */
+    assert(&packet->pkt_list != &map->_.pkt_list); /* not the end of the list */
 
     packet->pkt_list.prev->next = packet->pkt_list.next;
     packet->pkt_list.next->prev = packet->pkt_list.prev;
@@ -154,7 +154,7 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
 
 void quicly_sentmap_dispose(quicly_sentmap_t *map)
 {
-    while (map->_.pkt_list.next != &(map->_.pkt_list)) {
+    while (map->_.pkt_list.next != &map->_.pkt_list) {
         discard_packet(map, (quicly_sent_packet_t *)map->_.pkt_list.next);
     }
 }
