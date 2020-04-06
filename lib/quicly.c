@@ -1479,8 +1479,9 @@ Exit:
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, void *stateless_reset_token,
                                            int is_client, const uint8_t *src, const uint8_t *end)
 {
-/* When non-negative, ext_index contains the index of the extension that are referred within this function. That index is being used
- * to find duplicates using a 64-bit bitmap (found_ext_bits). When the extension is being processed, ext_index is set to -1. */
+/* When non-negative, ext_index contains the literal position within the list of extensions recognized by this function. That index
+ * is being used to find duplicates using a 64-bit bitmap (found_ext_bits). When the extension is being processed, ext_index is set
+ * to -1. */
 #define DECODE_ONE_EXTENSION(_id, block)                                                                                           \
     do {                                                                                                                           \
         if (ext_index >= 0) {                                                                                                      \
