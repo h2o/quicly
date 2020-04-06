@@ -1595,8 +1595,10 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
-                if (v >= 16384)
-                    v = QUICLY_DEFAULT_MAX_ACK_DELAY;
+                if (v >= 16384) { /* "values of 2^14 or greater are invalid" */
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
                 params->max_ack_delay = (uint16_t)v;
             });
             DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
