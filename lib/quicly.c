@@ -4815,12 +4815,40 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
     if ((ret = quicly_decode_retire_connection_id_frame(&state->src, state->end, &frame)) != 0)
         return ret;
 
-    /* TODO: return PROTOCOL_VIOLATION if sequence is associated with a DCID of this packet */
-
-    /* TODO: implement retirement logic */
     QUICLY_PROBE(RETIRE_CONNECTION_ID_RECEIVE, conn, probe_now(), frame.sequence);
 
-    return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+    if (frame.sequence >= conn->super.master_id.path_id) {
+        /* Receipt of a RETIRE_CONNECTION_ID frame containing a sequence number greater than any previously sent to the peer
+         * MUST be treated as a connection error of type PROTOCOL_VIOLATION. (19.16) */
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+    }
+
+    /* TODO: return PROTOCOL_VIOLATION if sequence is associated with a DCID of this packet */
+
+    for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i++) {
+        struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
+
+        if (c->state == QUICLY_ISSUED_CID_STATE_IDLE || c->sequence != frame.sequence)
+            continue;
+
+        if (c->state == QUICLY_ISSUED_CID_STATE_PENDING)
+            conn->issued_cid.num_pending--;
+        c->state = QUICLY_ISSUED_CID_STATE_IDLE;
+        if (++conn->issued_cid.num_retired >= QUICLY_MAX_PATH_ID - 1) {
+            /* we've used up the entire path ID -- drop the connection */
+            /* TODO: what's the correct error code here? */
+            return QUICLY_TRANSPORT_ERROR_INTERNAL;
+        }
+        if (conn->super.master_id.path_id < QUICLY_MAX_PATH_ID) {
+            /* issue new CID */
+            int ret = schedule_new_connection_id(conn, conn->super.master_id.path_id++);
+            if (ret != 0)
+                return QUICLY_TRANSPORT_ERROR_INTERNAL;
+        }
+        break;
+    }
+
+    return 0;
 }
 
 static int handle_handshake_done_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
