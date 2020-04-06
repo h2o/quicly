@@ -392,10 +392,6 @@ struct st_quicly_conn_t {
      */
     struct {
         /**
-         * maximum number of path ID issued so far
-         */
-        uint32_t last_path_id;
-        /**
          * list of struct st_quicly_pending_new_cid_t
          */
         struct st_quicly_issued_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
@@ -1800,7 +1796,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     } else {
         conn->_.super.master_id.path_id = QUICLY_MAX_PATH_ID;
     }
-    conn->_.issued_cid.last_path_id = conn->_.super.master_id.path_id;
     for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i++)
         conn->_.issued_cid.cids[i].state = QUICLY_ISSUED_CID_STATE_IDLE;
     if (ctx->cid_encryptor != NULL) {
@@ -3687,7 +3682,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         /* schedule NEW_CONNECTION_IDs */
 
         /** active CIDs the peer currently has */
-        uint64_t num_cids_active = conn->issued_cid.last_path_id - conn->super.host.num_retired_cids;
+        uint64_t num_cids_active = conn->super.master_id.path_id - conn->super.host.num_retired_cids;
         /** how many more CIDs can the peer accept? active_connection_id_limit is uint64_t, hence this too */
         uint64_t num_peer_room = conn->super.peer.transport_params.active_connection_id_limit - num_cids_active;
         /** how many more CIDs can we issue? */
@@ -3695,15 +3690,15 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         if (num_cids_more > num_peer_room)
             num_cids_more = num_peer_room;
         /** new upper limit of path_id to which we can issue */
-        uint64_t path_id_limit = conn->issued_cid.last_path_id + num_cids_more;
+        uint64_t path_id_limit = conn->super.master_id.path_id + num_cids_more;
         if (path_id_limit > QUICLY_MAX_PATH_ID)
             path_id_limit = QUICLY_MAX_PATH_ID;
 
-        while (conn->issued_cid.last_path_id < path_id_limit) {
-            int ret = schedule_new_connection_id(conn, conn->issued_cid.last_path_id);
+        while (conn->super.master_id.path_id < path_id_limit) {
+            int ret = schedule_new_connection_id(conn, conn->super.master_id.path_id);
             if (ret != 0)
                 return ret;
-            conn->issued_cid.last_path_id++;
+            conn->super.master_id.path_id++;
         }
     }
 
