@@ -245,7 +245,7 @@ static void test_vector(void)
     dispose_cipher(&egress);
 }
 
-void test_retry_aead(void)
+static void test_retry_aead(void)
 {
     quicly_cid_t odcid = {{0x29, 0xb0, 0x09, 0x2f, 0xf9, 0x2b, 0xb4, 0xe8}, 8};
     static const uint8_t packet_bytes[] = {
@@ -262,6 +262,32 @@ void test_retry_aead(void)
     ptls_aead_context_t *retry_aead = create_retry_aead(&quic_ctx, 0);
     ok(validate_retry_tag(&decoded, &odcid, retry_aead));
     ptls_aead_free(retry_aead);
+}
+
+static void test_transport_parameters(void)
+{
+    quicly_transport_parameters_t decoded;
+
+    static const uint8_t valid_bytes[] = {0x05, 0x04, 0x80, 0x10, 0x00, 0x00, 0x06, 0x04, 0x80, 0x10, 0x00, 0x00,
+                                          0x07, 0x04, 0x80, 0x10, 0x00, 0x00, 0x04, 0x04, 0x81, 0x00, 0x00, 0x00,
+                                          0x01, 0x04, 0x80, 0x00, 0x75, 0x30, 0x08, 0x01, 0x0a, 0x0a, 0x01, 0x0a};
+    memset(&decoded, 0x55, sizeof(decoded));
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, 0, valid_bytes, valid_bytes + sizeof(valid_bytes)) == 0);
+    ok(decoded.max_stream_data.bidi_local = 0x100000);
+    ok(decoded.max_stream_data.bidi_remote = 0x100000);
+    ok(decoded.max_stream_data.uni = 0x100000);
+    ok(decoded.max_data == 0x1000000);
+    ok(decoded.max_idle_timeout == 30000);
+    ok(decoded.max_streams_bidi == 10);
+    ok(decoded.max_streams_uni == 0);
+    ok(decoded.ack_delay_exponent == 10);
+    ok(decoded.max_ack_delay == 25);
+    ok(!decoded.disable_active_migration);
+
+    static const uint8_t dup_bytes[] = {0x05, 0x04, 0x80, 0x10, 0x00, 0x00, 0x05, 0x04, 0x80, 0x10, 0x00, 0x00};
+    memset(&decoded, 0x55, sizeof(decoded));
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, 0, dup_bytes, dup_bytes + sizeof(dup_bytes)) ==
+       QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
 }
 
 void free_packets(quicly_datagram_t **packets, size_t cnt)
@@ -462,6 +488,7 @@ int main(int argc, char **argv)
     subtest("sentmap", test_sentmap);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
+    subtest("transport-parameters", test_transport_parameters);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("loss", test_loss);
