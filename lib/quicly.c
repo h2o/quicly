@@ -1761,6 +1761,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
+    conn->_.egress.ack_frequency.update_at = INT64_MAX;
     conn->_.egress.send_ack_at = INT64_MAX;
     quicly_cc_init(&conn->_.egress.cc);
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.uni);
@@ -2645,7 +2646,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
             return ret;
         /* adjust ack-frequency */
         if (now >= conn->egress.ack_frequency.update_at) {
-            if (conn->initial == NULL && conn->handshake == NULL && !quicly_cc_is_in_startup(&conn->egress.cc)) {
+            if (conn->egress.packet_number >= 1000 && conn->initial == NULL && conn->handshake == NULL) {
                 uint32_t eighth_of_cwnd = conn->egress.cc.cwnd / 8;
                 if (eighth_of_cwnd > conn->super.ctx->max_packet_size * 3) {
                     uint32_t packet_tolerance = eighth_of_cwnd / conn->super.ctx->max_packet_size;

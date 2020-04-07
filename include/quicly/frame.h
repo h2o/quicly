@@ -659,7 +659,7 @@ Error:
 inline uint8_t *quicly_encode_ack_frequency_frame(uint8_t *dst, uint64_t sequence, uint64_t packet_tolerance,
                                                   uint64_t max_ack_delay, int ignore_order)
 {
-    *dst++ = QUICLY_FRAME_TYPE_ACK_FREQUENCY;
+    dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_ACK_FREQUENCY);
     dst = quicly_encodev(dst, sequence);
     dst = quicly_encodev(dst, packet_tolerance);
     dst = quicly_encodev(dst, max_ack_delay);
