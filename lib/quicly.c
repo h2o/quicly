@@ -399,6 +399,10 @@ struct st_quicly_conn_t {
          * # of elements in cids whose state is PENDING
          */
         uint64_t num_pending;
+        /**
+         * # of retired CIDs
+         */
+        uint64_t num_retired;
     } issued_cid;
 };
 
@@ -3682,7 +3686,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         /* schedule NEW_CONNECTION_IDs */
 
         /** active CIDs the peer currently has */
-        uint64_t num_cids_active = conn->super.master_id.path_id - conn->super.host.num_retired_cids;
+        uint64_t num_cids_active = conn->super.master_id.path_id - conn->issued_cid.num_retired;
         /** how many more CIDs can the peer accept? active_connection_id_limit is uint64_t, hence this too */
         uint64_t num_peer_room = conn->super.peer.transport_params.active_connection_id_limit - num_cids_active;
         /** how many more CIDs can we issue? */

@@ -475,7 +475,6 @@ struct _st_quicly_conn_public_t {
          */
         quicly_cid_t offered_cid;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
-        uint64_t num_retired_cids;
     } host;
     struct {
         /**
