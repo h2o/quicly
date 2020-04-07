@@ -48,26 +48,17 @@ void quicly_cc_init(quicly_cc_t *cc);
  * Called when a packet is newly acknowledged.
  */
 void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked, uint32_t inflight);
+
 /**
  * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
  * used for setting the recovery window.
  */
 void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn);
+
 /**
  * Called when persistent congestion is observed.
  */
 void quicly_cc_on_persistent_congestion(quicly_cc_t *cc);
-/**
- * Returns a boolean indicating if the CC is in startup (i.e. slow-start)
- */
-static int quicly_cc_is_in_startup(quicly_cc_t *cc);
-
-/* inline definitions */
-
-inline int quicly_cc_is_in_startup(quicly_cc_t *cc)
-{
-    return cc->cwnd < cc->ssthresh;
-}
 
 #ifdef __cplusplus
 }
