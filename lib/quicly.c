@@ -847,17 +847,27 @@ static int schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
         return 0;
     }
 
-    for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++) {
-        if (conn->egress.retire_cid.sequences[i] != UINT64_MAX)
-            continue;
+    int slot = -1;
 
-        conn->egress.retire_cid.sequences[i] = sequence;
-        assert(conn->egress.retire_cid.num_pending < QUICLY_RETIRE_CONNECTION_ID_LIMIT);
-        conn->egress.retire_cid.num_pending++;
-        return 0;
+    for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++) {
+        if (conn->egress.retire_cid.sequences[i] != UINT64_MAX) {
+            if (conn->egress.retire_cid.sequences[i] == sequence) {
+                /* already scheduled */
+                return 0;
+            }
+            continue;
+        }
+
+        if (slot < 0)
+            slot = i; /* found a candidate to install this request */
     }
 
-    assert(0); /* should not reach here, as we already checked the full case at the beginning */
+    assert(slot >= 0);
+    conn->egress.retire_cid.sequences[slot] = sequence;
+    assert(conn->egress.retire_cid.num_pending < QUICLY_RETIRE_CONNECTION_ID_LIMIT);
+    conn->egress.retire_cid.num_pending++;
+
+    return 0;
 }
 
 static int write_crypto_data(quicly_conn_t *conn, ptls_buffer_t *tlsbuf, size_t epoch_offsets[5])
