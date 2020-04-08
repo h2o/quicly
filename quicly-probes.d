@@ -60,6 +60,17 @@ provider quicly {
     probe application_close_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t error_code, const char *reason_phrase);
     probe application_close_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t error_code, const char *reason_phrase);
 
+    probe ack_send(struct st_quicly_conn_t *conn, int64_t at, int has_ping_bundled);
+
+    probe reset_stream_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, unsigned error_code,
+                            uint64_t final_size);
+    probe reset_stream_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t stream_id,
+                               unsigned error_code, uint64_t final_size);
+
+    probe stop_sending_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, unsigned error_code);
+    probe stop_sending_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t stream_id,
+                               unsigned error_code);
+
     probe stream_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off, size_t len,
                       int is_fin);
     probe stream_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off, size_t len);
@@ -78,6 +89,12 @@ provider quicly {
     probe new_token_send(struct st_quicly_conn_t *conn, int64_t at, uint8_t *token, size_t len, uint64_t generation);
     probe new_token_acked(struct st_quicly_conn_t *conn, int64_t at, uint64_t generation);
     probe new_token_receive(struct st_quicly_conn_t *conn, int64_t at, uint8_t *token, size_t len);
+
+    probe path_challenge_send(struct st_quicly_conn_t *conn, int64_t at, const uint8_t *data);
+    probe path_challenge_receive(struct st_quicly_conn_t *conn, int64_t at, const uint8_t *data);
+
+    probe path_response_send(struct st_quicly_conn_t *conn, int64_t at, const uint8_t *data);
+    probe path_response_receive(struct st_quicly_conn_t *conn, int64_t at, const uint8_t *data);
 
     probe handshake_done_send(struct st_quicly_conn_t *conn, int64_t at);
     probe handshake_done_receive(struct st_quicly_conn_t *conn, int64_t at);
