@@ -2646,12 +2646,13 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
             return ret;
         /* adjust ack-frequency */
         if (now >= conn->egress.ack_frequency.update_at) {
-            if (conn->egress.packet_number >= 1000 && conn->initial == NULL && conn->handshake == NULL) {
-                uint32_t eighth_of_cwnd = conn->egress.cc.cwnd / 8;
-                if (eighth_of_cwnd > conn->super.ctx->max_packet_size * 3) {
-                    uint32_t packet_tolerance = eighth_of_cwnd / conn->super.ctx->max_packet_size;
-                    if (packet_tolerance > 100)
-                        packet_tolerance = 100;
+            if (conn->egress.packet_number >= QUICLY_FIRST_ACK_FREQUENCY_PACKET_NUMBER && conn->initial == NULL &&
+                conn->handshake == NULL) {
+                uint32_t fraction_of_cwnd = conn->egress.cc.cwnd / QUICLY_ACK_FREQUENCY_CWND_FRACTION;
+                if (fraction_of_cwnd >= conn->super.ctx->max_packet_size * 3) {
+                    uint32_t packet_tolerance = fraction_of_cwnd / conn->super.ctx->max_packet_size;
+                    if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
+                        packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
                     s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
                                                                conn->super.peer.transport_params.max_ack_delay * 1000, 0);
                 }
