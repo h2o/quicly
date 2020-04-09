@@ -1843,7 +1843,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         conn->_.super.version = QUICLY_PROTOCOL_VERSION;
     }
     memset(conn->_.super.peer.spare_cids, 0, sizeof(conn->_.super.peer.spare_cids));
-    conn->_.super.peer.max_retire_prior_to = 0;
+    conn->_.super.peer.largest_retire_prior_to = 0;
     quicly_linklist_init(&conn->_.super._default_scheduler.active);
     quicly_linklist_init(&conn->_.super._default_scheduler.blocked);
     conn->_.streams = kh_init(quicly_stream_t);
@@ -4721,7 +4721,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
 
     QUICLY_PROBE(NEW_CONNECTION_ID_RECEIVE, conn, probe_now(), frame.sequence, frame.retire_prior_to);
 
-    if (frame.sequence < conn->super.peer.max_retire_prior_to) {
+    if (frame.sequence < conn->super.peer.largest_retire_prior_to) {
         /* An endpoint that receives a NEW_CONNECTION_ID frame with a sequence number smaller than the Retire Prior To
          * field of a previously received NEW_CONNECTION_ID frame MUST send a corresponding RETIRE_CONNECTION_ID frame
          * that retires the newly received connection ID, unless it has already done so for that sequence number. (19.15)
@@ -4737,7 +4737,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
      * such that it retires active_connection_id_limit CIDs and then installs
      * one new CID.
      */
-    if (frame.retire_prior_to > conn->super.peer.max_retire_prior_to) {
+    if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to) {
         if (frame.retire_prior_to > conn->super.peer.cid_sequence) {
             if (schedule_retire_connection_id(conn, conn->super.peer.cid_sequence) != 0) {
                 /* TODO: if the scheduling fails (likely due to malloc failure),
@@ -4761,7 +4761,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
                 return QUICLY_TRANSPORT_ERROR_INTERNAL;
             spare_cid->is_active = 0;
         }
-        conn->super.peer.max_retire_prior_to = frame.retire_prior_to;
+        conn->super.peer.largest_retire_prior_to = frame.retire_prior_to;
     }
 
     if (need_to_replace_cid) {

@@ -510,9 +510,9 @@ struct _st_quicly_conn_public_t {
          */
         struct st_quicly_spare_cid_t spare_cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1];
         /**
-         * maximum value of Retire Prior To field observed so far
+         * largest value of Retire Prior To field observed so far
          */
-        uint64_t max_retire_prior_to;
+        uint64_t largest_retire_prior_to;
     } peer;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
