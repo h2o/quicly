@@ -190,7 +190,7 @@ enum en_quicly_issued_cid_state_t {
      */
     QUICLY_ISSUED_CID_STATE_PENDING,
     /**
-     * this entry has been sent and is waiting for ACK (or timeout)
+     * this entry has been sent and is waiting for ACK (or to be deemed lost)
      */
     QUICLY_ISSUED_CID_STATE_INFLIGHT,
     /**
