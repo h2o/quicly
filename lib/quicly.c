@@ -1462,10 +1462,11 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
     /* if requested, add a greasing TP of 1 MTU size so that CH spans across multiple packets */
     if (expand) {
         PUSH_TP(buf, 31 * 100 + 27, {
-            if ((ret = ptls_buffer_reserve(buf, QUICLY_MAX_PACKET_SIZE)) != 0)
+            static const size_t bigger_than_mtu = 1600;
+            if ((ret = ptls_buffer_reserve(buf, bigger_than_mtu)) != 0)
                 goto Exit;
-            memset(buf->base + buf->off, 0, QUICLY_MAX_PACKET_SIZE);
-            buf->off += QUICLY_MAX_PACKET_SIZE;
+            memset(buf->base + buf->off, 0, bigger_than_mtu);
+            buf->off += bigger_than_mtu;
         });
     }
 
@@ -1701,7 +1702,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
     conn->_.egress.send_ack_at = INT64_MAX;
-    quicly_cc_init(&conn->_.egress.cc);
+    quicly_cc_init(&conn->_.egress.cc, ctx->max_packet_size);
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->_.egress.pending_streams.control);
@@ -2391,10 +2392,10 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     while (s->dst - s->dst_payload_from < QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE)
         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
 
-    /* the last packet of first-flight datagrams is padded to become 1280 bytes */
+    /* the last packet of the first-flight datagrams are padded to become max_packet_size bytes */
     if (!coalesced && quicly_is_client(conn) &&
         (s->target.packet->data.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
-        const size_t max_size = QUICLY_MAX_PACKET_SIZE - QUICLY_AEAD_TAG_SIZE;
+        const size_t max_size = conn->super.ctx->max_packet_size - QUICLY_AEAD_TAG_SIZE;
         assert(quicly_is_client(conn));
         assert(s->dst - s->target.packet->data.base <= max_size);
         memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->target.packet->data.base + max_size - s->dst);
@@ -2966,7 +2967,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
             if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.stats.num_packets.lost;
                 largest_newly_lost_pn = sent->packet_number;
-                quicly_cc_on_lost(&conn->egress.cc, sent->bytes_in_flight, sent->packet_number, conn->egress.packet_number);
+                quicly_cc_on_lost(&conn->egress.cc, sent->bytes_in_flight, sent->packet_number, conn->egress.packet_number,
+                                  conn->super.ctx->max_packet_size);
                 QUICLY_PROBE(PACKET_LOST, conn, probe_now(), largest_newly_lost_pn);
                 QUICLY_PROBE(QUICTRACE_LOST, conn, probe_now(), largest_newly_lost_pn);
             }
@@ -4008,7 +4010,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame.largest_acknowledged,
-                           (uint32_t)(conn->egress.sentmap.bytes_in_flight + bytes_acked));
+                           (uint32_t)(conn->egress.sentmap.bytes_in_flight + bytes_acked), conn->super.ctx->max_packet_size);
         QUICLY_PROBE(QUICTRACE_CC_ACK, conn, probe_now(), &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                      conn->egress.sentmap.bytes_in_flight);
     }
@@ -5069,13 +5071,15 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
     uint8_t ptbuf[QUICLY_MAX_PACKET_SIZE];
     size_t ptlen;
 
-    assert(len < QUICLY_MAX_PACKET_SIZE);
-
     *err_desc = NULL;
 
-    /* check if can get type and decrypt */
+    /* check if we can get type and decrypt */
     if (len < prefix_len + 1 + aead->algo->iv_size + aead->algo->tag_size) {
         *err_desc = "token too small";
+        return PTLS_ALERT_DECODE_ERROR;
+    }
+    if (prefix_len + 1 + aead->algo->iv_size + sizeof(ptbuf) + aead->algo->tag_size < len) {
+        *err_desc = "token too large";
         return PTLS_ALERT_DECODE_ERROR;
     }
 
