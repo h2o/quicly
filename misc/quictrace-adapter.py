@@ -3,7 +3,7 @@ import json
 import base64
 from pprint import pprint
 
-epoch = ["ENCRYPTION_INITIAL", "ENCRYPTION_0RTT", "ENCRYPTION_UNKNOWN", "ENCRYPTION_1RTT"]
+epoch = ["ENCRYPTION_INITIAL", "ENCRYPTION_0RTT", "ENCRYPTION_HANDSHAKE", "ENCRYPTION_1RTT"]
 
 def transform(inf, outf, cid):
     start = -1
@@ -37,6 +37,7 @@ def transform(inf, outf, cid):
             if rframes:
                 packet = {}
                 packet["eventType"] = "PACKET_RECEIVED"
+                packet["encryptionLevel"] = epoch[3] # hack
                 packet["timeUs"] = str((rtime - start) * 1000)
                 packet["packetNumber"] = str(rpn)
                 packet["frames"] = rframes
@@ -55,6 +56,7 @@ def transform(inf, outf, cid):
             # record new loss
             packet = {}
             packet["eventType"] = "PACKET_LOST"
+            packet["encryptionLevel"] = epoch[3]
             if start == -1: start = trace["time"]
             packet["timeUs"] = str((trace["time"] - start) * 1000)
             packet["packetNumber"] = str(trace["pn"])
@@ -146,6 +148,7 @@ def transform(inf, outf, cid):
     if rframes:
         # packet = {}
         packet["eventType"] = "PACKET_RECEIVED"
+        packet["encryptionLevel"] = epoch[3] # hack
         packet["timeUs"] = str((rtime - start) * 1000)
         packet["packetNumber"] = str(rpn)
         packet["frames"] = rframes
