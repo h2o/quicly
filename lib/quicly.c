@@ -810,7 +810,7 @@ static int schedule_path_challenge(quicly_conn_t *conn, int is_response, const u
 /**
  * set up an internal record to send NEW_CONNECTION_ID frame later
  */
-static int schedule_new_connection_id(quicly_conn_t *conn, uint32_t path_id)
+static void schedule_new_connection_id(quicly_conn_t *conn, uint32_t path_id)
 {
     struct st_quicly_issued_cid_t *ncid = NULL;
     quicly_cid_plaintext_t plain_cid = conn->super.master_id;
@@ -833,18 +833,16 @@ static int schedule_new_connection_id(quicly_conn_t *conn, uint32_t path_id)
     ncid->state = QUICLY_ISSUED_CID_STATE_PENDING;
     assert(conn->issued_cid.num_pending < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
     conn->issued_cid.num_pending++;
-
-    return 0;
 }
 
 /**
  * set up an internal record to send RETIRE_CONNECTION_ID frame later
  */
-static int schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
+static void schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
 {
     if (conn->egress.retire_cid.num_pending == QUICLY_RETIRE_CONNECTION_ID_LIMIT) {
         /* in case we don't find an empty slot, we'll just drop this sequence (never send RETIRE_CONNECTION_ID frame) */
-        return 0;
+        return;
     }
 
     int slot = -1;
@@ -853,7 +851,7 @@ static int schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
         if (conn->egress.retire_cid.sequences[i] != UINT64_MAX) {
             if (conn->egress.retire_cid.sequences[i] == sequence) {
                 /* already scheduled */
-                return 0;
+                return;
             }
             continue;
         }
@@ -866,8 +864,6 @@ static int schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
     conn->egress.retire_cid.sequences[slot] = sequence;
     assert(conn->egress.retire_cid.num_pending < QUICLY_RETIRE_CONNECTION_ID_LIMIT);
     conn->egress.retire_cid.num_pending++;
-
-    return 0;
 }
 
 static int write_crypto_data(quicly_conn_t *conn, ptls_buffer_t *tlsbuf, size_t epoch_offsets[5])
@@ -3709,9 +3705,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
             path_id_limit = QUICLY_MAX_PATH_ID;
 
         while (conn->super.master_id.path_id < path_id_limit) {
-            int ret = schedule_new_connection_id(conn, conn->super.master_id.path_id);
-            if (ret != 0)
-                return ret;
+            schedule_new_connection_id(conn, conn->super.master_id.path_id);
             conn->super.master_id.path_id++;
         }
     }
@@ -4727,8 +4721,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
          * that retires the newly received connection ID, unless it has already done so for that sequence number. (19.15)
          * TODO: "unless ..." part may not be properly addressed here (we may already have sent the RCID frame for this
          * sequence) */
-        if (schedule_retire_connection_id(conn, frame.sequence) != 0)
-            return QUICLY_TRANSPORT_ERROR_INTERNAL;
+        schedule_retire_connection_id(conn, frame.sequence);
         /* do not install this CID */
         return 0;
     }
@@ -4739,16 +4732,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
      */
     if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to) {
         if (frame.retire_prior_to > conn->super.peer.cid_sequence) {
-            if (schedule_retire_connection_id(conn, conn->super.peer.cid_sequence) != 0) {
-                /* TODO: if the scheduling fails (likely due to malloc failure),
-                 * it's possible that we could continue without disrupting the connection
-                 * -- just silently ignore retire_prior_to and the peer will eventually
-                 * retransmit the same information.
-                 * However given that malloc failure indicates catastrophic events are going
-                 * on in the system, probably it's reasonable to drop the connection by
-                 * returning the error. */
-                return QUICLY_TRANSPORT_ERROR_INTERNAL;
-            }
+            schedule_retire_connection_id(conn, conn->super.peer.cid_sequence);
             need_to_replace_cid = 1;
         }
 
@@ -4757,8 +4741,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
             struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
             if (!spare_cid->is_active || spare_cid->sequence >= frame.retire_prior_to)
                 continue;
-            if (schedule_retire_connection_id(conn, spare_cid->sequence) != 0)
-                return QUICLY_TRANSPORT_ERROR_INTERNAL;
+            schedule_retire_connection_id(conn, spare_cid->sequence);
             spare_cid->is_active = 0;
         }
         conn->super.peer.largest_retire_prior_to = frame.retire_prior_to;
@@ -4846,9 +4829,7 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
         c->state = QUICLY_ISSUED_CID_STATE_IDLE;
         if (conn->super.master_id.path_id < QUICLY_MAX_PATH_ID) {
             /* issue new CID */
-            int ret = schedule_new_connection_id(conn, conn->super.master_id.path_id++);
-            if (ret != 0)
-                return QUICLY_TRANSPORT_ERROR_INTERNAL;
+            schedule_new_connection_id(conn, conn->super.master_id.path_id++);
         }
         break;
     }
