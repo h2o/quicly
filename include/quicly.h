@@ -236,13 +236,17 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint64_t max_streams_uni;
     /**
-     * quicly ignores the value set for quicly_context_t::transport_parameters
+     *
      */
-    uint8_t ack_delay_exponent;
+    uint16_t max_udp_payload_size;
     /**
      * in milliseconds; quicly ignores the value set for quicly_context_t::transport_parameters
      */
     uint16_t max_ack_delay;
+    /**
+     * quicly ignores the value set for quicly_context_t::transport_parameters
+     */
+    uint8_t ack_delay_exponent;
     /**
      *
      */
@@ -290,9 +294,9 @@ struct st_quicly_context_t {
      */
     ptls_context_t *tls;
     /**
-     * MTU
+     * size of the client-sent datagrams containing Initial packets
      */
-    uint16_t max_packet_size;
+    uint16_t client_initial_size;
     /**
      * loss detection parameters
      */
