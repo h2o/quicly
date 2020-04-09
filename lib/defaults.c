@@ -22,13 +22,14 @@
 #include <sys/time.h>
 #include "quicly/defaults.h"
 
+#define DEFAULT_MAX_PACKET_SIZE 1280
 #define DEFAULT_MAX_PACKETS_PER_KEY 16777216
 #define DEFAULT_MAX_CRYPTO_BYTES 65536
 
 /* profile that employs IETF specified values */
-const quicly_context_t quicly_spec_context = {NULL,                   /* tls */
-                                              QUICLY_MAX_PACKET_SIZE, /* max_packet_size */
-                                              QUICLY_LOSS_SPEC_CONF,  /* loss */
+const quicly_context_t quicly_spec_context = {NULL,                    /* tls */
+                                              DEFAULT_MAX_PACKET_SIZE, /* max_packet_size */
+                                              QUICLY_LOSS_SPEC_CONF,   /* loss */
                                               {
                                                   {1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
                                                   16 * 1024 * 1024,                                    /* max_data */
@@ -53,7 +54,7 @@ const quicly_context_t quicly_spec_context = {NULL,                   /* tls */
 
 /* profile with a focus on reducing latency for the HTTP use case */
 const quicly_context_t quicly_performant_context = {NULL,                        /* tls */
-                                                    QUICLY_MAX_PACKET_SIZE,      /* max_packet_size */
+                                                    DEFAULT_MAX_PACKET_SIZE,     /* max_packet_size */
                                                     QUICLY_LOSS_PERFORMANT_CONF, /* loss */
                                                     {
                                                         {1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */

@@ -5068,7 +5068,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
                                  size_t len, size_t prefix_len, const char **err_desc)
 {
     const uint8_t *const token = _token;
-    uint8_t ptbuf[QUICLY_MAX_PACKET_SIZE];
+    uint8_t ptbuf[QUICLY_MIN_CLIENT_INITIAL_SIZE];
     size_t ptlen;
 
     *err_desc = NULL;

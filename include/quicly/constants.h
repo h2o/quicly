@@ -40,10 +40,10 @@ extern "C" {
 #define QUICLY_DEFAULT_INITIAL_RTT 66 /* initial retransmission timeout is *3, i.e. 200ms */
 #define QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD 3
 
-#define QUICLY_MAX_PACKET_SIZE 1280 /* must be >= 1200 bytes */
 #define QUICLY_AEAD_TAG_SIZE 16
 
 #define QUICLY_MAX_CID_LEN_V1 20
+#define QUICLY_MIN_CLIENT_INITIAL_SIZE 1200
 #define QUICLY_STATELESS_RESET_TOKEN_LEN 16
 
 /* coexists with picotls error codes, assuming that int is at least 32-bits */
