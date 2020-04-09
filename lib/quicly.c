@@ -4844,11 +4844,6 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
         if (c->state == QUICLY_ISSUED_CID_STATE_PENDING)
             conn->issued_cid.num_pending--;
         c->state = QUICLY_ISSUED_CID_STATE_IDLE;
-        if (++conn->issued_cid.num_retired >= QUICLY_MAX_PATH_ID - 1) {
-            /* we've used up the entire path ID -- drop the connection */
-            /* TODO: what's the correct error code here? */
-            return QUICLY_TRANSPORT_ERROR_INTERNAL;
-        }
         if (conn->super.master_id.path_id < QUICLY_MAX_PATH_ID) {
             /* issue new CID */
             int ret = schedule_new_connection_id(conn, conn->super.master_id.path_id++);
