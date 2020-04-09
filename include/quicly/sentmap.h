@@ -32,9 +32,6 @@ extern "C" {
 #include "quicly/maxsender.h"
 #include "quicly/sendstate.h"
 
-/*
- * forward declarations
- */
 struct st_quicly_conn_t;
 typedef struct st_quicly_sent_t quicly_sent_t;
 
