@@ -4531,6 +4531,10 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
+    if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE) {
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
     if (packet->cid.dest.encrypted.len < 8) {
         ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         goto Exit;
@@ -4687,11 +4691,18 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            /* update cid if this is the first Initial packet that's being received */
-            if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
-                assert(quicly_is_client(conn));
-                memcpy(conn->super.peer.cid.cid, packet->cid.src.base, packet->cid.src.len);
-                conn->super.peer.cid.len = packet->cid.src.len;
+            if (quicly_is_client(conn)) {
+                /* client: update cid if this is the first Initial packet that's being received */
+                if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
+                    memcpy(conn->super.peer.cid.cid, packet->cid.src.base, packet->cid.src.len);
+                    conn->super.peer.cid.len = packet->cid.src.len;
+                }
+            } else {
+                /* server: ignore packets that are too small */
+                if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE) {
+                    ret = QUICLY_ERROR_PACKET_IGNORED;
+                    goto Exit;
+                }
             }
             aead.cb = aead_decrypt_fixed_key;
             aead.ctx = conn->initial->cipher.ingress.aead;
