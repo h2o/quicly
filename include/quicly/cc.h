@@ -42,19 +42,19 @@ typedef struct st_quicly_cc_t {
     uint64_t recovery_end;
 } quicly_cc_t;
 
-void quicly_cc_init(quicly_cc_t *cc, uint32_t max_packet_size);
-
+/**
+ * Initializes the congestion controller.
+ */
+void quicly_cc_init(quicly_cc_t *cc, uint32_t max_udp_payload_size);
 /**
  * Called when a packet is newly acknowledged.
  */
-void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked, uint32_t inflight, uint32_t max_packet_size);
-
+void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked, uint32_t inflight, uint32_t max_udp_payload_size);
 /**
  * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
  * used for setting the recovery window.
  */
-void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, uint32_t max_packet_size);
-
+void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, uint32_t max_udp_payload_size);
 /**
  * Called when persistent congestion is observed.
  */

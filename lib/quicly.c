@@ -2424,7 +2424,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     while (s->dst - s->dst_payload_from < QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE)
         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
 
-    /* the last packet of the first-flight datagrams are padded to become max_packet_size bytes */
+    /* the last packet of the first-flight datagrams are padded to become max_udp_payload_size bytes */
     if (!coalesced && quicly_is_client(conn) &&
         (s->target.packet->data.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
         const size_t max_size = conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;

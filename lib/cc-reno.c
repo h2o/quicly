@@ -26,19 +26,19 @@
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
 
-void quicly_cc_init(quicly_cc_t *cc, uint32_t max_packet_size)
+void quicly_cc_init(quicly_cc_t *cc, uint32_t max_udp_payload_size)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
-    cc->cwnd = QUICLY_INITIAL_WINDOW * max_packet_size;
+    cc->cwnd = QUICLY_INITIAL_WINDOW * max_udp_payload_size;
     if (cc->cwnd > 14720)
         cc->cwnd = 14720;
-    if (cc->cwnd < 2 * max_packet_size)
-        cc->cwnd = 2 * max_packet_size;
+    if (cc->cwnd < 2 * max_udp_payload_size)
+        cc->cwnd = 2 * max_udp_payload_size;
     cc->ssthresh = UINT32_MAX;
 }
 
 // TODO: Avoid increase if sender was application limited
-void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked, uint32_t inflight, uint32_t max_packet_size)
+void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked, uint32_t inflight, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
     // no increases while in recovery
@@ -57,10 +57,10 @@ void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked,
     // increase cwnd by 1 MSS per cwnd acked
     uint32_t count = cc->stash / cc->cwnd;
     cc->stash -= count * cc->cwnd;
-    cc->cwnd += count * max_packet_size;
+    cc->cwnd += count * max_udp_payload_size;
 }
 
-void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, uint32_t max_packet_size)
+void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, uint32_t max_udp_payload_size)
 {
     // nothing to do if loss is in recovery window
     if (lost_pn < cc->recovery_end)
@@ -68,8 +68,8 @@ void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64
     // set end of recovery window
     cc->recovery_end = next_pn;
     cc->cwnd *= QUICLY_RENO_BETA;
-    if (cc->cwnd < QUICLY_MIN_CWND * max_packet_size)
-        cc->cwnd = QUICLY_MIN_CWND * max_packet_size;
+    if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
+        cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
     cc->ssthresh = cc->cwnd;
 }
 
