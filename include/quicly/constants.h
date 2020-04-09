@@ -37,7 +37,12 @@ extern "C" {
 #define QUICLY_DEFAULT_ACK_DELAY_EXPONENT 3
 #define QUICLY_LOCAL_ACK_DELAY_EXPONENT 10
 #define QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT 2 /* If this transport parameter is absent, a default of 2 is assumed. (18.2) */
-/** how many CIDs is quicly willing to manage at the same time? */
+/**
+ * how many CIDs is quicly willing to manage at the same time?
+ * this value is used in two ways:
+ * - active_connection_id_limit transport parameter advertised to the peer
+ * - maximum number of connection IDs we issue to the peer at a moment
+ */
 #define QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT 4
 #define QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT 2
 #define QUICLY_DEFAULT_MIN_PTO 1      /* milliseconds */
