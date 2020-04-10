@@ -1717,7 +1717,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
                      conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
     conn->_.egress.next_pn_to_skip = calc_next_pn_to_skip(conn->_.super.ctx->tls, 0);
-    conn->_.egress.max_udp_payload_size = conn->_.super.ctx->client_initial_size;
+    conn->_.egress.max_udp_payload_size = conn->_.super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;

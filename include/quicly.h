@@ -294,9 +294,11 @@ struct st_quicly_context_t {
      */
     ptls_context_t *tls;
     /**
-     * size of the client-sent datagrams containing Initial packets
+     * Maximum size of packets that we are willing to send when path-specific information is unavailable. As a path-specific
+     * * optimization, quicly acting as a server expands this value to `min(host.tp.max_udp_payload_size,
+     * * peer.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters from the client.
      */
-    uint16_t client_initial_size;
+    uint16_t initial_egress_max_udp_payload_size;
     /**
      * loss detection parameters
      */
