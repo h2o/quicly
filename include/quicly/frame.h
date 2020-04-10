@@ -57,6 +57,7 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_TRANSPORT_CLOSE 28
 #define QUICLY_FRAME_TYPE_APPLICATION_CLOSE 29
 #define QUICLY_FRAME_TYPE_HANDSHAKE_DONE 30
+#define QUICLY_FRAME_TYPE_ACK_FREQUENCY 0xaf
 
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
 #define QUICLY_FRAME_TYPE_STREAM_BIT_OFF 0x4
@@ -232,6 +233,17 @@ typedef struct st_quicly_new_token_frame_t {
 } quicly_new_token_frame_t;
 
 static int quicly_decode_new_token_frame(const uint8_t **src, const uint8_t *end, quicly_new_token_frame_t *frame);
+
+typedef struct st_quicly_ack_frequency_frame_t {
+    uint64_t sequence;
+    uint64_t packet_tolerance;
+    uint64_t max_ack_delay;
+    uint8_t ignore_order;
+} quicly_ack_frequency_frame_t;
+
+static uint8_t *quicly_encode_ack_frequency_frame(uint8_t *dst, uint64_t sequence, uint64_t packet_tolerance,
+                                                  uint64_t max_ack_delay, int ignore_order);
+static int quicly_decode_ack_frequency_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frequency_frame_t *frame);
 
 /* inline definitions */
 
@@ -639,6 +651,48 @@ inline int quicly_decode_new_token_frame(const uint8_t **src, const uint8_t *end
         goto Error;
     frame->token = ptls_iovec_init(*src, (size_t)token_len);
     *src += frame->token.len;
+    return 0;
+Error:
+    return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+}
+
+inline uint8_t *quicly_encode_ack_frequency_frame(uint8_t *dst, uint64_t sequence, uint64_t packet_tolerance,
+                                                  uint64_t max_ack_delay, int ignore_order)
+{
+    dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_ACK_FREQUENCY);
+    dst = quicly_encodev(dst, sequence);
+    dst = quicly_encodev(dst, packet_tolerance);
+    dst = quicly_encodev(dst, max_ack_delay);
+#if 0 // not in -00
+    *dst++ = !!ignore_order;
+#endif
+    return dst;
+}
+
+inline int quicly_decode_ack_frequency_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frequency_frame_t *frame)
+{
+    if ((frame->sequence = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
+    if ((frame->packet_tolerance = quicly_decodev(src, end)) == UINT64_MAX || frame->packet_tolerance == 0)
+        goto Error;
+    if ((frame->max_ack_delay = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
+    if (*src == end)
+        goto Error;
+#if 1 // not in -00
+    frame->ignore_order = 0;
+#else
+    switch (*(*src)++) {
+    case 0:
+        frame->ignore_order = 0;
+        break;
+    case 1:
+        frame->ignore_order = 1;
+        break;
+    default:
+        goto Error;
+    }
+#endif
     return 0;
 Error:
     return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
