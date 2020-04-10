@@ -1193,13 +1193,13 @@ int main(int argc, char **argv)
             session_file = optarg;
             break;
         case 'u':
-            if (sscanf(optarg, "%" PRIu16, &ctx.initial_egress_max_udp_payload_size) != 1) {
+            if (sscanf(optarg, "%" SCNu16, &ctx.initial_egress_max_udp_payload_size) != 1) {
                 fprintf(stderr, "invalid argument passed to `-u`\n");
                 exit(1);
             }
             break;
         case 'U':
-            if (sscanf(optarg, "%" PRIu16, &ctx.transport_params.max_udp_payload_size) != 1) {
+            if (sscanf(optarg, "%" SCNu16, &ctx.transport_params.max_udp_payload_size) != 1) {
                 fprintf(stderr, "invalid argument passed to `-U`\n");
                 exit(1);
             }
