@@ -1589,7 +1589,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
-                params->max_udp_payload_size = (uint8_t)v;
+                params->max_udp_payload_size = (uint16_t)v;
             });
             DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, {
                 if ((params->max_stream_data.bidi_local = ptls_decode_quicint(&src, end)) == UINT64_MAX) {

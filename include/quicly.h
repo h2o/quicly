@@ -238,7 +238,7 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint16_t max_udp_payload_size;
+    uint64_t max_udp_payload_size;
     /**
      * quicly ignores the value set for quicly_context_t::transport_parameters
      */
