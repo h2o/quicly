@@ -4693,6 +4693,17 @@ static struct st_quicly_spare_cid_t *pick_spare_cid(quicly_conn_t *conn)
 }
 
 /**
+ * copies NEW_CONNECTION_ID information to an internal storage from a received frame
+ */
+static void store_spare_cid(struct st_quicly_spare_cid_t *spare_cid, const quicly_new_connection_id_frame_t *frame)
+{
+    spare_cid->sequence = frame->sequence;
+    set_cid(&spare_cid->cid, frame->cid);
+    memcpy(spare_cid->stateless_reset_token, frame->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
+    spare_cid->is_active = 1;
+}
+
+/**
  * compares CIDs, returns zero if identical
  */
 static int cmp_cid(const quicly_cid_t *l, ptls_iovec_t r)
@@ -4747,25 +4758,9 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         conn->super.peer.largest_retire_prior_to = frame.retire_prior_to;
     }
 
-    if (need_to_replace_cid) {
-        struct st_quicly_spare_cid_t *spare_cid = pick_spare_cid(conn);
-        if (spare_cid == NULL) {
-            /* the peer has retired every CID and is installing a new one */
-            set_cid(&conn->super.peer.cid, frame.cid);
-            memcpy(conn->super.peer.stateless_reset._buf, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
-            conn->super.peer.stateless_reset.token = conn->super.peer.stateless_reset._buf;
-            conn->super.peer.cid_sequence = frame.sequence;
-            return 0;
-        }
-        /* replace with the picked one */
-        spare_cid->is_active = 0;
-        conn->super.peer.cid = spare_cid->cid;
-        memcpy(conn->super.peer.stateless_reset._buf, spare_cid->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
-        conn->super.peer.stateless_reset.token = conn->super.peer.stateless_reset._buf;
-        conn->super.peer.cid_sequence = spare_cid->sequence;
-    }
-
     /* store new CID as a spare */
+
+    int was_stored = 0;
     for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
         struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
         if (spare_cid->is_active) {
@@ -4789,15 +4784,32 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
 
             continue;
         }
-        spare_cid->sequence = frame.sequence;
-        set_cid(&spare_cid->cid, frame.cid);
-        memcpy(spare_cid->stateless_reset_token, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
-        spare_cid->is_active = 1;
-        return 0;
+
+        store_spare_cid(spare_cid, &frame);
+        was_stored = 1;
+        break;
     }
 
-    /* Could not store the new CID -- peer sent NEW_CONNECTION_ID while we have already reached active_connection_id_limit */
-    return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
+    if (!was_stored && !need_to_replace_cid) {
+        /* peer sent NEW_CONNECTION_ID while we have already reached active_connection_id_limit */
+        return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
+    }
+
+    if (need_to_replace_cid) {
+        struct st_quicly_spare_cid_t *spare_cid = pick_spare_cid(conn);
+        assert(spare_cid != NULL);
+        spare_cid->is_active = 0;
+        conn->super.peer.cid = spare_cid->cid;
+        memcpy(conn->super.peer.stateless_reset._buf, spare_cid->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
+        conn->super.peer.stateless_reset.token = conn->super.peer.stateless_reset._buf;
+        conn->super.peer.cid_sequence = spare_cid->sequence;
+        if (!was_stored) {
+            /* had to hold off the store until we replace the CID (which makes one spare entry vacant) */
+            store_spare_cid(spare_cid, &frame);
+        }
+    }
+
+    return 0;
 }
 
 static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
