@@ -1471,6 +1471,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
         ptls_buffer_push_block((buf), -1, block);                                                                                  \
     } while (0)
 
+    PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE,
+            { ptls_buffer_push_quicint(buf, params->max_udp_payload_size); });
     if (params->max_stream_data.bidi_local != 0)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL,
                 { ptls_buffer_push_quicint(buf, params->max_stream_data.bidi_local); });
