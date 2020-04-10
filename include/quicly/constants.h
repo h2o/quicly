@@ -30,7 +30,6 @@ extern "C" {
 #include <stdint.h>
 #include "picotls.h"
 
-#define QUICLY_NUM_PACKETS_BEFORE_ACK 2
 #define QUICLY_DELAYED_ACK_TIMEOUT 25   /* milliseconds */
 #define QUICLY_DEFAULT_MAX_ACK_DELAY 25 /* milliseconds */
 #define QUICLY_LOCAL_MAX_ACK_DELAY 25   /* milliseconds */
@@ -41,6 +40,11 @@ extern "C" {
 #define QUICLY_DEFAULT_MIN_PTO 1      /* milliseconds */
 #define QUICLY_DEFAULT_INITIAL_RTT 66 /* initial retransmission timeout is *3, i.e. 200ms */
 #define QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD 3
+
+#define QUICLY_DEFAULT_PACKET_TOLERANCE 2
+#define QUICLY_MAX_PACKET_TOLERANCE 100
+#define QUICLY_FIRST_ACK_FREQUENCY_PACKET_NUMBER 1000
+#define QUICLY_ACK_FREQUENCY_CWND_FRACTION 8
 
 #define QUICLY_AEAD_TAG_SIZE 16
 

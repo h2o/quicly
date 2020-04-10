@@ -240,13 +240,17 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint16_t max_udp_payload_size;
     /**
+     * quicly ignores the value set for quicly_context_t::transport_parameters
+     */
+    uint8_t ack_delay_exponent;
+    /**
      * in milliseconds; quicly ignores the value set for quicly_context_t::transport_parameters
      */
     uint16_t max_ack_delay;
     /**
-     * quicly ignores the value set for quicly_context_t::transport_parameters
+     * quicly ignores the value set for quicly_context_t::transport_parameters. Set to UINT64_MAX when not specified by peer.
      */
-    uint8_t ack_delay_exponent;
+    uint64_t min_ack_delay_usec;
     /**
      *
      */

@@ -3,13 +3,13 @@ import json
 import base64
 from pprint import pprint
 
-epoch = ["ENCRYPTION_INITIAL", "ENCRYPTION_0RTT", "ENCRYPTION_UNKNOWN", "ENCRYPTION_1RTT"]
+epoch = ["ENCRYPTION_INITIAL", "ENCRYPTION_0RTT", "ENCRYPTION_HANDSHAKE", "ENCRYPTION_1RTT"]
 
-def transform(inf, outf):
+def transform(inf, outf, cid):
     start = -1
-    cid = -1
     qtr = {}
     qtr["protocolVersion"] = "AAAA"
+    qtr["destinationConnectionId"] = base64.b64encode(str(cid))
     qtr["events"] = []
     packet = {}
     sframes = []
@@ -20,27 +20,24 @@ def transform(inf, outf):
         if line[0] != "{":
             continue
         trace = json.loads(line)
-        if len(trace["type"]) < 11 or trace["type"][:9] != "quictrace": continue
+        type = trace["type"]
+        if len(type) < 11 or type[:9] != "quictrace" or trace["conn"] != cid:
+            continue
 
-        # use first connection that is seen as the CID for the trace.
-        # TODO: make this a cmdline parameter if multiple CIDs in trace.
-        if cid == -1: 
-            cid = trace["conn"]
-            qtr["destinationConnectionId"] = base64.b64encode(str(cid))
-
-        event = trace["type"][10:]
-
+        event = type[10:]
         if event == "sent" or event == "recv" or event == "lost":
             # if last loss was not posted, do it now (TSNH)
             if packet and packet["eventType"] == "PACKET_LOST":
                qtr["events"].append(packet)
                packet = {}
-               print "WARNING: Packet lost but no transport state posted"
+               # multiple packet losses. TODO: store packet and post after congestion state read.
+               # print "WARNING: Packet lost but no transport state posted"
 
             # close out previous received packet if it's still open
             if rframes:
                 packet = {}
                 packet["eventType"] = "PACKET_RECEIVED"
+                packet["encryptionLevel"] = epoch[3] # hack
                 packet["timeUs"] = str((rtime - start) * 1000)
                 packet["packetNumber"] = str(rpn)
                 packet["frames"] = rframes
@@ -59,6 +56,7 @@ def transform(inf, outf):
             # record new loss
             packet = {}
             packet["eventType"] = "PACKET_LOST"
+            packet["encryptionLevel"] = epoch[3]
             if start == -1: start = trace["time"]
             packet["timeUs"] = str((trace["time"] - start) * 1000)
             packet["packetNumber"] = str(trace["pn"])
@@ -150,6 +148,7 @@ def transform(inf, outf):
     if rframes:
         # packet = {}
         packet["eventType"] = "PACKET_RECEIVED"
+        packet["encryptionLevel"] = epoch[3] # hack
         packet["timeUs"] = str((rtime - start) * 1000)
         packet["packetNumber"] = str(rpn)
         packet["frames"] = rframes
@@ -161,13 +160,13 @@ def transform(inf, outf):
 
 
 def main():
-    if len(sys.argv) != 3:
-        print "Usage: python adapter.py inTrace outTrace"
+    if len(sys.argv) != 4:
+        print "Usage: python adapter.py inTrace outTrace cid"
         sys.exit(1)
         
     inf = open(sys.argv[1], 'r')
     outf = open(sys.argv[2], 'w')
-    transform(inf, outf)
+    transform(inf, outf, int(sys.argv[3]))
     inf.close()
     outf.close()
 
