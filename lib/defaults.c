@@ -22,14 +22,14 @@
 #include <sys/time.h>
 #include "quicly/defaults.h"
 
-#define DEFAULT_MAX_UDP_PAYLOAD_SIZE 1280
-#define DEFAULT_CLIENT_INITIAL_SIZE DEFAULT_MAX_UDP_PAYLOAD_SIZE
+#define DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE 1280
+#define DEFAULT_MAX_UDP_PAYLOAD_SIZE 1500
 #define DEFAULT_MAX_PACKETS_PER_KEY 16777216
 #define DEFAULT_MAX_CRYPTO_BYTES 65536
 
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {NULL,                                                 /* tls */
-                                              DEFAULT_CLIENT_INITIAL_SIZE,                          /* client_initial_size */
+                                              DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE,          /* client_initial_size */
                                               QUICLY_LOSS_SPEC_CONF,                                /* loss */
                                               {{1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
                                                16 * 1024 * 1024,                                    /* max_data */
@@ -54,7 +54,7 @@ const quicly_context_t quicly_spec_context = {NULL,                             
 
 /* profile with a focus on reducing latency for the HTTP use case */
 const quicly_context_t quicly_performant_context = {NULL,                                                 /* tls */
-                                                    DEFAULT_CLIENT_INITIAL_SIZE,                          /* client_initial_size */
+                                                    DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE,          /* client_initial_size */
                                                     QUICLY_LOSS_PERFORMANT_CONF,                          /* loss */
                                                     {{1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
                                                      16 * 1024 * 1024,                                    /* max_data */
