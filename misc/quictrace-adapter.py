@@ -1,7 +1,20 @@
+#!/usr/bin/env python
+from __future__ import print_function
 import sys
 import json
 import base64
+import time
+import os
+from collections import OrderedDict
 from pprint import pprint
+
+def usage():
+    print(r"""
+Usage:
+    quictrace-adapter.py inTrace.jsonl outTrace.json cid
+    quictrace-adatper.py inTrace.jsonl outTraceDir
+""".strip())
+
 
 epoch = ["ENCRYPTION_INITIAL", "ENCRYPTION_0RTT", "ENCRYPTION_HANDSHAKE", "ENCRYPTION_1RTT"]
 
@@ -122,7 +135,7 @@ def transform(inf, outf, cid):
         if "recv-ack" in event:
             if "recv-ack-delay" not in event:
                 # create ack block, add to list
-                block = {"firstPacket": str(trace["ack-block-begin"]), 
+                block = {"firstPacket": str(trace["ack-block-begin"]),
                          "lastPacket": str(trace["ack-block-end"])}
                 acked.append(block)
                 continue
@@ -159,16 +172,39 @@ def transform(inf, outf, cid):
     json.dump(qtr, outf)
 
 
+def find_cids(infile):
+    cids = OrderedDict()
+    with open(infile, 'r') as f:
+        for line in f:
+            event = json.loads(line)
+            if event["type"] == "accept":
+                cids[event["conn"]] = event
+    return cids
+
+def mkdir_p(dirname):
+    try:
+        os.makedirs(dirname)
+    except OSError:
+        pass
+
 def main():
-    if len(sys.argv) != 4:
-        print "Usage: python adapter.py inTrace outTrace cid"
+    if len(sys.argv) == 3:
+        (_, infile, outdir) = sys.argv
+        for cid, event in find_cids(infile).items():
+            timestamp = time.strftime('%FT%TZ', time.gmtime(event["time"] / 1000))
+            mkdir_p(outdir)
+            outfile = os.path.join(outdir, '{timestamp}-{cid}.json'.format(timestamp=timestamp, cid=cid))
+            with open(infile, 'r') as inf, open(outfile, 'w') as outf:
+                print("Transforming %s" % outfile, file = sys.stderr)
+                transform(inf, outf, int(cid))
+    elif len(sys.argv) == 4:
+        (_, infile, outfile, cid) = sys.argv
+        with open(infile, 'r') as inf, open(outfile, 'w') as outf:
+            print("Transforming %s" % outfile, file = sys.stderr)
+            transform(inf, outf, int(cid))
+    else:
+        usage()
         sys.exit(1)
-        
-    inf = open(sys.argv[1], 'r')
-    outf = open(sys.argv[2], 'w')
-    transform(inf, outf, int(sys.argv[3]))
-    inf.close()
-    outf.close()
 
 
 if __name__ == "__main__":
