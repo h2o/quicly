@@ -808,30 +808,33 @@ static int schedule_path_challenge(quicly_conn_t *conn, int is_response, const u
 }
 
 /**
- * set up an internal record to send NEW_CONNECTION_ID frame later
+ * calculate how many CIDs we provide to the peer
  */
-static void schedule_new_connection_id(quicly_conn_t *conn, uint32_t path_id)
+static uint64_t issued_cid_capacity(const quicly_conn_t *conn)
 {
-    struct st_quicly_issued_cid_t *ncid = NULL;
-    quicly_cid_plaintext_t plain_cid = conn->super.master_id;
+    uint64_t capacity = conn->super.peer.transport_params.active_connection_id_limit;
+    if (capacity > QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT)
+        capacity = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT;
+    return capacity;
+}
+
+/**
+ * initialize a new connection ID to be sent
+ */
+static void prepare_pending_new_connection_id(quicly_conn_t *conn, struct st_quicly_issued_cid_t *cid)
+{
     quicly_cid_encryptor_t *cid_encryptor = conn->super.ctx->cid_encryptor;
 
-    /* search for an empty slot */
-    for (uint64_t slot = 0; slot < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; slot++) {
-        if (conn->issued_cid.cids[slot].state == QUICLY_ISSUED_CID_STATE_IDLE) {
-            ncid = &conn->issued_cid.cids[slot];
-            break; /* found */
-        }
-    }
-    /* we shouldn't be filling up the slot -- number of CIDs must be kept below active connection id limit */
-    assert(ncid != NULL);
-
     assert(cid_encryptor != NULL);
-    ncid->sequence = path_id;
-    plain_cid.path_id = path_id;
-    cid_encryptor->encrypt_cid(cid_encryptor, &ncid->cid, ncid->stateless_reset_token, &plain_cid);
-    ncid->state = QUICLY_ISSUED_CID_STATE_PENDING;
+    assert(cid->state == QUICLY_ISSUED_CID_STATE_IDLE);
+    assert(conn->super.master_id.path_id < QUICLY_MAX_PATH_ID);
+
+    cid->sequence = conn->super.master_id.path_id;
+
+    cid_encryptor->encrypt_cid(cid_encryptor, &cid->cid, cid->stateless_reset_token, &conn->super.master_id);
+    cid->state = QUICLY_ISSUED_CID_STATE_PENDING;
     conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
+    conn->super.master_id.path_id++;
 }
 
 /**
@@ -2437,7 +2440,8 @@ static int on_ack_new_connection_id(quicly_conn_t *conn, const quicly_sent_packe
     if (event == QUICLY_SENTMAP_EVENT_EXPIRED)
         return 0;
 
-    for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i++) {
+    uint64_t cap = issued_cid_capacity(conn);
+    for (uint64_t i = 0; i < cap; i++) {
         if (conn->issued_cid.cids[i].sequence == sequence && conn->issued_cid.cids[i].state == QUICLY_ISSUED_CID_STATE_INFLIGHT) {
             new_cid = &conn->issued_cid.cids[i];
             break;
@@ -3678,24 +3682,17 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
             assert(ret == 0);
         }
 
-        /* schedule NEW_CONNECTION_IDs */
-
-        /** active CIDs the peer currently has */
-        uint64_t num_cids_active = conn->super.master_id.path_id - conn->issued_cid.num_retired;
-        /** how many more CIDs can the peer accept? active_connection_id_limit is uint64_t, hence this too */
-        uint64_t num_peer_room = conn->super.peer.transport_params.active_connection_id_limit - num_cids_active;
-        /** how many more CIDs can we issue? */
-        uint64_t num_cids_more = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - num_cids_active;
-        if (num_cids_more > num_peer_room)
-            num_cids_more = num_peer_room;
-        /** new upper limit of path_id to which we can issue */
-        uint64_t path_id_limit = conn->super.master_id.path_id + num_cids_more;
-        if (path_id_limit > QUICLY_MAX_PATH_ID)
-            path_id_limit = QUICLY_MAX_PATH_ID;
-
-        while (conn->super.master_id.path_id < path_id_limit) {
-            schedule_new_connection_id(conn, conn->super.master_id.path_id);
-            conn->super.master_id.path_id++;
+        /* schedule NEW_CONNECTION_IDs
+         *
+         * First we issue N CIDs (to be precise here we issue N-1, as we already gave one upon connection establishment).
+         * Later, every time the peer retires one of the CIDs, we immediately offer one additional CID
+         * to always fill the peer's CID list.
+         */
+        uint64_t cap = issued_cid_capacity(conn);
+        for (uint64_t i = 0; i < cap && conn->super.master_id.path_id < QUICLY_MAX_PATH_ID; i++) {
+            struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
+            if (c->state == QUICLY_ISSUED_CID_STATE_IDLE)
+                prepare_pending_new_connection_id(conn, c);
         }
     }
 
@@ -3816,7 +3813,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
                 if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_CID_FRAME_BIT) != 0) {
                     /* send NEW_CONNECTION_ID */
-                    for (uint64_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i++) {
+                    uint64_t cap = issued_cid_capacity(conn);
+                    for (uint64_t i = 0; i < cap; i++) {
                         struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
                         if (c->state == QUICLY_ISSUED_CID_STATE_PENDING) {
                             if ((ret = send_new_connection_id(conn, s, c)) != 0)
@@ -4820,7 +4818,8 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
 
     /* TODO: return PROTOCOL_VIOLATION if sequence is associated with a DCID of this packet */
 
-    for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i++) {
+    uint64_t cap = issued_cid_capacity(conn);
+    for (uint64_t i = 0; i < cap; i++) {
         struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
 
         if (c->state == QUICLY_ISSUED_CID_STATE_IDLE || c->sequence != frame.sequence)
@@ -4828,8 +4827,8 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
 
         c->state = QUICLY_ISSUED_CID_STATE_IDLE;
         if (conn->super.master_id.path_id < QUICLY_MAX_PATH_ID) {
-            /* issue new CID */
-            schedule_new_connection_id(conn, conn->super.master_id.path_id++);
+            /* issue new CID in the next send round */
+            prepare_pending_new_connection_id(conn, c);
         }
         break;
     }
