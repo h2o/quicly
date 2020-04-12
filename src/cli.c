@@ -19,16 +19,16 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#include <getopt.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/udp.h>
-#include <stdio.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <getopt.h>
+#include <netinet/udp.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <picotls.h>
 #include "quicly.h"

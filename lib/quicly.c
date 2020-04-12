@@ -60,6 +60,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION 12
 #define QUICLY_TRANSPORT_PARAMETER_ID_PREFERRED_ADDRESS 13
 #define QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT 14
+#define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xde1a
 
 #define QUICLY_EPOCH_INITIAL 0
 #define QUICLY_EPOCH_0RTT 1
@@ -134,9 +135,17 @@ struct st_quicly_pn_space_t {
      */
     uint64_t next_expected_packet_number;
     /**
-     * packet count before ack is sent
+     * number of ACK-eliciting packets that have not been ACKed yet
      */
     uint32_t unacked_count;
+    /**
+     * maximum number of ACK-eliciting packets to be queued before sending an ACK
+     */
+    uint32_t packet_tolerance;
+    /**
+     * boolean indicating if reorder should NOT trigger an immediate ack
+     */
+    uint8_t ignore_order;
 };
 
 struct st_quicly_handshake_space_t {
@@ -244,6 +253,12 @@ struct st_quicly_conn_t {
         struct {
             quicly_maxsender_t *uni, *bidi;
         } max_streams;
+        /**
+         *
+         */
+        struct {
+            uint64_t next_sequence;
+        } ack_frequency;
     } ingress;
     /**
      *
@@ -309,6 +324,13 @@ struct st_quicly_conn_t {
             uint64_t max_acked;
             uint32_t num_inflight;
         } new_token;
+        /**
+         *
+         */
+        struct {
+            int64_t update_at;
+            uint64_t sequence;
+        } ack_frequency;
         /**
          *
          */
@@ -421,17 +443,10 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 static int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase);
 static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
-static const quicly_transport_parameters_t default_transport_params = {
-    .max_stream_data = {0, 0, 0},
-    .max_data = 0,
-    .max_idle_timeout = 0,
-    .max_streams_bidi = 0,
-    .max_streams_uni = 0,
-    .ack_delay_exponent = QUICLY_DEFAULT_ACK_DELAY_EXPONENT,
-    .max_ack_delay = QUICLY_DEFAULT_MAX_ACK_DELAY,
-    .disable_active_migration = 0,
-    .active_connection_id_limit = QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT,
-};
+static const quicly_transport_parameters_t default_transport_params = {.ack_delay_exponent = QUICLY_DEFAULT_ACK_DELAY_EXPONENT,
+                                                                       .max_ack_delay = QUICLY_DEFAULT_MAX_ACK_DELAY,
+                                                                       .min_ack_delay_usec = UINT64_MAX,
+                                                                       .active_connection_id_limit = QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT};
 
 static __thread int64_t now;
 
@@ -527,6 +542,23 @@ static void dispose_cipher(struct st_quicly_cipher_context_t *ctx)
 {
     ptls_aead_free(ctx->aead);
     ptls_cipher_free(ctx->header_protection);
+}
+
+/**
+ * Returns the timeout for sentmap entries. This timeout is also used as the duration of CLOSING / DRAINING state, and therefore be
+ * longer than 3PTO. At the moment, the value is 4PTO.
+ */
+static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
+{
+    return quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.peer.transport_params.max_ack_delay,
+                              conn->egress.loss.conf->min_pto) *
+           4;
+}
+
+static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
+{
+    if (conn->super.peer.transport_params.min_ack_delay_usec != UINT64_MAX)
+        conn->egress.ack_frequency.update_at = now + get_sentmap_expiration_time(conn);
 }
 
 size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len)
@@ -1179,6 +1211,8 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
     space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->unacked_count = 0;
+    space->packet_tolerance = QUICLY_DEFAULT_PACKET_TOLERANCE;
+    space->ignore_order = 0;
     if (sz != sizeof(*space))
         memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
 
@@ -1222,7 +1256,7 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
     if ((ret = record_pn(&space->ack_queue, pn, &is_out_of_order)) != 0)
         goto Exit;
 
-    ack_now = is_out_of_order && !is_ack_only;
+    ack_now = is_out_of_order && !space->ignore_order && !is_ack_only;
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
@@ -1232,8 +1266,7 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
     if (!is_ack_only) {
         space->unacked_count++;
         /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
-        if (space->unacked_count >= QUICLY_NUM_PACKETS_BEFORE_ACK || epoch == QUICLY_EPOCH_INITIAL ||
-            epoch == QUICLY_EPOCH_HANDSHAKE)
+        if (space->unacked_count >= space->packet_tolerance || epoch == QUICLY_EPOCH_INITIAL || epoch == QUICLY_EPOCH_HANDSHAKE)
             ack_now = 1;
     }
 
@@ -1588,6 +1621,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACK_DELAY_EXPONENT); });
     if (QUICLY_LOCAL_MAX_ACK_DELAY != QUICLY_DEFAULT_MAX_ACK_DELAY)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
+    PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY,
+            { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MAX_ACK_DELAY * 1000 /* in microseconds */); });
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
     if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
@@ -1735,6 +1770,16 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
                 params->max_ack_delay = (uint16_t)v;
             });
+            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
+                if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+                if (params->min_ack_delay_usec >= 16777216) { /* "values of 2^24 or greater are invalid" */
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+            });
             DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -1752,6 +1797,14 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
             if (ext_index >= 0)
                 src = end;
         });
+    }
+
+    /* check consistency between the transpart parameters */
+    if (params->min_ack_delay_usec != UINT64_MAX) {
+        if (params->min_ack_delay_usec > params->max_ack_delay * 1000) {
+            ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+            goto Exit;
+        }
     }
 
     ret = 0;
@@ -1858,6 +1911,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
+    conn->_.egress.ack_frequency.update_at = INT64_MAX;
     conn->_.egress.send_ack_at = INT64_MAX;
     quicly_cc_init(&conn->_.egress.cc);
     for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++)
@@ -1926,6 +1980,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* store the results */
     conn->super.peer.stateless_reset.token = conn->super.peer.stateless_reset._buf;
     conn->super.peer.transport_params = params;
+    ack_frequency_set_next_update_at(conn);
 
 Exit:
     return ret; /* negative error codes used to transmit QUIC errors through picotls */
@@ -2026,6 +2081,8 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
         if ((ret = quicly_decode_transport_parameter_list(&conn->super.peer.transport_params, NULL, NULL, 0, src, end)) != 0)
             goto Exit;
     }
+
+    ack_frequency_set_next_update_at(conn);
 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
@@ -2781,13 +2838,28 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
     assert(s->dst_end - s->dst >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
 
-    /* register to sentmap */
     if (conn->super.state < QUICLY_STATE_CLOSING) {
+        /* register to sentmap */
         uint8_t ack_epoch = get_epoch(s->current.first_byte);
         if (ack_epoch == QUICLY_EPOCH_0RTT)
             ack_epoch = QUICLY_EPOCH_1RTT;
         if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, now, ack_epoch)) != 0)
             return ret;
+        /* adjust ack-frequency */
+        if (now >= conn->egress.ack_frequency.update_at) {
+            if (conn->egress.packet_number >= QUICLY_FIRST_ACK_FREQUENCY_PACKET_NUMBER && conn->initial == NULL &&
+                conn->handshake == NULL) {
+                uint32_t fraction_of_cwnd = conn->egress.cc.cwnd / QUICLY_ACK_FREQUENCY_CWND_FRACTION;
+                if (fraction_of_cwnd >= conn->super.ctx->max_packet_size * 3) {
+                    uint32_t packet_tolerance = fraction_of_cwnd / conn->super.ctx->max_packet_size;
+                    if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
+                        packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
+                    s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
+                                                               conn->super.peer.transport_params.max_ack_delay * 1000, 0);
+                }
+            }
+            ack_frequency_set_next_update_at(conn);
+        }
     }
 
 TargetReady:
@@ -3071,17 +3143,6 @@ UpdateState:
     sent->data.stream.args.end = end_off + is_fin;
 
     return 0;
-}
-
-/**
- * Returns the timeout for sentmap entries. This timeout is also used as the duration of CLOSING / DRAINING state, and therefore be
- * longer than 3PTO. At the moment, the value is 4PTO.
- */
-static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
-{
-    return quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.peer.transport_params.max_ack_delay,
-                              conn->egress.loss.conf->min_pto) *
-           4;
 }
 
 static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
@@ -4856,13 +4917,39 @@ static int handle_handshake_done_frame(quicly_conn_t *conn, struct st_quicly_han
     return 0;
 }
 
+static int handle_ack_frequency_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    quicly_ack_frequency_frame_t frame;
+    int ret;
+
+    if ((ret = quicly_decode_ack_frequency_frame(&state->src, state->end, &frame)) != 0)
+        return ret;
+
+    QUICLY_PROBE(ACK_FREQUENCY_RECEIVE, conn, probe_now(), frame.sequence, frame.packet_tolerance, frame.max_ack_delay,
+                 frame.ignore_order);
+
+    /* At the moment, the only value that the peer would send is this value, because our TP.min_ack_delay and max_ack_delay are
+     * equal. */
+    if (frame.max_ack_delay != QUICLY_LOCAL_MAX_ACK_DELAY * 1000)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
+    if (frame.sequence >= conn->ingress.ack_frequency.next_sequence) {
+        conn->ingress.ack_frequency.next_sequence = frame.sequence + 1;
+        conn->application->super.packet_tolerance =
+            (uint32_t)(frame.packet_tolerance < QUICLY_MAX_PACKET_TOLERANCE ? frame.packet_tolerance : QUICLY_MAX_PACKET_TOLERANCE);
+        conn->application->super.ignore_order = frame.ignore_order;
+    }
+
+    return 0;
+}
+
 static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src, size_t _len, uint64_t *offending_frame_type,
                           int *is_ack_only)
 {
     /* clang-format off */
 
     /* `frame_handlers` is an array of frame handlers and the properties of the frames, indexed by the ID of the frame. */
-    static const struct {
+    static const struct st_quicly_frame_handler_t {
         int (*cb)(quicly_conn_t *, struct st_quicly_handle_payload_state_t *); /* callback function that handles the frame */
         uint8_t permitted_epochs;  /* the epochs the frame can appear, calculated as bitwise-or of `1 << epoch` */
         uint8_t ack_eliciting;     /* boolean indicating if the frame is ack-eliciting */
@@ -4912,6 +4999,29 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         /*   +----------------------+----+----+----+----+---------------+ */
 #undef FRAME
     };
+    static const struct {
+        uint64_t type;
+        struct st_quicly_frame_handler_t _;
+    } ex_frame_handlers[] = {
+#define FRAME(uc, lc, i, z, h, o, ae)                                                                                              \
+    {                                                                                                                              \
+        QUICLY_FRAME_TYPE_##uc,                                                                                                    \
+        {                                                                                                                          \
+            handle_##lc##_frame,                                                                                                   \
+            (i << QUICLY_EPOCH_INITIAL) | (z << QUICLY_EPOCH_0RTT) | (h << QUICLY_EPOCH_HANDSHAKE) | (o << QUICLY_EPOCH_1RTT),     \
+            ae                                                                                                                     \
+        },                                                                                                                         \
+    }
+        /*   +-------------------------------+-------------------+---------------+
+         *   |             frame             |  permitted epochs |               |
+         *   |---------------+---------------+----+----+----+----+ ack-eliciting |
+         *   |  upper-case   |  lower-case   | IN | 0R | HS | 1R |               |
+         *   +---------------+---------------+----+----+----+----+---------------+ */
+        FRAME( ACK_FREQUENCY , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ),
+        /*   +---------------+---------------+-------------------+---------------+ */
+#undef FRAME
+        {UINT64_MAX},
+    };
     /* clang-format on */
 
     struct st_quicly_handle_payload_state_t state = {_src, _src + _len, epoch};
@@ -4919,18 +5029,35 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
     int ret;
 
     do {
+        /* determine the frame type; fast path is available for frame types below 64 */
+        const struct st_quicly_frame_handler_t *frame_handler;
         state.frame_type = *state.src++;
-        if (state.frame_type >= sizeof(frame_handlers) / sizeof(frame_handlers[0])) {
-            ret = QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
-            break;
+        if (state.frame_type < sizeof(frame_handlers) / sizeof(frame_handlers[0])) {
+            frame_handler = frame_handlers + state.frame_type;
+        } else {
+            /* slow path */
+            --state.src;
+            if ((state.frame_type = quicly_decodev(&state.src, state.end)) == UINT64_MAX) {
+                ret = QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+                break;
+            }
+            size_t i;
+            for (i = 0; ex_frame_handlers[i].type < state.frame_type; ++i)
+                ;
+            if (ex_frame_handlers[i].type != state.frame_type) {
+                ret = QUICLY_TRANSPORT_ERROR_FRAME_ENCODING; /* not found */
+                break;
+            }
+            frame_handler = &ex_frame_handlers[i]._;
         }
-        if ((frame_handlers[state.frame_type].permitted_epochs & (1 << epoch)) == 0) {
+        /* check if frame is allowed, then process */
+        if ((frame_handler->permitted_epochs & (1 << epoch)) == 0) {
             ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
             break;
         }
         num_frames += 1;
-        num_frames_ack_eliciting += frame_handlers[state.frame_type].ack_eliciting;
-        if ((ret = (*frame_handlers[state.frame_type].cb)(conn, &state)) != 0)
+        num_frames_ack_eliciting += frame_handler->ack_eliciting;
+        if ((ret = frame_handler->cb(conn, &state)) != 0)
             break;
     } while (state.src != state.end);
 
