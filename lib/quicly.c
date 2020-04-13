@@ -3674,7 +3674,9 @@ static int send_new_connection_id(quicly_conn_t *conn, quicly_send_context_t *s,
     s->dst = quicly_encode_new_connection_id_frame(s->dst, new_cid->sequence, retire_prior_to, new_cid->cid.cid, new_cid->cid.len,
                                                    new_cid->stateless_reset_token);
 
-    QUICLY_PROBE(NEW_CONNECTION_ID_SEND, conn, probe_now(), new_cid->sequence, retire_prior_to);
+    QUICLY_PROBE(NEW_CONNECTION_ID_SEND, conn, probe_now(), new_cid->sequence, retire_prior_to,
+                 QUICLY_PROBE_HEXDUMP(new_cid->cid.cid, new_cid->cid.len),
+                 QUICLY_PROBE_HEXDUMP(new_cid->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN));
 
     return 0;
 }
@@ -4810,7 +4812,9 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
     if ((ret = quicly_decode_new_connection_id_frame(&state->src, state->end, &frame)) != 0)
         return ret;
 
-    QUICLY_PROBE(NEW_CONNECTION_ID_RECEIVE, conn, probe_now(), frame.sequence, frame.retire_prior_to);
+    QUICLY_PROBE(NEW_CONNECTION_ID_RECEIVE, conn, probe_now(), frame.sequence, frame.retire_prior_to,
+                 QUICLY_PROBE_HEXDUMP(frame.cid.base, frame.cid.len),
+                 QUICLY_PROBE_HEXDUMP(frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN));
 
     if (frame.sequence < conn->super.peer.largest_retire_prior_to) {
         /* An endpoint that receives a NEW_CONNECTION_ID frame with a sequence number smaller than the Retire Prior To
