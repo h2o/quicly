@@ -2564,9 +2564,6 @@ static int on_ack_retire_connection_id(quicly_conn_t *conn, const quicly_sent_pa
 {
     uint64_t sequence = sent->data.retire_connection_id.sequence;
 
-    if (event == QUICLY_SENTMAP_EVENT_EXPIRED)
-        return 0;
-
     if (event == QUICLY_SENTMAP_EVENT_LOST) {
         /* reschedule transmission */
         schedule_retire_connection_id(conn, sequence);
