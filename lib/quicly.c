@@ -452,7 +452,8 @@ static const quicly_transport_parameters_t default_transport_params = {.max_udp_
                                                                        .ack_delay_exponent = QUICLY_DEFAULT_ACK_DELAY_EXPONENT,
                                                                        .max_ack_delay = QUICLY_DEFAULT_MAX_ACK_DELAY,
                                                                        .min_ack_delay_usec = UINT64_MAX,
-                                                                       .active_connection_id_limit = QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT};
+                                                                       .active_connection_id_limit =
+                                                                           QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT};
 
 static __thread int64_t now;
 static __thread size_t in_quicly_send_cnt;
