@@ -851,8 +851,10 @@ static int schedule_path_challenge(quicly_conn_t *conn, int is_response, const u
 /**
  * calculate how many CIDs we provide to the peer
  */
-static uint64_t issued_cid_capacity(const quicly_conn_t *conn)
+static size_t issued_cid_capacity(const quicly_conn_t *conn)
 {
+    PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT < SIZE_MAX / sizeof(uint64_t));
+
     /* if we don't have an encryptor we won't be issuing any CID */
     if (conn->super.ctx->cid_encryptor == NULL)
         return 0;
@@ -1885,7 +1887,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     } else {
         conn->_.super.master_id.path_id = QUICLY_MAX_PATH_ID;
     }
-    for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i++)
+    for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i++)
         conn->_.issued_cid.cids[i].state = QUICLY_ISSUED_CID_STATE_IDLE;
     if (ctx->cid_encryptor != NULL) {
         /* mark CID with sequence=0 as already delivered, so we can handle RETIRE_CONNECTION_ID
@@ -2540,8 +2542,8 @@ static int on_ack_new_connection_id(quicly_conn_t *conn, const quicly_sent_packe
     if (event == QUICLY_SENTMAP_EVENT_EXPIRED)
         return 0;
 
-    uint64_t cap = issued_cid_capacity(conn);
-    for (uint64_t i = 0; i < cap; i++) {
+    size_t cap = issued_cid_capacity(conn);
+    for (size_t i = 0; i < cap; i++) {
         if (conn->issued_cid.cids[i].sequence == sequence && conn->issued_cid.cids[i].state == QUICLY_ISSUED_CID_STATE_INFLIGHT) {
             new_cid = &conn->issued_cid.cids[i];
             break;
@@ -3794,8 +3796,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
          * Later, every time the peer retires one of the CIDs, we immediately offer one additional CID
          * to always fill the peer's CID list.
          */
-        uint64_t cap = issued_cid_capacity(conn);
-        for (uint64_t i = 0; i < cap && conn->super.master_id.path_id < QUICLY_MAX_PATH_ID; i++) {
+        size_t cap = issued_cid_capacity(conn);
+        for (size_t i = 0; i < cap && conn->super.master_id.path_id < QUICLY_MAX_PATH_ID; i++) {
             struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
             if (c->state == QUICLY_ISSUED_CID_STATE_IDLE)
                 prepare_pending_new_connection_id(conn, c);
@@ -3919,8 +3921,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
                 if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_CID_FRAME_BIT) != 0) {
                     /* send NEW_CONNECTION_ID */
-                    uint64_t cap = issued_cid_capacity(conn);
-                    for (uint64_t i = 0; i < cap; i++) {
+                    size_t cap = issued_cid_capacity(conn);
+                    for (size_t i = 0; i < cap; i++) {
                         struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
                         if (c->state == QUICLY_ISSUED_CID_STATE_PENDING) {
                             if ((ret = send_new_connection_id(conn, s, c)) != 0)
@@ -3929,7 +3931,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         }
                     }
                     /* send RETIRE_CONNECTION_ID */
-                    for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++) {
+                    for (size_t i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++) {
                         uint64_t sequence = conn->egress.retire_cid.sequences[i];
                         if (sequence == UINT64_MAX)
                             continue; /* empty slot */
@@ -4771,7 +4773,7 @@ static struct st_quicly_spare_cid_t *pick_spare_cid(quicly_conn_t *conn)
 {
     struct st_quicly_spare_cid_t *cid = NULL;
     /* find the CID with smallest sequence number */
-    for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
+    for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
         struct st_quicly_spare_cid_t *c = &conn->super.peer.spare_cids[i];
         if (!c->is_active)
             continue;
@@ -4842,7 +4844,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         }
 
         /* retire CIDs in the spare pool */
-        for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
+        for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
             struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
             if (!spare_cid->is_active || spare_cid->sequence >= frame.retire_prior_to)
                 continue;
@@ -4855,7 +4857,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
     /* store new CID as a spare */
 
     int was_stored = 0;
-    for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
+    for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
         struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
         if (spare_cid->is_active) {
             /* If an endpoint receives a NEW_CONNECTION_ID frame that repeats a previously issued connection ID with
@@ -4924,8 +4926,8 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
 
     /* TODO: return PROTOCOL_VIOLATION if sequence is associated with a DCID of this packet */
 
-    uint64_t cap = issued_cid_capacity(conn);
-    for (uint64_t i = 0; i < cap; i++) {
+    size_t cap = issued_cid_capacity(conn);
+    for (size_t i = 0; i < cap; i++) {
         struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
 
         if (c->state == QUICLY_ISSUED_CID_STATE_IDLE || c->sequence != frame.sequence)
