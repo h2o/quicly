@@ -1199,7 +1199,7 @@ int main(int argc, char **argv)
             }
             break;
         case 'U':
-            if (sscanf(optarg, "%" SCNu16, &ctx.transport_params.max_udp_payload_size) != 1) {
+            if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.max_udp_payload_size) != 1) {
                 fprintf(stderr, "invalid argument passed to `-U`\n");
                 exit(1);
             }
