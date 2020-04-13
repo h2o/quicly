@@ -43,7 +43,10 @@ void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked,
 
     // slow start
     if (cc->cwnd < cc->ssthresh) {
-        cc->cwnd += bytes;
+        if (cc->cwnd > UINT32_MAX - bytes)
+            cc->cwnd = UINT32_MAX;
+        else
+            cc->cwnd += bytes;
         return;
     }
     // congestion avoidance
@@ -53,7 +56,11 @@ void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked,
     // increase cwnd by 1 MSS per cwnd acked
     uint32_t count = cc->stash / cc->cwnd;
     cc->stash -= count * cc->cwnd;
-    cc->cwnd += count * QUICLY_MAX_PACKET_SIZE;
+    uint32_t increase = count * QUICLY_MAX_PACKET_SIZE;
+    if (cc->cwnd < UINT32_MAX - increase)
+        cc->cwnd += increase;
+    else
+        cc->cwnd = UINT32_MAX;
 }
 
 void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn)

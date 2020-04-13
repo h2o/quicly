@@ -24,24 +24,13 @@
 
 static int on_acked_callcnt, on_acked_ackcnt;
 
-static int on_acked(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
+static int on_acked(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_frame_t *sent,
                     quicly_sentmap_event_t event)
 {
     ++on_acked_callcnt;
     if (event == QUICLY_SENTMAP_EVENT_ACKED)
         ++on_acked_ackcnt;
     return 0;
-}
-
-static size_t num_blocks(quicly_sentmap_t *map)
-{
-    struct st_quicly_sent_block_t *block;
-    size_t n = 0;
-
-    for (block = map->head; block != NULL; block = block->next)
-        ++n;
-
-    return n;
 }
 
 void test_sentmap(void)
@@ -58,8 +47,8 @@ void test_sentmap(void)
     for (at = 0; at < 10; ++at) {
         for (i = 1; i <= 5; ++i) {
             quicly_sentmap_prepare(&map, at * 5 + i, at, 0);
-            quicly_sentmap_allocate(&map, on_acked);
-            quicly_sentmap_allocate(&map, on_acked);
+            quicly_sentmap_allocate_frame(&map, on_acked);
+            quicly_sentmap_allocate_frame(&map, on_acked);
             quicly_sentmap_commit(&map, 1);
         }
     }
@@ -76,8 +65,7 @@ void test_sentmap(void)
             quicly_sentmap_skip(&iter);
         }
     }
-    ok(quicly_sentmap_get(&iter)->packet_number == UINT64_MAX);
-    ok(num_blocks(&map) == 150 / 16 + 1);
+    ok(quicly_sentmap_iter_is_end(&iter));
 
     /* pop acks between 11 <= packet_number <= 40 */
     quicly_sentmap_init_iter(&map, &iter);
@@ -97,7 +85,18 @@ void test_sentmap(void)
         ++cnt;
     }
     ok(cnt == 20);
-    ok(num_blocks(&map) == 30 / 16 + 1 + 1 + 30 / 16 + 1);
 
+    quicly_sentmap_dispose(&map);
+
+    /* save one packet and delete it */
+    quicly_sentmap_init(&map);
+    quicly_sentmap_prepare(&map, at * 5 + i, at, 0);
+    quicly_sentmap_allocate_frame(&map, on_acked);
+    quicly_sentmap_commit(&map, 1);
+    quicly_sentmap_init_iter(&map, &iter);
+    quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_EXPIRED, NULL);
+    ok(quicly_sentmap_iter_is_end(&iter));
+    quicly_sentmap_init_iter(&map, &iter);
+    ok(quicly_sentmap_iter_is_end(&iter));
     quicly_sentmap_dispose(&map);
 }
