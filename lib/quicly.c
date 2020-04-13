@@ -853,6 +853,10 @@ static int schedule_path_challenge(quicly_conn_t *conn, int is_response, const u
  */
 static uint64_t issued_cid_capacity(const quicly_conn_t *conn)
 {
+    /* if we don't have an encryptor we won't be issuing any CID */
+    if (conn->super.ctx->cid_encryptor == NULL)
+        return 0;
+
     uint64_t capacity = conn->super.peer.transport_params.active_connection_id_limit;
     if (capacity > QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT)
         capacity = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT;
