@@ -1870,7 +1870,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     update_now(ctx);
 
     if ((conn = create_connection(ctx, server_name, dest_addr, src_addr, new_cid, handshake_properties,
-                                  quicly_cc_calc_initial_cwnd(ctx->initial_egress_max_udp_payload_size))) == NULL) {
+                                  quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -4719,7 +4719,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
     /* create connection */
     if ((*conn = create_connection(ctx, NULL, src_addr, dest_addr, new_cid, handshake_properties,
-                                   quicly_cc_calc_initial_cwnd(packet->datagram_size))) == NULL) {
+                                   quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
