@@ -3346,7 +3346,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
     /* append AEAD tag */
     ret = ptls_buffer_reserve(&buf, PTLS_AESGCM_TAG_SIZE);
     assert(ret == 0);
-    assert(!buf.is_allocated);
+    assert(!buf.is_allocated && "retry packet is too large");
     {
         ptls_aead_context_t *aead =
             retry_aead_cache != NULL && *retry_aead_cache != NULL ? *retry_aead_cache : create_retry_aead(ctx, 1);
