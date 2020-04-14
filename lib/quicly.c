@@ -4773,7 +4773,7 @@ static struct st_quicly_spare_cid_t *pick_spare_cid(quicly_conn_t *conn)
 {
     struct st_quicly_spare_cid_t *cid = NULL;
     /* find the CID with smallest sequence number */
-    for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.peer.spare_cids); i++) {
         struct st_quicly_spare_cid_t *c = &conn->super.peer.spare_cids[i];
         if (!c->is_active)
             continue;
@@ -4844,7 +4844,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         }
 
         /* retire CIDs in the spare pool */
-        for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.peer.spare_cids); i++) {
             struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
             if (!spare_cid->is_active || spare_cid->sequence >= frame.retire_prior_to)
                 continue;
@@ -4857,7 +4857,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
     /* store new CID as a spare */
 
     int was_stored = 0;
-    for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1; i++) {
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.peer.spare_cids); i++) {
         struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
         if (spare_cid->is_active) {
             /* If an endpoint receives a NEW_CONNECTION_ID frame that repeats a previously issued connection ID with
