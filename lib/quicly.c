@@ -1706,7 +1706,7 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
 
 static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *remote_addr,
                                         struct sockaddr *local_addr, const quicly_cid_plaintext_t *new_cid,
-                                        ptls_handshake_properties_t *handshake_properties)
+                                        ptls_handshake_properties_t *handshake_properties, uint32_t initcwnd)
 {
     ptls_t *tls = NULL;
     struct {
@@ -1785,7 +1785,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
     conn->_.egress.ack_frequency.update_at = INT64_MAX;
     conn->_.egress.send_ack_at = INT64_MAX;
-    quicly_cc_init(&conn->_.egress.cc, ctx->transport_params.max_udp_payload_size);
+    quicly_cc_init(&conn->_.egress.cc, initcwnd);
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->_.egress.pending_streams.control);
@@ -1869,7 +1869,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     update_now(ctx);
 
-    if ((conn = create_connection(ctx, server_name, dest_addr, src_addr, new_cid, handshake_properties)) == NULL) {
+    if ((conn = create_connection(ctx, server_name, dest_addr, src_addr, new_cid, handshake_properties,
+                                  quicly_cc_calc_initial_cwnd(ctx->initial_egress_max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -4717,7 +4718,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         goto Exit;
 
     /* create connection */
-    if ((*conn = create_connection(ctx, NULL, src_addr, dest_addr, new_cid, handshake_properties)) == NULL) {
+    if ((*conn = create_connection(ctx, NULL, src_addr, dest_addr, new_cid, handshake_properties,
+                                   quicly_cc_calc_initial_cwnd(packet->datagram_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }

@@ -22,18 +22,13 @@
 
 #include "quicly/cc.h"
 
-#define QUICLY_INITIAL_WINDOW 10
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
 
-void quicly_cc_init(quicly_cc_t *cc, uint32_t max_udp_payload_size)
+void quicly_cc_init(quicly_cc_t *cc, uint32_t initcwnd)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
-    cc->cwnd = QUICLY_INITIAL_WINDOW * max_udp_payload_size;
-    if (cc->cwnd > 14720)
-        cc->cwnd = 14720;
-    if (cc->cwnd < 2 * max_udp_payload_size)
-        cc->cwnd = 2 * max_udp_payload_size;
+    cc->cwnd = initcwnd;
     cc->ssthresh = UINT32_MAX;
 }
 
@@ -76,4 +71,15 @@ void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64
 void quicly_cc_on_persistent_congestion(quicly_cc_t *cc)
 {
     // TODO
+}
+
+uint32_t quicly_cc_calc_initial_cwnd(uint16_t max_udp_payload_size)
+{
+    static const uint32_t max_packets = 10, max_bytes = 14720;
+    uint32_t cwnd = max_packets * max_udp_payload_size;
+    if (cwnd > max_bytes)
+        cwnd = max_bytes;
+    if (cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
+        cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+    return cwnd;
 }

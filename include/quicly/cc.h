@@ -59,6 +59,10 @@ void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64
  * Called when persistent congestion is observed.
  */
 void quicly_cc_on_persistent_congestion(quicly_cc_t *cc);
+/**
+ * Calculates the initial congestion window size given the maximum UDP payload size.
+ */
+uint32_t quicly_cc_calc_initial_cwnd(uint16_t max_udp_payload_size);
 
 #ifdef __cplusplus
 }
