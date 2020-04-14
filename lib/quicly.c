@@ -149,7 +149,7 @@ struct st_quicly_handshake_space_t {
         struct st_quicly_cipher_context_t ingress;
         struct st_quicly_cipher_context_t egress;
     } cipher;
-    uint16_t max_ingress_udp_payload_size;
+    uint16_t largest_ingress_udp_payload_size;
 };
 
 struct st_quicly_application_space_t {
@@ -1958,8 +1958,8 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* update UDP max payload size to:
      * max(current, min(max_the_peer_sent, peer.tp.max_udp_payload_size, host.tp.max_udp_payload_size)) */
     assert(conn->initial != NULL);
-    if (conn->egress.max_udp_payload_size < conn->initial->max_ingress_udp_payload_size) {
-        uint16_t size = conn->initial->max_ingress_udp_payload_size;
+    if (conn->egress.max_udp_payload_size < conn->initial->largest_ingress_udp_payload_size) {
+        uint16_t size = conn->initial->largest_ingress_udp_payload_size;
         if (size > conn->super.peer.transport_params.max_udp_payload_size)
             size = conn->super.peer.transport_params.max_udp_payload_size;
         if (size > conn->super.ctx->transport_params.max_udp_payload_size)
@@ -4737,7 +4737,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     (*conn)->initial->cipher.egress = egress_cipher;
     egress_cipher = (struct st_quicly_cipher_context_t){NULL};
     (*conn)->crypto.handshake_properties.collected_extensions = server_collected_extensions;
-    (*conn)->initial->max_ingress_udp_payload_size = packet->datagram_size;
+    (*conn)->initial->largest_ingress_udp_payload_size = packet->datagram_size;
 
     QUICLY_PROBE(ACCEPT, *conn, probe_now(), QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len),
                  address_token);
@@ -4942,8 +4942,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     switch (epoch) {
     case QUICLY_EPOCH_INITIAL:
         /* update max_ingress_udp_payload_size if necessary */
-        if (conn->initial->max_ingress_udp_payload_size < packet->datagram_size)
-            conn->initial->max_ingress_udp_payload_size = packet->datagram_size;
+        if (conn->initial->largest_ingress_udp_payload_size < packet->datagram_size)
+            conn->initial->largest_ingress_udp_payload_size = packet->datagram_size;
         break;
     case QUICLY_EPOCH_HANDSHAKE:
         /* Discard Initial space before processing the payload of the Handshake packet to avoid the chance of an ACK frame included
