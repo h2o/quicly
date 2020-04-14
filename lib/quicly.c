@@ -4838,10 +4838,10 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
      * one new CID.
      */
     if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to) {
-        if (frame.retire_prior_to > conn->super.peer.cid_sequence) {
-            schedule_retire_connection_id(conn, conn->super.peer.cid_sequence);
-            need_to_replace_cid = 1;
-        }
+        /* current active CID must have smaller sequence number than any others in the spare list */
+        assert(frame.retire_prior_to > conn->super.peer.cid_sequence);
+        schedule_retire_connection_id(conn, conn->super.peer.cid_sequence);
+        need_to_replace_cid = 1;
 
         /* retire CIDs in the spare pool */
         for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.peer.spare_cids); i++) {
