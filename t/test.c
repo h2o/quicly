@@ -326,7 +326,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     quicly_decoded_packet_t decoded[32];
     int ret;
 
-    num_datagrams = sizeof(datagrams) / sizeof(datagrams[0]);
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
     ret = quicly_send(src, datagrams, &num_datagrams);
     ok(ret == 0);
 
