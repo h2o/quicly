@@ -647,7 +647,7 @@ static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn)
 
     if (cached_rand.off == 0) {
         tlsctx->random_bytes(cached_rand.values, sizeof(cached_rand.values));
-        cached_rand.off = sizeof(cached_rand.values) / sizeof(cached_rand.values[0]);
+        cached_rand.off = PTLS_ELEMENTSOF(cached_rand.values);
     }
 
     /* on average, skip one PN per every 256 packets, by selecting one of the 511 packet numbers following next_pn */
@@ -4591,7 +4591,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         /* determine the frame type; fast path is available for frame types below 64 */
         const struct st_quicly_frame_handler_t *frame_handler;
         state.frame_type = *state.src++;
-        if (state.frame_type < sizeof(frame_handlers) / sizeof(frame_handlers[0])) {
+        if (state.frame_type < PTLS_ELEMENTSOF(frame_handlers)) {
             frame_handler = frame_handlers + state.frame_type;
         } else {
             /* slow path */

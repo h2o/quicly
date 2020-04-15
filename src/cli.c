@@ -486,7 +486,7 @@ static void (*send_packets)(int, quicly_datagram_t **, size_t, quicly_packet_all
 static int send_pending(int fd, quicly_conn_t *conn)
 {
     quicly_datagram_t *packets[MAX_BURST_PACKETS];
-    size_t num_packets = sizeof(packets) / sizeof(packets[0]);
+    size_t num_packets = PTLS_ELEMENTSOF(packets);
     int ret;
 
     if ((ret = quicly_send(conn, packets, &num_packets)) == 0 && num_packets != 0)
@@ -1075,7 +1075,7 @@ int main(int argc, char **argv)
     while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:Gi:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
-            assert(negotiated_protocols.count < sizeof(negotiated_protocols.list) / sizeof(negotiated_protocols.list[0]));
+            assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
             negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init(optarg, strlen(optarg));
             break;
         case 'b':
