@@ -3736,7 +3736,7 @@ quicly_datagram_t *quicly_send_close_invalid_token(quicly_context_t *ctx, struct
     uint8_t *dst = dgram->data.base, *length_at;
 
     /* build packet */
-    QUICLY_BUILD_ASSERT(QUICLY_SEND_PN_SIZE == 2);
+    PTLS_BUILD_ASSERT(QUICLY_SEND_PN_SIZE == 2);
     *dst++ = QUICLY_PACKET_TYPE_INITIAL | 0x1 /* 2-byte PN */;
     dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION);
     *dst++ = dest_cid.len;
@@ -5284,7 +5284,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         break;
     case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
         ptls_decode_open_block(src, end, 1, {
-            QUICLY_BUILD_ASSERT(sizeof(plaintext->resumption.bytes) >= 256);
+            PTLS_BUILD_ASSERT(sizeof(plaintext->resumption.bytes) >= 256);
             plaintext->resumption.len = end - src;
             memcpy(plaintext->resumption.bytes, src, plaintext->resumption.len);
             src = end;
@@ -5295,7 +5295,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         abort();
     }
     ptls_decode_block(src, end, 1, {
-        QUICLY_BUILD_ASSERT(sizeof(plaintext->appdata.bytes) >= 256);
+        PTLS_BUILD_ASSERT(sizeof(plaintext->appdata.bytes) >= 256);
         plaintext->appdata.len = end - src;
         memcpy(plaintext->appdata.bytes, src, plaintext->appdata.len);
         src = end;

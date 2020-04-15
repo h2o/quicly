@@ -320,13 +320,13 @@ inline size_t quicly_encodev_capacity(uint64_t v)
 
 inline unsigned quicly_clz32(uint32_t v)
 {
-    QUICLY_BUILD_ASSERT(sizeof(unsigned) == 4);
+    PTLS_BUILD_ASSERT(sizeof(unsigned) == 4);
     return v != 0 ? __builtin_clz(v) : 32;
 }
 
 inline unsigned quicly_clz64(uint64_t v)
 {
-    QUICLY_BUILD_ASSERT(sizeof(long long) == 8);
+    PTLS_BUILD_ASSERT(sizeof(long long) == 8);
     return v != 0 ? __builtin_clzll(v) : 64;
 }
 
