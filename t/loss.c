@@ -108,7 +108,7 @@ static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sen
     quicly_datagram_t *packets[32];
     int ret;
 
-    *num_sent = sizeof(packets) / sizeof(packets[0]);
+    *num_sent = PTLS_ELEMENTSOF(packets);
     if ((ret = quicly_send(src, packets, num_sent)) != 0) {
         fprintf(stderr, "%s: quicly_send: ret=%d\n", __FUNCTION__, ret);
         return ret;

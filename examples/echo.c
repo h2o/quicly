@@ -250,7 +250,7 @@ static int run_loop(int fd, quicly_conn_t *client)
         /* send QUIC packets, if any */
         for (i = 0; conns[i] != NULL; ++i) {
             quicly_datagram_t *dgrams[16];
-            size_t num_dgrams = sizeof(dgrams) / sizeof(dgrams[0]);
+            size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
             int ret = quicly_send(conns[i], dgrams, &num_dgrams);
             switch (ret) {
             case 0: {
