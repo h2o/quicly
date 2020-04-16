@@ -245,9 +245,17 @@ static int flatten_sized_text(quicly_sendbuf_vec_t *vec, void *dst, size_t off, 
         "world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
         "world\nhello world\nhello world\nhello world\nhello world\nhello world\n";
 
-    const char *src = pattern + off % 12;
-    assert(src + len - pattern <= sizeof(pattern) - 1); /* pattern is bigger than MTU size */
-    memcpy(dst, src, len);
+    while (len != 0) {
+        const char *src = pattern + off % 12;
+        if (src + len - pattern <= sizeof(pattern) - 1) {
+            memcpy(dst, src, len);
+            break;
+        }
+        memcpy(dst, src, sizeof(pattern) - 20);
+        off += sizeof(pattern) - 20;
+        dst += sizeof(pattern) - 20;
+        len -= sizeof(pattern) - 20;
+    }
     return 0;
 
 #undef PATTERN
@@ -568,7 +576,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
-                uint8_t buf[4096];
+                uint8_t buf[ctx.transport_params.max_udp_payload_size];
                 struct msghdr mess;
                 struct sockaddr sa;
                 struct iovec vec;
@@ -1024,6 +1032,8 @@ static void usage(const char *cmd)
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
+           "  -u size                   initial size of UDP datagram payload\n"
+           "  -U size                   maximum size of UDP datagarm payload\n"
            "  -V                        verify peer using the default certificates\n"
            "  -v                        verbose mode (-vv emits packet dumps as well)\n"
            "  -x named-group            named group to be used (default: secp256r1)\n"
@@ -1072,7 +1082,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:Gi:I:l:M:m:NnOp:P:Rr:S:s:Vvx:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:Gi:I:l:M:m:NnOp:P:Rr:S:s:u:U:Vvx:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
@@ -1181,6 +1191,18 @@ int main(int argc, char **argv)
             break;
         case 's':
             session_file = optarg;
+            break;
+        case 'u':
+            if (sscanf(optarg, "%" SCNu16, &ctx.initial_egress_max_udp_payload_size) != 1) {
+                fprintf(stderr, "invalid argument passed to `-u`\n");
+                exit(1);
+            }
+            break;
+        case 'U':
+            if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.max_udp_payload_size) != 1) {
+                fprintf(stderr, "invalid argument passed to `-U`\n");
+                exit(1);
+            }
             break;
         case 'V':
             setup_verify_certificate(ctx.tls);
