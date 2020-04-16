@@ -3225,6 +3225,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
     if ((ret = conn->super.ctx->generate_resumption_token->cb(conn->super.ctx->generate_resumption_token, conn, &tokenbuf,
                                                               &token)) != 0)
         goto Exit;
+    assert(tokenbuf.off < QUICLY_MIN_CLIENT_INITIAL_SIZE / 2 && "this is a ballpark figure, but tokens ought to be small");
 
     /* emit frame */
     if ((ret = allocate_ack_eliciting_frame(conn, s, quicly_new_token_frame_capacity(ptls_iovec_init(tokenbuf.base, tokenbuf.off)),
