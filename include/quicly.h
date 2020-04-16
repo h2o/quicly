@@ -236,6 +236,10 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint64_t max_streams_uni;
     /**
+     *
+     */
+    uint64_t max_udp_payload_size;
+    /**
      * quicly ignores the value set for quicly_context_t::transport_parameters
      */
     uint8_t ack_delay_exponent;
@@ -298,9 +302,11 @@ struct st_quicly_context_t {
      */
     ptls_context_t *tls;
     /**
-     * MTU
+     * Maximum size of packets that we are willing to send when path-specific information is unavailable. As a path-specific
+     * * optimization, quicly acting as a server expands this value to `min(host.tp.max_udp_payload_size,
+     * * peer.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters from the client.
      */
-    uint16_t max_packet_size;
+    uint16_t initial_egress_max_udp_payload_size;
     /**
      * loss detection parameters
      */
@@ -908,7 +914,7 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
  *
  */
 int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
-                                           const quicly_cid_t *odcid, const void *stateless_reset_token, int expand);
+                                           const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by);
 /**
  *
  */

@@ -36,7 +36,7 @@ static void test_handshake(void)
     ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
                          NULL);
     ok(ret == 0);
-    num_packets = sizeof(packets) / sizeof(packets[0]);
+    num_packets = PTLS_ELEMENTSOF(packets);
     ret = quicly_send(client, packets, &num_packets);
     ok(ret == 0);
     ok(num_packets == 1);
@@ -50,7 +50,7 @@ static void test_handshake(void)
     free_packets(packets, num_packets);
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
     ok(quicly_connection_is_ready(server));
-    num_packets = sizeof(packets) / sizeof(packets[0]);
+    num_packets = PTLS_ELEMENTSOF(packets);
     ret = quicly_send(server, packets, &num_packets);
     ok(ret == 0);
     ok(num_packets != 0);

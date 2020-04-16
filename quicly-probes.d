@@ -30,7 +30,7 @@ provider quicly {
                  struct st_quicly_address_token_plaintext_t *address_token);
     probe free(struct st_quicly_conn_t *conn, int64_t at);
     probe send(struct st_quicly_conn_t *conn, int64_t at, int state, const char *dcid);
-    probe receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const void *bytes, size_t num_bytes);
+    probe receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const void *bytes, size_t bytes_len);
     probe version_switch(struct st_quicly_conn_t *conn, int64_t at, uint32_t new_version);
     probe idle_timeout(struct st_quicly_conn_t *conn, int64_t at);
     probe stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t at);
@@ -75,9 +75,9 @@ provider quicly {
     probe max_stream_data_send(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t limit);
     probe max_stream_data_receive(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t limit);
 
-    probe new_token_send(struct st_quicly_conn_t *conn, int64_t at, uint8_t *token, size_t len, uint64_t generation);
+    probe new_token_send(struct st_quicly_conn_t *conn, int64_t at, uint8_t *token, size_t token_len, uint64_t generation);
     probe new_token_acked(struct st_quicly_conn_t *conn, int64_t at, uint64_t generation);
-    probe new_token_receive(struct st_quicly_conn_t *conn, int64_t at, uint8_t *token, size_t len);
+    probe new_token_receive(struct st_quicly_conn_t *conn, int64_t at, uint8_t *token, size_t token_len);
 
     probe handshake_done_send(struct st_quicly_conn_t *conn, int64_t at);
     probe handshake_done_receive(struct st_quicly_conn_t *conn, int64_t at);

@@ -22,20 +22,21 @@
 #include <sys/time.h>
 #include "quicly/defaults.h"
 
+#define DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE 1280
+#define DEFAULT_MAX_UDP_PAYLOAD_SIZE 1472
 #define DEFAULT_MAX_PACKETS_PER_KEY 16777216
 #define DEFAULT_MAX_CRYPTO_BYTES 65536
 
 /* profile that employs IETF specified values */
-const quicly_context_t quicly_spec_context = {NULL,                   /* tls */
-                                              QUICLY_MAX_PACKET_SIZE, /* max_packet_size */
-                                              QUICLY_LOSS_SPEC_CONF,  /* loss */
-                                              {
-                                                  {1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
-                                                  16 * 1024 * 1024,                                    /* max_data */
-                                                  30 * 1000, /* idle_timeout (30 seconds) */
-                                                  100,       /* max_concurrent_streams_bidi */
-                                                  0          /* max_concurrent_streams_uni */
-                                              },
+const quicly_context_t quicly_spec_context = {NULL,                                                 /* tls */
+                                              DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE,          /* client_initial_size */
+                                              QUICLY_LOSS_SPEC_CONF,                                /* loss */
+                                              {{1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
+                                               16 * 1024 * 1024,                                    /* max_data */
+                                               30 * 1000,                                           /* idle_timeout (30 seconds) */
+                                               100, /* max_concurrent_streams_bidi */
+                                               0,   /* max_concurrent_streams_uni */
+                                               DEFAULT_MAX_UDP_PAYLOAD_SIZE},
                                               DEFAULT_MAX_PACKETS_PER_KEY,
                                               DEFAULT_MAX_CRYPTO_BYTES,
                                               0, /* enforce_version_negotiation */
@@ -52,16 +53,15 @@ const quicly_context_t quicly_spec_context = {NULL,                   /* tls */
                                               &quicly_default_crypto_engine};
 
 /* profile with a focus on reducing latency for the HTTP use case */
-const quicly_context_t quicly_performant_context = {NULL,                        /* tls */
-                                                    QUICLY_MAX_PACKET_SIZE,      /* max_packet_size */
-                                                    QUICLY_LOSS_PERFORMANT_CONF, /* loss */
-                                                    {
-                                                        {1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
-                                                        16 * 1024 * 1024,                                    /* max_data */
-                                                        30 * 1000, /* idle_timeout (30 seconds) */
-                                                        100,       /* max_concurrent_streams_bidi */
-                                                        0          /* max_concurrent_streams_uni */
-                                                    },
+const quicly_context_t quicly_performant_context = {NULL,                                                 /* tls */
+                                                    DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE,          /* client_initial_size */
+                                                    QUICLY_LOSS_PERFORMANT_CONF,                          /* loss */
+                                                    {{1 * 1024 * 1024, 1 * 1024 * 1024, 1 * 1024 * 1024}, /* max_stream_data */
+                                                     16 * 1024 * 1024,                                    /* max_data */
+                                                     30 * 1000, /* idle_timeout (30 seconds) */
+                                                     100,       /* max_concurrent_streams_bidi */
+                                                     0,         /* max_concurrent_streams_uni */
+                                                     DEFAULT_MAX_UDP_PAYLOAD_SIZE},
                                                     DEFAULT_MAX_PACKETS_PER_KEY,
                                                     DEFAULT_MAX_CRYPTO_BYTES,
                                                     0, /* enforce_version_negotiation */

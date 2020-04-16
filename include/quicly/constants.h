@@ -44,6 +44,8 @@ extern "C" {
  */
 #define QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT 4
 #define QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT 2
+#define QUICLY_DEFAULT_MAX_UDP_PAYLOAD_SIZE 65527
+#define QUICLY_MIN_CLIENT_INITIAL_SIZE 1200
 #define QUICLY_DEFAULT_MIN_PTO 1      /* milliseconds */
 #define QUICLY_DEFAULT_INITIAL_RTT 66 /* initial retransmission timeout is *3, i.e. 200ms */
 #define QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD 3
@@ -53,7 +55,6 @@ extern "C" {
 #define QUICLY_FIRST_ACK_FREQUENCY_PACKET_NUMBER 1000
 #define QUICLY_ACK_FREQUENCY_CWND_FRACTION 8
 
-#define QUICLY_MAX_PACKET_SIZE 1280 /* must be >= 1200 bytes */
 #define QUICLY_AEAD_TAG_SIZE 16
 
 #define QUICLY_MAX_CID_LEN_V1 20
@@ -96,8 +97,6 @@ extern "C" {
 #define QUICLY_ERROR_NO_COMPATIBLE_VERSION 0xff05
 #define QUICLY_ERROR_IS_CLOSING 0xff06 /* indicates that the connection has already entered closing state */
 #define QUICLY_ERROR_STATE_EXHAUSTION 0xff07
-
-#define QUICLY_BUILD_ASSERT(condition) ((void)sizeof(char[2 * !!(!__builtin_constant_p(condition) || (condition)) - 1]))
 
 typedef int64_t quicly_stream_id_t;
 

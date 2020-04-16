@@ -48,7 +48,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT 1
 #define QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN 2
-#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_PACKET_SIZE 3
+#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE 3
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA 4
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL 5
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE 6
@@ -154,6 +154,7 @@ struct st_quicly_handshake_space_t {
         struct st_quicly_cipher_context_t ingress;
         struct st_quicly_cipher_context_t egress;
     } cipher;
+    uint16_t largest_ingress_udp_payload_size;
 };
 
 struct st_quicly_application_space_t {
@@ -284,6 +285,10 @@ struct st_quicly_conn_t {
          * next PN to be skipped
          */
         uint64_t next_pn_to_skip;
+        /**
+         *
+         */
+        uint16_t max_udp_payload_size;
         /**
          * valid if state is CLOSING
          */
@@ -443,19 +448,22 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 static int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase);
 static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
-static const quicly_transport_parameters_t default_transport_params = {.ack_delay_exponent = QUICLY_DEFAULT_ACK_DELAY_EXPONENT,
+static const quicly_transport_parameters_t default_transport_params = {.max_udp_payload_size = QUICLY_DEFAULT_MAX_UDP_PAYLOAD_SIZE,
+                                                                       .ack_delay_exponent = QUICLY_DEFAULT_ACK_DELAY_EXPONENT,
                                                                        .max_ack_delay = QUICLY_DEFAULT_MAX_ACK_DELAY,
                                                                        .min_ack_delay_usec = UINT64_MAX,
                                                                        .active_connection_id_limit = QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT};
 
 static __thread int64_t now;
+static __thread size_t in_quicly_send_cnt;
 
 static void update_now(quicly_context_t *ctx)
 {
-    int64_t newval = ctx->now->cb(ctx->now);
-
-    if (now < newval)
-        now = newval;
+    if (in_quicly_send_cnt == 0) {
+        int64_t newval = ctx->now->cb(ctx->now);
+        if (now < newval)
+            now = newval;
+    }
 }
 
 /**
@@ -710,7 +718,7 @@ static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn)
 
     if (cached_rand.off == 0) {
         tlsctx->random_bytes(cached_rand.values, sizeof(cached_rand.values));
-        cached_rand.off = sizeof(cached_rand.values) / sizeof(cached_rand.values[0]);
+        cached_rand.off = PTLS_ELEMENTSOF(cached_rand.values);
     }
 
     /* on average, skip one PN per every 256 packets, by selecting one of the 511 packet numbers following next_pn */
@@ -1169,12 +1177,12 @@ static int scheduler_can_send(quicly_conn_t *conn)
     return conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, conn_is_saturated);
 }
 
-static void update_loss_alarm(quicly_conn_t *conn)
+static void update_loss_alarm(quicly_conn_t *conn, int is_after_send)
 {
     int has_outstanding = conn->egress.sentmap.bytes_in_flight != 0 || conn->super.peer.address_validation.send_probe,
         handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
     quicly_loss_update_alarm(&conn->egress.loss, now, conn->egress.last_retransmittable_sent_at, has_outstanding,
-                             scheduler_can_send(conn), handshake_is_in_progress, conn->egress.max_data.sent);
+                             scheduler_can_send(conn), handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -1578,7 +1586,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 }
 
 int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
-                                           const quicly_cid_t *odcid, const void *stateless_reset_token, int expand)
+                                           const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by)
 {
     int ret;
 
@@ -1588,6 +1596,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
         ptls_buffer_push_block((buf), -1, block);                                                                                  \
     } while (0)
 
+    PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE,
+            { ptls_buffer_push_quicint(buf, params->max_udp_payload_size); });
     if (params->max_stream_data.bidi_local != 0)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL,
                 { ptls_buffer_push_quicint(buf, params->max_stream_data.bidi_local); });
@@ -1629,12 +1639,12 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); });
     /* if requested, add a greasing TP of 1 MTU size so that CH spans across multiple packets */
-    if (expand) {
+    if (expand_by != 0) {
         PUSH_TP(buf, 31 * 100 + 27, {
-            if ((ret = ptls_buffer_reserve(buf, QUICLY_MAX_PACKET_SIZE)) != 0)
+            if ((ret = ptls_buffer_reserve(buf, expand_by)) != 0)
                 goto Exit;
-            memset(buf->base + buf->off, 0, QUICLY_MAX_PACKET_SIZE);
-            buf->off += QUICLY_MAX_PACKET_SIZE;
+            memset(buf->base + buf->off, 0, expand_by);
+            buf->off += expand_by;
         });
     }
 
@@ -1695,6 +1705,18 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 if (odcid != NULL)
                     set_cid(odcid, ptls_iovec_init(src, cidlen));
                 src = end;
+            });
+            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE, {
+                uint64_t v;
+                if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+                if (v < 1200) {
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+                params->max_udp_payload_size = (uint16_t)v;
             });
             DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, {
                 if ((params->max_stream_data.bidi_local = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -1823,7 +1845,7 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
 
 static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *remote_addr,
                                         struct sockaddr *local_addr, const quicly_cid_plaintext_t *new_cid,
-                                        ptls_handshake_properties_t *handshake_properties)
+                                        ptls_handshake_properties_t *handshake_properties, uint32_t initcwnd)
 {
     ptls_t *tls = NULL;
     struct {
@@ -1908,12 +1930,13 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
                      conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
     conn->_.egress.next_pn_to_skip = calc_next_pn_to_skip(conn->_.super.ctx->tls, 0);
+    conn->_.egress.max_udp_payload_size = conn->_.super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
     conn->_.egress.path_challenge.tail_ref = &conn->_.egress.path_challenge.head;
     conn->_.egress.ack_frequency.update_at = INT64_MAX;
     conn->_.egress.send_ack_at = INT64_MAX;
-    quicly_cc_init(&conn->_.egress.cc);
+    quicly_cc_init(&conn->_.egress.cc, initcwnd);
     for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++)
         conn->_.egress.retire_cid.sequences[i] = UINT64_MAX;
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.uni);
@@ -1999,7 +2022,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     update_now(ctx);
 
-    if ((conn = create_connection(ctx, server_name, dest_addr, src_addr, new_cid, handshake_properties)) == NULL) {
+    if ((conn = create_connection(ctx, server_name, dest_addr, src_addr, new_cid, handshake_properties,
+                                  quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -2025,8 +2049,9 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     /* handshake */
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
-    if ((ret = quicly_encode_transport_parameter_list(&conn->crypto.transport_params.buf, 1, &conn->super.ctx->transport_params,
-                                                      NULL, NULL, conn->super.ctx->expand_client_hello)) != 0)
+    if ((ret = quicly_encode_transport_parameter_list(
+             &conn->crypto.transport_params.buf, 1, &conn->super.ctx->transport_params, NULL, NULL,
+             conn->super.ctx->expand_client_hello ? conn->super.ctx->initial_egress_max_udp_payload_size : 0)) != 0)
         goto Exit;
     conn->crypto.transport_params.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
@@ -2082,7 +2107,20 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
             goto Exit;
     }
 
+    /* setup ack frequency */
     ack_frequency_set_next_update_at(conn);
+
+    /* update UDP max payload size to:
+     * max(current, min(max_the_peer_sent, peer.tp.max_udp_payload_size, host.tp.max_udp_payload_size)) */
+    assert(conn->initial != NULL);
+    if (conn->egress.max_udp_payload_size < conn->initial->largest_ingress_udp_payload_size) {
+        uint16_t size = conn->initial->largest_ingress_udp_payload_size;
+        if (size > conn->super.peer.transport_params.max_udp_payload_size)
+            size = conn->super.peer.transport_params.max_udp_payload_size;
+        if (size > conn->super.ctx->transport_params.max_udp_payload_size)
+            size = conn->super.ctx->transport_params.max_udp_payload_size;
+        conn->egress.max_udp_payload_size = size;
+    }
 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
@@ -2657,10 +2695,10 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     while (s->dst - s->dst_payload_from < QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE)
         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
 
-    /* the last packet of first-flight datagrams is padded to become 1280 bytes */
+    /* the last packet of the first-flight datagrams is padded to become max_udp_payload_size bytes */
     if (!coalesced && quicly_is_client(conn) &&
         (s->target.packet->data.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
-        const size_t max_size = QUICLY_MAX_PACKET_SIZE - QUICLY_AEAD_TAG_SIZE;
+        const size_t max_size = conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;
         assert(quicly_is_client(conn));
         assert(s->dst - s->target.packet->data.base <= max_size);
         memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->target.packet->data.base + max_size - s->dst);
@@ -2689,7 +2727,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
                                                      s->dst - s->dst_payload_from, conn->egress.packet_number,
                                                      s->target.first_byte_at, s->dst_payload_from - s->target.first_byte_at);
     s->target.packet->data.len = s->dst - s->target.packet->data.base;
-    assert(s->target.packet->data.len <= conn->super.ctx->max_packet_size);
+    assert(s->target.packet->data.len <= conn->egress.max_udp_payload_size);
 
     conn->super.ctx->crypto_engine->finalize_send_packet(
         conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead, s->target.packet,
@@ -2797,13 +2835,13 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         if (ack_eliciting && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
         if ((s->target.packet = conn->super.ctx->packet_allocator->alloc_packet(conn->super.ctx->packet_allocator,
-                                                                                conn->super.ctx->max_packet_size)) == NULL)
+                                                                                conn->egress.max_udp_payload_size)) == NULL)
             return PTLS_ERROR_NO_MEMORY;
         s->target.packet->dest = conn->super.peer.address;
         s->target.packet->src = conn->super.host.address;
         s->target.cipher = s->current.cipher;
         s->dst = s->target.packet->data.base;
-        s->dst_end = s->target.packet->data.base + conn->super.ctx->max_packet_size;
+        s->dst_end = s->target.packet->data.base + conn->egress.max_udp_payload_size;
     }
     s->target.ack_eliciting = 0;
 
@@ -2850,8 +2888,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
             if (conn->egress.packet_number >= QUICLY_FIRST_ACK_FREQUENCY_PACKET_NUMBER && conn->initial == NULL &&
                 conn->handshake == NULL) {
                 uint32_t fraction_of_cwnd = conn->egress.cc.cwnd / QUICLY_ACK_FREQUENCY_CWND_FRACTION;
-                if (fraction_of_cwnd >= conn->super.ctx->max_packet_size * 3) {
-                    uint32_t packet_tolerance = fraction_of_cwnd / conn->super.ctx->max_packet_size;
+                if (fraction_of_cwnd >= conn->egress.max_udp_payload_size * 3) {
+                    uint32_t packet_tolerance = fraction_of_cwnd / conn->egress.max_udp_payload_size;
                     if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
                         packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
                     s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
@@ -3236,7 +3274,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
             if (sent->packet_number != largest_newly_lost_pn) {
                 ++conn->super.stats.num_packets.lost;
                 largest_newly_lost_pn = sent->packet_number;
-                quicly_cc_on_lost(&conn->egress.cc, sent->bytes_in_flight, sent->packet_number, conn->egress.packet_number);
+                quicly_cc_on_lost(&conn->egress.cc, sent->bytes_in_flight, sent->packet_number, conn->egress.packet_number,
+                                  conn->egress.max_udp_payload_size);
                 QUICLY_PROBE(PACKET_LOST, conn, probe_now(), largest_newly_lost_pn);
                 QUICLY_PROBE(QUICTRACE_LOST, conn, probe_now(), largest_newly_lost_pn);
             }
@@ -3257,6 +3296,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
     /* schedule time-threshold alarm if there is a packet outstanding that is smaller than largest_acked */
     while (sent->packet_number < largest_acked && sent->sent_at != INT64_MAX) {
         if (sent->bytes_in_flight != 0) {
+            assert(now < sent->sent_at + delay_until_lost);
             *loss_time = sent->sent_at + delay_until_lost;
             break;
         }
@@ -3386,6 +3426,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
     if ((ret = conn->super.ctx->generate_resumption_token->cb(conn->super.ctx->generate_resumption_token, conn, &tokenbuf,
                                                               &token)) != 0)
         goto Exit;
+    assert(tokenbuf.off < QUICLY_MIN_CLIENT_INITIAL_SIZE / 2 && "this is a ballpark figure, but tokens ought to be small");
 
     /* emit frame */
     if ((ret = allocate_ack_eliciting_frame(conn, s, quicly_new_token_frame_capacity(ptls_iovec_init(tokenbuf.base, tokenbuf.off)),
@@ -3408,7 +3449,7 @@ quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct
     quicly_datagram_t *packet;
     uint8_t *dst;
 
-    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, ctx->max_packet_size)) == NULL)
+    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, QUICLY_MIN_CLIENT_INITIAL_SIZE)) == NULL)
         return NULL;
     set_address(&packet->dest, dest_addr);
     set_address(&packet->src, src_addr);
@@ -3485,11 +3526,11 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
     }
 
     /* start building the packet */
-    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, ctx->max_packet_size)) == NULL)
+    if ((packet = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, QUICLY_MIN_CLIENT_INITIAL_SIZE)) == NULL)
         goto Exit;
     set_address(&packet->dest, dest_addr);
     set_address(&packet->src, src_addr);
-    ptls_buffer_init(&buf, packet->data.base, ctx->max_packet_size);
+    ptls_buffer_init(&buf, packet->data.base, QUICLY_MIN_CLIENT_INITIAL_SIZE);
 
     /* first generate a pseudo packet */
     ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, odcid.base, odcid.len); });
@@ -3511,7 +3552,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
     /* append AEAD tag */
     ret = ptls_buffer_reserve(&buf, PTLS_AESGCM_TAG_SIZE);
     assert(ret == 0);
-    assert(!buf.is_allocated);
+    assert(!buf.is_allocated && "retry packet is too large");
     {
         ptls_aead_context_t *aead =
             retry_aead_cache != NULL && *retry_aead_cache != NULL ? *retry_aead_cache : create_retry_aead(ctx, 1);
@@ -3794,7 +3835,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         return QUICLY_ERROR_FREE_CONNECTION;
     }
 
-    s->send_window = calc_send_window(conn, min_packets_to_send * conn->super.ctx->max_packet_size, restrict_sending);
+    s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size, restrict_sending);
     if (s->send_window == 0)
         ack_only = 1;
 
@@ -3917,7 +3958,7 @@ Exit:
     if (ret == 0) {
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
-        update_loss_alarm(conn);
+        update_loss_alarm(conn, 1);
         if (s->num_packets != 0)
             update_idle_timeout(conn, 0);
     }
@@ -3931,10 +3972,12 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
     update_now(conn->super.ctx);
 
+    ++in_quicly_send_cnt;
+
     /* bail out if there's nothing is scheduled to be sent */
     if (now < quicly_get_first_timeout(conn)) {
-        *num_packets = 0;
-        return 0;
+        ret = 0;
+        goto Exit;
     }
 
     QUICLY_PROBE(SEND, conn, probe_now(), conn->super.state,
@@ -3945,8 +3988,10 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
         init_acks_iter(conn, &iter);
         /* check if the connection can be closed now (after 3 pto) */
         if (conn->super.state == QUICLY_STATE_DRAINING || conn->egress.connection_close.num_sent != 0) {
-            if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX)
-                return QUICLY_ERROR_FREE_CONNECTION;
+            if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX) {
+                ret = QUICLY_ERROR_FREE_CONNECTION;
+                goto Exit;
+            }
         }
         if (conn->super.state == QUICLY_STATE_CLOSING && conn->egress.send_ack_at <= now) {
             destroy_all_streams(conn, 0, 0); /* delayed until the emission of CONNECTION_CLOSE frame to allow quicly_close to be
@@ -3962,32 +4007,26 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
                 s.current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
             }
             if ((ret = send_connection_close(conn, &s)) != 0)
-                return ret;
+                goto Exit;
             if ((ret = commit_send_packet(conn, &s, 0)) != 0)
-                return ret;
+                goto Exit;
         }
         /* wait at least 1ms */
         if ((conn->egress.send_ack_at = quicly_sentmap_get(&iter)->sent_at + get_sentmap_expiration_time(conn)) <= now)
             conn->egress.send_ack_at = now + 1;
-        *num_packets = s.num_packets;
-        return 0;
+        ret = 0;
+        goto Exit;
     }
 
     /* emit packets */
     if ((ret = do_send(conn, &s)) != 0)
-        return ret;
-    /* We might see the timer going back to the past, if time-threshold loss timer fires first without being able to make any
-     * progress (i.e. due to the payload of lost packet being cancelled), then PTO for the previously sent packet.  To accomodate
-     * that, we allow to rerun the do_send function just once.
-     */
-    if (s.num_packets == 0 && conn->egress.loss.alarm_at <= now) {
-        assert(conn->egress.loss.alarm_at == now);
-        if ((ret = do_send(conn, &s)) != 0)
-            return ret;
-    }
+        goto Exit;
+
     assert_consistency(conn, 1);
 
+Exit:
     *num_packets = s.num_packets;
+    --in_quicly_send_cnt;
     return ret;
 }
 
@@ -4002,7 +4041,7 @@ quicly_datagram_t *quicly_send_close_invalid_token(quicly_context_t *ctx, struct
         goto Exit;
 
     /* allocate packet, set peer address */
-    if ((dgram = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, ctx->max_packet_size)) == NULL)
+    if ((dgram = ctx->packet_allocator->alloc_packet(ctx->packet_allocator, QUICLY_MIN_CLIENT_INITIAL_SIZE)) == NULL)
         goto Exit;
     set_address(&dgram->dest, dest_addr);
     set_address(&dgram->src, src_addr);
@@ -4010,7 +4049,7 @@ quicly_datagram_t *quicly_send_close_invalid_token(quicly_context_t *ctx, struct
     uint8_t *dst = dgram->data.base, *length_at;
 
     /* build packet */
-    QUICLY_BUILD_ASSERT(QUICLY_SEND_PN_SIZE == 2);
+    PTLS_BUILD_ASSERT(QUICLY_SEND_PN_SIZE == 2);
     *dst++ = QUICLY_PACKET_TYPE_INITIAL | 0x1 /* 2-byte PN */;
     dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION);
     *dst++ = dest_cid.len;
@@ -4029,7 +4068,7 @@ quicly_datagram_t *quicly_send_close_invalid_token(quicly_context_t *ctx, struct
 
     /* determine the size of the packet, make adjustments */
     dst += egress.aead->algo->tag_size;
-    assert(dst - dgram->data.base <= ctx->max_packet_size);
+    assert(dst - dgram->data.base <= QUICLY_MIN_CLIENT_INITIAL_SIZE);
     assert(dst - length_at - 1 < 64);
     *length_at = dst - length_at - 1;
     dgram->data.len = dst - dgram->data.base;
@@ -4112,7 +4151,7 @@ static int enter_close(quicly_conn_t *conn, int host_is_initiating, int wait_dra
         conn->egress.send_ack_at = wait_draining ? now + get_sentmap_expiration_time(conn) : 0;
     }
 
-    update_loss_alarm(conn);
+    update_loss_alarm(conn, 0);
 
     return 0;
 }
@@ -4352,7 +4391,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
         quicly_cc_on_acked(&conn->egress.cc, (uint32_t)bytes_acked, frame.largest_acknowledged,
-                           (uint32_t)(conn->egress.sentmap.bytes_in_flight + bytes_acked));
+                           (uint32_t)(conn->egress.sentmap.bytes_in_flight + bytes_acked), conn->egress.max_udp_payload_size);
         QUICLY_PROBE(QUICTRACE_CC_ACK, conn, probe_now(), &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                      conn->egress.sentmap.bytes_in_flight);
     }
@@ -4362,7 +4401,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     /* loss-detection  */
     quicly_loss_detect_loss(&conn->egress.loss, frame.largest_acknowledged, do_detect_loss);
-    update_loss_alarm(conn);
+    update_loss_alarm(conn, 0);
 
     return 0;
 }
@@ -4913,7 +4952,7 @@ static int handle_handshake_done_frame(quicly_conn_t *conn, struct st_quicly_han
     conn->super.peer.address_validation.send_probe = 0;
     if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
         return ret;
-    update_loss_alarm(conn);
+    update_loss_alarm(conn, 0);
     return 0;
 }
 
@@ -5032,7 +5071,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         /* determine the frame type; fast path is available for frame types below 64 */
         const struct st_quicly_frame_handler_t *frame_handler;
         state.frame_type = *state.src++;
-        if (state.frame_type < sizeof(frame_handlers) / sizeof(frame_handlers[0])) {
+        if (state.frame_type < PTLS_ELEMENTSOF(frame_handlers)) {
             frame_handler = frame_handlers + state.frame_type;
         } else {
             /* slow path */
@@ -5106,6 +5145,10 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
+    if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE) {
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
     if (packet->cid.dest.encrypted.len < 8) {
         ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         goto Exit;
@@ -5119,7 +5162,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         goto Exit;
 
     /* create connection */
-    if ((*conn = create_connection(ctx, NULL, src_addr, dest_addr, new_cid, handshake_properties)) == NULL) {
+    if ((*conn = create_connection(ctx, NULL, src_addr, dest_addr, new_cid, handshake_properties,
+                                   quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -5139,6 +5183,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     (*conn)->initial->cipher.egress = egress_cipher;
     egress_cipher = (struct st_quicly_cipher_context_t){NULL};
     (*conn)->crypto.handshake_properties.collected_extensions = server_collected_extensions;
+    (*conn)->initial->largest_ingress_udp_payload_size = packet->datagram_size;
 
     QUICLY_PROBE(ACCEPT, *conn, probe_now(), QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len),
                  address_token);
@@ -5262,11 +5307,18 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
-            /* update cid if this is the first Initial packet that's being received */
-            if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
-                assert(quicly_is_client(conn));
-                memcpy(conn->super.peer.cid.cid, packet->cid.src.base, packet->cid.src.len);
-                conn->super.peer.cid.len = packet->cid.src.len;
+            if (quicly_is_client(conn)) {
+                /* client: update cid if this is the first Initial packet that's being received */
+                if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
+                    memcpy(conn->super.peer.cid.cid, packet->cid.src.base, packet->cid.src.len);
+                    conn->super.peer.cid.len = packet->cid.src.len;
+                }
+            } else {
+                /* server: ignore packets that are too small */
+                if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE) {
+                    ret = QUICLY_ERROR_PACKET_IGNORED;
+                    goto Exit;
+                }
             }
             aead.cb = aead_decrypt_fixed_key;
             aead.ctx = conn->initial->cipher.ingress.aead;
@@ -5333,13 +5385,24 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     conn->super.stats.num_bytes.received += packet->octets.len;
 
     /* state updates, that are triggered by the receipt of a packet */
-    if (epoch == QUICLY_EPOCH_HANDSHAKE && conn->initial != NULL) {
+    switch (epoch) {
+    case QUICLY_EPOCH_INITIAL:
+        /* update max_ingress_udp_payload_size if necessary */
+        if (conn->initial->largest_ingress_udp_payload_size < packet->datagram_size)
+            conn->initial->largest_ingress_udp_payload_size = packet->datagram_size;
+        break;
+    case QUICLY_EPOCH_HANDSHAKE:
         /* Discard Initial space before processing the payload of the Handshake packet to avoid the chance of an ACK frame included
          * in the Handshake packet setting a loss timer for the Initial packet. */
-        if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
-            goto Exit;
-        update_loss_alarm(conn);
-        conn->super.peer.address_validation.validated = 1;
+        if (conn->initial != NULL) {
+            if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
+                goto Exit;
+            update_loss_alarm(conn, 0);
+            conn->super.peer.address_validation.validated = 1;
+        }
+        break;
+    default:
+        break;
     }
 
     /* handle the payload */
@@ -5357,7 +5420,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         if (quicly_is_client(conn) && conn->handshake != NULL && conn->handshake->cipher.egress.aead != NULL) {
             if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
                 goto Exit;
-            update_loss_alarm(conn);
+            update_loss_alarm(conn, 0);
         }
         break;
     case QUICLY_EPOCH_HANDSHAKE:
@@ -5643,16 +5706,18 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
                                  size_t len, size_t prefix_len, const char **err_desc)
 {
     const uint8_t *const token = _token;
-    uint8_t ptbuf[QUICLY_MAX_PACKET_SIZE];
+    uint8_t ptbuf[QUICLY_MIN_CLIENT_INITIAL_SIZE];
     size_t ptlen;
-
-    assert(len < QUICLY_MAX_PACKET_SIZE);
 
     *err_desc = NULL;
 
-    /* check if can get type and decrypt */
+    /* check if we can get type and decrypt */
     if (len < prefix_len + 1 + aead->algo->iv_size + aead->algo->tag_size) {
         *err_desc = "token too small";
+        return PTLS_ALERT_DECODE_ERROR;
+    }
+    if (prefix_len + 1 + aead->algo->iv_size + sizeof(ptbuf) + aead->algo->tag_size < len) {
+        *err_desc = "token too large";
         return PTLS_ALERT_DECODE_ERROR;
     }
 
@@ -5725,7 +5790,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         break;
     case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
         ptls_decode_open_block(src, end, 1, {
-            QUICLY_BUILD_ASSERT(sizeof(plaintext->resumption.bytes) >= 256);
+            PTLS_BUILD_ASSERT(sizeof(plaintext->resumption.bytes) >= 256);
             plaintext->resumption.len = end - src;
             memcpy(plaintext->resumption.bytes, src, plaintext->resumption.len);
             src = end;
@@ -5736,7 +5801,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         abort();
     }
     ptls_decode_block(src, end, 1, {
-        QUICLY_BUILD_ASSERT(sizeof(plaintext->appdata.bytes) >= 256);
+        PTLS_BUILD_ASSERT(sizeof(plaintext->appdata.bytes) >= 256);
         plaintext->appdata.len = end - src;
         memcpy(plaintext->appdata.bytes, src, plaintext->appdata.len);
         src = end;
