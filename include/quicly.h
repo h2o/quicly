@@ -724,7 +724,17 @@ struct st_quicly_address_token_plaintext_t {
 };
 
 /**
+ * Extracts QUIC packets from a datagram pointed to by `src` and `len`. If successful, the function returns the size of the QUIC
+ * packet being decoded. Otherwise, SIZE_MAX is returned.
+ * `off` is an I/O argument that takes starting offset of the QUIC packet to be decoded as input, and returns the starting offset of
+ * the next QUIC packet. A typical loop that handles an UDP datagram would look like:
  *
+ *     size_t off = 0;
+ *     while (off < dgram.size) {
+ *         if (quicly_decode_packet(ctx, &packet, dgram.bytes, dgram.size, &off) == SIZE_MAX)
+ *             break;
+ *         handle_quic_packet(&packet);
+ *     }
  */
 size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len, size_t *off);
 /**
