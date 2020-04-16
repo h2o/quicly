@@ -87,8 +87,6 @@ extern "C" {
 #define QUICLY_ERROR_IS_CLOSING 0xff06 /* indicates that the connection has already entered closing state */
 #define QUICLY_ERROR_STATE_EXHAUSTION 0xff07
 
-#define QUICLY_BUILD_ASSERT(condition) ((void)sizeof(char[2 * !!(!__builtin_constant_p(condition) || (condition)) - 1]))
-
 typedef int64_t quicly_stream_id_t;
 
 typedef struct st_quicly_conn_t quicly_conn_t;

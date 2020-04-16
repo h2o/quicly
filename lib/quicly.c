@@ -647,7 +647,7 @@ static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn)
 
     if (cached_rand.off == 0) {
         tlsctx->random_bytes(cached_rand.values, sizeof(cached_rand.values));
-        cached_rand.off = sizeof(cached_rand.values) / sizeof(cached_rand.values[0]);
+        cached_rand.off = PTLS_ELEMENTSOF(cached_rand.values);
     }
 
     /* on average, skip one PN per every 256 packets, by selecting one of the 511 packet numbers following next_pn */
@@ -3736,7 +3736,7 @@ quicly_datagram_t *quicly_send_close_invalid_token(quicly_context_t *ctx, struct
     uint8_t *dst = dgram->data.base, *length_at;
 
     /* build packet */
-    QUICLY_BUILD_ASSERT(QUICLY_SEND_PN_SIZE == 2);
+    PTLS_BUILD_ASSERT(QUICLY_SEND_PN_SIZE == 2);
     *dst++ = QUICLY_PACKET_TYPE_INITIAL | 0x1 /* 2-byte PN */;
     dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION);
     *dst++ = dest_cid.len;
@@ -4591,7 +4591,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         /* determine the frame type; fast path is available for frame types below 64 */
         const struct st_quicly_frame_handler_t *frame_handler;
         state.frame_type = *state.src++;
-        if (state.frame_type < sizeof(frame_handlers) / sizeof(frame_handlers[0])) {
+        if (state.frame_type < PTLS_ELEMENTSOF(frame_handlers)) {
             frame_handler = frame_handlers + state.frame_type;
         } else {
             /* slow path */
@@ -5284,7 +5284,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         break;
     case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
         ptls_decode_open_block(src, end, 1, {
-            QUICLY_BUILD_ASSERT(sizeof(plaintext->resumption.bytes) >= 256);
+            PTLS_BUILD_ASSERT(sizeof(plaintext->resumption.bytes) >= 256);
             plaintext->resumption.len = end - src;
             memcpy(plaintext->resumption.bytes, src, plaintext->resumption.len);
             src = end;
@@ -5295,7 +5295,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         abort();
     }
     ptls_decode_block(src, end, 1, {
-        QUICLY_BUILD_ASSERT(sizeof(plaintext->appdata.bytes) >= 256);
+        PTLS_BUILD_ASSERT(sizeof(plaintext->appdata.bytes) >= 256);
         plaintext->appdata.len = end - src;
         memcpy(plaintext->appdata.bytes, src, plaintext->appdata.len);
         src = end;
