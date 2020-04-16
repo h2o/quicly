@@ -1919,6 +1919,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         conn->_.super.version = QUICLY_PROTOCOL_VERSION;
     }
     memset(conn->_.super.peer.spare_cids, 0, sizeof(conn->_.super.peer.spare_cids));
+    conn->_.super.peer.largest_sequence_expected = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1;
     conn->_.super.peer.largest_retire_prior_to = 0;
     quicly_linklist_init(&conn->_.super._default_scheduler.active);
     quicly_linklist_init(&conn->_.super._default_scheduler.blocked);
@@ -4822,6 +4823,14 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
                  QUICLY_PROBE_HEXDUMP(frame.cid.base, frame.cid.len),
                  QUICLY_PROBE_HEXDUMP(frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN));
 
+    uint64_t num_to_retire = frame.retire_prior_to > conn->super.peer.largest_retire_prior_to
+                                 ? frame.retire_prior_to - conn->super.peer.largest_retire_prior_to
+                                 : 0;
+    if (frame.sequence > conn->super.peer.largest_sequence_expected + num_to_retire) {
+        /* the peer sent CID that falls outside of the current expected sequence number window */
+        return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
+    }
+
     if (frame.sequence < conn->super.peer.largest_retire_prior_to) {
         /* An endpoint that receives a NEW_CONNECTION_ID frame with a sequence number smaller than the Retire Prior To
          * field of a previously received NEW_CONNECTION_ID frame MUST send a corresponding RETIRE_CONNECTION_ID frame
@@ -4832,6 +4841,13 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         /* do not install this CID */
         return 0;
     }
+
+    if (frame.sequence < conn->super.peer.cid_sequence) {
+        /* we have already retired this CID */
+        schedule_retire_connection_id(conn, frame.sequence);
+        return 0;
+    }
+
     /* First, handle retire_prior_to field.
      * This order is important as it is possible to receive a NEW_CONNECTION_ID frame
      * such that it retires active_connection_id_limit CIDs and then installs
@@ -4841,6 +4857,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         /* current active CID must have smaller sequence number than any others in the spare list */
         assert(frame.retire_prior_to > conn->super.peer.cid_sequence);
         schedule_retire_connection_id(conn, conn->super.peer.cid_sequence);
+        conn->super.peer.largest_sequence_expected++;
         need_to_replace_cid = 1;
 
         /* retire CIDs in the spare pool */
@@ -4886,10 +4903,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         break;
     }
 
-    if (!was_stored && !need_to_replace_cid) {
-        /* peer sent NEW_CONNECTION_ID while we have already reached active_connection_id_limit */
-        return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
-    }
+    assert(was_stored || need_to_replace_cid);
 
     if (need_to_replace_cid) {
         struct st_quicly_spare_cid_t *spare_cid = pick_spare_cid(conn);
