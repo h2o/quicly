@@ -882,7 +882,7 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
  *
  */
 int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
-                                           const quicly_cid_t *odcid, const void *stateless_reset_token, int expand);
+                                           const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by);
 /**
  *
  */

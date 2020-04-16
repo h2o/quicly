@@ -1463,7 +1463,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
 }
 
 int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
-                                           const quicly_cid_t *odcid, const void *stateless_reset_token, int expand)
+                                           const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by)
 {
     int ret;
 
@@ -1513,13 +1513,12 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
     /* if requested, add a greasing TP of 1 MTU size so that CH spans across multiple packets */
-    if (expand) {
+    if (expand_by != 0) {
         PUSH_TP(buf, 31 * 100 + 27, {
-            static const size_t bigger_than_mtu = 1600;
-            if ((ret = ptls_buffer_reserve(buf, bigger_than_mtu)) != 0)
+            if ((ret = ptls_buffer_reserve(buf, expand_by)) != 0)
                 goto Exit;
-            memset(buf->base + buf->off, 0, bigger_than_mtu);
-            buf->off += bigger_than_mtu;
+            memset(buf->base + buf->off, 0, expand_by);
+            buf->off += expand_by;
         });
     }
 
@@ -1898,8 +1897,9 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     /* handshake */
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
-    if ((ret = quicly_encode_transport_parameter_list(&conn->crypto.transport_params.buf, 1, &conn->super.ctx->transport_params,
-                                                      NULL, NULL, conn->super.ctx->expand_client_hello)) != 0)
+    if ((ret = quicly_encode_transport_parameter_list(
+             &conn->crypto.transport_params.buf, 1, &conn->super.ctx->transport_params, NULL, NULL,
+             conn->super.ctx->expand_client_hello ? conn->super.ctx->initial_egress_max_udp_payload_size : 0)) != 0)
         goto Exit;
     conn->crypto.transport_params.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
