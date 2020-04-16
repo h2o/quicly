@@ -736,7 +736,8 @@ struct st_quicly_address_token_plaintext_t {
  *         handle_quic_packet(&packet);
  *     }
  */
-size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len, size_t *off);
+size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *datagram, size_t datagram_size,
+                            size_t *off);
 /**
  *
  */

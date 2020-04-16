@@ -498,14 +498,17 @@ static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
         conn->egress.ack_frequency.update_at = now + get_sentmap_expiration_time(conn);
 }
 
-size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len, size_t *off)
+size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *datagram, size_t datagram_size,
+                            size_t *off)
 {
-    const uint8_t *src_end = src + len;
+    const uint8_t *src = datagram, *src_end = datagram + datagram_size;
 
-    packet->octets = ptls_iovec_init(src + *off, len - *off);
+    assert(*off <= datagram_size);
+
+    packet->octets = ptls_iovec_init(src + *off, datagram_size - *off);
     if (packet->octets.len < 2)
         goto Error;
-    packet->datagram_size = *off == 0 ? len : 0;
+    packet->datagram_size = *off == 0 ? datagram_size : 0;
     packet->token = ptls_iovec_init(NULL, 0);
     packet->decrypted.pn = UINT64_MAX;
 
