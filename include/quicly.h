@@ -404,6 +404,9 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t late_acked;                                                                                                       \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
+        /**                                                                                                                        \
+         * This value is calculated at UDP datagram-level, and used for determining the amplification limit.                       \
+         */                                                                                                                        \
         uint64_t received;                                                                                                         \
         uint64_t sent;                                                                                                             \
     } num_bytes
@@ -680,7 +683,7 @@ typedef struct st_quicly_decoded_packet_t {
      */
     size_t encrypted_off;
     /**
-     * size of the datagram
+     * size of the UDP datagram; set to zero if this is not the first QUIC packet within the datagram
      */
     size_t datagram_size;
     /**
@@ -723,7 +726,7 @@ struct st_quicly_address_token_plaintext_t {
 /**
  *
  */
-size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len);
+size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len, size_t *off);
 /**
  *
  */

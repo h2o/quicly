@@ -232,7 +232,9 @@ static void test_vector(void)
     ptls_iovec_t payload;
     int ret;
 
-    ok(quicly_decode_packet(&quic_ctx, &packet, datagram, sizeof(datagram)) == sizeof(datagram));
+    size_t off = 0;
+    ok(quicly_decode_packet(&quic_ctx, &packet, datagram, sizeof(datagram), &off) == sizeof(datagram));
+    ok(off == sizeof(datagram));
     ret = setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress, packet.cid.dest.encrypted, 0, NULL);
     ok(ret == 0);
     ok(decrypt_packet(ingress.header_protection, aead_decrypt_fixed_key, ingress.aead, &next_expected_pn, &packet, &pn, &payload) ==
@@ -256,8 +258,9 @@ static void test_retry_aead(void)
         0xb1, 0x2a, 0x43, 0x03, 0xfa, 0xf0, 0xeb, 0xf0, 0x11, 0x47, 0xb4, 0x8f, 0xc9, 0xe2, 0x9d, 0x00};
 
     quicly_decoded_packet_t decoded;
-    size_t decoded_len = quicly_decode_packet(&quic_ctx, &decoded, packet_bytes, sizeof(packet_bytes));
+    size_t off = 0, decoded_len = quicly_decode_packet(&quic_ctx, &decoded, packet_bytes, sizeof(packet_bytes), &off);
     ok(decoded_len == sizeof(packet_bytes));
+    ok(off == sizeof(packet_bytes));
 
     ptls_aead_context_t *retry_aead = create_retry_aead(&quic_ctx, 0);
     ok(validate_retry_tag(&decoded, &odcid, retry_aead));
@@ -304,10 +307,9 @@ size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw,
     for (ri = 0; ri != cnt; ++ri) {
         size_t off = 0;
         do {
-            size_t dl = quicly_decode_packet(&quic_ctx, decoded + dc, raw[ri]->data.base + off, raw[ri]->data.len - off);
+            size_t dl = quicly_decode_packet(&quic_ctx, decoded + dc, raw[ri]->data.base, raw[ri]->data.len, &off);
             assert(dl != SIZE_MAX);
             ++dc;
-            off += dl;
         } while (off != raw[ri]->data.len);
     }
 

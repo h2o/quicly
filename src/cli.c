@@ -589,11 +589,9 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                 size_t off = 0;
                 while (off != rret) {
                     quicly_decoded_packet_t packet;
-                    size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
-                    if (plen == SIZE_MAX)
+                    if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
                     quicly_receive(conn, NULL, &sa, &packet);
-                    off += plen;
                 }
             }
         }
@@ -762,8 +760,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                 size_t off = 0;
                 while (off != rret) {
                     quicly_decoded_packet_t packet;
-                    size_t plen = quicly_decode_packet(&ctx, &packet, buf + off, rret - off);
-                    if (plen == SIZE_MAX)
+                    if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
                     if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
                         if (packet.version != QUICLY_PROTOCOL_VERSION) {
@@ -844,7 +841,6 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             send_packets(fd, &dgram, 1, ctx.packet_allocator);
                         }
                     }
-                    off += plen;
                 }
             }
         }
