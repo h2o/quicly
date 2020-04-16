@@ -4770,23 +4770,6 @@ static int handle_ping_frame(quicly_conn_t *conn, struct st_quicly_handle_payloa
     return 0;
 }
 
-static struct st_quicly_spare_cid_t *pick_spare_cid(quicly_conn_t *conn)
-{
-    struct st_quicly_spare_cid_t *cid = NULL;
-    /* find the CID with smallest sequence number */
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.peer.spare_cids); i++) {
-        struct st_quicly_spare_cid_t *c = &conn->super.peer.spare_cids[i];
-        if (!c->is_active)
-            continue;
-
-        if (cid == NULL || cid->sequence > c->sequence) {
-            cid = c;
-        }
-    }
-
-    return cid;
-}
-
 /**
  * copies NEW_CONNECTION_ID information to an internal storage from a received frame
  */
@@ -4850,7 +4833,6 @@ static int verify_new_cid(uint64_t sequence, const quicly_cid_t *cid,
 static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     int ret;
-    int need_to_replace_cid = 0;
     quicly_new_connection_id_frame_t frame;
 
     /* TODO: return error when using zero-length CID */
@@ -4891,59 +4873,61 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
     if (verify_new_cid(conn->super.peer.cid_sequence, &conn->super.peer.cid, conn->super.peer.stateless_reset.token, &frame, &ret))
         return ret;
 
-    /* First, handle retire_prior_to field.
-     * This order is important as it is possible to receive a NEW_CONNECTION_ID frame
-     * such that it retires active_connection_id_limit CIDs and then installs
-     * one new CID.
-     */
     if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to) {
         /* current active CID must have smaller sequence number than any others in the spare list */
         assert(frame.retire_prior_to > conn->super.peer.cid_sequence);
         schedule_retire_connection_id(conn, conn->super.peer.cid_sequence);
         conn->super.peer.largest_sequence_expected++;
-        need_to_replace_cid = 1;
-
-        /* retire CIDs in the spare pool */
-        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.peer.spare_cids); i++) {
-            struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
-            if (!spare_cid->is_active || spare_cid->sequence >= frame.retire_prior_to)
-                continue;
-            schedule_retire_connection_id(conn, spare_cid->sequence);
-            spare_cid->is_active = 0;
-        }
-        conn->super.peer.largest_retire_prior_to = frame.retire_prior_to;
     }
 
-    /* store new CID as a spare */
-
+    struct st_quicly_spare_cid_t *spare_pick =
+        NULL;                      /* candidate for replacing the current CID for communication, if it is to be retired */
+    uint64_t min_seq = UINT64_MAX; /* sequence number of the candidate */
     int was_stored = 0;
+
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.peer.spare_cids); i++) {
         struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
+        /* First, handle retire_prior_to field.
+         * This order is important as it is possible to receive a NEW_CONNECTION_ID frame
+         * such that it retires active_connection_id_limit CIDs and then installs
+         * one new CID. */
+        if (spare_cid->sequence >= frame.retire_prior_to) {
+            if (spare_cid->is_active) {
+                schedule_retire_connection_id(conn, spare_cid->sequence);
+                spare_cid->is_active = 0;
+                conn->super.peer.largest_sequence_expected++;
+            }
+        }
         if (spare_cid->is_active) {
             if (verify_new_cid(spare_cid->sequence, &spare_cid->cid, spare_cid->stateless_reset_token, &frame, &ret))
                 return ret;
-            continue;
+        } else if (!was_stored) {
+            store_spare_cid(spare_cid, &frame);
+            was_stored = 1;
         }
 
-        store_spare_cid(spare_cid, &frame);
-        was_stored = 1;
-        break;
+        /* update the candidate for replacing the current CID
+         *
+         * While it is not mandated by the spec, we pick the CID with smallest sequence number. */
+        if (spare_cid->is_active && min_seq > spare_cid->sequence) {
+            min_seq = spare_cid->sequence;
+            spare_pick = spare_cid;
+        }
     }
 
-    assert(was_stored || need_to_replace_cid);
-
-    if (need_to_replace_cid) {
-        struct st_quicly_spare_cid_t *spare_cid = pick_spare_cid(conn);
-        assert(spare_cid != NULL);
-        spare_cid->is_active = 0;
-        conn->super.peer.cid = spare_cid->cid;
-        memcpy(conn->super.peer.stateless_reset._buf, spare_cid->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
+    if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to) {
+        /* replace the current CID for communication */
+        assert(spare_pick != NULL);
+        spare_pick->is_active = 0;
+        conn->super.peer.cid = spare_pick->cid;
+        memcpy(conn->super.peer.stateless_reset._buf, spare_pick->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
         conn->super.peer.stateless_reset.token = conn->super.peer.stateless_reset._buf;
-        conn->super.peer.cid_sequence = spare_cid->sequence;
+        conn->super.peer.cid_sequence = spare_pick->sequence;
         if (!was_stored) {
             /* had to hold off the store until we replace the CID (which makes one spare entry vacant) */
-            store_spare_cid(spare_cid, &frame);
+            store_spare_cid(spare_pick, &frame);
         }
+        conn->super.peer.largest_retire_prior_to = frame.retire_prior_to;
     }
 
     return 0;
