@@ -4808,6 +4808,45 @@ static int cid_is_equal(const quicly_cid_t *l, ptls_iovec_t r)
     return memcmp(l->cid, r.base, l->len);
 }
 
+/**
+ * checks if the received CID carries conflicting information with CIDs we already have
+ *
+ * @param sequence known sequence number
+ * @param cid known CID
+ * @param stateless_reset_token known stateless reset token
+ * @param frame newly received NEW_CONNECTION_ID frame
+ * @param retcode return code that the caller will return to its caller
+ * @return 0 if okay (the caller can continue), non-zero otherwise (the caller must terminate frame rocessing and return *retcode)
+ */
+static int verify_new_cid(uint64_t sequence, const quicly_cid_t *cid,
+                          const uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN],
+                          const quicly_new_connection_id_frame_t *frame, int *retcode)
+{
+    /* If an endpoint receives a NEW_CONNECTION_ID frame that repeats a previously issued connection ID with
+     * a different Stateless Reset Token or a different sequence number, or if a sequence number is used for
+     * different connection IDs, the endpoint MAY treat that receipt as a connection error of type PROTOCOL_VIOLATION.
+     * (19.15)
+     */
+    if (cid_is_equal(cid, frame->cid) == 0) {
+        if (sequence == frame->sequence &&
+            memcmp(stateless_reset_token, frame->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0) {
+            /* likely a duplicate due to retransmission */
+            *retcode = 0;
+            return 1;
+        } else {
+            /* received a frame that carries conflicting information */
+            *retcode = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+            return 1;
+        }
+    }
+    if (sequence == frame->sequence && cid_is_equal(cid, frame->cid) != 0) {
+        *retcode = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+        return 1;
+    }
+
+    return 0;
+}
+
 static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     int ret;
@@ -4848,6 +4887,10 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         return 0;
     }
 
+    /* validate against current CID for communication */
+    if (verify_new_cid(conn->super.peer.cid_sequence, &conn->super.peer.cid, conn->super.peer.stateless_reset.token, &frame, &ret))
+        return ret;
+
     /* First, handle retire_prior_to field.
      * This order is important as it is possible to receive a NEW_CONNECTION_ID frame
      * such that it retires active_connection_id_limit CIDs and then installs
@@ -4877,24 +4920,8 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.peer.spare_cids); i++) {
         struct st_quicly_spare_cid_t *spare_cid = &conn->super.peer.spare_cids[i];
         if (spare_cid->is_active) {
-            /* If an endpoint receives a NEW_CONNECTION_ID frame that repeats a previously issued connection ID with
-             * a different Stateless Reset Token or a different sequence number, or if a sequence number is used for
-             * different connection IDs, the endpoint MAY treat that receipt as a connection error of type PROTOCOL_VIOLATION.
-             * (19.15)
-             */
-            if (cid_is_equal(&spare_cid->cid, frame.cid) == 0) {
-                if (spare_cid->sequence == frame.sequence &&
-                    memcmp(spare_cid->stateless_reset_token, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0) {
-                    /* likely a duplicate due to retransmission */
-                    return 0;
-                } else {
-                    /* received a frame that carries conflicting information */
-                    return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-                }
-            }
-            if (spare_cid->sequence == frame.sequence && cid_is_equal(&spare_cid->cid, frame.cid) != 0)
-                return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-
+            if (verify_new_cid(spare_cid->sequence, &spare_cid->cid, spare_cid->stateless_reset_token, &frame, &ret))
+                return ret;
             continue;
         }
 
