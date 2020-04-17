@@ -1918,8 +1918,12 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     } else {
         conn->_.super.version = QUICLY_PROTOCOL_VERSION;
     }
-    memset(conn->_.super.peer.spare_cids, 0, sizeof(conn->_.super.peer.spare_cids));
-    conn->_.super.peer.largest_sequence_expected = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->_.super.peer.spare_cids); i++) {
+        conn->_.super.peer.spare_cids[i].is_active = 0;
+        /* reserve slots for CIDs with sequence number [1, ..., ELEMENTSOF(spare_cids)] */
+        conn->_.super.peer.spare_cids[i].sequence = i + 1;
+    }
+    conn->_.super.peer.largest_sequence_expected = PTLS_ELEMENTSOF(conn->_.super.peer.spare_cids);
     conn->_.super.peer.largest_retire_prior_to = 0;
     quicly_linklist_init(&conn->_.super._default_scheduler.active);
     quicly_linklist_init(&conn->_.super._default_scheduler.blocked);
@@ -4834,6 +4838,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
 {
     int ret;
     quicly_new_connection_id_frame_t frame;
+    int is_expected = 0; /* are we expected to receive this sequence no? i.e. we haven't retired this */
 
     /* TODO: return error when using zero-length CID */
 
@@ -4844,12 +4849,23 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
                  QUICLY_PROBE_HEXDUMP(frame.cid.base, frame.cid.len),
                  QUICLY_PROBE_HEXDUMP(frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN));
 
+    /* conditions for the sequence numbers to be treated as an error or ignored
+     *
+     * If the received sequence number exceeds largest_sequence_expected (after considering the CIDs to be retired via
+     * retire_prior_to), it is an ACTIVE_CONNECTION_LIMIT error.
+     * If the number is not found in the list of expected sequence numbers (conn->super.peer.spare_cids), it is considered to be
+     * already retired. */
+
     uint64_t num_to_retire = frame.retire_prior_to > conn->super.peer.largest_retire_prior_to
                                  ? frame.retire_prior_to - conn->super.peer.largest_retire_prior_to
                                  : 0;
     if (frame.sequence > conn->super.peer.largest_sequence_expected + num_to_retire) {
         /* the peer sent CID that falls outside of the current expected sequence number window */
         return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
+    } else if (frame.sequence > conn->super.peer.largest_sequence_expected) {
+        /* Received sequence is beyond the current largest_sequence_expected, but it is still okay because we are going to retire
+         * some */
+        is_expected = 1;
     }
 
     if (frame.sequence < conn->super.peer.largest_retire_prior_to) {
@@ -4863,22 +4879,13 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         return 0;
     }
 
-    if (frame.sequence < conn->super.peer.cid_sequence) {
-        /* we have already retired this CID */
-        schedule_retire_connection_id(conn, frame.sequence);
-        return 0;
-    }
-
     /* validate against current CID for communication */
     if (verify_new_cid(conn->super.peer.cid_sequence, &conn->super.peer.cid, conn->super.peer.stateless_reset.token, &frame, &ret))
         return ret;
 
-    if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to) {
-        /* current active CID must have smaller sequence number than any others in the spare list */
-        assert(frame.retire_prior_to > conn->super.peer.cid_sequence);
+    /* is the current CID going to be retired? */
+    if (frame.retire_prior_to > conn->super.peer.cid_sequence)
         schedule_retire_connection_id(conn, conn->super.peer.cid_sequence);
-        conn->super.peer.largest_sequence_expected++;
-    }
 
     struct st_quicly_spare_cid_t *spare_pick =
         NULL;                      /* candidate for replacing the current CID for communication, if it is to be retired */
@@ -4895,15 +4902,16 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
             if (spare_cid->is_active) {
                 schedule_retire_connection_id(conn, spare_cid->sequence);
                 spare_cid->is_active = 0;
-                conn->super.peer.largest_sequence_expected++;
+                spare_cid->sequence = ++conn->super.peer.largest_sequence_expected;
             }
         }
         if (spare_cid->is_active) {
             if (verify_new_cid(spare_cid->sequence, &spare_cid->cid, spare_cid->stateless_reset_token, &frame, &ret))
                 return ret;
-        } else if (!was_stored) {
+        } else if (spare_cid->sequence == frame.sequence) {
+            assert(!was_stored);
             store_spare_cid(spare_cid, &frame);
-            was_stored = 1;
+            was_stored = is_expected = 1;
         }
 
         /* update the candidate for replacing the current CID
@@ -4915,7 +4923,12 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         }
     }
 
-    if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to) {
+    if (!is_expected) {
+        /* received sequence was not found in the spare list -- indicating we have already retired this CID */
+        return 0;
+    }
+
+    if (frame.retire_prior_to > conn->super.peer.cid_sequence) {
         /* replace the current CID for communication */
         assert(spare_pick != NULL);
         spare_pick->is_active = 0;
@@ -4923,12 +4936,15 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         memcpy(conn->super.peer.stateless_reset._buf, spare_pick->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
         conn->super.peer.stateless_reset.token = conn->super.peer.stateless_reset._buf;
         conn->super.peer.cid_sequence = spare_pick->sequence;
+        spare_pick->sequence = ++conn->super.peer.largest_sequence_expected;
         if (!was_stored) {
             /* had to hold off the store until we replace the CID (which makes one spare entry vacant) */
             store_spare_cid(spare_pick, &frame);
         }
-        conn->super.peer.largest_retire_prior_to = frame.retire_prior_to;
     }
+
+    if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to)
+        conn->super.peer.largest_retire_prior_to = frame.retire_prior_to;
 
     return 0;
 }

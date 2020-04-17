@@ -454,6 +454,13 @@ struct st_quicly_spare_cid_t {
      * indicates whether this record holds an active (given by peer and not retired) CID
      */
     int is_active;
+    /**
+     * sequence number of the CID
+     *
+     * If is_active, this represents the sequence number associated with the CID.
+     * If !is_active, this represents a "reserved" slot, meaning that we are expecting to receive a NEW_CONNECTION_ID frame
+     * with this sequence number. This helps determine if a received frame is carrying a CID that is already retired.
+     */
     uint64_t sequence;
     quicly_cid_t cid;
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
