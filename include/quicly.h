@@ -410,6 +410,9 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t late_acked;                                                                                                       \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
+        /**                                                                                                                        \
+         * This value is calculated at UDP datagram-level, and used for determining the amplification limit.                       \
+         */                                                                                                                        \
         uint64_t received;                                                                                                         \
         uint64_t sent;                                                                                                             \
     } num_bytes
@@ -686,7 +689,7 @@ typedef struct st_quicly_decoded_packet_t {
      */
     size_t encrypted_off;
     /**
-     * size of the datagram
+     * size of the UDP datagram; set to zero if this is not the first QUIC packet within the datagram
      */
     size_t datagram_size;
     /**
@@ -727,9 +730,20 @@ struct st_quicly_address_token_plaintext_t {
 };
 
 /**
+ * Extracts QUIC packets from a datagram pointed to by `src` and `len`. If successful, the function returns the size of the QUIC
+ * packet being decoded. Otherwise, SIZE_MAX is returned.
+ * `off` is an I/O argument that takes starting offset of the QUIC packet to be decoded as input, and returns the starting offset of
+ * the next QUIC packet. A typical loop that handles an UDP datagram would look like:
  *
+ *     size_t off = 0;
+ *     while (off < dgram.size) {
+ *         if (quicly_decode_packet(ctx, &packet, dgram.bytes, dgram.size, &off) == SIZE_MAX)
+ *             break;
+ *         handle_quic_packet(&packet);
+ *     }
  */
-size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len);
+size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *datagram, size_t datagram_size,
+                            size_t *off);
 /**
  *
  */

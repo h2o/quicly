@@ -159,12 +159,12 @@ static void on_receive(quicly_stream_t *stream, size_t off, const void *src, siz
 
 static void process_msg(int is_client, quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
 {
-    size_t off, packet_len, i;
+    size_t off = 0, i;
 
     /* split UDP datagram into multiple QUIC packets */
-    for (off = 0; off < dgram_len; off += packet_len) {
+    while (off < dgram_len) {
         quicly_decoded_packet_t decoded;
-        if ((packet_len = quicly_decode_packet(&ctx, &decoded, msg->msg_iov[0].iov_base + off, dgram_len - off)) == SIZE_MAX)
+        if (quicly_decode_packet(&ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
             return;
         /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
         for (i = 0; conns[i] != NULL; ++i)

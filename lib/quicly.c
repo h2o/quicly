@@ -504,18 +504,22 @@ static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
         conn->egress.ack_frequency.update_at = now + get_sentmap_expiration_time(conn);
 }
 
-size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *src, size_t len)
+size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *datagram, size_t datagram_size,
+                            size_t *off)
 {
-    const uint8_t *src_end = src + len;
+    const uint8_t *src = datagram, *src_end = datagram + datagram_size;
 
-    if (len < 2)
+    assert(*off <= datagram_size);
+
+    packet->octets = ptls_iovec_init(src + *off, datagram_size - *off);
+    if (packet->octets.len < 2)
         goto Error;
-
-    packet->octets = ptls_iovec_init(src, len);
-    packet->datagram_size = len;
+    packet->datagram_size = *off == 0 ? datagram_size : 0;
     packet->token = ptls_iovec_init(NULL, 0);
     packet->decrypted.pn = UINT64_MAX;
-    ++src;
+
+    /* move the cursor to the sencond byte */
+    src += *off + 1;
 
     if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
         /* long header */
@@ -601,6 +605,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
         packet->_is_stateless_reset_cached = QUICLY__DECODED_PACKET_CACHED_MAYBE_STATELESS_RESET;
     }
 
+    *off += packet->octets.len;
     return packet->octets.len;
 
 Error:
@@ -4750,7 +4755,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
     (*conn)->super.stats.num_packets.received += 1;
-    (*conn)->super.stats.num_bytes.received += packet->octets.len;
+    (*conn)->super.stats.num_bytes.received += packet->datagram_size;
     if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if ((ret = record_receipt(*conn, &(*conn)->initial->super, pn, 0, QUICLY_EPOCH_INITIAL)) != 0)
@@ -4788,6 +4793,9 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     }
 
     /* FIXME check peer address */
+
+    /* add unconditionally, as packet->datagram_size is set only for the first packet within the UDP datagram */
+    conn->super.stats.num_bytes.received += packet->datagram_size;
 
     switch (conn->super.state) {
     case QUICLY_STATE_CLOSING:
@@ -4940,7 +4948,6 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
     conn->super.stats.num_packets.received += 1;
-    conn->super.stats.num_bytes.received += packet->octets.len;
 
     /* state updates, that are triggered by the receipt of a packet */
     switch (epoch) {
