@@ -4898,7 +4898,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
          * This order is important as it is possible to receive a NEW_CONNECTION_ID frame
          * such that it retires active_connection_id_limit CIDs and then installs
          * one new CID. */
-        if (spare_cid->sequence >= frame.retire_prior_to) {
+        if (spare_cid->sequence < frame.retire_prior_to) {
             if (spare_cid->is_active) {
                 schedule_retire_connection_id(conn, spare_cid->sequence);
                 spare_cid->is_active = 0;
