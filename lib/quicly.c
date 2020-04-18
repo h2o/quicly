@@ -4903,10 +4903,13 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
             spare_cid->is_active = 0;
             spare_cid->sequence = ++conn->super.peer.largest_sequence_expected;
         }
+
         if (spare_cid->is_active) {
+            /* check if the received frame contradicts a CID we already have */
             if (verify_new_cid(spare_cid->sequence, &spare_cid->cid, spare_cid->stateless_reset_token, &frame, &ret))
                 return ret;
         } else if (spare_cid->sequence == frame.sequence) {
+            /* found a reserved slot for storing this CID */
             assert(!was_stored);
             store_spare_cid(spare_cid, &frame);
             was_stored = is_expected = 1;
