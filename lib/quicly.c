@@ -4786,13 +4786,13 @@ static void store_spare_cid(struct st_quicly_spare_cid_t *spare_cid, const quicl
 }
 
 /**
- * compares CIDs, returns zero if identical
+ * compares CIDs, returns true if identical
  */
 static int cid_is_equal(const quicly_cid_t *l, ptls_iovec_t r)
 {
     if (l->len != r.len)
-        return 1;
-    return memcmp(l->cid, r.base, l->len);
+        return 0;
+    return !memcmp(l->cid, r.base, l->len);
 }
 
 /**
@@ -4814,7 +4814,7 @@ static int verify_new_cid(uint64_t sequence, const quicly_cid_t *cid,
      * different connection IDs, the endpoint MAY treat that receipt as a connection error of type PROTOCOL_VIOLATION.
      * (19.15)
      */
-    if (cid_is_equal(cid, frame->cid) == 0) {
+    if (cid_is_equal(cid, frame->cid)) {
         if (sequence == frame->sequence &&
             memcmp(stateless_reset_token, frame->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0) {
             /* likely a duplicate due to retransmission */
@@ -4826,7 +4826,7 @@ static int verify_new_cid(uint64_t sequence, const quicly_cid_t *cid,
             return 1;
         }
     }
-    if (sequence == frame->sequence && cid_is_equal(cid, frame->cid) != 0) {
+    if (sequence == frame->sequence && !cid_is_equal(cid, frame->cid)) {
         *retcode = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         return 1;
     }
