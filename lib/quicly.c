@@ -4798,25 +4798,22 @@ static int cid_is_equal(const quicly_cid_t *l, ptls_iovec_t r)
 /**
  * checks if the received CID carries conflicting information with CIDs we already have
  *
- * @param sequence known sequence number
- * @param cid known CID
- * @param stateless_reset_token known stateless reset token
  * @param frame newly received NEW_CONNECTION_ID frame
  * @param retcode return code that the caller will return to its caller
  * @return 0 if the caller can continue, non-zero otherwise i.e. the caller must terminate frame processing and return *retcode
  */
-static int verify_new_cid(uint64_t sequence, const quicly_cid_t *cid,
-                          const uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN],
-                          const quicly_new_connection_id_frame_t *frame, int *retcode)
+static int verify_new_cid(uint64_t known_sequence, const quicly_cid_t *known_cid,
+                          const uint8_t known_srt[QUICLY_STATELESS_RESET_TOKEN_LEN], const quicly_new_connection_id_frame_t *frame,
+                          int *retcode)
 {
     /* If an endpoint receives a NEW_CONNECTION_ID frame that repeats a previously issued connection ID with
      * a different Stateless Reset Token or a different sequence number, or if a sequence number is used for
      * different connection IDs, the endpoint MAY treat that receipt as a connection error of type PROTOCOL_VIOLATION.
      * (19.15)
      */
-    if (cid_is_equal(cid, frame->cid)) {
-        if (sequence == frame->sequence &&
-            memcmp(stateless_reset_token, frame->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0) {
+    if (cid_is_equal(known_cid, frame->cid)) {
+        if (known_sequence == frame->sequence &&
+            memcmp(known_srt, frame->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0) {
             /* likely a duplicate due to retransmission */
             *retcode = 0;
             return 1;
@@ -4826,7 +4823,7 @@ static int verify_new_cid(uint64_t sequence, const quicly_cid_t *cid,
             return 1;
         }
     }
-    if (sequence == frame->sequence && !cid_is_equal(cid, frame->cid)) {
+    if (known_sequence == frame->sequence && !cid_is_equal(known_cid, frame->cid)) {
         *retcode = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         return 1;
     }
