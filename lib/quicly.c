@@ -4803,7 +4803,7 @@ static int cid_is_equal(const quicly_cid_t *l, ptls_iovec_t r)
  * @param stateless_reset_token known stateless reset token
  * @param frame newly received NEW_CONNECTION_ID frame
  * @param retcode return code that the caller will return to its caller
- * @return 0 if okay (the caller can continue), non-zero otherwise (the caller must terminate frame rocessing and return *retcode)
+ * @return 0 if the caller can continue, non-zero otherwise i.e. the caller must terminate frame processing and return *retcode
  */
 static int verify_new_cid(uint64_t sequence, const quicly_cid_t *cid,
                           const uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN],
