@@ -112,6 +112,40 @@ void quicly_sendstate_reset(quicly_sendstate_t *state)
     quicly_ranges_clear(&state->pending);
 }
 
+/**
+ * When the amount of state for remembering which bytes are acked or need to be sent becomes excessive, we reduce amount of that
+ * state by unmarking some bytes being acked, and by marking some bytes to be sent once more. This works, because making such
+ * modifications reduces the number of ranges being retained.
+ */
+static int reduce_state(quicly_sendstate_t *state)
+{
+    static const size_t max_ranges = 32;
+    int ret;
+
+    /* When there are too many gaps in the acked ranges, move some ranges that have been acked back to pending. */
+    if (state->acked.num_ranges > max_ranges) {
+        for (size_t i = max_ranges; i != state->acked.num_ranges; ++i) {
+            if ((ret = quicly_ranges_add(&state->pending, state->acked.ranges[i].start, state->acked.ranges[i].end)) != 0)
+                return ret;
+        }
+        quicly_ranges_drop_by_range_indices(&state->acked, max_ranges, state->acked.num_ranges);
+        assert(state->acked.num_ranges == max_ranges);
+    }
+
+    /* When there are too many gaps in pending, remove some gaps. We choose the gaps nearest to the end, so as to minimize the
+     * impact of this unneeded retransmission causing head-of-line blocking at the sender. */
+    while (state->pending.num_ranges > max_ranges) {
+        quicly_range_t offending = {
+            .start = state->pending.ranges[state->pending.num_ranges - 2].end,
+            .end = state->pending.ranges[state->pending.num_ranges - 1].start,
+        };
+        if ((ret = quicly_ranges_add(&state->pending, offending.start, offending.end)) != 0)
+            return ret;
+    }
+
+    return 0;
+}
+
 int quicly_sendstate_acked(quicly_sendstate_t *state, quicly_sendstate_sent_t *args, int is_active, size_t *bytes_to_shift)
 {
     uint64_t prev_sent_upto = state->acked.ranges[0].end;
@@ -139,7 +173,7 @@ int quicly_sendstate_acked(quicly_sendstate_t *state, quicly_sendstate_sent_t *a
         *bytes_to_shift = 0;
     }
 
-    return 0;
+    return reduce_state(state);
 }
 
 int quicly_sendstate_lost(quicly_sendstate_t *state, quicly_sendstate_sent_t *args)
@@ -164,5 +198,6 @@ int quicly_sendstate_lost(quicly_sendstate_t *state, quicly_sendstate_sent_t *ar
     }
 
     assert(state->acked.ranges[0].end <= state->pending.ranges[0].start);
-    return 0;
+
+    return reduce_state(state);
 }
