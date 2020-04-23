@@ -441,26 +441,6 @@ struct st_quicly_default_scheduler_state_t {
     quicly_linklist_t blocked;
 };
 
-/**
- * records an extra CID given by the peer via NEW_CONNECTION_ID frame
- */
-struct st_quicly_spare_cid_t {
-    /**
-     * indicates whether this record holds an active (given by peer and not retired) CID
-     */
-    int is_active;
-    /**
-     * sequence number of the CID
-     *
-     * If is_active, this represents the sequence number associated with the CID.
-     * If !is_active, this represents a "reserved" slot, meaning that we are expecting to receive a NEW_CONNECTION_ID frame
-     * with this sequence number. This helps determine if a received frame is carrying a CID that is already retired.
-     */
-    uint64_t sequence;
-    quicly_cid_t cid;
-    uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
-};
-
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
@@ -494,37 +474,15 @@ struct _st_quicly_conn_public_t {
          */
         quicly_address_t address;
         /**
-         * CID used for emitting the packets
+         * CIDs received from the peer
          */
-        quicly_cid_t cid;
-        /**
-         * stateless reset token corresponding to the CID
-         */
-        struct {
-            /**
-             * points to either _buf or NULL. NULL indicates the token is not available yet.
-             */
-            uint8_t *token;
-            uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
-        } stateless_reset;
-        /**
-         * sequence number associated with the current CID
-         */
-        uint64_t cid_sequence;
+        struct st_quicly_received_cid_set_t cid_set;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
             unsigned validated : 1;
             unsigned send_probe : 1;
         } address_validation;
-        /**
-         * additional CIDs offered by the peer
-         */
-        struct st_quicly_spare_cid_t spare_cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1];
-        /**
-         * we expect to receive CIDs with sequence number smaller than or equal to this number
-         */
-        uint64_t largest_sequence_expected;
         /**
          * largest value of Retire Prior To field observed so far
          */
@@ -1092,7 +1050,7 @@ inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
 inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->peer.cid;
+    return &c->peer.cid_set.cids[0].cid;
 }
 
 inline const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn)
