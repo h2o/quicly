@@ -385,7 +385,7 @@ static void test_address_token_codec(void)
     input.remote.sin.sin_family = AF_INET;
     input.remote.sin.sin_addr.s_addr = htonl(0x7f000001);
     input.remote.sin.sin_port = htons(443);
-    set_cid(&input.retry.odcid, ptls_iovec_init("abcdefgh", 8));
+    quicly_set_cid(&input.retry.odcid, ptls_iovec_init("abcdefgh", 8));
     input.retry.cidpair_hash = 12345;
     strcpy((char *)input.appdata.bytes, "hello world");
     input.appdata.len = strlen((char *)input.appdata.bytes);

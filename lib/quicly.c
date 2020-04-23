@@ -530,12 +530,6 @@ static inline uint8_t get_epoch(uint8_t first_byte)
     }
 }
 
-static void set_cid(quicly_cid_t *dest, ptls_iovec_t src)
-{
-    memcpy(dest->cid, src.base, src.len);
-    dest->len = src.len;
-}
-
 static ptls_aead_context_t *create_retry_aead(quicly_context_t *ctx, int is_enc)
 {
     static const uint8_t secret[] = {0x65, 0x6e, 0x61, 0xe3, 0x36, 0xae, 0x94, 0x17, 0xf7, 0xf0, 0xed,
@@ -1710,7 +1704,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                     goto Exit;
                 }
                 if (odcid != NULL)
-                    set_cid(odcid, ptls_iovec_init(src, cidlen));
+                    quicly_set_cid(odcid, ptls_iovec_init(src, cidlen));
                 src = end;
             });
             DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE, {
@@ -3525,7 +3519,7 @@ quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t 
     set_address(&token.remote, dest_addr);
     set_address(&token.local, src_addr);
 
-    set_cid(&token.retry.odcid, odcid);
+    quicly_set_cid(&token.retry.odcid, odcid);
     if ((ret = quicly_retry_calc_cidpair_hash(get_aes128gcmsha256(ctx)->hash, dest_cid, src_cid, &token.retry.cidpair_hash)) != 0)
         goto Exit;
     if (appdata.len != 0) {
@@ -4780,7 +4774,7 @@ static int handle_ping_frame(quicly_conn_t *conn, struct st_quicly_handle_payloa
 static void store_spare_cid(struct st_quicly_spare_cid_t *spare_cid, const quicly_new_connection_id_frame_t *frame)
 {
     spare_cid->sequence = frame->sequence;
-    set_cid(&spare_cid->cid, frame->cid);
+    quicly_set_cid(&spare_cid->cid, frame->cid);
     memcpy(spare_cid->stateless_reset_token, frame->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
     spare_cid->is_active = 1;
 }
@@ -5215,12 +5209,12 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         goto Exit;
     }
     (*conn)->super.state = QUICLY_STATE_CONNECTED;
-    set_cid(&(*conn)->super.peer.cid, packet->cid.src);
-    set_cid(&(*conn)->super.host.offered_cid, packet->cid.dest.encrypted);
+    quicly_set_cid(&(*conn)->super.peer.cid, packet->cid.src);
+    quicly_set_cid(&(*conn)->super.host.offered_cid, packet->cid.dest.encrypted);
     if (address_token != NULL) {
         (*conn)->super.peer.address_validation.validated = 1;
         if (address_token->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY)
-            set_cid(&(*conn)->retry_odcid, ptls_iovec_init(address_token->retry.odcid.cid, address_token->retry.odcid.len));
+            quicly_set_cid(&(*conn)->retry_odcid, ptls_iovec_init(address_token->retry.odcid.cid, address_token->retry.odcid.len));
     }
     if ((ret = setup_handshake_space_and_flow(*conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
@@ -5337,7 +5331,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             conn->token.len = packet->token.len;
             conn->retry_odcid = conn->super.peer.cid;
             /* update DCID */
-            set_cid(&conn->super.peer.cid, packet->cid.src);
+            quicly_set_cid(&conn->super.peer.cid, packet->cid.src);
             /* replace initial keys */
             dispose_cipher(&conn->initial->cipher.ingress);
             dispose_cipher(&conn->initial->cipher.egress);

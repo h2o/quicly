@@ -41,6 +41,7 @@ extern "C" {
 #include "quicly/recvstate.h"
 #include "quicly/sendstate.h"
 #include "quicly/maxsender.h"
+#include "quicly/cid.h"
 
 #ifndef QUICLY_DEBUG
 #define QUICLY_DEBUG 0
@@ -83,7 +84,6 @@ typedef struct st_quicly_datagram_t {
     quicly_address_t dest, src;
 } quicly_datagram_t;
 
-typedef struct st_quicly_cid_t quicly_cid_t;
 typedef struct st_quicly_cid_plaintext_t quicly_cid_plaintext_t;
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
@@ -260,11 +260,6 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint64_t active_connection_id_limit;
 } quicly_transport_parameters_t;
-
-struct st_quicly_cid_t {
-    uint8_t cid[QUICLY_MAX_CID_LEN_V1];
-    uint8_t len;
-};
 
 /**
  * Guard value. We would never send path_id of this value.
@@ -780,10 +775,6 @@ uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uin
 /**
  *
  */
-static int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec);
-/**
- *
- */
 static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
 /**
  *
@@ -1078,11 +1069,6 @@ inline uint32_t quicly_num_streams(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return c->host.bidi.num_streams + c->host.uni.num_streams + c->peer.bidi.num_streams + c->peer.uni.num_streams;
-}
-
-inline int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec)
-{
-    return cid->len == vec.len && memcmp(cid->cid, vec.base, vec.len) == 0;
 }
 
 inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
