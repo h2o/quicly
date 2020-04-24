@@ -492,6 +492,7 @@ int main(int argc, char **argv)
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("loss", test_loss);
+    subtest("cid", test_cid);
 
     return done_testing();
 }
