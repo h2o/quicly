@@ -26,6 +26,12 @@
 #include "quicly/constants.h"
 #include "quicly/sendstate.h"
 
+/**
+ * Ranges are coalesced (at the cost of retransmitting previously acknowledged data), when the number of ranges (i.e. gaps + 1) in
+ * `acked` or `pending` becomes greater than this value.
+ */
+static const size_t max_ranges = 32;
+
 void quicly_sendstate_init(quicly_sendstate_t *state)
 {
     quicly_ranges_init_with_range(&state->acked, 0, 0);
@@ -119,7 +125,6 @@ void quicly_sendstate_reset(quicly_sendstate_t *state)
  */
 static int reduce_state(quicly_sendstate_t *state)
 {
-    static const size_t max_ranges = 32;
     int ret;
 
     /* When there are too many gaps in the acked ranges, move some ranges that have been acked back to pending. */
@@ -134,13 +139,14 @@ static int reduce_state(quicly_sendstate_t *state)
 
     /* When there are too many gaps in pending, remove some gaps. We choose the gaps nearest to the end, so as to minimize the
      * impact of this unneeded retransmission causing head-of-line blocking at the sender. */
-    while (state->pending.num_ranges > max_ranges) {
-        quicly_range_t offending = {
-            .start = state->pending.ranges[state->pending.num_ranges - 2].end,
-            .end = state->pending.ranges[state->pending.num_ranges - 1].start,
+    if (state->pending.num_ranges > max_ranges) {
+        quicly_range_t gaps_to_fill = {
+            .start = state->pending.ranges[max_ranges - 2].end,
+            .end = state->pending.ranges[max_ranges - 1].start,
         };
-        if ((ret = quicly_ranges_add(&state->pending, offending.start, offending.end)) != 0)
-            return ret;
+        ret = quicly_ranges_add(&state->pending, gaps_to_fill.start, gaps_to_fill.end);
+        assert(ret == 0 && "reducing the number of ranges should always succeed");
+        assert(state->pending.num_ranges == max_ranges);
     }
 
     return 0;
