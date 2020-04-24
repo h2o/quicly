@@ -60,6 +60,7 @@
 		E99F8C261F4E9EBF00C26B3D /* frame.c in Sources */ = {isa = PBXBuildFile; fileRef = E99F8C251F4E9EBF00C26B3D /* frame.c */; };
 		E99F8C271F4E9F5D00C26B3D /* frame.c in Sources */ = {isa = PBXBuildFile; fileRef = E99F8C251F4E9EBF00C26B3D /* frame.c */; };
 		E99F8C291F4EAEF800C26B3D /* frame.c in Sources */ = {isa = PBXBuildFile; fileRef = E99F8C281F4EAEF800C26B3D /* frame.c */; };
+		E9B43DA72452A94E00824E51 /* sendstate.c in Sources */ = {isa = PBXBuildFile; fileRef = E9B43DA62452A94E00824E51 /* sendstate.c */; };
 		E9CC44111EB85E0B00DC7D3E /* khash.h in Headers */ = {isa = PBXBuildFile; fileRef = E9CC44101EB85E0B00DC7D3E /* khash.h */; };
 		E9CC441B1EC195DF00DC7D3E /* openssl.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448271EA48D0000390927 /* openssl.c */; };
 		E9CC441C1EC195DF00DC7D3E /* picotls.c in Sources */ = {isa = PBXBuildFile; fileRef = E98448281EA48D0000390927 /* picotls.c */; };
@@ -74,7 +75,6 @@
 		E9F6A4271F3C3B050083F0B2 /* ranges.h in Headers */ = {isa = PBXBuildFile; fileRef = E9F6A4261F3C3B050083F0B2 /* ranges.h */; };
 		E9F6A42A1F3C3B7B0083F0B2 /* ranges.c in Sources */ = {isa = PBXBuildFile; fileRef = E9F6A4291F3C3B7B0083F0B2 /* ranges.c */; };
 		E9F6A42E1F41375B0083F0B2 /* sendstate.c in Sources */ = {isa = PBXBuildFile; fileRef = E9F6A42D1F41375B0083F0B2 /* sendstate.c */; };
-		E9F6A42F1F41375B0083F0B2 /* sendstate.c in Sources */ = {isa = PBXBuildFile; fileRef = E9F6A42D1F41375B0083F0B2 /* sendstate.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -159,6 +159,7 @@
 		E99F8C231F4E863200C26B3D /* frame.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = frame.h; sourceTree = "<group>"; };
 		E99F8C251F4E9EBF00C26B3D /* frame.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = frame.c; sourceTree = "<group>"; };
 		E99F8C281F4EAEF800C26B3D /* frame.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = frame.c; sourceTree = "<group>"; };
+		E9B43DA62452A94E00824E51 /* sendstate.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = sendstate.c; sourceTree = "<group>"; };
 		E9CC44101EB85E0B00DC7D3E /* khash.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = khash.h; sourceTree = "<group>"; };
 		E9CC44151EC195CA00DC7D3E /* picotest.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = picotest.c; sourceTree = "<group>"; };
 		E9CC44161EC195CA00DC7D3E /* picotest.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = picotest.h; sourceTree = "<group>"; };
@@ -363,6 +364,7 @@
 				E920D22F1F49EE0B00799777 /* loss.c */,
 				E99B75E61F5CF96900CF503E /* maxsender.c */,
 				E9F6A4291F3C3B7B0083F0B2 /* ranges.c */,
+				E9B43DA62452A94E00824E51 /* sendstate.c */,
 				E920D22D1F4981E500799777 /* sentmap.c */,
 				E920D2241F49412900799777 /* simple.c */,
 				E99B75E81F5D259400CF503E /* stream-concurrency.c */,
@@ -646,7 +648,6 @@
 				E920D22C1F49533800799777 /* sentmap.c in Sources */,
 				E920D2301F49EE0B00799777 /* loss.c in Sources */,
 				E99B75E71F5CF96900CF503E /* maxsender.c in Sources */,
-				E9F6A42F1F41375B0083F0B2 /* sendstate.c in Sources */,
 				E920D2251F49412900799777 /* simple.c in Sources */,
 				E920D21F1F43E05000799777 /* recvstate.c in Sources */,
 				E9CC44251EC1962700DC7D3E /* test.c in Sources */,
@@ -660,6 +661,7 @@
 				E9CC44261EC1963100DC7D3E /* picotest.c in Sources */,
 				E95E953D22904A4C00215ACD /* picotls-probes.d in Sources */,
 				E9CC441C1EC195DF00DC7D3E /* picotls.c in Sources */,
+				E9B43DA72452A94E00824E51 /* sendstate.c in Sources */,
 				E98042372244A5D7008B9745 /* defaults.c in Sources */,
 				E99F8C271F4E9F5D00C26B3D /* frame.c in Sources */,
 			);

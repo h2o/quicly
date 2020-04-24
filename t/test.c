@@ -485,6 +485,7 @@ int main(int argc, char **argv)
     subtest("ranges", test_ranges);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
+    subtest("sendstate", test_sendstate);
     subtest("sentmap", test_sentmap);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);

@@ -53,6 +53,7 @@ SET(UNITTEST_SOURCE_FILES
     t/maxsender.c
     t/loss.c
     t/ranges.c
+    t/sendstate.c
     t/sentmap.c
     t/simple.c
     t/stream-concurrency.c
