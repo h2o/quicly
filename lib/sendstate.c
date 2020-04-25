@@ -141,8 +141,8 @@ static int reduce_state(quicly_sendstate_t *state)
      * impact of this unneeded retransmission causing head-of-line blocking at the sender. */
     if (state->pending.num_ranges > max_ranges) {
         quicly_range_t gaps_to_fill = {
-            .start = state->pending.ranges[max_ranges - 2].end,
-            .end = state->pending.ranges[max_ranges - 1].start,
+            .start = state->pending.ranges[state->pending.num_ranges - 2].end,
+            .end = state->pending.ranges[state->pending.num_ranges - 1].start,
         };
         ret = quicly_ranges_add(&state->pending, gaps_to_fill.start, gaps_to_fill.end);
         assert(ret == 0 && "reducing the number of ranges should always succeed");
@@ -193,9 +193,11 @@ int quicly_sendstate_lost(quicly_sendstate_t *state, quicly_sendstate_sent_t *ar
             start = state->acked.ranges[acked_slot].end;
         ++acked_slot;
         if (acked_slot == state->acked.num_ranges || end <= state->acked.ranges[acked_slot].start) {
-            if (!(start < end))
-                return 0;
-            return quicly_ranges_add(&state->pending, start, end);
+            if (start < end) {
+                if ((ret = quicly_ranges_add(&state->pending, start, end)) != 0)
+                    return ret;
+            }
+            goto Done;
         }
         if (start < state->acked.ranges[acked_slot].start) {
             if ((ret = quicly_ranges_add(&state->pending, start, state->acked.ranges[acked_slot].start)) != 0)
@@ -205,5 +207,6 @@ int quicly_sendstate_lost(quicly_sendstate_t *state, quicly_sendstate_sent_t *ar
 
     assert(state->acked.ranges[0].end <= state->pending.ranges[0].start);
 
+Done:
     return reduce_state(state);
 }
