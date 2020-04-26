@@ -78,11 +78,6 @@ typedef union st_quicly_address_t {
     struct sockaddr_in6 sin6;
 } quicly_address_t;
 
-typedef struct st_quicly_datagram_t {
-    ptls_iovec_t data;
-    quicly_address_t dest, src;
-} quicly_datagram_t;
-
 typedef struct st_quicly_cid_t quicly_cid_t;
 typedef struct st_quicly_cid_plaintext_t quicly_cid_plaintext_t;
 typedef struct st_quicly_context_t quicly_context_t;
@@ -99,14 +94,6 @@ typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintex
     typedef struct st_quicly_##name##_t {                                                                                          \
         ret (*cb)(struct st_quicly_##name##_t * self, __VA_ARGS__);                                                                \
     } quicly_##name##_t
-
-/**
- * allocates a packet buffer
- */
-typedef struct st_quicly_packet_allocator_t {
-    quicly_datagram_t *(*alloc_packet)(struct st_quicly_packet_allocator_t *self, size_t payloadsize);
-    void (*free_packet)(struct st_quicly_packet_allocator_t *self, quicly_datagram_t *packet);
-} quicly_packet_allocator_t;
 
 /**
  * CID encryption
@@ -204,7 +191,7 @@ typedef struct st_quicly_crypto_engine_t {
      */
     void (*finalize_send_packet)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn,
                                  ptls_cipher_context_t *header_protect_ctx, ptls_aead_context_t *packet_protect_ctx,
-                                 quicly_datagram_t *packet, size_t first_byte_at, size_t payload_from, int coalesced);
+                                 ptls_iovec_t datagram, size_t first_byte_at, size_t payload_from, int coalesced);
 } quicly_crypto_engine_t;
 
 typedef struct st_quicly_max_stream_data_t {
@@ -331,10 +318,6 @@ struct st_quicly_context_t {
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
-    /**
-     * callback for allocating memory for raw packet
-     */
-    quicly_packet_allocator_t *packet_allocator;
     /**
      *
      */
@@ -851,8 +834,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s);
 /**
  *
  */
-quicly_datagram_t *quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
-                                                   struct sockaddr *src_addr, ptls_iovec_t src_cid);
+size_t quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
+                                       struct sockaddr *src_addr, ptls_iovec_t src_cid, void *payload);
 /**
  *
  */
@@ -862,23 +845,24 @@ int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t c
  * @param retry_aead_cache pointer to `ptls_aead_context_t *` that the function can store a AEAD context for future reuse. The cache
  *                         cannot be shared between multiple threads. Can be set to NULL when caching is unnecessary.
  */
-quicly_datagram_t *quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *dest_addr,
-                                     ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, ptls_iovec_t odcid,
-                                     ptls_iovec_t token_prefix, ptls_iovec_t appdata, ptls_aead_context_t **retry_aead_cache);
+size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *dest_addr,
+                         ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, ptls_iovec_t odcid,
+                         ptls_iovec_t token_prefix, ptls_iovec_t appdata, ptls_aead_context_t **retry_aead_cache, uint8_t *payload);
 /**
  *
  */
-int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_packets);
+int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *packets, size_t *num_packets,
+                void *buf, size_t bufsize);
 /**
  *
  */
-quicly_datagram_t *quicly_send_close_invalid_token(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
-                                                   struct sockaddr *src_addr, ptls_iovec_t src_cid, const char *err_desc);
+size_t quicly_send_close_invalid_token(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
+                                       struct sockaddr *src_addr, ptls_iovec_t src_cid, const char *err_desc, void *payload);
 /**
  *
  */
-quicly_datagram_t *quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
-                                               const void *src_cid);
+size_t quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
+                                   const void *src_cid, void *payload);
 /**
  *
  */
