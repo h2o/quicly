@@ -356,6 +356,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
             } else {
                 dump_stats(stderr, stream->conn);
                 quicly_close(stream->conn, 0, "");
+                exit(0);
             }
         }
     }
