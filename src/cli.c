@@ -400,71 +400,6 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
-#ifdef __linux__
-
-#ifndef UDP_SEGMENT
-#define UDP_SEGMENT 103
-#endif
-
-static void do_send_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
-{
-    struct msghdr mess = {};
-    struct iovec vecs[num_packets];
-    union {
-        struct cmsghdr hdr;
-        char buf[CMSG_SPACE(sizeof(uint16_t))];
-    } cmsg = {};
-
-    mess.msg_name = &packets[0]->dest.sa; /* TODO quicly might start sending packets going to different paths? */
-    mess.msg_namelen = quicly_get_socklen(&packets[0]->dest.sa);
-
-    for (size_t i = 0; i != num_packets; ++i) {
-        vecs[i].iov_base = packets[i]->data.base;
-        vecs[i].iov_len = packets[i]->data.len;
-    }
-    mess.msg_iov = vecs;
-    mess.msg_iovlen = num_packets;
-
-    if (num_packets != 1) {
-        cmsg.hdr.cmsg_level = SOL_UDP;
-        cmsg.hdr.cmsg_type = UDP_SEGMENT;
-        cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(uint16_t));
-        *(uint16_t *)CMSG_DATA(&cmsg.hdr) = vecs[0].iov_len;
-        mess.msg_control = &cmsg;
-        mess.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(uint16_t));
-    }
-
-    int ret;
-    while ((ret = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-        ;
-    if (ret == -1)
-        perror("sendmsg failed");
-
-    for (size_t i = 0; i != num_packets; ++i)
-        pa->free_packet(pa, packets[i]);
-}
-
-static void send_packets_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
-{
-    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram
-     * might be of different size */
-    size_t gso_from = 0;
-    for (size_t i = 1; i < num_packets; ++i) {
-        if (packets[i]->data.len > packets[gso_from]->data.len) {
-            do_send_gso(fd, packets + gso_from, i - gso_from, pa);
-            gso_from = i;
-        } else if (packets[i]->data.len != packets[gso_from]->data.len || i + 1 - gso_from >= MAX_BURST_PACKETS) {
-            do_send_gso(fd, packets + gso_from, i + 1 - gso_from, pa);
-            gso_from = i + 1;
-            i = i + 1;
-        }
-    }
-    if (gso_from < num_packets)
-        do_send_gso(fd, packets + gso_from, num_packets - gso_from, pa);
-}
-
-#endif
-
 static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
 {
     for (size_t i = 0; i != num_packets; ++i) {
@@ -483,6 +418,68 @@ static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *pa
             perror("sendmsg failed");
     }
 }
+
+#ifdef __linux__
+
+#ifndef UDP_SEGMENT
+#define UDP_SEGMENT 103
+#endif
+
+static void do_send_gso(int fd, struct sockaddr *dest, const uint8_t *payload, const uint8_t *payload_end, size_t segment_size)
+{
+    struct iovec vec = {.iov_base = (void *)payload, .iov_len = payload_end - payload};
+
+    if (vec.iov_len == segment_size) {
+        send_packets_default(fd, dest, &vec, 1);
+        return;
+    }
+
+    union {
+        struct cmsghdr hdr;
+        char buf[CMSG_SPACE(sizeof(uint16_t))];
+    } cmsg;
+    cmsg.hdr.cmsg_level = SOL_UDP;
+    cmsg.hdr.cmsg_type = UDP_SEGMENT;
+    cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(uint16_t));
+    *(uint16_t *)CMSG_DATA(&cmsg.hdr) = segment_size;
+
+    struct msghdr mess = {
+        .msg_name = dest, /* TODO quicly might start sending packets going to different paths? */
+        .msg_namelen = quicly_get_socklen(dest),
+        .msg_iov = &vec,
+        .msg_iovlen = 1,
+        .msg_control = &cmsg,
+        .msg_controllen = (socklen_t)CMSG_SPACE(sizeof(uint16_t)),
+    };
+
+    int ret;
+    while ((ret = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+        ;
+    if (ret == -1)
+        perror("sendmsg failed");
+}
+
+static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
+{
+    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram
+     * might be of different size */
+    size_t gso_from = 0;
+    for (size_t i = 1; i < num_packets; ++i) {
+        if (packets[i].iov_len > packets[gso_from].iov_len) {
+            do_send_gso(fd, dest, packets[gso_from].iov_base, packets[i].iov_base, packets[gso_from].iov_len);
+            gso_from = i;
+        } else if (packets[i].iov_len != packets[gso_from].iov_len) {
+            do_send_gso(fd, dest, packets[gso_from].iov_base, packets[i].iov_base + packets[i].iov_len, packets[gso_from].iov_len);
+            gso_from = i + 1;
+            i = i + 1;
+        }
+    }
+    if (gso_from < num_packets)
+        do_send_gso(fd, dest, packets[gso_from].iov_base, packets[num_packets - 1].iov_base + packets[num_packets - 1].iov_len,
+                    packets[gso_from].iov_len);
+}
+
+#endif
 
 static void (*send_packets)(int, struct sockaddr *, struct iovec *, size_t) = send_packets_default;
 
