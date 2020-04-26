@@ -842,14 +842,28 @@ size_t quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *d
 int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
                                    uint64_t *value);
 /**
- * @param retry_aead_cache pointer to `ptls_aead_context_t *` that the function can store a AEAD context for future reuse. The cache
- *                         cannot be shared between multiple threads. Can be set to NULL when caching is unnecessary.
+ * Builds a UDP datagram containing a Retry packet.
+ * @param retry_aead_cache  pointer to `ptls_aead_context_t *` that the function can store a AEAD context for future reuse. The
+ *                          cache cannot be shared between multiple threads. Can be set to NULL when caching is unnecessary.
+ * @param payload           buffer used for building the packet
+ * @return size of the UDP datagram payload being built, or otherwise SIZE_MAX to indicate failure
  */
 size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *dest_addr,
                          ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, ptls_iovec_t odcid,
                          ptls_iovec_t token_prefix, ptls_iovec_t appdata, ptls_aead_context_t **retry_aead_cache, uint8_t *payload);
 /**
- *
+ * Builds UDP datagrams to be sent for given connection.
+ * @param [out] dest            destination address
+ * @param [out] src             source address
+ * @param [out] packets         vector of iovecs pointing to the payloads of UDP datagrams. Each iovec represens a single UDP
+ *                              datagram.
+ * @param [in,out] num_packets  Upon entry, the application provides the number of entries that the `packets` vector can contain.
+ *                              Upon return, contains the number of packet vectors emitted by `quicly_send`.
+ * @param buf                   buffer used for building UDP datagrams. It is guaranteed that the first datagram would be built from
+ *                              the address provided by `buf`, and that succeeding packets (if any) will be contiguously laid out.
+ *                              This constraint reduces the number of vectors that need to be passed to the kernel when using GSO.
+ * @return 0 if successful, otherwise an error. When an error is returned, the caller must call `quicly_close` to discard the
+ *         connection context.
  */
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *packets, size_t *num_packets,
                 void *buf, size_t bufsize);
