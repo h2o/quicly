@@ -2542,22 +2542,28 @@ struct st_quicly_send_context_t {
     /**
      * output buffer into which list of datagrams is written
      */
-    struct iovec *packets;
+    struct iovec *datagrams;
     /**
      * max number of datagrams that can be stored in |packets|
      */
-    size_t max_packets;
+    size_t max_datagrams;
     /**
      * number of datagrams currently stored in |packets|
      */
-    size_t num_packets;
+    size_t num_datagrams;
     /**
      * buffer in which packets are built
      */
     struct {
-        uint8_t *datagram, *end;
+        /**
+         * starting position of the current (or next) datagram
+         */
+        uint8_t *datagram;
+        /**
+         * end position of the payload buffer
+         */
+        uint8_t *end;
     } payload_buf;
-
     /**
      * the currently available window for sending (in bytes)
      */
@@ -2647,7 +2653,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
 
     if (!coalesced) {
         conn->super.stats.num_bytes.sent += datagram_size;
-        s->packets[s->num_packets++] = (struct iovec){.iov_base = s->payload_buf.datagram, .iov_len = datagram_size};
+        s->datagrams[s->num_datagrams++] = (struct iovec){.iov_base = s->payload_buf.datagram, .iov_len = datagram_size};
         s->payload_buf.datagram += datagram_size;
         s->target.cipher = NULL;
         s->target.first_byte_at = NULL;
@@ -2724,7 +2730,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         s->dst_end += s->target.cipher->aead->algo->tag_size; /* restore the AEAD tag size (tag size can differ bet. epochs) */
         s->target.cipher = s->current.cipher;
     } else {
-        if (s->num_packets >= s->max_packets)
+        if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
         s->send_window = round_send_window(s->send_window);
         if (ack_eliciting && s->send_window < (ssize_t)min_space)
@@ -2939,7 +2945,7 @@ int quicly_is_flow_capped(quicly_conn_t *conn)
 
 int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s)
 {
-    return s->num_packets < s->max_packets;
+    return s->num_datagrams < s->max_datagrams;
 }
 
 int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
@@ -3634,7 +3640,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                                         &restrict_sending)) != 0)
             goto Exit;
         assert(min_packets_to_send > 0);
-        assert(min_packets_to_send <= s->max_packets);
+        assert(min_packets_to_send <= s->max_datagrams);
 
         if (restrict_sending) {
             /* PTO (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
@@ -3736,7 +3742,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
             }
             /* send stream-level control frames */
-            while (s->num_packets != s->max_packets && quicly_linklist_is_linked(&conn->egress.pending_streams.control)) {
+            while (s->num_datagrams != s->max_datagrams && quicly_linklist_is_linked(&conn->egress.pending_streams.control)) {
                 quicly_stream_t *stream = (void *)((char *)conn->egress.pending_streams.control.next -
                                                    offsetof(quicly_stream_t, _send_aux.pending_link.control));
                 if ((ret = send_stream_control_frames(stream, s)) != 0)
@@ -3758,16 +3764,16 @@ Exit:
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         update_loss_alarm(conn, 1);
-        if (s->num_packets != 0)
+        if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
     return ret;
 }
 
-int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *packets, size_t *num_packets,
+int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize)
 {
-    quicly_send_context_t s = {{NULL, -1}, {}, packets, *num_packets, 0, {buf, (uint8_t *)buf + bufsize}};
+    quicly_send_context_t s = {{NULL, -1}, {}, datagrams, *num_datagrams, 0, {buf, (uint8_t *)buf + bufsize}};
     int ret;
 
     update_now(conn->super.ctx);
@@ -3825,11 +3831,11 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
     assert_consistency(conn, 1);
 
 Exit:
-    if (s.num_packets != 0) {
+    if (s.num_datagrams != 0) {
         *dest = conn->super.peer.address;
         *src = conn->super.host.address;
     }
-    *num_packets = s.num_packets;
+    *num_datagrams = s.num_datagrams;
     --in_quicly_send_cnt;
     return ret;
 }

@@ -853,19 +853,20 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
                          ptls_iovec_t token_prefix, ptls_iovec_t appdata, ptls_aead_context_t **retry_aead_cache, uint8_t *payload);
 /**
  * Builds UDP datagrams to be sent for given connection.
- * @param [out] dest            destination address
- * @param [out] src             source address
- * @param [out] packets         vector of iovecs pointing to the payloads of UDP datagrams. Each iovec represens a single UDP
- *                              datagram.
- * @param [in,out] num_packets  Upon entry, the application provides the number of entries that the `packets` vector can contain.
- *                              Upon return, contains the number of packet vectors emitted by `quicly_send`.
- * @param buf                   buffer used for building UDP datagrams. It is guaranteed that the first datagram would be built from
- *                              the address provided by `buf`, and that succeeding packets (if any) will be contiguously laid out.
- *                              This constraint reduces the number of vectors that need to be passed to the kernel when using GSO.
+ * @param [out] dest              destination address
+ * @param [out] src               source address
+ * @param [out] datagrams         vector of iovecs pointing to the payloads of UDP datagrams. Each iovec represens a single UDP
+ *                                datagram.
+ * @param [in,out] num_datagrams  Upon entry, the application provides the number of entries that the `packets` vector can contain.
+ *                                Upon return, contains the number of packet vectors emitted by `quicly_send`.
+ * @param buf                     buffer used for building UDP datagrams. It is guaranteed that the first datagram would be built
+ *                                from the address provided by `buf`, and that succeeding packets (if any) will be contiguously laid
+ *                                out. This constraint reduces the number of vectors that need to be passed to the kernel when using
+ *                                GSO.
  * @return 0 if successful, otherwise an error. When an error is returned, the caller must call `quicly_close` to discard the
  *         connection context.
  */
-int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *packets, size_t *num_packets,
+int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize);
 /**
  *
