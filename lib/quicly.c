@@ -649,10 +649,10 @@ static int on_invalid_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packe
     return 0;
 }
 
-static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn)
+static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn, uint32_t cwnd, uint64_t mtu)
 {
     static __thread struct {
-        uint16_t values[32];
+        uint32_t values[8];
         size_t off;
     } cached_rand;
 
@@ -661,8 +661,12 @@ static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn)
         cached_rand.off = PTLS_ELEMENTSOF(cached_rand.values);
     }
 
-    /* on average, skip one PN per every 256 packets, by selecting one of the 511 packet numbers following next_pn */
-    return next_pn + 1 + (cached_rand.values[--cached_rand.off] & 0x1ff);
+    /* on average, skip one PN per every min(256 packets, 8 * CWND) */
+    uint32_t packet_cwnd = cwnd / mtu;
+    if (packet_cwnd < 32)
+        packet_cwnd = 32;
+    uint64_t skip_after = cached_rand.values[--cached_rand.off] % (16 * packet_cwnd);
+    return next_pn + 1 + skip_after;
 }
 
 static void init_max_streams(struct st_quicly_max_streams_t *m)
@@ -1784,7 +1788,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_loss_init(&conn->_.egress.loss, &conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->_.super.peer.transport_params.max_ack_delay, &conn->_.super.peer.transport_params.ack_delay_exponent);
-    conn->_.egress.next_pn_to_skip = calc_next_pn_to_skip(conn->_.super.ctx->tls, 0);
+    conn->_.egress.next_pn_to_skip =
+        calc_next_pn_to_skip(conn->_.super.ctx->tls, 0, initcwnd, conn->_.super.ctx->initial_egress_max_udp_payload_size);
     conn->_.egress.max_udp_payload_size = conn->_.super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->_.egress.max_streams.uni);
     init_max_streams(&conn->_.egress.max_streams.bidi);
@@ -2574,7 +2579,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
             return PTLS_ERROR_NO_MEMORY;
         quicly_sentmap_commit(&conn->egress.sentmap, 0);
         ++conn->egress.packet_number;
-        conn->egress.next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, conn->egress.packet_number);
+        conn->egress.next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, conn->egress.packet_number, conn->egress.cc.cwnd,
+                                                            conn->egress.max_udp_payload_size);
     }
 
     return 0;
