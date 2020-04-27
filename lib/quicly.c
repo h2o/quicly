@@ -367,6 +367,25 @@ struct st_quicly_conn_t {
          */
         uint8_t should_rearm_on_send : 1;
     } idle_timeout;
+    /**
+     * structure to hold various data used internally
+     */
+    struct {
+        struct {
+            /**
+             * This cache is used to concatenate acked ranges of streams before processing them, reducing the frequency of function
+             * calls to `quicly_sendstate_t` and to the application-level send window management callbacks. This approach works,
+             * because in most cases acks will contain contiguous ranges of a single stream.
+             */
+            struct {
+                /**
+                 * set to INT64_MIN when the cache is invalid
+                 */
+                quicly_stream_id_t stream_id;
+                quicly_sendstate_sent_t args;
+            } active_acked_cache;
+        } on_ack_stream;
+    } stash;
 };
 
 struct st_quicly_handle_payload_state_t {
@@ -1812,6 +1831,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->_.crypto.handshake_properties.collect_extension = collect_transport_parameters;
     conn->_.idle_timeout.at = INT64_MAX;
     conn->_.idle_timeout.should_rearm_on_send = 1;
+    conn->_.stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
 
     *ptls_get_data_ptr(tls) = &conn->_;
 
@@ -2189,39 +2209,80 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
     return 0;
 }
 
-static int on_ack_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent, quicly_sentmap_event_t event)
+static int on_ack_stream_ack_one(quicly_conn_t *conn, quicly_stream_id_t stream_id, quicly_sendstate_sent_t *sent, int is_active)
 {
     quicly_stream_t *stream;
+    int ret;
+
+    if ((stream = quicly_get_stream(conn, stream_id)) == NULL)
+        return 0;
+
+    size_t bytes_to_shift;
+    if ((ret = quicly_sendstate_acked(&stream->sendstate, sent, is_active, &bytes_to_shift)) != 0)
+        return ret;
+    if (bytes_to_shift != 0)
+        stream->callbacks->on_send_shift(stream, bytes_to_shift);
+    if (stream_is_destroyable(stream)) {
+        destroy_stream(stream, 0);
+    } else if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE) {
+        resched_stream_data(stream);
+    }
+
+    return 0;
+}
+
+static int on_ack_stream_ack_cached(quicly_conn_t *conn)
+{
+    int ret;
+
+    if (conn->stash.on_ack_stream.active_acked_cache.stream_id == INT64_MIN)
+        return 0;
+    ret = on_ack_stream_ack_one(conn, conn->stash.on_ack_stream.active_acked_cache.stream_id,
+                                &conn->stash.on_ack_stream.active_acked_cache.args, 1);
+    conn->stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
+    return ret;
+}
+
+static int on_ack_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent, quicly_sentmap_event_t event)
+{
     int ret;
 
     if (event == QUICLY_SENTMAP_EVENT_EXPIRED)
         return 0;
 
     if (event == QUICLY_SENTMAP_EVENT_ACKED) {
+
         QUICLY_PROBE(STREAM_ACKED, conn, probe_now(), sent->data.stream.stream_id, sent->data.stream.args.start,
                      sent->data.stream.args.end - sent->data.stream.args.start);
+
+        int is_active = packet->bytes_in_flight != 0;
+
+        if (is_active && conn->stash.on_ack_stream.active_acked_cache.stream_id == sent->data.stream.stream_id &&
+            conn->stash.on_ack_stream.active_acked_cache.args.end == sent->data.stream.args.start) {
+            /* Fast path: append the newly supplied range to the existing cached range. */
+            conn->stash.on_ack_stream.active_acked_cache.args.end = sent->data.stream.args.end;
+        } else {
+            /* Slow path: submit the cached range, and if possible, cache the newly supplied range. Else submit the newly supplied
+             * range directly. */
+            if ((ret = on_ack_stream_ack_cached(conn)) != 0)
+                return ret;
+            if (is_active) {
+                conn->stash.on_ack_stream.active_acked_cache.stream_id = sent->data.stream.stream_id;
+                conn->stash.on_ack_stream.active_acked_cache.args = sent->data.stream.args;
+            } else {
+                if ((ret = on_ack_stream_ack_one(conn, sent->data.stream.stream_id, &sent->data.stream.args, is_active)) != 0)
+                    return ret;
+            }
+        }
+
     } else {
+
         QUICLY_PROBE(STREAM_LOST, conn, probe_now(), sent->data.stream.stream_id, sent->data.stream.args.start,
                      sent->data.stream.args.end - sent->data.stream.args.start);
-    }
 
-    /* TODO cache pointer to stream (using a generation counter?) */
-    if ((stream = quicly_get_stream(conn, sent->data.stream.stream_id)) == NULL)
-        return 0;
-
-    if (event == QUICLY_SENTMAP_EVENT_ACKED) {
-        size_t bytes_to_shift;
-        if ((ret = quicly_sendstate_acked(&stream->sendstate, &sent->data.stream.args, packet->bytes_in_flight != 0,
-                                          &bytes_to_shift)) != 0)
-            return ret;
-        if (bytes_to_shift != 0)
-            stream->callbacks->on_send_shift(stream, bytes_to_shift);
-        if (stream_is_destroyable(stream)) {
-            destroy_stream(stream, 0);
-        } else if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE) {
-            resched_stream_data(stream);
-        }
-    } else {
+        quicly_stream_t *stream;
+        if ((stream = quicly_get_stream(conn, sent->data.stream.stream_id)) == NULL)
+            return 0;
         /* FIXME handle rto error */
         if ((ret = quicly_sendstate_lost(&stream->sendstate, &sent->data.stream.args)) != 0)
             return ret;
@@ -4116,6 +4177,9 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
             break;
         pn_acked += frame.gaps[gap_index];
     }
+
+    if ((ret = on_ack_stream_ack_cached(conn)) != 0)
+        return ret;
 
     QUICLY_PROBE(QUICTRACE_RECV_ACK_DELAY, conn, probe_now(), frame.ack_delay);
 
