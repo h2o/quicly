@@ -2251,20 +2251,24 @@ static int on_ack_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet
                      sent->data.stream.args.end - sent->data.stream.args.start);
 
         int is_active = packet->bytes_in_flight != 0;
+
         if (is_active && conn->stash.on_ack_stream.active_acked_cache.stream_id == sent->data.stream.stream_id &&
             conn->stash.on_ack_stream.active_acked_cache.args.end == sent->data.stream.args.start) {
+            /* Fast path: append the newly supplied range to the existing cached range. */
             conn->stash.on_ack_stream.active_acked_cache.args.end = sent->data.stream.args.end;
-            return 0;
+        } else {
+            /* Slow path: submit the cached range, and if possible, cache the newly supplied range. Else submit the newly supplied
+             * range directly. */
+            if ((ret = on_ack_stream_ack_cached(conn)) != 0)
+                return ret;
+            if (is_active) {
+                conn->stash.on_ack_stream.active_acked_cache.stream_id = sent->data.stream.stream_id;
+                conn->stash.on_ack_stream.active_acked_cache.args = sent->data.stream.args;
+            } else {
+                if ((ret = on_ack_stream_ack_one(conn, sent->data.stream.stream_id, &sent->data.stream.args, is_active)) != 0)
+                    return ret;
+            }
         }
-        if ((ret = on_ack_stream_ack_cached(conn)) != 0)
-            return ret;
-        if (is_active) {
-            conn->stash.on_ack_stream.active_acked_cache.stream_id = sent->data.stream.stream_id;
-            conn->stash.on_ack_stream.active_acked_cache.args = sent->data.stream.args;
-            return 0;
-        }
-        if ((ret = on_ack_stream_ack_one(conn, sent->data.stream.stream_id, &sent->data.stream.args, is_active)) != 0)
-            return ret;
 
     } else {
 
