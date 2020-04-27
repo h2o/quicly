@@ -2204,7 +2204,7 @@ static int on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, q
     return 0;
 }
 
-static int on_ack_stream_acked(quicly_conn_t *conn, quicly_stream_id_t stream_id, quicly_sendstate_sent_t *sent, int is_active)
+static int on_ack_stream_ack_one(quicly_conn_t *conn, quicly_stream_id_t stream_id, quicly_sendstate_sent_t *sent, int is_active)
 {
     quicly_stream_t *stream;
     int ret;
@@ -2226,14 +2226,14 @@ static int on_ack_stream_acked(quicly_conn_t *conn, quicly_stream_id_t stream_id
     return 0;
 }
 
-static int on_ack_stream_sumbit_delayed(quicly_conn_t *conn)
+static int on_ack_stream_ack_cached(quicly_conn_t *conn)
 {
     int ret;
 
     if (conn->stash.on_ack_stream.active_acked_cache.stream_id == INT64_MIN)
         return 0;
-    ret = on_ack_stream_acked(conn, conn->stash.on_ack_stream.active_acked_cache.stream_id,
-                              &conn->stash.on_ack_stream.active_acked_cache.args, 1);
+    ret = on_ack_stream_ack_one(conn, conn->stash.on_ack_stream.active_acked_cache.stream_id,
+                                &conn->stash.on_ack_stream.active_acked_cache.args, 1);
     conn->stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
     return ret;
 }
@@ -2256,14 +2256,14 @@ static int on_ack_stream(quicly_conn_t *conn, const quicly_sent_packet_t *packet
             conn->stash.on_ack_stream.active_acked_cache.args.end = sent->data.stream.args.end;
             return 0;
         }
-        if ((ret = on_ack_stream_sumbit_delayed(conn)) != 0)
+        if ((ret = on_ack_stream_ack_cached(conn)) != 0)
             return ret;
         if (is_active) {
             conn->stash.on_ack_stream.active_acked_cache.stream_id = sent->data.stream.stream_id;
             conn->stash.on_ack_stream.active_acked_cache.args = sent->data.stream.args;
             return 0;
         }
-        if ((ret = on_ack_stream_acked(conn, sent->data.stream.stream_id, &sent->data.stream.args, is_active)) != 0)
+        if ((ret = on_ack_stream_ack_one(conn, sent->data.stream.stream_id, &sent->data.stream.args, is_active)) != 0)
             return ret;
 
     } else {
@@ -4168,7 +4168,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         pn_acked += frame.gaps[gap_index];
     }
 
-    if ((ret = on_ack_stream_sumbit_delayed(conn)) != 0)
+    if ((ret = on_ack_stream_ack_cached(conn)) != 0)
         return ret;
 
     QUICLY_PROBE(QUICTRACE_RECV_ACK_DELAY, conn, probe_now(), frame.ack_delay);
