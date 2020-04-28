@@ -427,7 +427,7 @@ struct st_quicly_lock_now_state_t {
 static void lock_now(quicly_conn_t *conn, struct st_quicly_lock_now_state_t *state)
 {
     if (conn->stash._now != 0) {
-        assert(conn->stash._now != 0 && state != NULL && "caller is not reentrant");
+        assert(state != NULL && "caller is not reentrant");
         state->unlock_on_exit = 0;
     } else {
         if (state != NULL)
