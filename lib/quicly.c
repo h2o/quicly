@@ -2572,6 +2572,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
 
     if (mode == COMMIT_SEND_PACKET_MODE_FULL_SIZE) {
+        assert(s->num_packets == 0 || s->packets[s->num_packets - 1]->data.len == conn->egress.max_udp_payload_size);
         const size_t max_size = conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;
         assert(s->dst - s->target.packet->data.base <= max_size);
         memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->target.packet->data.base + max_size - s->dst);
