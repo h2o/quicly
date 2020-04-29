@@ -120,7 +120,10 @@ static int check_amount_of_state(quicly_sendstate_t *state)
     if (PTLS_LIKELY(num_ranges < 32))
         return 0;
 
-    /* when there are more than ~30 gaps, we should have been transmitting, on average, STREAM frames of at least 512 bytes large */
+    /* When there are large number of gaps, make sure that the amount of state retained in quicly is relatively smaller than the
+     * amount of state retained by application (in form of the stream-level send buffer). 512 is used as the threshold, based on the
+     * assumption that the STREAM frames that have been sent are on average at least 512 bytes long, when seeing excess number of
+     * gaps. */
     int64_t bytes_buffered = (int64_t)state->size_inflight - (int64_t)state->acked.ranges[0].end;
     if ((int64_t)num_ranges * 512 > bytes_buffered)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
