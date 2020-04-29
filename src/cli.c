@@ -405,7 +405,7 @@ static quicly_generate_resumption_token_t generate_resumption_token = {&on_gener
 #define UDP_SEGMENT 103
 #endif
 
-static void do_send_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
+static void send_packets_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
 {
     struct msghdr mess = {};
     struct iovec vecs[num_packets];
@@ -441,25 +441,6 @@ static void do_send_gso(int fd, quicly_datagram_t **packets, size_t num_packets,
 
     for (size_t i = 0; i != num_packets; ++i)
         pa->free_packet(pa, packets[i]);
-}
-
-static void send_packets_gso(int fd, quicly_datagram_t **packets, size_t num_packets, quicly_packet_allocator_t *pa)
-{
-    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram
-     * might be of different size */
-    size_t gso_from = 0;
-    for (size_t i = 1; i < num_packets; ++i) {
-        if (packets[i]->data.len > packets[gso_from]->data.len) {
-            do_send_gso(fd, packets + gso_from, i - gso_from, pa);
-            gso_from = i;
-        } else if (packets[i]->data.len != packets[gso_from]->data.len || i + 1 - gso_from >= MAX_BURST_PACKETS) {
-            do_send_gso(fd, packets + gso_from, i + 1 - gso_from, pa);
-            gso_from = i + 1;
-            i = i + 1;
-        }
-    }
-    if (gso_from < num_packets)
-        do_send_gso(fd, packets + gso_from, num_packets - gso_from, pa);
 }
 
 #endif
