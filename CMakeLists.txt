@@ -46,7 +46,7 @@ SET(QUICLY_LIBRARY_FILES
     lib/sendstate.c
     lib/sentmap.c
     lib/streambuf.c
-    lib/cid.c)
+    lib/received_cid.c)
 
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
@@ -57,7 +57,7 @@ SET(UNITTEST_SOURCE_FILES
     t/sentmap.c
     t/simple.c
     t/stream-concurrency.c
-    t/cid.c
+    t/received_cid.c
     t/test.c)
 
 IF (WITH_DTRACE)

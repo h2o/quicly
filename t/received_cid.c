@@ -21,7 +21,7 @@
  */
 
 #include "test.h"
-#include "quicly/cid.h"
+#include "quicly/received_cid.h"
 
 #define CID_LEN 8
 
@@ -51,7 +51,7 @@ static uint8_t srts[][QUICLY_STATELESS_RESET_TOKEN_LEN] = {
 };
 /* clang-format on */
 
-void test_cid(void)
+void test_received_cid(void)
 {
     quicly_received_cid_set_t set;
 

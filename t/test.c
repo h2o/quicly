@@ -424,6 +424,11 @@ static void test_address_token_codec(void)
     ptls_aead_free(dec);
 }
 
+static void test_cid(void)
+{
+    subtest("received cid", test_received_cid);
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;

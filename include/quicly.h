@@ -42,6 +42,7 @@ extern "C" {
 #include "quicly/sendstate.h"
 #include "quicly/maxsender.h"
 #include "quicly/cid.h"
+#include "quicly/received_cid.h"
 
 #ifndef QUICLY_DEBUG
 #define QUICLY_DEBUG 0
