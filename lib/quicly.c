@@ -415,7 +415,7 @@ static const quicly_transport_parameters_t default_transport_params = {.max_udp_
                                                                        .min_ack_delay_usec = UINT64_MAX};
 
 struct st_quicly_lock_now_state_t {
-    uint8_t unlock_on_exit : 1;
+    uint8_t unlock_on_exit; /* boolean */
 };
 
 static void lock_now(quicly_conn_t *conn, struct st_quicly_lock_now_state_t *state)
