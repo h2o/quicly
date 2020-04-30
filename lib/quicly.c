@@ -2553,13 +2553,13 @@ struct st_quicly_send_context_t {
     uint8_t *dst_payload_from;
 };
 
-enum en_commit_send_packet_mode_t {
-    COMMIT_SEND_PACKET_MODE_FULL_SIZE,
-    COMMIT_SEND_PACKET_MODE_SMALL,
-    COMMIT_SEND_PACKET_MODE_COALESCED,
+enum en_quicly_send_packet_mode_t {
+    QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE,
+    QUICLY_COMMIT_SEND_PACKET_MODE_SMALL,
+    QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED,
 };
 
-static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enum en_commit_send_packet_mode_t mode)
+static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enum en_quicly_send_packet_mode_t mode)
 {
     size_t packet_bytes_in_flight;
 
@@ -2571,7 +2571,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
     while (s->dst - s->dst_payload_from < QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE)
         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
 
-    if (mode == COMMIT_SEND_PACKET_MODE_FULL_SIZE) {
+    if (mode == QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE) {
         assert(s->num_packets == 0 || s->packets[s->num_packets - 1]->data.len == conn->egress.max_udp_payload_size);
         const size_t max_size = conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;
         assert(s->dst - s->target.packet->data.base <= max_size);
@@ -2606,7 +2606,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
     conn->super.ctx->crypto_engine->finalize_send_packet(
         conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead, s->target.packet,
         s->target.first_byte_at - s->target.packet->data.base, s->dst_payload_from - s->target.packet->data.base,
-        mode == COMMIT_SEND_PACKET_MODE_COALESCED);
+        mode == QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED);
 
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
@@ -2626,7 +2626,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
     ++conn->egress.packet_number;
     ++conn->super.stats.num_packets.sent;
 
-    if (mode != COMMIT_SEND_PACKET_MODE_COALESCED) {
+    if (mode != QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED) {
         conn->super.stats.num_bytes.sent += s->target.packet->data.len;
         s->packets[s->num_packets++] = s->target.packet;
         s->target.packet = NULL;
@@ -2694,8 +2694,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
                 coalescible = 0;
         }
         /* close out packet under construction */
-        if ((ret = commit_send_packet(conn, s,
-                                      coalescible ? COMMIT_SEND_PACKET_MODE_COALESCED : COMMIT_SEND_PACKET_MODE_FULL_SIZE)) != 0)
+        if ((ret = commit_send_packet(
+                 conn, s, coalescible ? QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED : QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE)) != 0)
             return ret;
     } else {
         coalescible = 0;
@@ -2835,7 +2835,7 @@ Emit: /* emit an ACK frame */
             assert(s->target.first_byte_at != s->target.packet->data.base);
             *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
         }
-        if ((ret = commit_send_packet(conn, s, COMMIT_SEND_PACKET_MODE_FULL_SIZE)) != 0)
+        if ((ret = commit_send_packet(conn, s, QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE)) != 0)
             return ret;
         goto Emit;
     }
@@ -3758,9 +3758,9 @@ Exit:
         ret = 0;
     if (ret == 0 && s->target.packet != NULL) {
         /* last packet can be small-sized, unless it is the first flight sent from the client */
-        enum en_commit_send_packet_mode_t commit_mode = COMMIT_SEND_PACKET_MODE_SMALL;
+        enum en_quicly_send_packet_mode_t commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_SMALL;
         if (quicly_is_client(conn) && (s->target.packet->data.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL)
-            commit_mode = COMMIT_SEND_PACKET_MODE_FULL_SIZE;
+            commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE;
         commit_send_packet(conn, s, commit_mode);
     }
     if (ret == 0) {
@@ -3816,7 +3816,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
             }
             if ((ret = send_connection_close(conn, &s)) != 0)
                 goto Exit;
-            if ((ret = commit_send_packet(conn, &s, COMMIT_SEND_PACKET_MODE_SMALL)) != 0)
+            if ((ret = commit_send_packet(conn, &s, QUICLY_COMMIT_SEND_PACKET_MODE_SMALL)) != 0)
                 goto Exit;
         }
         /* wait at least 1ms */
