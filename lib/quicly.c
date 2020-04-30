@@ -2582,7 +2582,13 @@ struct st_quicly_send_context_t {
     uint8_t *dst_payload_from;
 };
 
-static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
+enum en_quicly_send_packet_mode_t {
+    QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE,
+    QUICLY_COMMIT_SEND_PACKET_MODE_SMALL,
+    QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED,
+};
+
+static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enum en_quicly_send_packet_mode_t mode)
 {
     size_t datagram_size, packet_bytes_in_flight;
 
@@ -2594,11 +2600,9 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     while (s->dst - s->dst_payload_from < QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE)
         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
 
-    /* the last packet of the first-flight datagrams is padded to become max_udp_payload_size bytes */
-    if (!coalesced && quicly_is_client(conn) &&
-        (s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
+    if (mode == QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE) {
+        assert(s->num_datagrams == 0 || s->datagrams[s->num_datagrams - 1].iov_len == conn->egress.max_udp_payload_size);
         const size_t max_size = conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;
-        assert(quicly_is_client(conn));
         assert(s->dst - s->payload_buf.datagram <= max_size);
         memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->payload_buf.datagram + max_size - s->dst);
         s->dst = s->payload_buf.datagram + max_size;
@@ -2631,7 +2635,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     conn->super.ctx->crypto_engine->finalize_send_packet(
         conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead,
         ptls_iovec_init(s->payload_buf.datagram, datagram_size), s->target.first_byte_at - s->payload_buf.datagram,
-        s->dst_payload_from - s->payload_buf.datagram, coalesced);
+        s->dst_payload_from - s->payload_buf.datagram, mode == QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED);
 
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
@@ -2651,7 +2655,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     ++conn->egress.packet_number;
     ++conn->super.stats.num_packets.sent;
 
-    if (!coalesced) {
+    if (mode != QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED) {
         conn->super.stats.num_bytes.sent += datagram_size;
         s->datagrams[s->num_datagrams++] = (struct iovec){.iov_base = s->payload_buf.datagram, .iov_len = datagram_size};
         s->payload_buf.datagram += datagram_size;
@@ -2719,7 +2723,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
                 coalescible = 0;
         }
         /* close out packet under construction */
-        if ((ret = commit_send_packet(conn, s, coalescible)) != 0)
+        if ((ret = commit_send_packet(
+                 conn, s, coalescible ? QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED : QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE)) != 0)
             return ret;
     } else {
         coalescible = 0;
@@ -2856,7 +2861,7 @@ Emit: /* emit an ACK frame */
             assert(s->target.first_byte_at != s->payload_buf.datagram);
             *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
         }
-        if ((ret = commit_send_packet(conn, s, 0)) != 0)
+        if ((ret = commit_send_packet(conn, s, QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE)) != 0)
             return ret;
         goto Emit;
     }
@@ -3758,8 +3763,13 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL)
         ret = 0;
-    if (ret == 0 && s->target.first_byte_at != NULL)
-        commit_send_packet(conn, s, 0);
+    if (ret == 0 && s->target.first_byte_at != NULL) {
+        /* last packet can be small-sized, unless it is the first flight sent from the client */
+        enum en_quicly_send_packet_mode_t commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_SMALL;
+        if (quicly_is_client(conn) && (s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL)
+            commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE;
+        commit_send_packet(conn, s, commit_mode);
+    }
     if (ret == 0) {
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
@@ -3814,7 +3824,7 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             }
             if ((ret = send_connection_close(conn, &s)) != 0)
                 goto Exit;
-            if ((ret = commit_send_packet(conn, &s, 0)) != 0)
+            if ((ret = commit_send_packet(conn, &s, QUICLY_COMMIT_SEND_PACKET_MODE_SMALL)) != 0)
                 goto Exit;
         }
         /* wait at least 1ms */
