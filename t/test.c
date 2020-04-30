@@ -89,7 +89,7 @@ static void on_ingress_receive(quicly_stream_t *stream, size_t off, const void *
 static void on_ingress_reset(quicly_stream_t *stream, int err);
 
 quicly_address_t fake_address;
-int64_t quic_now;
+int64_t quic_now = 1;
 quicly_context_t quic_ctx;
 quicly_stream_callbacks_t stream_callbacks = {
     on_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_egress_stop, on_ingress_receive, on_ingress_reset};
