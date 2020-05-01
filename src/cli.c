@@ -747,7 +747,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
-                uint8_t buf[4096];
+                uint8_t buf[ctx.transport_params.max_udp_payload_size];
                 struct msghdr mess;
                 struct sockaddr sa;
                 struct iovec vec;
