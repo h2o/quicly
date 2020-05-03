@@ -180,11 +180,9 @@ static void process_msg(int is_client, quicly_conn_t **conns, struct msghdr *msg
     }
 }
 
-static int send_one(int fd, quicly_datagram_t *p)
+static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
 {
-    struct iovec vec = {.iov_base = p->data.base, .iov_len = p->data.len};
-    struct msghdr mess = {
-        .msg_name = &p->dest.sa, .msg_namelen = quicly_get_socklen(&p->dest.sa), .msg_iov = &vec, .msg_iovlen = 1};
+    struct msghdr mess = {.msg_name = dest, .msg_namelen = quicly_get_socklen(dest), .msg_iov = vec, .msg_iovlen = 1};
     int ret;
 
     while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
@@ -249,15 +247,16 @@ static int run_loop(int fd, quicly_conn_t *client)
 
         /* send QUIC packets, if any */
         for (i = 0; conns[i] != NULL; ++i) {
-            quicly_datagram_t *dgrams[16];
+            quicly_address_t dest, src;
+            struct iovec dgrams[10];
+            uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * ctx.transport_params.max_udp_payload_size];
             size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
-            int ret = quicly_send(conns[i], dgrams, &num_dgrams);
+            int ret = quicly_send(conns[i], &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
             switch (ret) {
             case 0: {
                 size_t j;
                 for (j = 0; j != num_dgrams; ++j) {
-                    send_one(fd, dgrams[j]);
-                    ctx.packet_allocator->free_packet(ctx.packet_allocator, dgrams[j]);
+                    send_one(fd, &dest.sa, &dgrams[j]);
                 }
             } break;
             case QUICLY_ERROR_FREE_CONNECTION:
