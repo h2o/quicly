@@ -424,58 +424,35 @@ static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *pa
 #define UDP_SEGMENT 103
 #endif
 
-static void do_send_gso(int fd, struct sockaddr *dest, const uint8_t *payload, const uint8_t *payload_end, size_t segment_size)
+static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
 {
-    struct iovec vec = {.iov_base = (void *)payload, .iov_len = payload_end - payload};
-
-    if (vec.iov_len == segment_size) {
-        send_packets_default(fd, dest, &vec, 1);
-        return;
-    }
+    struct iovec vec = {.iov_base = (void *)packets[0].iov_base,
+                        .iov_len = packets[num_packets - 1].iov_base + packets[num_packets - 1].iov_len - packets[0].iov_base};
+    struct msghdr mess = {
+        .msg_name = dest,
+        .msg_namelen = quicly_get_socklen(dest),
+        .msg_iov = &vec,
+        .msg_iovlen = 1,
+    };
 
     union {
         struct cmsghdr hdr;
         char buf[CMSG_SPACE(sizeof(uint16_t))];
     } cmsg;
-    cmsg.hdr.cmsg_level = SOL_UDP;
-    cmsg.hdr.cmsg_type = UDP_SEGMENT;
-    cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(uint16_t));
-    *(uint16_t *)CMSG_DATA(&cmsg.hdr) = segment_size;
-
-    struct msghdr mess = {
-        .msg_name = dest, /* TODO quicly might start sending packets going to different paths? */
-        .msg_namelen = quicly_get_socklen(dest),
-        .msg_iov = &vec,
-        .msg_iovlen = 1,
-        .msg_control = &cmsg,
-        .msg_controllen = (socklen_t)CMSG_SPACE(sizeof(uint16_t)),
-    };
+    if (num_packets != 1) {
+        cmsg.hdr.cmsg_level = SOL_UDP;
+        cmsg.hdr.cmsg_type = UDP_SEGMENT;
+        cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(uint16_t));
+        *(uint16_t *)CMSG_DATA(&cmsg.hdr) = packets[0].iov_len;
+        mess.msg_control = &cmsg;
+        mess.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(uint16_t));
+    }
 
     int ret;
     while ((ret = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
         ;
     if (ret == -1)
         perror("sendmsg failed");
-}
-
-static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
-{
-    /* send packets using GSO, coalescing up to MAX_BURST_PACKETS same-sized datagrams, with the exception that the last datagram
-     * might be of different size */
-    size_t gso_from = 0;
-    for (size_t i = 1; i < num_packets; ++i) {
-        if (packets[i].iov_len > packets[gso_from].iov_len) {
-            do_send_gso(fd, dest, packets[gso_from].iov_base, packets[i].iov_base, packets[gso_from].iov_len);
-            gso_from = i;
-        } else if (packets[i].iov_len != packets[gso_from].iov_len) {
-            do_send_gso(fd, dest, packets[gso_from].iov_base, packets[i].iov_base + packets[i].iov_len, packets[gso_from].iov_len);
-            gso_from = i + 1;
-            i = i + 1;
-        }
-    }
-    if (gso_from < num_packets)
-        do_send_gso(fd, dest, packets[gso_from].iov_base, packets[num_packets - 1].iov_base + packets[num_packets - 1].iov_len,
-                    packets[gso_from].iov_len);
 }
 
 #endif
@@ -746,7 +723,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
-                uint8_t buf[4096];
+                uint8_t buf[ctx.transport_params.max_udp_payload_size];
                 struct msghdr mess;
                 struct sockaddr sa;
                 struct iovec vec;
