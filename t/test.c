@@ -427,6 +427,7 @@ static void test_address_token_codec(void)
 static void test_cid(void)
 {
     subtest("received cid", test_received_cid);
+    subtest("issued cid", test_issued_cid);
 }
 
 int main(int argc, char **argv)
