@@ -41,6 +41,7 @@
 #elif QUICLY_USE_DTRACE
 #include "quicly-probes.h"
 #endif
+#include "quicly/issued_cid.h"
 
 #define QUICLY_MIN_INITIAL_DCID_LEN 8
 
@@ -188,35 +189,6 @@ struct st_quicly_application_space_t {
         } egress;
     } cipher;
     int one_rtt_writable;
-};
-
-enum en_quicly_issued_cid_state_t {
-    /**
-     * this entry is free for use
-     */
-    QUICLY_ISSUED_CID_STATE_IDLE,
-    /**
-     * this entry is to be sent at the next round of send operation
-     */
-    QUICLY_ISSUED_CID_STATE_PENDING,
-    /**
-     * this entry has been sent and is waiting for ACK (or to be deemed lost)
-     */
-    QUICLY_ISSUED_CID_STATE_INFLIGHT,
-    /**
-     * this CID has been delivered to the peer (ACKed) and in use
-     */
-    QUICLY_ISSUED_CID_STATE_DELIVERED,
-};
-
-/**
- * records information for sending NEW_CONNECTION_ID frame
- */
-struct st_quicly_issued_cid_t {
-    enum en_quicly_issued_cid_state_t state;
-    uint64_t sequence;
-    quicly_cid_t cid;
-    uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
 };
 
 struct st_quicly_conn_t {
