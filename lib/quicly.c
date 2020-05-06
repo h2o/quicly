@@ -348,14 +348,9 @@ struct st_quicly_conn_t {
  */
 #define QUICLY_PENDING_FLOW_CID_FRAME_BIT (1 << 7)
         /**
-         * pending RETIRE_CONNECTION_ID frames to be sent, as a response to retire prior to in NEW_CONNECTION_ID
+         * pending RETIRE_CONNECTION_ID frames to be sent
          */
-        struct {
-            /**
-             * sequence numbers to ask for retirement -- UINT64_MAX indicates empty slot
-             */
-            uint64_t sequences[QUICLY_RETIRE_CONNECTION_ID_LIMIT];
-        } retire_cid;
+        quicly_retire_cid_set_t retire_cid;
     } egress;
     /**
      * crypto data
@@ -846,26 +841,7 @@ static int generate_new_connection_id(quicly_conn_t *conn, quicly_issued_cid_t *
  */
 static void schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
 {
-    int slot = -1;
-
-    for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++) {
-        if (conn->egress.retire_cid.sequences[i] != UINT64_MAX) {
-            if (conn->egress.retire_cid.sequences[i] == sequence) {
-                /* already scheduled */
-                return;
-            }
-            continue;
-        }
-
-        if (slot < 0)
-            slot = i; /* found a candidate to install this request */
-    }
-
-    if (slot < 0) {
-        /* in case we don't find an empty slot, we'll just drop this sequence (never send RETIRE_CONNECTION_ID frame) */
-        return;
-    }
-    conn->egress.retire_cid.sequences[slot] = sequence;
+    quicly_retire_cid_push(&conn->egress.retire_cid, sequence);
     conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
 }
 
@@ -1894,8 +1870,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->_.egress.ack_frequency.update_at = INT64_MAX;
     conn->_.egress.send_ack_at = INT64_MAX;
     quicly_cc_init(&conn->_.egress.cc, initcwnd);
-    for (int i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++)
-        conn->_.egress.retire_cid.sequences[i] = UINT64_MAX;
+    quicly_retire_cid_init(&conn->_.egress.retire_cid);
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->_.egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->_.egress.pending_streams.control);
@@ -3861,14 +3836,16 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     }
                     quicly_issued_cid_mark_inflight(&conn->issued_cid, i);
                     /* send RETIRE_CONNECTION_ID */
-                    for (i = 0; i < QUICLY_RETIRE_CONNECTION_ID_LIMIT; i++) {
+                    for (i = 0; i < PTLS_ELEMENTSOF(conn->egress.retire_cid.sequences); i++) {
                         uint64_t sequence = conn->egress.retire_cid.sequences[i];
                         if (sequence == UINT64_MAX)
-                            continue; /* empty slot */
-                        if ((ret = send_retire_connection_id(conn, s, sequence)) != 0)
+                            break; /* we've sent all pending sequence numbers */
+                        if ((ret = send_retire_connection_id(conn, s, sequence)) != 0) {
+                            quicly_retire_cid_pop(&conn->egress.retire_cid, i);
                             goto Exit;
-                        conn->egress.retire_cid.sequences[i] = UINT64_MAX;
+                        }
                     }
+                    quicly_retire_cid_pop(&conn->egress.retire_cid, i);
                     conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_CID_FRAME_BIT;
                 }
             }
