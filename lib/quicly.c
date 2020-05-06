@@ -42,6 +42,7 @@
 #include "quicly-probes.h"
 #endif
 #include "quicly/issued_cid.h"
+#include "quicly/retire_cid.h"
 
 #define QUICLY_MIN_INITIAL_DCID_LEN 8
 
@@ -81,10 +82,6 @@
  * smaller than QUICLY_MAX_RANGES.
  */
 #define QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK 8
-/**
- * up to how many RETIRE_CONNECTION_IDs to keep for retransmission
- */
-#define QUICLY_RETIRE_CONNECTION_ID_LIMIT (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * 2)
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 

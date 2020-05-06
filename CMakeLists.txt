@@ -47,7 +47,8 @@ SET(QUICLY_LIBRARY_FILES
     lib/sentmap.c
     lib/streambuf.c
     lib/received_cid.c
-    lib/issued_cid.c)
+    lib/issued_cid.c
+    lib/retire_cid.c)
 
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
