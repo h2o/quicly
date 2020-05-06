@@ -58,5 +58,6 @@ void test_loss(void);
 void test_stream_concurrency(void);
 void test_received_cid(void);
 void test_issued_cid(void);
+void test_retire_cid(void);
 
 #endif

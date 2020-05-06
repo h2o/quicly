@@ -428,6 +428,7 @@ static void test_cid(void)
 {
     subtest("received cid", test_received_cid);
     subtest("issued cid", test_issued_cid);
+    subtest("retire cid", test_retire_cid);
 }
 
 int main(int argc, char **argv)

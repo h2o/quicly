@@ -61,6 +61,7 @@ SET(UNITTEST_SOURCE_FILES
     t/stream-concurrency.c
     t/received_cid.c
     t/issued_cid.c
+    t/retire_cid.c
     t/test.c)
 
 IF (WITH_DTRACE)
