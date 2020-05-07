@@ -232,7 +232,9 @@ static void test_vector(void)
     ptls_iovec_t payload;
     int ret;
 
-    ok(quicly_decode_packet(&quic_ctx, &packet, datagram, sizeof(datagram)) == sizeof(datagram));
+    size_t off = 0;
+    ok(quicly_decode_packet(&quic_ctx, &packet, datagram, sizeof(datagram), &off) == sizeof(datagram));
+    ok(off == sizeof(datagram));
     ret = setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress, packet.cid.dest.encrypted, 0, NULL);
     ok(ret == 0);
     ok(decrypt_packet(ingress.header_protection, aead_decrypt_fixed_key, ingress.aead, &next_expected_pn, &packet, &pn, &payload) ==
@@ -256,8 +258,9 @@ static void test_retry_aead(void)
         0xb1, 0x2a, 0x43, 0x03, 0xfa, 0xf0, 0xeb, 0xf0, 0x11, 0x47, 0xb4, 0x8f, 0xc9, 0xe2, 0x9d, 0x00};
 
     quicly_decoded_packet_t decoded;
-    size_t decoded_len = quicly_decode_packet(&quic_ctx, &decoded, packet_bytes, sizeof(packet_bytes));
+    size_t off = 0, decoded_len = quicly_decode_packet(&quic_ctx, &decoded, packet_bytes, sizeof(packet_bytes), &off);
     ok(decoded_len == sizeof(packet_bytes));
+    ok(off == sizeof(packet_bytes));
 
     ptls_aead_context_t *retry_aead = create_retry_aead(&quic_ctx, 0);
     ok(validate_retry_tag(&decoded, &odcid, retry_aead));
@@ -290,25 +293,17 @@ static void test_transport_parameters(void)
        QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
 }
 
-void free_packets(quicly_datagram_t **packets, size_t cnt)
-{
-    size_t i;
-    for (i = 0; i != cnt; ++i)
-        quic_ctx.packet_allocator->free_packet(quic_ctx.packet_allocator, packets[i]);
-}
-
-size_t decode_packets(quicly_decoded_packet_t *decoded, quicly_datagram_t **raw, size_t cnt)
+size_t decode_packets(quicly_decoded_packet_t *decoded, struct iovec *raw, size_t cnt)
 {
     size_t ri, dc = 0;
 
     for (ri = 0; ri != cnt; ++ri) {
         size_t off = 0;
         do {
-            size_t dl = quicly_decode_packet(&quic_ctx, decoded + dc, raw[ri]->data.base + off, raw[ri]->data.len - off);
+            size_t dl = quicly_decode_packet(&quic_ctx, decoded + dc, raw[ri].iov_base, raw[ri].iov_len, &off);
             assert(dl != SIZE_MAX);
             ++dc;
-            off += dl;
-        } while (off != raw[ri]->data.len);
+        } while (off != raw[ri].iov_len);
     }
 
     return dc;
@@ -321,13 +316,15 @@ int buffer_is(ptls_buffer_t *buf, const char *s)
 
 size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 {
-    quicly_datagram_t *datagrams[32];
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[32];
+    uint8_t datagramsbuf[PTLS_ELEMENTSOF(datagrams) * quicly_get_context(src)->transport_params.max_udp_payload_size];
     size_t num_datagrams, i;
-    quicly_decoded_packet_t decoded[32];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
     int ret;
 
     num_datagrams = PTLS_ELEMENTSOF(datagrams);
-    ret = quicly_send(src, datagrams, &num_datagrams);
+    ret = quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, datagramsbuf, sizeof(datagramsbuf));
     ok(ret == 0);
 
     if (num_datagrams != 0) {
@@ -336,7 +333,6 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
             ret = quicly_receive(dst, NULL, &fake_address.sa, decoded + i);
             ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
         }
-        free_packets(datagrams, num_datagrams);
     }
 
     return num_datagrams;
