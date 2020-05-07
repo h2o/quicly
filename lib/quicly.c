@@ -4819,6 +4819,11 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
     /* TODO: return PROTOCOL_VIOLATION if sequence is associated with a DCID of this packet */
 
     quicly_issued_cid_retire(&conn->issued_cid, frame.sequence);
+    if (quicly_issued_cid_is_empty(&conn->issued_cid)) {
+        /* the peer has retired every CID but we have exhausted the available CIDs (reached MAX_PATH_ID),
+         * so there is no CID left for communication */
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+    }
 
     return 0;
 }
