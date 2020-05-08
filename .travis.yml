@@ -24,7 +24,7 @@ matrix:
       before_install: &bs_osx
         - curl -L https://cpanmin.us | perl - --self-upgrade --sudo
         - cpanm --sudo --installdeps --notest .
-      script:
+      script: &scr_osx
         - cmake -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl .
         - make && make check
     - os: osx
@@ -41,3 +41,9 @@ matrix:
         - cd ..
         - cmake -DCMAKE_C_FLAGS=-m32 -DOPENSSL_ROOT_DIR=$HOME/openssl-build -DWITH_DTRACE=OFF .
         - make && make check
+    - os: osx
+      osx_image: xcode11.4
+      env:
+        - label=osx10.14/x86-64-dtrace
+      before_install: *bs_osx
+      script: *scr_osx
