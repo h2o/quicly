@@ -31,7 +31,6 @@ extern "C" {
 
 typedef struct st_quicly_issued_cid_set_t quicly_issued_cid_set_t;
 typedef struct st_quicly_issued_cid_t quicly_issued_cid_t;
-typedef struct st_quicly_conn_t quicly_conn_t;
 
 /**
  * a callback function to generate a new connection ID in `cid`
