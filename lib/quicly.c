@@ -2464,11 +2464,17 @@ static ssize_t round_send_window(ssize_t window)
  */
 static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, int restrict_sending)
 {
-    /* If address is unvalidated, limit sending to 3x bytes received */
+    /* If address is unvalidated, limit sending to the min of 3x bytes received or cwnd */
     if (!conn->super.peer.address_validation.validated) {
         uint64_t total = conn->super.stats.num_bytes.received * 3;
-        if (conn->super.stats.num_bytes.sent + MIN_SEND_WINDOW <= total)
-            return total - conn->super.stats.num_bytes.sent;
+        if (conn->super.stats.num_bytes.sent + MIN_SEND_WINDOW <= total
+            && conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight) {
+            uint64_t amplification_space =  total - conn->super.stats.num_bytes.sent;
+            uint64_t cwnd_space = conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
+            if (amplification_space < cwnd_space)
+                return amplification_space;
+            return cwnd_space;
+        }
         return 0;
     }
 
