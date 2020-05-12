@@ -5380,7 +5380,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
     /* decrypt */
     if ((ptlen = aead->do_decrypt(aead, ptbuf, token + prefix_len + 1 + aead->algo->iv_size,
                                   len - (prefix_len + 1 + aead->algo->iv_size), token + prefix_len + 1, token,
-                                  prefix_len + 1 + aead->algo->iv_size)) == SIZE_MAX) {
+                                  prefix_len + 1 + aead->algo->iv_size, NULL, NULL)) == SIZE_MAX) {
         ret = PTLS_ALERT_DECRYPT_ERROR;
         *err_desc = "token decryption failure";
         goto Exit;
