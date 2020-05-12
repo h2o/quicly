@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <picotls.h>
+#include "picotls/fusion.h"
 #include "quicly.h"
 #include "quicly/defaults.h"
 #include "quicly/streambuf.h"
@@ -74,6 +75,9 @@ static struct {
 static ptls_save_ticket_t save_session_ticket = {save_session_ticket_cb};
 static ptls_on_client_hello_t on_client_hello = {on_client_hello_cb};
 static int enforce_retry;
+
+static const ptls_cipher_suite_t aes128gcmsha256 = {PTLS_CIPHER_SUITE_AES_128_GCM_SHA256, &ptls_fusion_aes128gcm,
+                                                    &ptls_openssl_sha256};
 
 static ptls_key_exchange_algorithm_t *key_exchanges[128];
 static ptls_cipher_suite_t *cipher_suites[128];
@@ -1220,10 +1224,11 @@ int main(int argc, char **argv)
             size_t i;
             for (i = 0; cipher_suites[i] != NULL; ++i)
                 ;
+            if (cipher_suites[i] == NULL && strcasecmp(optarg, "aes128gcmsha256") == 0)
+                cipher_suites[i] = &aes128gcmsha256;
 #define MATCH(name)                                                                                                                \
     if (cipher_suites[i] == NULL && strcasecmp(optarg, #name) == 0)                                                                \
     cipher_suites[i] = &ptls_openssl_##name
-            MATCH(aes128gcmsha256);
             MATCH(aes256gcmsha384);
 #if PTLS_OPENSSL_HAVE_CHACHA20_POLY1305
             MATCH(chacha20poly1305sha256);
@@ -1253,7 +1258,9 @@ int main(int argc, char **argv)
     if (cipher_suites[0] == NULL) {
         size_t i;
         for (i = 0; ptls_openssl_cipher_suites[i] != NULL; ++i)
-            cipher_suites[i] = ptls_openssl_cipher_suites[i];
+            cipher_suites[i] = ptls_openssl_cipher_suites[i]->id == PTLS_CIPHER_SUITE_AES_128_GCM_SHA256
+                                   ? &aes128gcmsha256
+                                   : ptls_openssl_cipher_suites[i];
     } else {
         size_t i;
         for (i = 0; cipher_suites[i] != NULL; ++i) {
