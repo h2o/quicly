@@ -2625,17 +2625,16 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
     }
     quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE, (uint16_t)conn->egress.packet_number);
 
-    /* AEAD protection */
-    s->dst = s->dst_payload_from + ptls_aead_encrypt(s->target.cipher->aead, s->dst_payload_from, s->dst_payload_from,
-                                                     s->dst - s->dst_payload_from, conn->egress.packet_number,
-                                                     s->target.first_byte_at, s->dst_payload_from - s->target.first_byte_at);
+    /* encrypt the packet */
+    s->dst += s->target.cipher->aead->algo->tag_size;
     datagram_size = s->dst - s->payload_buf.datagram;
     assert(datagram_size <= conn->egress.max_udp_payload_size);
 
-    conn->super.ctx->crypto_engine->finalize_send_packet(
-        conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead,
-        ptls_iovec_init(s->payload_buf.datagram, datagram_size), s->target.first_byte_at - s->payload_buf.datagram,
-        s->dst_payload_from - s->payload_buf.datagram, mode == QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED);
+    conn->super.ctx->crypto_engine->encrypt_packet(conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection,
+                                                   s->target.cipher->aead, ptls_iovec_init(s->payload_buf.datagram, datagram_size),
+                                                   s->target.first_byte_at - s->payload_buf.datagram,
+                                                   s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number,
+                                                   mode == QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED);
 
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
@@ -3887,11 +3886,9 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, struct sockaddr *d
     size_t datagram_len = dst - (uint8_t *)datagram;
 
     /* encrypt packet */
-    ptls_aead_encrypt(egress.aead, payload_from, payload_from, dst - payload_from - egress.aead->algo->tag_size, 0, datagram,
-                      payload_from - (uint8_t *)datagram);
-    quicly_default_crypto_engine.finalize_send_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
-                                                      ptls_iovec_init(datagram, datagram_len), 0,
-                                                      payload_from - (uint8_t *)datagram, 0);
+    quicly_default_crypto_engine.encrypt_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
+                                                ptls_iovec_init(datagram, datagram_len), 0, payload_from - (uint8_t *)datagram, 0,
+                                                0);
 
     dispose_cipher(&egress);
     return datagram_len;
