@@ -2538,9 +2538,9 @@ static int on_ack_new_connection_id(quicly_conn_t *conn, const quicly_sent_packe
         return 0;
 
     if (event == QUICLY_SENTMAP_EVENT_ACKED)
-        quicly_issued_cid_mark_delivered(&conn->issued_cid, sequence);
+        quicly_issued_cid_on_acked(&conn->issued_cid, sequence);
     else if (event == QUICLY_SENTMAP_EVENT_LOST)
-        quicly_issued_cid_mark_pending(&conn->issued_cid, sequence);
+        quicly_issued_cid_on_lost(&conn->issued_cid, sequence);
 
     return 0;
 }

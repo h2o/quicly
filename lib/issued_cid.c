@@ -59,6 +59,18 @@ static void do_mark_pending(quicly_issued_cid_set_t *set, size_t idx)
     }
 }
 
+static void do_mark_delivered(quicly_issued_cid_set_t *set, size_t idx)
+{
+    if (set->cids[idx].state == QUICLY_ISSUED_CID_STATE_PENDING) {
+        /* if transitioning from PENDING, move it backward so the remaining PENDING CIDs come first */
+        while (idx + 1 < set->_capacity && set->cids[idx + 1].state == QUICLY_ISSUED_CID_STATE_PENDING) {
+            swap_cids(&set->cids[idx], &set->cids[idx + 1]);
+            idx++;
+        }
+    }
+    set->cids[idx].state = QUICLY_ISSUED_CID_STATE_DELIVERED;
+}
+
 void quicly_issued_cid_set_capacity(quicly_issued_cid_set_t *set, size_t capacity)
 {
     assert(capacity >= 0);
@@ -101,41 +113,36 @@ void quicly_issued_cid_mark_inflight(quicly_issued_cid_set_t *set, size_t num_se
     }
 }
 
-static size_t find_inflight(const quicly_issued_cid_set_t *set, uint64_t sequence)
+static size_t find_index(const quicly_issued_cid_set_t *set, uint64_t sequence)
 {
     for (size_t i = 0; i < set->_capacity; i++) {
-        if (set->cids[i].sequence == sequence) {
-            assert(set->cids[i].state != QUICLY_ISSUED_CID_STATE_PENDING);
-            assert(set->cids[i].state != QUICLY_ISSUED_CID_STATE_IDLE);
+        if (set->cids[i].sequence == sequence)
             return i;
-        }
     }
 
     return SIZE_MAX;
 }
 
-int quicly_issued_cid_mark_delivered(quicly_issued_cid_set_t *set, uint64_t sequence)
+void quicly_issued_cid_on_acked(quicly_issued_cid_set_t *set, uint64_t sequence)
 {
-    size_t i = find_inflight(set, sequence);
+    size_t i = find_index(set, sequence);
     if (i == SIZE_MAX)
-        return 1;
+        return;
 
-    assert(set->cids[i].state == QUICLY_ISSUED_CID_STATE_INFLIGHT);
-
-    set->cids[i].state = QUICLY_ISSUED_CID_STATE_DELIVERED;
-
-    return 0;
+    do_mark_delivered(set, i);
 }
 
-int quicly_issued_cid_mark_pending(quicly_issued_cid_set_t *set, uint64_t sequence)
+void quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence)
 {
-    size_t i = find_inflight(set, sequence);
+    size_t i = find_index(set, sequence);
     if (i == SIZE_MAX)
-        return 1;
+        return;
+
+    /* if it's already delivered, ignore the packet loss event (no need for retransmission) */
+    if (set->cids[i].state == QUICLY_ISSUED_CID_STATE_DELIVERED)
+        return;
 
     do_mark_pending(set, i);
-
-    return 0;
 }
 
 int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)

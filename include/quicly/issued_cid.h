@@ -114,18 +114,13 @@ static size_t quicly_issued_cid_get_capacity(const quicly_issued_cid_set_t *set)
  */
 void quicly_issued_cid_mark_inflight(quicly_issued_cid_set_t *set, size_t num_sent);
 /**
- * mark the specified CID as DELIVERED.
- *
- * @return zero if successful, non-zero if the specified CID was not found.
+ * tells the module that the given sequence number was ACKed
  */
-int quicly_issued_cid_mark_delivered(quicly_issued_cid_set_t *set, uint64_t sequence);
+void quicly_issued_cid_on_acked(quicly_issued_cid_set_t *set, uint64_t sequence);
 /**
- * (re-)mark the specified CID as PENDING.
- *
- * This function is intended for rescheduling CID transmission after packet loss
- * @return zero if successful, non-zero if the specified CID was not found.
+ * tells the module that the given sequence number was lost
  */
-int quicly_issued_cid_mark_pending(quicly_issued_cid_set_t *set, uint64_t sequence);
+void quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence);
 /**
  * remove the specified CID from the storage.
  *

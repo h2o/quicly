@@ -141,9 +141,9 @@ void test_issued_cid(void)
     ok(exists_once(&set, 2, QUICLY_ISSUED_CID_STATE_INFLIGHT));
     ok(exists_once(&set, 3, QUICLY_ISSUED_CID_STATE_INFLIGHT));
 
-    quicly_issued_cid_mark_delivered(&set, 1);
-    quicly_issued_cid_mark_delivered(&set, 3);
-    quicly_issued_cid_mark_pending(&set, 2); /* simulate a packet loss */
+    quicly_issued_cid_on_acked(&set, 1);
+    quicly_issued_cid_on_acked(&set, 3);
+    quicly_issued_cid_on_lost(&set, 2); /* simulate a packet loss */
     ok(verify_array(&set) == 0);
     ok(num_pending(&set) == 1);
     ok(exists_once(&set, 1, QUICLY_ISSUED_CID_STATE_DELIVERED));
@@ -172,6 +172,14 @@ void test_issued_cid(void)
     /* retire one in the middle of PENDING CIDs */
     quicly_issued_cid_retire(&set, 6);
     ok(verify_array(&set) == 0);
+
+    quicly_issued_cid_mark_inflight(&set, 2);
+    quicly_issued_cid_on_lost(&set, 4);
+    quicly_issued_cid_on_acked(&set, 4); /* simulate late ack */
+    quicly_issued_cid_on_acked(&set, 5);
+    quicly_issued_cid_on_acked(&set, 5); /* simulate duplicate ack */
+    ok(exists_once(&set, 4, QUICLY_ISSUED_CID_STATE_DELIVERED));
+    ok(exists_once(&set, 5, QUICLY_ISSUED_CID_STATE_DELIVERED));
 
     /* create a set with a NULL CID generator (corresponds to cases where ) */
     quicly_issued_cid_set_t empty_set;
