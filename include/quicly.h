@@ -181,17 +181,14 @@ typedef struct st_quicly_crypto_engine_t {
                         ptls_cipher_context_t **header_protect_ctx, ptls_aead_context_t **packet_protect_ctx,
                         ptls_aead_algorithm_t *aead, ptls_hash_algorithm_t *hash, const void *secret);
     /**
-     * Callback used for sealing the send packet. What "sealing" means depends on the packet_protection_ctx being returned by the
-     * `setup_cipher` callback.
-     * * If the packet protection context was a real cipher, the payload of the packet is already encrypted when this callback is
-     *   invoked. The responsibility of this callback is to apply header protection.
-     * * If the packet protection context was a fake (i.e. path-through) cipher, the responsibility of this callback is to
-     *   AEAD-protect the packet and to apply header protection.
-     * The protection can be delayed until after `quicly_datagram_t` is returned by the `quicly_send` function.
+     * Callback used for encrypting the send packet. The engine must AEAD-encrypt the payload using `packet_protect_ctx` and apply
+     * header protection using `header_protect_ctx`. Quicly does not read or write the content of the UDP datagram payload after
+     * this function is being called. Therefore, an engine might retain the information provided by this function, and apply the
+     * changes at a later moment (e.g., hardware crypto offload).
      */
-    void (*finalize_send_packet)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn,
-                                 ptls_cipher_context_t *header_protect_ctx, ptls_aead_context_t *packet_protect_ctx,
-                                 ptls_iovec_t datagram, size_t first_byte_at, size_t payload_from, int coalesced);
+    void (*encrypt_packet)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn, ptls_cipher_context_t *header_protect_ctx,
+                           ptls_aead_context_t *packet_protect_ctx, ptls_iovec_t datagram, size_t first_byte_at,
+                           size_t payload_from, uint64_t packet_number, int coalesced);
 } quicly_crypto_engine_t;
 
 typedef struct st_quicly_max_stream_data_t {
