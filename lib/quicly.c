@@ -5333,9 +5333,9 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
     /* encrypt, abusing the internal API to supply full IV */
     if ((ret = ptls_buffer_reserve(buf, aead->algo->tag_size)) != 0)
         goto Exit;
-    aead->do_encrypt_init(aead, buf->base + enc_start - aead->algo->iv_size, buf->base + start_off, enc_start - start_off);
-    ptls_aead_encrypt_update(aead, buf->base + enc_start, buf->base + enc_start, buf->off - enc_start);
-    ptls_aead_encrypt_final(aead, buf->base + buf->off);
+    aead->algo->setup_crypto(aead, 1, NULL, buf->base + enc_start - aead->algo->iv_size);
+    ptls_aead_encrypt(aead, buf->base + enc_start, buf->base + enc_start, buf->off - enc_start, 0, buf->base + start_off,
+                      enc_start - start_off);
     buf->off += aead->algo->tag_size;
 
 Exit:
@@ -5378,9 +5378,10 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
     int ret;
 
     /* decrypt */
-    if ((ptlen = aead->do_decrypt(aead, ptbuf, token + prefix_len + 1 + aead->algo->iv_size,
-                                  len - (prefix_len + 1 + aead->algo->iv_size), token + prefix_len + 1, token,
-                                  prefix_len + 1 + aead->algo->iv_size, NULL, NULL)) == SIZE_MAX) {
+    aead->algo->setup_crypto(aead, 0, NULL, token + prefix_len + 1);
+    if ((ptlen = ptls_aead_decrypt(aead, ptbuf, token + prefix_len + 1 + aead->algo->iv_size,
+                                   len - (prefix_len + 1 + aead->algo->iv_size), 0, token, prefix_len + 1 + aead->algo->iv_size)) ==
+        SIZE_MAX) {
         ret = PTLS_ALERT_DECRYPT_ERROR;
         *err_desc = "token decryption failure";
         goto Exit;
