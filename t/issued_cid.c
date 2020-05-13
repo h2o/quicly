@@ -135,7 +135,7 @@ void test_issued_cid(void)
     ok(exists_once(&set, 3, QUICLY_ISSUED_CID_STATE_PENDING));
 
     /* send three PENDING CIDs */
-    quicly_issued_cid_mark_inflight(&set, NUM_CIDS - 1);
+    quicly_issued_cid_on_sent(&set, NUM_CIDS - 1);
     ok(verify_array(&set) == 0);
     ok(exists_once(&set, 1, QUICLY_ISSUED_CID_STATE_INFLIGHT));
     ok(exists_once(&set, 2, QUICLY_ISSUED_CID_STATE_INFLIGHT));
@@ -151,7 +151,7 @@ void test_issued_cid(void)
     ok(exists_once(&set, 3, QUICLY_ISSUED_CID_STATE_DELIVERED));
 
     /* retransmit sequence=1 */
-    quicly_issued_cid_mark_inflight(&set, 1);
+    quicly_issued_cid_on_sent(&set, 1);
     ok(num_pending(&set) == 0);
 
     /* retire everything */
@@ -161,7 +161,7 @@ void test_issued_cid(void)
     quicly_issued_cid_retire(&set, 3);
     ok(num_pending(&set) == 4);
     /* partial send */
-    quicly_issued_cid_mark_inflight(&set, 1);
+    quicly_issued_cid_on_sent(&set, 1);
     ok(verify_array(&set) == 0);
     ok(num_pending(&set) == 3);
     ok(exists_once(&set, 4, QUICLY_ISSUED_CID_STATE_INFLIGHT));
@@ -173,7 +173,7 @@ void test_issued_cid(void)
     quicly_issued_cid_retire(&set, 6);
     ok(verify_array(&set) == 0);
 
-    quicly_issued_cid_mark_inflight(&set, 2);
+    quicly_issued_cid_on_sent(&set, 2);
     quicly_issued_cid_on_lost(&set, 4);
     quicly_issued_cid_on_acked(&set, 4); /* simulate late ack */
     quicly_issued_cid_on_acked(&set, 5);

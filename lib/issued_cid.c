@@ -95,7 +95,7 @@ void quicly_issued_cid_set_capacity(quicly_issued_cid_set_t *set, size_t capacit
     }
 }
 
-void quicly_issued_cid_mark_inflight(quicly_issued_cid_set_t *set, size_t num_sent)
+void quicly_issued_cid_on_sent(quicly_issued_cid_set_t *set, size_t num_sent)
 {
     assert(num_sent <= set->_capacity);
 

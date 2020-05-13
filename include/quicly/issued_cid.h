@@ -110,9 +110,9 @@ void quicly_issued_cid_set_capacity(quicly_issued_cid_set_t *set, size_t new_cap
 static int quicly_issued_cid_is_empty(const quicly_issued_cid_set_t *set);
 static size_t quicly_issued_cid_get_capacity(const quicly_issued_cid_set_t *set);
 /**
- * mark the first `num_sent` pending CIDs as INFLIGHT.
+ * tells the module that the first `num_sent` pending CIDs have been sent
  */
-void quicly_issued_cid_mark_inflight(quicly_issued_cid_set_t *set, size_t num_sent);
+void quicly_issued_cid_on_sent(quicly_issued_cid_set_t *set, size_t num_sent);
 /**
  * tells the module that the given sequence number was ACKed
  */

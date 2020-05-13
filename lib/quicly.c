@@ -3915,11 +3915,11 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         if (c->state != QUICLY_ISSUED_CID_STATE_PENDING)
                             break;
                         if ((ret = send_new_connection_id(conn, s, c)) != 0) {
-                            quicly_issued_cid_mark_inflight(&conn->issued_cid, i);
+                            quicly_issued_cid_on_sent(&conn->issued_cid, i);
                             goto Exit;
                         }
                     }
-                    quicly_issued_cid_mark_inflight(&conn->issued_cid, i);
+                    quicly_issued_cid_on_sent(&conn->issued_cid, i);
                     /* send RETIRE_CONNECTION_ID */
                     for (i = 0; i < PTLS_ELEMENTSOF(conn->egress.retire_cid.sequences); i++) {
                         uint64_t sequence = conn->egress.retire_cid.sequences[i];
