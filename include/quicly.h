@@ -80,7 +80,6 @@ typedef union st_quicly_address_t {
     struct sockaddr_in6 sin6;
 } quicly_address_t;
 
-typedef struct st_quicly_cid_plaintext_t quicly_cid_plaintext_t;
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 typedef struct st_quicly_send_context_t quicly_send_context_t;
@@ -95,29 +94,6 @@ typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintex
     typedef struct st_quicly_##name##_t {                                                                                          \
         ret (*cb)(struct st_quicly_##name##_t * self, __VA_ARGS__);                                                                \
     } quicly_##name##_t
-
-/**
- * CID encryption
- */
-typedef struct st_quicly_cid_encryptor_t {
-    /**
-     * encrypts CID and optionally generates a stateless reset token
-     */
-    void (*encrypt_cid)(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
-                        const quicly_cid_plaintext_t *plaintext);
-    /**
-     * decrypts CID. plaintext->thread_id should contain a randomly distributed number when validation fails, so that the value can
-     * be used for distributing load among the threads within the process.
-     * @param len length of encrypted bytes if known, or 0 if unknown (short header packet)
-     * @return length of the CID, or SIZE_MAX if decryption failed
-     */
-    size_t (*decrypt_cid)(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
-                          size_t len);
-    /**
-     * generates a stateless reset token (returns if generated)
-     */
-    int (*generate_stateless_reset_token)(struct st_quicly_cid_encryptor_t *self, void *token, const void *cid);
-} quicly_cid_encryptor_t;
 
 /**
  * stream scheduler
@@ -248,36 +224,6 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint64_t active_connection_id_limit;
 } quicly_transport_parameters_t;
-
-/**
- * Guard value. We would never send path_id of this value.
- */
-#define QUICLY_MAX_PATH_ID UINT8_MAX
-
-/**
- * The structure of CID issued by quicly.
- *
- * Authentication of the CID can be done by validating if server_id and thread_id contain correct values.
- */
-struct st_quicly_cid_plaintext_t {
-    /**
-     * the internal "connection ID" unique to each connection (rather than QUIC's CID being unique to each path)
-     */
-    uint32_t master_id;
-    /**
-     * path ID of the connection; we issue up to 255 CIDs per connection (see QUICLY_MAX_PATH_ID)
-     */
-    uint32_t path_id : 8;
-    /**
-     * for intra-node routing
-     */
-    uint32_t thread_id : 24;
-    /**
-     * for inter-node routing; available only when using a 16-byte cipher to encrypt CIDs, otherwise set to zero. See
-     * quicly_context_t::is_clustered.
-     */
-    uint64_t node_id;
-};
 
 struct st_quicly_context_t {
     /**
