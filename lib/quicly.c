@@ -3892,23 +3892,23 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
                         if (c->state != QUICLY_ISSUED_CID_STATE_PENDING)
                             break;
-                        if ((ret = send_new_connection_id(conn, s, c)) != 0) {
-                            quicly_issued_cid_on_sent(&conn->issued_cid, i);
-                            goto Exit;
-                        }
+                        if ((ret = send_new_connection_id(conn, s, c)) != 0)
+                            break;
                     }
                     quicly_issued_cid_on_sent(&conn->issued_cid, i);
+                    if (ret != 0)
+                        goto Exit;
                     /* send RETIRE_CONNECTION_ID */
                     for (i = 0; i < PTLS_ELEMENTSOF(conn->egress.retire_cid.sequences); i++) {
                         uint64_t sequence = conn->egress.retire_cid.sequences[i];
                         if (sequence == UINT64_MAX)
                             break; /* we've sent all pending sequence numbers */
-                        if ((ret = send_retire_connection_id(conn, s, sequence)) != 0) {
-                            quicly_retire_cid_pop(&conn->egress.retire_cid, i);
-                            goto Exit;
-                        }
+                        if ((ret = send_retire_connection_id(conn, s, sequence)) != 0)
+                            break;
                     }
                     quicly_retire_cid_pop(&conn->egress.retire_cid, i);
+                    if (ret != 0)
+                        goto Exit;
                     conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_CID_FRAME_BIT;
                 }
             }
