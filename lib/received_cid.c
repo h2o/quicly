@@ -20,7 +20,6 @@
  * IN THE SOFTWARE.
  */
 
-#include <string.h>
 #include "quicly/received_cid.h"
 
 void quicly_received_cid_init(struct st_quicly_received_cid_set_t *set)

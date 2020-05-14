@@ -20,7 +20,6 @@
  * IN THE SOFTWARE.
  */
 
-#include <string.h>
 #include "quicly/issued_cid.h"
 
 void quicly_issued_cid_init(quicly_issued_cid_set_t *set, quicly_issued_cid_generator_t generator, quicly_conn_t *conn)

@@ -20,7 +20,6 @@
  * IN THE SOFTWARE.
  */
 
-#include <stdint.h>
 #include "test.h"
 #include "picotls.h"
 #include "quicly/retire_cid.h"

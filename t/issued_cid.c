@@ -20,7 +20,6 @@
  * IN THE SOFTWARE.
  */
 
-#include <string.h>
 #include "test.h"
 #include "quicly/issued_cid.h"
 

@@ -20,7 +20,6 @@
  * IN THE SOFTWARE.
  */
 
-#include <string.h>
 #include "quicly/retire_cid.h"
 
 void quicly_retire_cid_init(quicly_retire_cid_set_t *set)

@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <string.h>
 #include "picotls.h"
 #include "quicly/constants.h"
 
