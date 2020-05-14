@@ -50,7 +50,7 @@ struct st_quicly_retire_cid_set_t {
 
 void quicly_retire_cid_init(quicly_retire_cid_set_t *set);
 void quicly_retire_cid_push(quicly_retire_cid_set_t *set, uint64_t sequence);
-void quicly_retire_cid_pop(quicly_retire_cid_set_t *set, size_t num_pop);
+void quicly_retire_cid_shift(quicly_retire_cid_set_t *set, size_t num_shift);
 
 #ifdef __cplusplus
 }

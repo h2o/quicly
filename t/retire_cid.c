@@ -65,8 +65,8 @@ void test_retire_cid(void)
 
     sequence++;
 
-    /* pop one -- back to empty */
-    quicly_retire_cid_pop(&set, 1);
+    /* shift one -- back to empty */
+    quicly_retire_cid_shift(&set, 1);
     ok(verify(&set, NULL, 0) == 0);
 
     {
@@ -84,17 +84,17 @@ void test_retire_cid(void)
         /* make sure push is ignored when the array is already full */
         quicly_retire_cid_push(&set, sequence + 1);
         ok(verify(&set, seqs, PTLS_ELEMENTSOF(seqs)) == 0);
-        /* zero pop from a full array */
-        quicly_retire_cid_pop(&set, 0);
+        /* zero shift from a full array */
+        quicly_retire_cid_shift(&set, 0);
         /* test partial removal */
-        size_t num_pop = PTLS_ELEMENTSOF(seqs) / 2;
-        quicly_retire_cid_pop(&set, num_pop);
-        ok(verify(&set, seqs + num_pop, PTLS_ELEMENTSOF(seqs) - num_pop) == 0);
-        /* test zero pop */
-        quicly_retire_cid_pop(&set, 0);
-        ok(verify(&set, seqs + num_pop, PTLS_ELEMENTSOF(seqs) - num_pop) == 0);
+        size_t num_shift = PTLS_ELEMENTSOF(seqs) / 2;
+        quicly_retire_cid_shift(&set, num_shift);
+        ok(verify(&set, seqs + num_shift, PTLS_ELEMENTSOF(seqs) - num_shift) == 0);
+        /* test zero shift */
+        quicly_retire_cid_shift(&set, 0);
+        ok(verify(&set, seqs + num_shift, PTLS_ELEMENTSOF(seqs) - num_shift) == 0);
         /* remove remaining sequence numbers */
-        quicly_retire_cid_pop(&set, PTLS_ELEMENTSOF(seqs) - num_pop);
+        quicly_retire_cid_shift(&set, PTLS_ELEMENTSOF(seqs) - num_shift);
         ok(verify(&set, NULL, 0) == 0);
     }
 }

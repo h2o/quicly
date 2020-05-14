@@ -3906,7 +3906,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         if ((ret = send_retire_connection_id(conn, s, sequence)) != 0)
                             break;
                     }
-                    quicly_retire_cid_pop(&conn->egress.retire_cid, i);
+                    quicly_retire_cid_shift(&conn->egress.retire_cid, i);
                     if (ret != 0)
                         goto Exit;
                     conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_CID_FRAME_BIT;
