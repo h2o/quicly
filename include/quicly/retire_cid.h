@@ -39,7 +39,7 @@ typedef struct st_quicly_retire_cid_set_t quicly_retire_cid_set_t;
 struct st_quicly_retire_cid_set_t {
     /**
      * sequence numbers to ask for retirement
-     * Valid entries are packed in the front of the array with FIFO manner. UINT64_MAX indicates sentinel.
+     * Valid entries are packed in the front of the array with FIFO manner.
      */
     uint64_t sequences[QUICLY_RETIRE_CONNECTION_ID_LIMIT];
     /**
@@ -51,6 +51,12 @@ struct st_quicly_retire_cid_set_t {
 void quicly_retire_cid_init(quicly_retire_cid_set_t *set);
 void quicly_retire_cid_push(quicly_retire_cid_set_t *set, uint64_t sequence);
 void quicly_retire_cid_shift(quicly_retire_cid_set_t *set, size_t num_shift);
+static size_t quicly_retire_cid_get_num_pending(const quicly_retire_cid_set_t *set);
+
+inline size_t quicly_retire_cid_get_num_pending(const quicly_retire_cid_set_t *set)
+{
+    return set->_num_pending;
+}
 
 #ifdef __cplusplus
 }

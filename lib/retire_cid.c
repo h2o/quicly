@@ -24,8 +24,6 @@
 
 void quicly_retire_cid_init(quicly_retire_cid_set_t *set)
 {
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->sequences); i++)
-        set->sequences[i] = UINT64_MAX;
     set->_num_pending = 0;
 }
 
@@ -43,11 +41,8 @@ void quicly_retire_cid_push(quicly_retire_cid_set_t *set, uint64_t sequence)
         }
     }
 
-    assert(set->sequences[set->_num_pending] == UINT64_MAX);
     set->sequences[set->_num_pending] = sequence;
     set->_num_pending++;
-    if (set->_num_pending < PTLS_ELEMENTSOF(set->sequences))
-        set->sequences[set->_num_pending] = UINT64_MAX;
 }
 
 void quicly_retire_cid_shift(quicly_retire_cid_set_t *set, size_t num_shift)
@@ -57,8 +52,5 @@ void quicly_retire_cid_shift(quicly_retire_cid_set_t *set, size_t num_shift)
         num_shift = set->_num_pending;
     /* move the remaining pending sequence numbers to the front */
     memmove(set->sequences, set->sequences + num_shift, sizeof(uint64_t) * (set->_num_pending - num_shift));
-    /* insert sentinel at the end */
-    if (num_shift > 0)
-        set->sequences[set->_num_pending - num_shift] = UINT64_MAX;
     set->_num_pending -= num_shift;
 }

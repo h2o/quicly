@@ -3899,10 +3899,9 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     if (ret != 0)
                         goto Exit;
                     /* send RETIRE_CONNECTION_ID */
-                    for (i = 0; i < PTLS_ELEMENTSOF(conn->egress.retire_cid.sequences); i++) {
+                    size = quicly_retire_cid_get_num_pending(&conn->egress.retire_cid);
+                    for (i = 0; i < size; i++) {
                         uint64_t sequence = conn->egress.retire_cid.sequences[i];
-                        if (sequence == UINT64_MAX)
-                            break; /* we've sent all pending sequence numbers */
                         if ((ret = send_retire_connection_id(conn, s, sequence)) != 0)
                             break;
                     }

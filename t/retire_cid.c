@@ -25,8 +25,8 @@
 #include "quicly/retire_cid.h"
 
 /**
- * verifies that 1) expected sequence numbers are in that order at the front of the array,
- * and 2) UINT64_MAX appears after that unless the array is full. Returns zero on success.
+ * verifies that expected sequence numbers are in that order at the front of the array.
+ * Returns zero on success.
  */
 static int verify(const quicly_retire_cid_set_t *set, const uint64_t expected_seqs[], size_t num_seqs)
 {
@@ -39,9 +39,6 @@ static int verify(const quicly_retire_cid_set_t *set, const uint64_t expected_se
         if (set->sequences[i] != expected_seqs[i])
             return 1;
     }
-
-    if (i < PTLS_ELEMENTSOF(set->sequences) && set->sequences[i] != UINT64_MAX)
-        return 1;
 
     return 0;
 }
