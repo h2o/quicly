@@ -71,7 +71,7 @@ static int verify_cid(const quicly_issued_cid_t *cid)
 static int verify_array(const quicly_issued_cid_set_t *set)
 {
     int allow_pending = 1;
-    for (size_t i = 0; i < set->_capacity; i++) {
+    for (size_t i = 0; i < set->_size; i++) {
         if (allow_pending) {
             if (set->cids[i].state != QUICLY_ISSUED_CID_STATE_PENDING)
                 allow_pending = 0;
@@ -101,7 +101,7 @@ static size_t num_pending(const quicly_issued_cid_set_t *set)
 static int exists_once(const quicly_issued_cid_set_t *set, uint64_t sequence, enum en_quicly_issued_cid_state_t state)
 {
     size_t occurrence = 0;
-    for (size_t i = 0; i < set->_capacity; i++) {
+    for (size_t i = 0; i < set->_size; i++) {
         if (set->cids[i].sequence == sequence) {
             if (set->cids[i].state != state)
                 return 0;
@@ -127,7 +127,7 @@ void test_issued_cid(void)
     ok(exists_once(&set, 0, QUICLY_ISSUED_CID_STATE_DELIVERED));
     conn.path_id = 1;
 
-    quicly_issued_cid_set_capacity(&set, NUM_CIDS);
+    quicly_issued_cid_set_size(&set, NUM_CIDS);
     ok(verify_array(&set) == 0);
     ok(num_pending(&set) == NUM_CIDS - 1);
     ok(exists_once(&set, 1, QUICLY_ISSUED_CID_STATE_PENDING));
@@ -184,6 +184,6 @@ void test_issued_cid(void)
     /* create a set with a NULL CID generator (corresponds to cases where ) */
     quicly_issued_cid_set_t empty_set;
     quicly_issued_cid_init(&empty_set, NULL, NULL);
-    quicly_issued_cid_set_capacity(&empty_set, NUM_CIDS);
+    quicly_issued_cid_set_size(&empty_set, NUM_CIDS);
     ok(quicly_issued_cid_is_empty(&empty_set));
 }

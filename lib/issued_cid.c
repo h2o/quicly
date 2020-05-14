@@ -30,7 +30,7 @@ void quicly_issued_cid_init(quicly_issued_cid_set_t *set, quicly_issued_cid_gene
     if (generator == NULL)
         return;
 
-    set->_capacity = 1;
+    set->_size = 1;
     set->cids[0].state = QUICLY_ISSUED_CID_STATE_DELIVERED;
     for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
         set->cids[i].sequence = UINT64_MAX;
@@ -63,7 +63,7 @@ static void do_mark_delivered(quicly_issued_cid_set_t *set, size_t idx)
 {
     if (set->cids[idx].state == QUICLY_ISSUED_CID_STATE_PENDING) {
         /* if transitioning from PENDING, move it backward so the remaining PENDING CIDs come first */
-        while (idx + 1 < set->_capacity && set->cids[idx + 1].state == QUICLY_ISSUED_CID_STATE_PENDING) {
+        while (idx + 1 < set->_size && set->cids[idx + 1].state == QUICLY_ISSUED_CID_STATE_PENDING) {
             swap_cids(&set->cids[idx], &set->cids[idx + 1]);
             idx++;
         }
@@ -71,21 +71,21 @@ static void do_mark_delivered(quicly_issued_cid_set_t *set, size_t idx)
     set->cids[idx].state = QUICLY_ISSUED_CID_STATE_DELIVERED;
 }
 
-void quicly_issued_cid_set_capacity(quicly_issued_cid_set_t *set, size_t capacity)
+void quicly_issued_cid_set_size(quicly_issued_cid_set_t *set, size_t size)
 {
-    assert(capacity >= 0);
-    assert(capacity <= PTLS_ELEMENTSOF(set->cids));
-    assert(set->_capacity <= capacity);
+    assert(size >= 0);
+    assert(size <= PTLS_ELEMENTSOF(set->cids));
+    assert(set->_size <= size);
 
-    for (size_t i = set->_capacity; i < capacity; i++)
+    for (size_t i = set->_size; i < size; i++)
         set->cids[i].state = QUICLY_ISSUED_CID_STATE_IDLE;
 
-    set->_capacity = capacity;
+    set->_size = size;
 
     /* First we prepare N CIDs (to be precise here we prepare N-1, as we already had one upon initialization).
      * Later, every time one of the CIDs is retired, we immediately prepare one additional CID
      * to always fill the CID list. */
-    for (size_t i = 0; i < capacity; i++) {
+    for (size_t i = 0; i < size; i++) {
         if (set->cids[i].state != QUICLY_ISSUED_CID_STATE_IDLE)
             continue;
 
@@ -97,7 +97,7 @@ void quicly_issued_cid_set_capacity(quicly_issued_cid_set_t *set, size_t capacit
 
 void quicly_issued_cid_on_sent(quicly_issued_cid_set_t *set, size_t num_sent)
 {
-    assert(num_sent <= set->_capacity);
+    assert(num_sent <= set->_size);
 
     /* first, mark the first `num_sent` CIDs as INFLIGHT */
     for (size_t i = 0; i < num_sent; i++) {
@@ -106,7 +106,7 @@ void quicly_issued_cid_on_sent(quicly_issued_cid_set_t *set, size_t num_sent)
     }
 
     /* then move the remaining PENDING CIDs (if any) to the front of the array */
-    for (size_t i = num_sent; i < set->_capacity; i++) {
+    for (size_t i = num_sent; i < set->_size; i++) {
         if (set->cids[i].state != QUICLY_ISSUED_CID_STATE_PENDING)
             break;
         swap_cids(&set->cids[i], &set->cids[i - num_sent]);
@@ -115,7 +115,7 @@ void quicly_issued_cid_on_sent(quicly_issued_cid_set_t *set, size_t num_sent)
 
 static size_t find_index(const quicly_issued_cid_set_t *set, uint64_t sequence)
 {
-    for (size_t i = 0; i < set->_capacity; i++) {
+    for (size_t i = 0; i < set->_size; i++) {
         if (set->cids[i].sequence == sequence)
             return i;
     }
@@ -147,8 +147,8 @@ void quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence)
 
 int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)
 {
-    size_t retired_at = set->_capacity;
-    for (size_t i = 0; i < set->_capacity; i++) {
+    size_t retired_at = set->_size;
+    for (size_t i = 0; i < set->_size; i++) {
         if (set->cids[i].sequence != sequence || set->cids[i].state == QUICLY_ISSUED_CID_STATE_IDLE)
             continue;
 
@@ -157,11 +157,11 @@ int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)
         set->cids[i].sequence = UINT64_MAX;
         break;
     }
-    if (retired_at == set->_capacity) /* not found */
+    if (retired_at == set->_size) /* not found */
         return 1;
 
     /* move following PENDING CIDs to front */
-    for (size_t i = retired_at + 1; i < set->_capacity; i++) {
+    for (size_t i = retired_at + 1; i < set->_size; i++) {
         if (set->cids[i].state != QUICLY_ISSUED_CID_STATE_PENDING)
             break;
         swap_cids(&set->cids[i], &set->cids[retired_at]);

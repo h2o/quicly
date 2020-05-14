@@ -830,7 +830,7 @@ static int schedule_path_challenge(quicly_conn_t *conn, int is_response, const u
 /**
  * calculate how many CIDs we provide to the peer
  */
-static size_t issued_cid_capacity(const quicly_conn_t *conn)
+static size_t issued_cid_size(const quicly_conn_t *conn)
 {
     PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT < SIZE_MAX / sizeof(uint64_t));
 
@@ -3786,8 +3786,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         }
 
         /* schedule NEW_CONNECTION_IDs */
-        size_t cap = issued_cid_capacity(conn);
-        quicly_issued_cid_set_capacity(&conn->issued_cid, cap);
+        size_t size = issued_cid_size(conn);
+        quicly_issued_cid_set_size(&conn->issued_cid, size);
     }
 
     return 0;
@@ -3908,8 +3908,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_CID_FRAME_BIT) != 0) {
                     /* send NEW_CONNECTION_ID */
                     size_t i;
-                    size_t cap = quicly_issued_cid_get_capacity(&conn->issued_cid);
-                    for (i = 0; i < cap; i++) {
+                    size_t size = quicly_issued_cid_get_size(&conn->issued_cid);
+                    for (i = 0; i < size; i++) {
                         /* PENDING CIDs are located at the front */
                         struct st_quicly_issued_cid_t *c = &conn->issued_cid.cids[i];
                         if (c->state != QUICLY_ISSUED_CID_STATE_PENDING)

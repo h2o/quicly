@@ -77,12 +77,14 @@ struct st_quicly_issued_cid_set_t {
      *
      * Pending CIDs (state == STATE_PENDING) are moved to the front of the array, in the order it was marked as pending.
      * This ensures that pending CIDs are sent in FIFO manner. Order of CIDs with other states is not defined.
+     *
+     * Actual size of the array is constrained by _size.
      */
     struct st_quicly_issued_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
     /**
      * how many entries are actually usable in `cids`?
      */
-    size_t _capacity;
+    size_t _size;
     quicly_issued_cid_generator_t _generator;
     /**
      * connection object passed to the CID generator
@@ -93,22 +95,22 @@ struct st_quicly_issued_cid_set_t {
 /**
  * initialize the structure
  *
- * If `generator` is non-NULL, it is initialized with capacity==1 (sequence==0 is registered as DELIVERED).
- * Otherwise, it is initialized with capacity==0, and the capacity shall never be increased.
+ * If `generator` is non-NULL, it is initialized with size==1 (sequence==0 is registered as DELIVERED).
+ * Otherwise, it is initialized with size==0, and the size shall never be increased.
  */
 void quicly_issued_cid_init(quicly_issued_cid_set_t *set, quicly_issued_cid_generator_t generator, quicly_conn_t *conn);
 /**
- * sets a new capacity of issued CIDs.
+ * sets a new size of issued CIDs.
  *
- * The new capacity must be equal to or grater than the current capacity, and must be equal to or less than the elements of `cids`.
- * When the capacity is expanded, the CID generator callback is called to generate a new CID.
+ * The new size must be equal to or grater than the current size, and must be equal to or less than the elements of `cids`.
+ * When the size is expanded, the CID generator callback is called to generate a new CID.
  */
-void quicly_issued_cid_set_capacity(quicly_issued_cid_set_t *set, size_t new_cap);
+void quicly_issued_cid_set_size(quicly_issued_cid_set_t *set, size_t new_cap);
 /**
  * returns true if all entries in the given set is in IDLE state
  */
 static int quicly_issued_cid_is_empty(const quicly_issued_cid_set_t *set);
-static size_t quicly_issued_cid_get_capacity(const quicly_issued_cid_set_t *set);
+static size_t quicly_issued_cid_get_size(const quicly_issued_cid_set_t *set);
 /**
  * tells the module that the first `num_sent` pending CIDs have been sent
  */
@@ -131,16 +133,16 @@ int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence);
 
 inline int quicly_issued_cid_is_empty(const quicly_issued_cid_set_t *set)
 {
-    for (size_t i = 0; i < set->_capacity; i++) {
+    for (size_t i = 0; i < set->_size; i++) {
         if (set->cids[i].state != QUICLY_ISSUED_CID_STATE_IDLE)
             return 0;
     }
     return 1;
 }
 
-inline size_t quicly_issued_cid_get_capacity(const quicly_issued_cid_set_t *set)
+inline size_t quicly_issued_cid_get_size(const quicly_issued_cid_set_t *set)
 {
-    return set->_capacity;
+    return set->_size;
 }
 
 #ifdef __cplusplus
