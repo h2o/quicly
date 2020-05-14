@@ -25,39 +25,40 @@
 
 #define NUM_CIDS 4
 
-struct st_test_conn_t {
-    uint32_t path_id;
-};
-
-/**
- * CID generator for testing
- *
- * This function actually takes struct st_test_conn_t instead of quicly_conn_t, for simplify the test code.
- */
-static int cid_generator(quicly_conn_t *conn, quicly_issued_cid_t *cid)
+static void encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
+                        const quicly_cid_plaintext_t *plaintext)
 {
-    struct st_test_conn_t *c = (struct st_test_conn_t *)conn;
-
-    if (c->path_id >= QUICLY_MAX_PATH_ID)
-        return 1;
-
-    memset(cid->stateless_reset_token, 0, QUICLY_STATELESS_RESET_TOKEN_LEN);
-    cid->sequence = cid->cid.cid[0] = cid->stateless_reset_token[0] = c->path_id++;
-    cid->cid.len = 1;
-
-    return 0;
+    encrypted->cid[0] = plaintext->path_id;
+    encrypted->len = 1;
 }
+
+static size_t decrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
+                          size_t len)
+{
+    plaintext->path_id = ((const uint8_t *)encrypted)[0];
+    return 1;
+}
+
+static quicly_cid_encryptor_t test_encryptor = {
+    .encrypt_cid = encrypt_cid,
+    .decrypt_cid = decrypt_cid,
+};
 
 /**
  * checks if the values within given CID are correct
  *
  * @return zero if okay
  */
-static int verify_cid(const quicly_issued_cid_t *cid)
+static int verify_cid(const quicly_issued_cid_t *cid, quicly_cid_encryptor_t *encryptor)
 {
+    quicly_cid_plaintext_t plaintext;
     if (cid->state == QUICLY_ISSUED_CID_STATE_IDLE)
         return 0;
-    return !(cid->sequence == cid->cid.cid[0] && cid->sequence == cid->stateless_reset_token[0]);
+    if (encryptor == NULL)
+        return 0;
+
+    encryptor->decrypt_cid(encryptor, &plaintext, cid->cid.cid, cid->cid.len);
+    return !(cid->sequence == plaintext.path_id);
 }
 
 /**
@@ -77,7 +78,7 @@ static int verify_array(const quicly_issued_cid_set_t *set)
         } else if (set->cids[i].state == QUICLY_ISSUED_CID_STATE_PENDING) {
             return 1;
         }
-        if (verify_cid(&set->cids[i]) != 0)
+        if (verify_cid(&set->cids[i], set->_encryptor) != 0)
             return 1;
     }
 
@@ -117,18 +118,19 @@ void test_issued_cid(void)
 {
     PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT >= NUM_CIDS);
     quicly_issued_cid_set_t set;
-    struct st_test_conn_t conn;
+    quicly_cid_plaintext_t cid_plaintext = {0};
 
     /* initialize */
-    quicly_issued_cid_init(&set, cid_generator, (quicly_conn_t *)&conn);
+    quicly_issued_cid_init(&set, &test_encryptor, &cid_plaintext);
     ok(verify_array(&set) == 0);
     ok(num_pending(&set) == 0);
     ok(exists_once(&set, 0, QUICLY_ISSUED_CID_STATE_DELIVERED));
-    conn.path_id = 1;
+    cid_plaintext.path_id = 1;
 
-    quicly_issued_cid_set_size(&set, NUM_CIDS);
+    ok(quicly_issued_cid_set_size(&set, NUM_CIDS) != 0);
     ok(verify_array(&set) == 0);
     ok(num_pending(&set) == NUM_CIDS - 1);
+    ok(exists_once(&set, 0, QUICLY_ISSUED_CID_STATE_DELIVERED));
     ok(exists_once(&set, 1, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(exists_once(&set, 2, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(exists_once(&set, 3, QUICLY_ISSUED_CID_STATE_PENDING));
@@ -142,22 +144,22 @@ void test_issued_cid(void)
 
     quicly_issued_cid_on_acked(&set, 1);
     quicly_issued_cid_on_acked(&set, 3);
-    quicly_issued_cid_on_lost(&set, 2); /* simulate a packet loss */
+    ok(quicly_issued_cid_on_lost(&set, 2) != 0); /* simulate a packet loss */
     ok(verify_array(&set) == 0);
     ok(num_pending(&set) == 1);
     ok(exists_once(&set, 1, QUICLY_ISSUED_CID_STATE_DELIVERED));
     ok(exists_once(&set, 2, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(exists_once(&set, 3, QUICLY_ISSUED_CID_STATE_DELIVERED));
 
-    /* retransmit sequence=1 */
+    /* retransmit sequence=2 */
     quicly_issued_cid_on_sent(&set, 1);
     ok(num_pending(&set) == 0);
 
     /* retire everything */
-    quicly_issued_cid_retire(&set, 0);
-    quicly_issued_cid_retire(&set, 1);
-    quicly_issued_cid_retire(&set, 2);
-    quicly_issued_cid_retire(&set, 3);
+    ok(quicly_issued_cid_retire(&set, 0) != 0);
+    ok(quicly_issued_cid_retire(&set, 1) != 0);
+    ok(quicly_issued_cid_retire(&set, 2) != 0);
+    ok(quicly_issued_cid_retire(&set, 3) != 0);
     ok(num_pending(&set) == 4);
     /* partial send */
     quicly_issued_cid_on_sent(&set, 1);
@@ -169,20 +171,20 @@ void test_issued_cid(void)
     ok(exists_once(&set, 7, QUICLY_ISSUED_CID_STATE_PENDING));
 
     /* retire one in the middle of PENDING CIDs */
-    quicly_issued_cid_retire(&set, 6);
+    ok(quicly_issued_cid_retire(&set, 6) != 0);
     ok(verify_array(&set) == 0);
 
     quicly_issued_cid_on_sent(&set, 2);
-    quicly_issued_cid_on_lost(&set, 4);
+    ok(quicly_issued_cid_on_lost(&set, 4) != 0);
     quicly_issued_cid_on_acked(&set, 4); /* simulate late ack */
     quicly_issued_cid_on_acked(&set, 5);
     quicly_issued_cid_on_acked(&set, 5); /* simulate duplicate ack */
     ok(exists_once(&set, 4, QUICLY_ISSUED_CID_STATE_DELIVERED));
     ok(exists_once(&set, 5, QUICLY_ISSUED_CID_STATE_DELIVERED));
 
-    /* create a set with a NULL CID generator (corresponds to cases where ) */
+    /* create a set with a NULL CID encryptor */
     quicly_issued_cid_set_t empty_set;
     quicly_issued_cid_init(&empty_set, NULL, NULL);
-    quicly_issued_cid_set_size(&empty_set, NUM_CIDS);
+    ok(quicly_issued_cid_set_size(&empty_set, NUM_CIDS) == 0);
     ok(quicly_issued_cid_is_empty(&empty_set));
 }

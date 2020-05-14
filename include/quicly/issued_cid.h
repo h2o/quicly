@@ -32,13 +32,6 @@ extern "C" {
 typedef struct st_quicly_issued_cid_set_t quicly_issued_cid_set_t;
 typedef struct st_quicly_issued_cid_t quicly_issued_cid_t;
 
-/**
- * a callback function to generate a new connection ID in `cid`
- *
- * @return 0 if successfully generated, non-zero if unable to generate a CID (e.g. limit reached)
- */
-typedef int (*quicly_issued_cid_generator_t)(quicly_conn_t *conn, quicly_issued_cid_t *cid);
-
 enum en_quicly_issued_cid_state_t {
     /**
      * this entry is free for use
@@ -85,27 +78,25 @@ struct st_quicly_issued_cid_set_t {
      * how many entries are actually usable in `cids`?
      */
     size_t _size;
-    quicly_issued_cid_generator_t _generator;
-    /**
-     * connection object passed to the CID generator
-     */
-    quicly_conn_t *_conn;
+    quicly_cid_encryptor_t *_encryptor;
+    quicly_cid_plaintext_t *_plaintext;
 };
 
 /**
  * initialize the structure
  *
- * If `generator` is non-NULL, it is initialized with size==1 (sequence==0 is registered as DELIVERED).
+ * If `encryptor` is non-NULL, it is initialized with size==1 (sequence==0 is registered as DELIVERED).
  * Otherwise, it is initialized with size==0, and the size shall never be increased.
  */
-void quicly_issued_cid_init(quicly_issued_cid_set_t *set, quicly_issued_cid_generator_t generator, quicly_conn_t *conn);
+void quicly_issued_cid_init(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor, quicly_cid_plaintext_t *plaintext);
 /**
  * sets a new size of issued CIDs.
  *
  * The new size must be equal to or grater than the current size, and must be equal to or less than the elements of `cids`.
- * When the size is expanded, the CID generator callback is called to generate a new CID.
+ *
+ * Returns true if there is something to send.
  */
-void quicly_issued_cid_set_size(quicly_issued_cid_set_t *set, size_t new_cap);
+int quicly_issued_cid_set_size(quicly_issued_cid_set_t *set, size_t new_cap);
 /**
  * returns true if all entries in the given set is in IDLE state
  */
@@ -121,13 +112,15 @@ void quicly_issued_cid_on_sent(quicly_issued_cid_set_t *set, size_t num_sent);
 void quicly_issued_cid_on_acked(quicly_issued_cid_set_t *set, uint64_t sequence);
 /**
  * tells the module that the given sequence number was lost
+ *
+ * returns true if there is something to send
  */
-void quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence);
+int quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence);
 /**
  * remove the specified CID from the storage.
  *
  * This makes one slot for CIDs empty. The CID generator callback is then called to fill the slot with a new CID.
- * @return 0 if successfully retired the specified sequence, non-zero if the specified sequence was not found
+ * @return true if there is something to send
  */
 int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence);
 

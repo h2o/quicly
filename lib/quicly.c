@@ -421,8 +421,6 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 static int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason_phrase);
 static int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
-static int generate_new_connection_id(quicly_conn_t *conn, quicly_issued_cid_t *cid);
-
 static const quicly_transport_parameters_t default_transport_params = {.max_udp_payload_size = QUICLY_DEFAULT_MAX_UDP_PAYLOAD_SIZE,
                                                                        .ack_delay_exponent = QUICLY_DEFAULT_ACK_DELAY_EXPONENT,
                                                                        .max_ack_delay = QUICLY_DEFAULT_MAX_ACK_DELAY,
@@ -841,26 +839,6 @@ static size_t issued_cid_size(const quicly_conn_t *conn)
     if (capacity > QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT)
         capacity = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT;
     return capacity;
-}
-
-/**
- * initialize a new connection ID to be sent
- */
-static int generate_new_connection_id(quicly_conn_t *conn, quicly_issued_cid_t *cid)
-{
-    quicly_cid_encryptor_t *cid_encryptor = conn->super.ctx->cid_encryptor;
-
-    if (cid_encryptor == NULL || cid->state != QUICLY_ISSUED_CID_STATE_IDLE || conn->super.master_id.path_id >= QUICLY_MAX_PATH_ID)
-        return 1;
-
-    cid->sequence = conn->super.master_id.path_id;
-
-    cid_encryptor->encrypt_cid(cid_encryptor, &cid->cid, cid->stateless_reset_token, &conn->super.master_id);
-    cid->state = QUICLY_ISSUED_CID_STATE_PENDING;
-    conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
-    conn->super.master_id.path_id++;
-
-    return 0;
 }
 
 /**
@@ -1844,12 +1822,10 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         ctx->cid_encryptor->encrypt_cid(ctx->cid_encryptor, &conn->_.super.host.src_cid, &conn->_.super.host.stateless_reset_token,
                                         &conn->_.super.master_id);
         conn->_.super.master_id.path_id = 1;
-        quicly_issued_cid_init(&conn->_.issued_cid, generate_new_connection_id, &conn->_);
     } else {
         conn->_.super.master_id.path_id = QUICLY_MAX_PATH_ID;
-        /* initialize an empty set -- telling that we are not going to issue a CID */
-        quicly_issued_cid_init(&conn->_.issued_cid, NULL, NULL);
     }
+    quicly_issued_cid_init(&conn->_.issued_cid, ctx->cid_encryptor, &conn->_.super.master_id);
     quicly_received_cid_init(&conn->_.super.peer.cid_set);
     conn->_.super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
@@ -2536,10 +2512,12 @@ static int on_ack_new_connection_id(quicly_conn_t *conn, const quicly_sent_packe
     if (event == QUICLY_SENTMAP_EVENT_EXPIRED)
         return 0;
 
-    if (event == QUICLY_SENTMAP_EVENT_ACKED)
+    if (event == QUICLY_SENTMAP_EVENT_ACKED) {
         quicly_issued_cid_on_acked(&conn->issued_cid, sequence);
-    else if (event == QUICLY_SENTMAP_EVENT_LOST)
-        quicly_issued_cid_on_lost(&conn->issued_cid, sequence);
+    } else if (event == QUICLY_SENTMAP_EVENT_LOST) {
+        if (quicly_issued_cid_on_lost(&conn->issued_cid, sequence))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
+    }
 
     return 0;
 }
@@ -3786,7 +3764,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 
         /* schedule NEW_CONNECTION_IDs */
         size_t size = issued_cid_size(conn);
-        quicly_issued_cid_set_size(&conn->issued_cid, size);
+        if (quicly_issued_cid_set_size(&conn->issued_cid, size))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
     }
 
     return 0;
@@ -4817,7 +4796,8 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
 
     /* TODO: return PROTOCOL_VIOLATION if sequence is associated with a DCID of this packet */
 
-    quicly_issued_cid_retire(&conn->issued_cid, frame.sequence);
+    if (quicly_issued_cid_retire(&conn->issued_cid, frame.sequence))
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
     if (quicly_issued_cid_is_empty(&conn->issued_cid)) {
         /* the peer has retired every CID but we have exhausted the available CIDs (reached MAX_PATH_ID),
          * so there is no CID left for communication */
