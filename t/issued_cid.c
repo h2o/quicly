@@ -174,13 +174,33 @@ void test_issued_cid(void)
     ok(quicly_issued_cid_retire(&set, 6) != 0);
     ok(verify_array(&set) == 0);
 
-    quicly_issued_cid_on_sent(&set, 2);
+    quicly_issued_cid_on_sent(&set, 2); /* send 4,5 */
     ok(quicly_issued_cid_on_lost(&set, 4) != 0);
     quicly_issued_cid_on_acked(&set, 4); /* simulate late ack */
     quicly_issued_cid_on_acked(&set, 5);
     quicly_issued_cid_on_acked(&set, 5); /* simulate duplicate ack */
     ok(exists_once(&set, 4, QUICLY_ISSUED_CID_STATE_DELIVERED));
     ok(exists_once(&set, 5, QUICLY_ISSUED_CID_STATE_DELIVERED));
+    ok(exists_once(&set, 8, QUICLY_ISSUED_CID_STATE_PENDING));
+
+    /* at this moment sequence=0,1,2,3,6 have been retired */
+    ok(quicly_issued_cid_retire(&set, 4) != 0);
+    ok(quicly_issued_cid_retire(&set, 5) != 0);
+    /* sequence=0-6 have been retired */
+
+    /* try to exhaust CID */
+    size_t num_retired = 7;
+    uint64_t seq_to_retire = 7;
+    while (num_retired < QUICLY_MAX_PATH_ID) {
+        if (seq_to_retire == QUICLY_MAX_PATH_ID - 1) {
+            /* this is the maximum CID we can generate -- after retiring it, there should be no CID to send */
+            ok(quicly_issued_cid_retire(&set, seq_to_retire) == 0);
+        } else {
+            ok(quicly_issued_cid_retire(&set, seq_to_retire) != 0);
+        }
+        num_retired++;
+        seq_to_retire++;
+    }
 
     /* create a set with a NULL CID encryptor */
     quicly_issued_cid_set_t empty_set;
