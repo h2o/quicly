@@ -207,4 +207,20 @@ void test_issued_cid(void)
     quicly_issued_cid_init(&empty_set, NULL, NULL);
     ok(quicly_issued_cid_set_size(&empty_set, NUM_CIDS) == 0);
     ok(quicly_issued_cid_is_empty(&empty_set));
+
+    /* create a set with a size smaller than QUICLY_LOCAL_ACTIVE_CONNECTION_LIMIT */
+    PTLS_BUILD_ASSERT(NUM_CIDS >= 2);
+    quicly_cid_plaintext_t cid_plaintext2 = {0};
+    quicly_issued_cid_set_t small_set;
+    quicly_issued_cid_init(&small_set, &test_encryptor, &cid_plaintext2);
+    cid_plaintext2.path_id = 1;
+    ok(quicly_issued_cid_set_size(&small_set, NUM_CIDS - 1) != 0);
+    ok(verify_array(&small_set) == 0);
+    ok(num_pending(&small_set) == NUM_CIDS - 2);
+    ok(exists_once(&small_set, 0, QUICLY_ISSUED_CID_STATE_DELIVERED));
+    ok(exists_once(&small_set, 1, QUICLY_ISSUED_CID_STATE_PENDING));
+    ok(exists_once(&small_set, 2, QUICLY_ISSUED_CID_STATE_PENDING));
+    ok(!exists_once(&small_set, 3, QUICLY_ISSUED_CID_STATE_PENDING)); /* seq=3 should not exist yet */
+    ok(quicly_issued_cid_retire(&small_set, 0) != 0);
+    ok(exists_once(&small_set, 3, QUICLY_ISSUED_CID_STATE_PENDING));
 }
