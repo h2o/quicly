@@ -48,8 +48,7 @@ void quicly_retire_cid_push(quicly_retire_cid_set_t *set, uint64_t sequence)
 void quicly_retire_cid_shift(quicly_retire_cid_set_t *set, size_t num_shift)
 {
     assert(num_shift <= PTLS_ELEMENTSOF(set->sequences));
-    if (num_shift > set->_num_pending)
-        num_shift = set->_num_pending;
+    assert(num_shift <= set->_num_pending);
     /* move the remaining pending sequence numbers to the front */
     memmove(set->sequences, set->sequences + num_shift, sizeof(uint64_t) * (set->_num_pending - num_shift));
     set->_num_pending -= num_shift;
