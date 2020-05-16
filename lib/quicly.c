@@ -1813,7 +1813,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     set_address(&conn->_.super.peer.address, remote_addr);
     quicly_issued_cid_init_set(&conn->_.super.issued_cid, ctx->cid_encryptor, new_cid);
     conn->_.super.host.long_header_src_cid = conn->_.super.issued_cid.cids[0].cid;
-    quicly_consumed_cid_init(&conn->_.super.peer.cid_set);
+    quicly_consumed_cid_init_set(&conn->_.super.peer.cid_set);
     conn->_.super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
         ctx->tls->random_bytes(conn->_.super.peer.cid_set.cids[0].cid.cid, QUICLY_MIN_INITIAL_DCID_LEN);

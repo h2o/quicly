@@ -55,7 +55,7 @@ void test_received_cid(void)
 {
     quicly_consumed_cid_set_t set;
 
-    quicly_consumed_cid_init(&set);
+    quicly_consumed_cid_init_set(&set);
     /* fill CIDs */
     for (int i = 0; i < 4; i++)
         ok(quicly_consumed_cid_register(&set, i, cids[i], CID_LEN, srts[i]) == 0);

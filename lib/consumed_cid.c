@@ -23,7 +23,7 @@
 #include <string.h>
 #include "quicly/consumed_cid.h"
 
-void quicly_consumed_cid_init(quicly_consumed_cid_set_t *set)
+void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set)
 {
     memset(set, 0, sizeof(*set));
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {

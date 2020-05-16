@@ -69,7 +69,7 @@ typedef struct st_quicly_consumed_cid_set_t {
     uint64_t _largest_sequence_expected;
 } quicly_consumed_cid_set_t;
 
-void quicly_consumed_cid_init(quicly_consumed_cid_set_t *set);
+void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set);
 /**
  * registers received connection ID
  * returns 0 if successfully (registered or ignored because of duplication/stale information), transport error code otherwise
