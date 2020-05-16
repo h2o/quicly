@@ -19,24 +19,20 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-
 #include "quicly/issued_cid.h"
 
-void quicly_issued_cid_init_set(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor, quicly_cid_plaintext_t *plaintext)
+/**
+ * generates a new CID and increments path_id. returns true if successfully generated.
+ */
+static int generate_cid(quicly_issued_cid_set_t *set, size_t idx)
 {
-    memset(set, 0, sizeof(*set));
+    if (set->_encryptor == NULL || set->plaintext.path_id >= QUICLY_MAX_PATH_ID)
+        return 0;
 
-    if (encryptor == NULL)
-        return;
+    set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
+    set->cids[idx].sequence = set->plaintext.path_id++;
 
-    assert(plaintext != NULL);
-
-    set->_size = 1;
-    set->cids[0].state = QUICLY_ISSUED_CID_STATE_DELIVERED;
-    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
-        set->cids[i].sequence = UINT64_MAX;
-    set->_plaintext = plaintext;
-    set->_encryptor = encryptor;
+    return 1;
 }
 
 static void swap_cids(quicly_issued_cid_t *a, quicly_issued_cid_t *b)
@@ -72,18 +68,26 @@ static void do_mark_delivered(quicly_issued_cid_set_t *set, size_t idx)
     set->cids[idx].state = QUICLY_ISSUED_CID_STATE_DELIVERED;
 }
 
-/**
- * generates a new CID and increments path_id. returns true if successfully generated.
- */
-static int generate_cid(quicly_issued_cid_set_t *set, size_t idx)
+void quicly_issued_cid_init_set(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                                const quicly_cid_plaintext_t *new_cid)
 {
-    if (set->_encryptor == NULL || set->_plaintext->path_id >= QUICLY_MAX_PATH_ID)
-        return 0;
+    *set = (quicly_issued_cid_set_t){
+        ._encryptor = encryptor,
+        ._size = 1,
+    };
 
-    set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, set->_plaintext);
-    set->cids[idx].sequence = set->_plaintext->path_id++;
+    /* initialize cids[0] */
+    if (encryptor != NULL) {
+        assert(new_cid->path_id == 0);
+        set->plaintext = *new_cid;
+        generate_cid(set, 0);
+    } else {
+        /* we have a zero-length CID at cids[0] */
+    }
+    set->cids[0].state = QUICLY_ISSUED_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the peer */
 
-    return 1;
+    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
+        set->cids[i].sequence = UINT64_MAX;
 }
 
 int quicly_issued_cid_set_size(quicly_issued_cid_set_t *set, size_t size)

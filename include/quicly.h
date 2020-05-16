@@ -35,6 +35,7 @@ extern "C" {
 #include "picotls.h"
 #include "quicly/constants.h"
 #include "quicly/frame.h"
+#include "quicly/issued_cid.h"
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
 #include "quicly/cc.h"
@@ -378,9 +379,9 @@ struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
     /**
-     * identifier assigned by the application. `path_id` stores the next value to be issued
+     * connection IDs being issued to the peer
      */
-    quicly_cid_plaintext_t master_id;
+    quicly_issued_cid_set_t issued_cid;
     struct {
         /**
          * the local address (may be AF_UNSPEC)
@@ -390,11 +391,6 @@ struct _st_quicly_conn_public_t {
          * the SCID used in long header packets
          */
         quicly_cid_t src_cid;
-        /**
-         * stateless reset token announced by the host. We have only one token per connection. The token will cached in this
-         * variable when the generate_stateless_reset_token is non-NULL.
-         */
-        uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
         /**
          * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
          */
@@ -998,7 +994,7 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->master_id;
+    return &c->issued_cid.plaintext;
 }
 
 inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)

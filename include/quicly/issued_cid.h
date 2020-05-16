@@ -76,7 +76,11 @@ typedef struct st_quicly_issued_cid_set_t {
      */
     size_t _size;
     quicly_cid_encryptor_t *_encryptor;
-    quicly_cid_plaintext_t *_plaintext;
+    /**
+     * Identifier of the connection used by quicly. Three tuple of (node_id, thread_id, master_id) is used to identify the
+     * connection. `path_id` is maintained by the "issued_cid" module, and used for identifying each CID being issued.
+     */
+    quicly_cid_plaintext_t plaintext;
 } quicly_issued_cid_set_t;
 
 /**
@@ -85,7 +89,8 @@ typedef struct st_quicly_issued_cid_set_t {
  * If `encryptor` is non-NULL, it is initialized with size==1 (sequence==0 is registered as DELIVERED).
  * Otherwise, it is initialized with size==0, and the size shall never be increased.
  */
-void quicly_issued_cid_init_set(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor, quicly_cid_plaintext_t *plaintext);
+void quicly_issued_cid_init_set(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                                const quicly_cid_plaintext_t *new_cid);
 /**
  * sets a new size of issued CIDs.
  *
