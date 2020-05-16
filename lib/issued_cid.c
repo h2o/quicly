@@ -99,7 +99,6 @@ int quicly_issued_cid_set_size(quicly_issued_cid_set_t *set, size_t size)
 {
     int is_pending = 0;
 
-    assert(size >= 0);
     assert(size <= PTLS_ELEMENTSOF(set->cids));
     assert(set->_size <= size);
 
