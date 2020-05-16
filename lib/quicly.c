@@ -1825,7 +1825,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     } else {
         conn->_.super.master_id.path_id = QUICLY_MAX_PATH_ID;
     }
-    quicly_issued_cid_init(&conn->_.issued_cid, ctx->cid_encryptor, &conn->_.super.master_id);
+    quicly_issued_cid_init_set(&conn->_.issued_cid, ctx->cid_encryptor, &conn->_.super.master_id);
     quicly_received_cid_init(&conn->_.super.peer.cid_set);
     conn->_.super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {

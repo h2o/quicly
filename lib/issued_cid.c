@@ -22,7 +22,7 @@
 
 #include "quicly/issued_cid.h"
 
-void quicly_issued_cid_init(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor, quicly_cid_plaintext_t *plaintext)
+void quicly_issued_cid_init_set(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor, quicly_cid_plaintext_t *plaintext)
 {
     memset(set, 0, sizeof(*set));
 

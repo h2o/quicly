@@ -121,7 +121,7 @@ void test_issued_cid(void)
     quicly_cid_plaintext_t cid_plaintext = {0};
 
     /* initialize */
-    quicly_issued_cid_init(&set, &test_encryptor, &cid_plaintext);
+    quicly_issued_cid_init_set(&set, &test_encryptor, &cid_plaintext);
     ok(verify_array(&set) == 0);
     ok(num_pending(&set) == 0);
     ok(exists_once(&set, 0, QUICLY_ISSUED_CID_STATE_DELIVERED));
@@ -204,7 +204,7 @@ void test_issued_cid(void)
 
     /* create a set with a NULL CID encryptor */
     quicly_issued_cid_set_t empty_set;
-    quicly_issued_cid_init(&empty_set, NULL, NULL);
+    quicly_issued_cid_init_set(&empty_set, NULL, NULL);
     ok(quicly_issued_cid_set_size(&empty_set, NUM_CIDS) == 0);
     ok(quicly_issued_cid_is_empty(&empty_set));
 
@@ -212,7 +212,7 @@ void test_issued_cid(void)
     PTLS_BUILD_ASSERT(NUM_CIDS >= 2);
     quicly_cid_plaintext_t cid_plaintext2 = {0};
     quicly_issued_cid_set_t small_set;
-    quicly_issued_cid_init(&small_set, &test_encryptor, &cid_plaintext2);
+    quicly_issued_cid_init_set(&small_set, &test_encryptor, &cid_plaintext2);
     cid_plaintext2.path_id = 1;
     ok(quicly_issued_cid_set_size(&small_set, NUM_CIDS - 1) != 0);
     ok(verify_array(&small_set) == 0);

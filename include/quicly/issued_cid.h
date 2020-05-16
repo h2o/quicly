@@ -85,7 +85,7 @@ typedef struct st_quicly_issued_cid_set_t {
  * If `encryptor` is non-NULL, it is initialized with size==1 (sequence==0 is registered as DELIVERED).
  * Otherwise, it is initialized with size==0, and the size shall never be increased.
  */
-void quicly_issued_cid_init(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor, quicly_cid_plaintext_t *plaintext);
+void quicly_issued_cid_init_set(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor, quicly_cid_plaintext_t *plaintext);
 /**
  * sets a new size of issued CIDs.
  *
