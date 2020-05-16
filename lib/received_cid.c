@@ -107,7 +107,8 @@ static void do_unregister(struct st_quicly_received_cid_set_t *set, size_t idx_t
 
 int quicly_received_cid_unregister(struct st_quicly_received_cid_set_t *set, uint64_t sequence)
 {
-    uint64_t min_seq = UINT64_MAX, min_seq_idx = UINT64_MAX;
+    uint64_t min_seq = UINT64_MAX;
+    size_t min_seq_idx = SIZE_MAX;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
         if (sequence == set->cids[i].sequence) {
             do_unregister(set, i);
@@ -123,7 +124,7 @@ int quicly_received_cid_unregister(struct st_quicly_received_cid_set_t *set, uin
 
     if (!set->cids[0].is_active) {
         /* we have retired the current CID (idx=0) */
-        if (min_seq_idx != UINT64_MAX)
+        if (min_seq_idx != SIZE_MAX)
             promote_cid(set, min_seq_idx);
         return 0;
     } else {
