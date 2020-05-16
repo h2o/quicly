@@ -29,9 +29,6 @@
 extern "C" {
 #endif
 
-typedef struct st_quicly_issued_cid_set_t quicly_issued_cid_set_t;
-typedef struct st_quicly_issued_cid_t quicly_issued_cid_t;
-
 enum en_quicly_issued_cid_state_t {
     /**
      * this entry is free for use
@@ -54,17 +51,17 @@ enum en_quicly_issued_cid_state_t {
 /**
  * records information for sending NEW_CONNECTION_ID frame
  */
-struct st_quicly_issued_cid_t {
+typedef struct st_quicly_issued_cid_t {
     enum en_quicly_issued_cid_state_t state;
     uint64_t sequence;
     quicly_cid_t cid;
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
-};
+} quicly_issued_cid_t;
 
 /**
  * manages a list of connection IDs we issue to the peer
  */
-struct st_quicly_issued_cid_set_t {
+typedef struct st_quicly_issued_cid_set_t {
     /**
      * storage to retain issued CIDs
      *
@@ -73,14 +70,14 @@ struct st_quicly_issued_cid_set_t {
      *
      * Actual size of the array is constrained by _size.
      */
-    struct st_quicly_issued_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+    quicly_issued_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
     /**
      * how many entries are actually usable in `cids`?
      */
     size_t _size;
     quicly_cid_encryptor_t *_encryptor;
     quicly_cid_plaintext_t *_plaintext;
-};
+} quicly_issued_cid_set_t;
 
 /**
  * initialize the structure
