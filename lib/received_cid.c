@@ -23,7 +23,7 @@
 #include <string.h>
 #include "quicly/received_cid.h"
 
-void quicly_received_cid_init(struct st_quicly_received_cid_set_t *set)
+void quicly_received_cid_init(quicly_received_cid_set_t *set)
 {
     memset(set, 0, sizeof(*set));
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
@@ -36,7 +36,7 @@ void quicly_received_cid_init(struct st_quicly_received_cid_set_t *set)
  * promote CID at idx_to_promote as the current CID for communication
  * i.e. swap cids[idx_to_promote] and cids[0]
  */
-static void promote_cid(struct st_quicly_received_cid_set_t *set, size_t idx_to_promote)
+static void promote_cid(quicly_received_cid_set_t *set, size_t idx_to_promote)
 {
     uint64_t seq_tmp = set->cids[0].sequence;
 
@@ -48,7 +48,7 @@ static void promote_cid(struct st_quicly_received_cid_set_t *set, size_t idx_to_
     set->cids[idx_to_promote].sequence = seq_tmp;
 }
 
-int quicly_received_cid_register(struct st_quicly_received_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+int quicly_received_cid_register(quicly_received_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
                                  const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
 {
     int was_stored = 0;
@@ -97,7 +97,7 @@ int quicly_received_cid_register(struct st_quicly_received_cid_set_t *set, uint6
     return 0;
 }
 
-static void do_unregister(struct st_quicly_received_cid_set_t *set, size_t idx_to_unreg)
+static void do_unregister(quicly_received_cid_set_t *set, size_t idx_to_unreg)
 {
     assert(set->cids[idx_to_unreg].is_active);
 
@@ -105,7 +105,7 @@ static void do_unregister(struct st_quicly_received_cid_set_t *set, size_t idx_t
     set->cids[idx_to_unreg].sequence = ++set->_largest_sequence_expected;
 }
 
-int quicly_received_cid_unregister(struct st_quicly_received_cid_set_t *set, uint64_t sequence)
+int quicly_received_cid_unregister(quicly_received_cid_set_t *set, uint64_t sequence)
 {
     uint64_t min_seq = UINT64_MAX;
     size_t min_seq_idx = SIZE_MAX;
@@ -133,7 +133,7 @@ int quicly_received_cid_unregister(struct st_quicly_received_cid_set_t *set, uin
     }
 }
 
-size_t quicly_received_cid_unregister_prior_to(struct st_quicly_received_cid_set_t *set, uint64_t seq_unreg_prior_to,
+size_t quicly_received_cid_unregister_prior_to(quicly_received_cid_set_t *set, uint64_t seq_unreg_prior_to,
                                                uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT])
 {
     uint64_t min_seq = UINT64_MAX, min_seq_idx = UINT64_MAX;
