@@ -19,9 +19,8 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-
-#ifndef issued_cid_h
-#define issued_cid_h
+#ifndef quicly_issued_cid_h
+#define quicly_issued_cid_h
 
 #include "quicly/cid.h"
 
