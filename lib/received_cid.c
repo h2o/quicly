@@ -19,7 +19,8 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-
+#include <assert.h>
+#include <string.h>
 #include "quicly/received_cid.h"
 
 void quicly_received_cid_init(struct st_quicly_received_cid_set_t *set)
