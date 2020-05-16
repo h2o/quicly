@@ -21,6 +21,11 @@
  */
 #include "quicly/issued_cid.h"
 
+static int has_pending(quicly_issued_cid_set_t *set)
+{
+    return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+}
+
 /**
  * generates a new CID and increments path_id. returns true if successfully generated.
  */
@@ -160,11 +165,11 @@ int quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence)
 {
     size_t i = find_index(set, sequence);
     if (i == SIZE_MAX)
-        return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+        return has_pending(set);
 
     /* if it's already delivered, ignore the packet loss event (no need for retransmission) */
     if (set->cids[i].state == QUICLY_ISSUED_CID_STATE_DELIVERED)
-        return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+        return has_pending(set);
 
     do_mark_pending(set, i);
 
@@ -184,7 +189,7 @@ int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)
         break;
     }
     if (retired_at == set->_size) /* not found */
-        return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+        return has_pending(set);
 
     /* move following PENDING CIDs to front */
     for (size_t i = retired_at + 1; i < set->_size; i++) {
@@ -199,5 +204,5 @@ int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)
         return 1;
     }
 
-    return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+    return has_pending(set);
 }
