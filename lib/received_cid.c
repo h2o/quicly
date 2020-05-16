@@ -78,7 +78,8 @@ int quicly_received_cid_register(struct st_quicly_received_cid_set_t *set, uint6
             /* here we know CID is not equal */
             if (set->cids[i].sequence == sequence)
                 return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-        } else if (!was_stored && set->cids[i].sequence == sequence) {
+        } else if (set->cids[i].sequence == sequence) {
+            assert(!was_stored);
             set->cids[i].sequence = sequence;
             quicly_set_cid(&set->cids[i].cid, ptls_iovec_init(cid, cid_len));
             memcpy(set->cids[i].stateless_reset_token, srt, QUICLY_STATELESS_RESET_TOKEN_LEN);

@@ -47,7 +47,13 @@ struct st_quicly_received_cid_t {
      * with this sequence number. This helps determine if a received frame is carrying a CID that is already retired.
      */
     uint64_t sequence;
+    /**
+     * CID; only usable if `is_active` is true
+     */
     struct st_quicly_cid_t cid;
+    /**
+     * stateless reset token; only usable if `is_active` is true
+     */
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
 };
 
