@@ -834,6 +834,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
                                            const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by);
 /**
  *
+ * @param stateless_reset_token  [client-only] if the corresponding transport parameter is used, the provided token is written back
+ *                               to this vector. When the transport parameter does not exist, the vector is left unmodified.
  */
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, void *stateless_reset_token,
                                            int is_client, const uint8_t *src, const uint8_t *end);

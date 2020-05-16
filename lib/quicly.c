@@ -42,8 +42,6 @@
 #endif
 #include "quicly/retire_cid.h"
 
-#define QUICLY_MIN_INITIAL_DCID_LEN 8
-
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS 0xffa5
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT 1
@@ -1624,8 +1622,6 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
     *params = default_transport_params;
     if (odcid != NULL)
         odcid->len = 0;
-    if (stateless_reset_token != NULL)
-        memset(stateless_reset_token, 0, QUICLY_STATELESS_RESET_TOKEN_LEN);
 
     /* decode the parameters block */
     while (src != end) {
@@ -1784,7 +1780,7 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
 }
 
 static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *remote_addr,
-                                        struct sockaddr *local_addr, const quicly_cid_plaintext_t *new_cid,
+                                        struct sockaddr *local_addr, ptls_iovec_t *peer_cid, const quicly_cid_plaintext_t *host_cid,
                                         ptls_handshake_properties_t *handshake_properties, uint32_t initcwnd)
 {
     ptls_t *tls = NULL;
@@ -1811,13 +1807,11 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->_.super.ctx = ctx;
     set_address(&conn->_.super.host.address, local_addr);
     set_address(&conn->_.super.peer.address, remote_addr);
-    quicly_issued_cid_init_set(&conn->_.super.issued_cid, ctx->cid_encryptor, new_cid);
+    quicly_issued_cid_init_set(&conn->_.super.issued_cid, ctx->cid_encryptor, host_cid);
     conn->_.super.host.long_header_src_cid = conn->_.super.issued_cid.cids[0].cid;
-    quicly_consumed_cid_init_set(&conn->_.super.peer.cid_set);
+    quicly_consumed_cid_init_set(&conn->_.super.peer.cid_set, peer_cid, ctx->tls->random_bytes);
     conn->_.super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
-        ctx->tls->random_bytes(conn->_.super.peer.cid_set.cids[0].cid.cid, QUICLY_MIN_INITIAL_DCID_LEN);
-        conn->_.super.peer.cid_set.cids[0].cid.len = QUICLY_MIN_INITIAL_DCID_LEN;
         conn->_.super.host.bidi.next_stream_id = 0;
         conn->_.super.host.uni.next_stream_id = 2;
         conn->_.super.peer.bidi.next_stream_id = 1;
@@ -1926,7 +1920,6 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     }
 
     /* store the results */
-    conn->super.peer.cid_set.cids[0].is_active = 1;
     conn->super.peer.transport_params = params;
     ack_frequency_set_next_update_at(conn);
 
@@ -1947,7 +1940,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     update_now(ctx);
 
-    if ((conn = create_connection(ctx, server_name, dest_addr, src_addr, new_cid, handshake_properties,
+    if ((conn = create_connection(ctx, server_name, dest_addr, src_addr, NULL, new_cid, handshake_properties,
                                   quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
@@ -5015,13 +5008,12 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         goto Exit;
 
     /* create connection */
-    if ((*conn = create_connection(ctx, NULL, src_addr, dest_addr, new_cid, handshake_properties,
+    if ((*conn = create_connection(ctx, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
                                    quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
     (*conn)->super.state = QUICLY_STATE_CONNECTED;
-    quicly_set_cid(&(*conn)->super.peer.cid_set.cids[0].cid, packet->cid.src);
     quicly_set_cid(&(*conn)->super.host.offered_cid, packet->cid.dest.encrypted);
     if (address_token != NULL) {
         (*conn)->super.peer.address_validation.validated = 1;

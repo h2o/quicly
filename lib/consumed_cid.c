@@ -20,15 +20,29 @@
  * IN THE SOFTWARE.
  */
 #include <assert.h>
-#include <string.h>
+#include "quicly/constants.h"
 #include "quicly/consumed_cid.h"
 
-void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set)
+void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set, ptls_iovec_t *initial_cid, void (*random_bytes)(void *, size_t))
 {
-    memset(set, 0, sizeof(*set));
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        set->cids[i].sequence = i;
+    set->cids[0] = (quicly_consumed_cid_t){
+        .is_active = 1,
+        .sequence = 0,
+    };
+    if (initial_cid != NULL) {
+        quicly_set_cid(&set->cids[0].cid, *initial_cid);
+    } else {
+        random_bytes(set->cids[0].cid.cid, QUICLY_MIN_INITIAL_DCID_LEN);
+        set->cids[0].cid.len = QUICLY_MIN_INITIAL_DCID_LEN;
     }
+    random_bytes(set->cids[0].stateless_reset_token, sizeof(set->cids[0].stateless_reset_token));
+
+    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
+        set->cids[i] = (quicly_consumed_cid_t){
+            .is_active = 0,
+            .sequence = i,
+        };
+
     set->_largest_sequence_expected = PTLS_ELEMENTSOF(set->cids) - 1;
 }
 
