@@ -175,20 +175,35 @@ int quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence)
     return 1;
 }
 
-int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)
+int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence, int *_has_pending)
 {
+    /* find the CID to be retired, also check if there is at least one CID that has been issued */
     size_t retired_at = set->_size;
+    int becomes_empty = 1;
     for (size_t i = 0; i < set->_size; i++) {
-        if (set->cids[i].sequence != sequence || set->cids[i].state == QUICLY_ISSUED_CID_STATE_IDLE)
+        if (set->cids[i].state == QUICLY_ISSUED_CID_STATE_IDLE)
             continue;
-
-        retired_at = i;
-        set->cids[i].state = QUICLY_ISSUED_CID_STATE_IDLE;
-        set->cids[i].sequence = UINT64_MAX;
-        break;
+        if (set->cids[i].sequence == sequence) {
+            assert(retired_at == set->_size);
+            retired_at = i;
+        } else {
+            becomes_empty = 0;
+        }
     }
-    if (retired_at == set->_size) /* not found */
-        return has_pending(set);
+
+    /* nothing to do if given CID has been retired already */
+    if (retired_at == set->_size) {
+        *_has_pending = has_pending(set);
+        return 0;
+    }
+
+    /* it is a protocol violation for the peer to retire the only CID that is available to it */
+    if (becomes_empty)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
+    /* retire given CID */
+    set->cids[retired_at].state = QUICLY_ISSUED_CID_STATE_IDLE;
+    set->cids[retired_at].sequence = UINT64_MAX;
 
     /* move following PENDING CIDs to front */
     for (size_t i = retired_at + 1; i < set->_size; i++) {
@@ -197,11 +212,14 @@ int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)
         swap_cids(&set->cids[i], &set->cids[retired_at]);
         retired_at = i;
     }
+
     /* generate one new CID */
     if (generate_cid(set, retired_at)) {
         do_mark_pending(set, retired_at);
-        return 1;
+        *_has_pending = 1;
+    } else {
+        *_has_pending = has_pending(set);
     }
 
-    return has_pending(set);
+    return 0;
 }

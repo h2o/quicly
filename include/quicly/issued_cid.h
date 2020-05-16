@@ -102,7 +102,6 @@ int quicly_issued_cid_set_size(quicly_issued_cid_set_t *set, size_t new_cap);
 /**
  * returns true if all entries in the given set is in IDLE state
  */
-static int quicly_issued_cid_is_empty(const quicly_issued_cid_set_t *set);
 static size_t quicly_issued_cid_get_size(const quicly_issued_cid_set_t *set);
 /**
  * tells the module that the first `num_sent` pending CIDs have been sent
@@ -122,18 +121,11 @@ int quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence);
  * remove the specified CID from the storage.
  *
  * This makes one slot for CIDs empty. The CID generator callback is then called to fill the slot with a new CID.
- * @return true if there is something to send
+ * @return 0 if the request was legal, otherwise an error code
  */
-int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence);
+int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence, int *has_pending);
 
-inline int quicly_issued_cid_is_empty(const quicly_issued_cid_set_t *set)
-{
-    for (size_t i = 0; i < set->_size; i++) {
-        if (set->cids[i].state != QUICLY_ISSUED_CID_STATE_IDLE)
-            return 0;
-    }
-    return 1;
-}
+/* inline definitions */
 
 inline size_t quicly_issued_cid_get_size(const quicly_issued_cid_set_t *set)
 {

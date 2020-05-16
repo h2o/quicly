@@ -1812,7 +1812,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     set_address(&conn->_.super.host.address, local_addr);
     set_address(&conn->_.super.peer.address, remote_addr);
     quicly_issued_cid_init_set(&conn->_.super.issued_cid, ctx->cid_encryptor, new_cid);
-    conn->_.super.host.src_cid = conn->_.super.issued_cid.cids[0].cid; // use the issued CID as SCID of long header packets
+    conn->_.super.host.long_header_src_cid = conn->_.super.issued_cid.cids[0].cid;
     quicly_received_cid_init(&conn->_.super.peer.cid_set);
     conn->_.super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
@@ -2794,7 +2794,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
                               s->current.cipher->aead->algo->tag_size;
             if (QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte))
                 overhead += 4 /* version */ + 1 /* cidl */ + conn->super.peer.cid_set.cids[0].cid.len +
-                            conn->super.host.src_cid.len +
+                            conn->super.host.long_header_src_cid.len +
                             (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL) /* token_length == 0 */ + 2 /* length */;
             size_t packet_min_space = QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE;
             if (packet_min_space < min_space)
@@ -2838,8 +2838,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         s->dst = quicly_encode32(s->dst, conn->super.version);
         *s->dst++ = conn->super.peer.cid_set.cids[0].cid.len;
         s->dst = emit_cid(s->dst, &conn->super.peer.cid_set.cids[0].cid);
-        *s->dst++ = conn->super.host.src_cid.len;
-        s->dst = emit_cid(s->dst, &conn->super.host.src_cid);
+        *s->dst++ = conn->super.host.long_header_src_cid.len;
+        s->dst = emit_cid(s->dst, &conn->super.host.long_header_src_cid);
         /* token */
         if (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL) {
             s->dst = quicly_encodev(s->dst, conn->token.len);
@@ -4767,7 +4767,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
 
 static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
-    int ret;
+    int ret, has_pending;
     quicly_retire_connection_id_frame_t frame;
 
     if ((ret = quicly_decode_retire_connection_id_frame(&state->src, state->end, &frame)) != 0)
@@ -4781,16 +4781,10 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     }
 
-    /* TODO: return PROTOCOL_VIOLATION if sequence is associated with a DCID of this packet */
-
-    if (quicly_issued_cid_retire(&conn->super.issued_cid, frame.sequence))
+    if ((ret = quicly_issued_cid_retire(&conn->super.issued_cid, frame.sequence, &has_pending)) != 0)
+        return ret;
+    if (has_pending)
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
-    /* FIXME we can't retire the last CID? */
-    if (quicly_issued_cid_is_empty(&conn->super.issued_cid)) {
-        /* the peer has retired every CID but we have exhausted the available CIDs (reached MAX_PATH_ID),
-         * so there is no CID left for communication */
-        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-    }
 
     return 0;
 }

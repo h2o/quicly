@@ -388,9 +388,10 @@ struct _st_quicly_conn_public_t {
          */
         quicly_address_t address;
         /**
-         * the SCID used in long header packets
+         * the SCID used in long header packets. Equiavalent to issued_cid[seq=0]. Retaining the value separately is the easiest way
+         * of staying away from the complexity caused by peer sending RCID frames before the handshake concludes.
          */
-        quicly_cid_t src_cid;
+        quicly_cid_t long_header_src_cid;
         /**
          * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
          */
