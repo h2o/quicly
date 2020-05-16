@@ -43,7 +43,7 @@ extern "C" {
 #include "quicly/sendstate.h"
 #include "quicly/maxsender.h"
 #include "quicly/cid.h"
-#include "quicly/received_cid.h"
+#include "quicly/consumed_cid.h"
 
 #ifndef QUICLY_DEBUG
 #define QUICLY_DEBUG 0
@@ -406,7 +406,7 @@ struct _st_quicly_conn_public_t {
         /**
          * CIDs received from the peer
          */
-        struct st_quicly_received_cid_set_t cid_set;
+        quicly_consumed_cid_set_t cid_set;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
