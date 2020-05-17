@@ -77,23 +77,17 @@ typedef struct st_quicly_consumed_cid_set_t {
 void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set, ptls_iovec_t *initial_cid, void (*random_bytes)(void *, size_t));
 /**
  * registers received connection ID
- * returns 0 if successfully (registered or ignored because of duplication/stale information), transport error code otherwise
+ * returns 0 if successful (registered or ignored because of duplication/stale information), transport error code otherwise
  */
 int quicly_consumed_cid_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                                 const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN]);
+                                 const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to,
+                                 uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT],
+                                 size_t *num_unregistered_seqs);
 /**
  * unregisters specified CID from the store
  * returns 0 if success, 1 if failure
  */
 int quicly_consumed_cid_unregister(quicly_consumed_cid_set_t *set, uint64_t sequence);
-/**
- * unregister all CIDs with sequence number smaller than seq_unreg_prior_to
- *
- * @param unregistered_seqs sequence numbers of unregistered CIDs are returned, packed from the begining of the array
- * @return the number of unregistered CIDs
- */
-size_t quicly_consumed_cid_unregister_prior_to(quicly_consumed_cid_set_t *set, uint64_t seq_unreg_prior_to,
-                                               uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT]);
 
 #ifdef __cplusplus
 }

@@ -62,8 +62,8 @@ static void promote_cid(quicly_consumed_cid_set_t *set, size_t idx_to_promote)
     set->cids[idx_to_promote].sequence = seq_tmp;
 }
 
-int quicly_consumed_cid_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                                 const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
+static int do_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                       const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
 {
     int was_stored = 0;
 
@@ -147,8 +147,8 @@ int quicly_consumed_cid_unregister(quicly_consumed_cid_set_t *set, uint64_t sequ
     }
 }
 
-size_t quicly_consumed_cid_unregister_prior_to(quicly_consumed_cid_set_t *set, uint64_t seq_unreg_prior_to,
-                                               uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT])
+static size_t unregister_prior_to(quicly_consumed_cid_set_t *set, uint64_t seq_unreg_prior_to,
+                                  uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT])
 {
     uint64_t min_seq = UINT64_MAX, min_seq_idx = UINT64_MAX;
     size_t num_unregistered = 0;
@@ -174,4 +174,28 @@ size_t quicly_consumed_cid_unregister_prior_to(quicly_consumed_cid_set_t *set, u
     }
 
     return num_unregistered;
+}
+
+int quicly_consumed_cid_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                                 const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to,
+                                 uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT], size_t *num_unregistered_seqs)
+{
+    quicly_consumed_cid_t backup_cid = set->cids[0]; // preserve one valid entry in cids[0] to handle protocol violation
+    int ret;
+
+    assert(sequence >= retire_prior_to);
+
+    /* First, handle retire_prior_to. This order is important as it is possible to receive a NEW_CONNECTION_ID frame such that it
+     * retires active_connection_id_limit CIDs and then installs one new CID. */
+    *num_unregistered_seqs = unregister_prior_to(set, retire_prior_to, unregistered_seqs);
+
+    /* Then, register given value. */
+    if ((ret = do_register(set, sequence, cid, cid_len, srt)) != 0) {
+        /* restore the backup and send the error */
+        if (!set->cids[0].is_active)
+            set->cids[0] = backup_cid;
+        return ret;
+    }
+
+    return ret;
 }

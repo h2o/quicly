@@ -4740,18 +4740,15 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         return 0;
     }
 
-    uint64_t retire_sequences[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
-    /* First, handle retire_prior_to field.
-     * This order is important as it is possible to receive a NEW_CONNECTION_ID frame such that it retires
-     * active_connection_id_limit CIDs and then installs one new CID. */
-    size_t num_unregistered =
-        quicly_consumed_cid_unregister_prior_to(&conn->super.peer.cid_set, frame.retire_prior_to, retire_sequences);
-    for (size_t i = 0; i < num_unregistered; i++)
-        schedule_retire_connection_id_frame(conn, retire_sequences[i]);
-
+    uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+    size_t num_unregistered_seqs;
     if ((ret = quicly_consumed_cid_register(&conn->super.peer.cid_set, frame.sequence, frame.cid.base, frame.cid.len,
-                                            frame.stateless_reset_token)) != 0)
+                                            frame.stateless_reset_token, frame.retire_prior_to, unregistered_seqs,
+                                            &num_unregistered_seqs)) != 0)
         return ret;
+
+    for (size_t i = 0; i < num_unregistered_seqs; i++)
+        schedule_retire_connection_id_frame(conn, unregistered_seqs[i]);
 
     if (frame.retire_prior_to > conn->super.peer.largest_retire_prior_to)
         conn->super.peer.largest_retire_prior_to = frame.retire_prior_to;
