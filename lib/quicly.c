@@ -1897,6 +1897,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     quicly_cid_t odcid;
 
     /* decode and validate */
+    assert(conn->super.peer.cid_set.cids[0].sequence == 0);
     if ((ret = quicly_decode_transport_parameter_list(&params, &odcid, conn->super.peer.cid_set.cids[0].stateless_reset_token, 1,
                                                       src, end)) != 0)
         goto Exit;
