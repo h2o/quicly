@@ -801,7 +801,7 @@ void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
     }
 }
 
-static int schedule_path_challenge(quicly_conn_t *conn, int is_response, const uint8_t *data)
+static int schedule_path_challenge_frame(quicly_conn_t *conn, int is_response, const uint8_t *data)
 {
     struct st_quicly_pending_path_challenge_t *pending;
 
@@ -837,7 +837,7 @@ static size_t issued_cid_size(const quicly_conn_t *conn)
 /**
  * set up an internal record to send RETIRE_CONNECTION_ID frame later
  */
-static void schedule_retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
+static void schedule_retire_connection_id_frame(quicly_conn_t *conn, uint64_t sequence)
 {
     quicly_retire_cid_push(&conn->egress.retire_cid, sequence);
     conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
@@ -2510,7 +2510,7 @@ static int on_ack_retire_connection_id(quicly_conn_t *conn, const quicly_sent_pa
 
     if (event == QUICLY_SENTMAP_EVENT_LOST) {
         /* reschedule transmission */
-        schedule_retire_connection_id(conn, sequence);
+        schedule_retire_connection_id_frame(conn, sequence);
     }
 
     return 0;
@@ -4469,7 +4469,7 @@ static int handle_path_challenge_frame(quicly_conn_t *conn, struct st_quicly_han
 
     if ((ret = quicly_decode_path_challenge_frame(&state->src, state->end, &frame)) != 0)
         return ret;
-    return schedule_path_challenge(conn, 1, frame.data);
+    return schedule_path_challenge_frame(conn, 1, frame.data);
 }
 
 static int handle_path_response_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
@@ -4734,7 +4734,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
          * that retires the newly received connection ID, unless it has already done so for that sequence number. (19.15)
          * TODO: "unless ..." part may not be properly addressed here (we may already have sent the RCID frame for this
          * sequence) */
-        schedule_retire_connection_id(conn, frame.sequence);
+        schedule_retire_connection_id_frame(conn, frame.sequence);
         /* do not install this CID */
         return 0;
     }
@@ -4746,7 +4746,7 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
     size_t num_unregistered =
         quicly_consumed_cid_unregister_prior_to(&conn->super.peer.cid_set, frame.retire_prior_to, retire_sequences);
     for (size_t i = 0; i < num_unregistered; i++)
-        schedule_retire_connection_id(conn, retire_sequences[i]);
+        schedule_retire_connection_id_frame(conn, retire_sequences[i]);
 
     if ((ret = quicly_consumed_cid_register(&conn->super.peer.cid_set, frame.sequence, frame.cid.base, frame.cid.len,
                                             frame.stateless_reset_token)) != 0)
