@@ -233,8 +233,8 @@ struct st_quicly_context_t {
     ptls_context_t *tls;
     /**
      * Maximum size of packets that we are willing to send when path-specific information is unavailable. As a path-specific
-     * * optimization, quicly acting as a server expands this value to `min(host.tp.max_udp_payload_size,
-     * * peer.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters from the client.
+     * * optimization, quicly acting as a server expands this value to `min(local.tp.max_udp_payload_size,
+     * * remote.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters from the client.
      */
     uint16_t initial_egress_max_udp_payload_size;
     /**
@@ -397,7 +397,7 @@ struct _st_quicly_conn_public_t {
          */
         quicly_cid_t offered_cid;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
-    } host;
+    } local;
     struct {
         /**
          * the remote address (cannot be AF_UNSPEC)
@@ -417,7 +417,7 @@ struct _st_quicly_conn_public_t {
          * largest value of Retire Prior To field observed so far
          */
         uint64_t largest_retire_prior_to;
-    } peer;
+    } remote;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
         QUICLY_STATS_PREBUILT_FIELDS;
@@ -985,7 +985,7 @@ inline quicly_state_t quicly_get_state(quicly_conn_t *conn)
 inline uint32_t quicly_num_streams(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return c->host.bidi.num_streams + c->host.uni.num_streams + c->peer.bidi.num_streams + c->peer.uni.num_streams;
+    return c->local.bidi.num_streams + c->local.uni.num_streams + c->remote.bidi.num_streams + c->remote.uni.num_streams;
 }
 
 inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
@@ -1003,49 +1003,49 @@ inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
 inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->host.offered_cid;
+    return &c->local.offered_cid;
 }
 
 inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->peer.cid_set.cids[0].cid;
+    return &c->remote.cid_set.cids[0].cid;
 }
 
 inline const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->peer.transport_params;
+    return &c->remote.transport_params;
 }
 
 inline int quicly_is_client(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return (c->host.bidi.next_stream_id & 1) == 0;
+    return (c->local.bidi.next_stream_id & 1) == 0;
 }
 
 inline quicly_stream_id_t quicly_get_host_next_stream_id(quicly_conn_t *conn, int uni)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return uni ? c->host.uni.next_stream_id : c->host.bidi.next_stream_id;
+    return uni ? c->local.uni.next_stream_id : c->local.bidi.next_stream_id;
 }
 
 inline quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, int uni)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return uni ? c->peer.uni.next_stream_id : c->peer.bidi.next_stream_id;
+    return uni ? c->remote.uni.next_stream_id : c->remote.bidi.next_stream_id;
 }
 
 inline struct sockaddr *quicly_get_sockname(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->host.address.sa;
+    return &c->local.address.sa;
 }
 
 inline struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->peer.address.sa;
+    return &c->remote.address.sa;
 }
 
 inline void **quicly_get_data(quicly_conn_t *conn)
