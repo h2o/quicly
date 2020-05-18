@@ -495,10 +495,10 @@ int main(int argc, char **argv)
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
+    subtest("cid", test_cid);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("loss", test_loss);
-    subtest("cid", test_cid);
 
     return done_testing();
 }

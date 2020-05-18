@@ -21,7 +21,7 @@
  */
 
 #include "test.h"
-#include "quicly/received_cid.h"
+#include "quicly/consumed_cid.h"
 
 #define CID_LEN 8
 
@@ -53,52 +53,62 @@ static uint8_t srts[][QUICLY_STATELESS_RESET_TOKEN_LEN] = {
 
 void test_received_cid(void)
 {
-    quicly_received_cid_set_t set;
+    quicly_consumed_cid_set_t set;
+    uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+    size_t num_unregistered;
 
-    quicly_received_cid_init(&set);
+    quicly_consumed_cid_init_set(&set, NULL, quic_ctx.tls->random_bytes);
     /* fill CIDs */
-    for (int i = 0; i < 4; i++)
-        ok(quicly_received_cid_register(&set, i, cids[i], CID_LEN, srts[i]) == 0);
+    for (int i = 1; i < 4; i++) {
+        ok(quicly_consumed_cid_register(&set, i, cids[i], CID_LEN, srts[i], 0, unregistered_seqs, &num_unregistered) == 0);
+        ok(num_unregistered == 0);
+    }
     /* active CIDs = {*0, 1, 2, 3} (*0 is the current one) */
 
     /* dup */
-    ok(quicly_received_cid_register(&set, 1, cids[1], CID_LEN, srts[1]) == 0);
+    ok(quicly_consumed_cid_register(&set, 1, cids[1], CID_LEN, srts[1], 0, unregistered_seqs, &num_unregistered) == 0);
+    ok(num_unregistered == 0);
     /* same CID with different sequence number */
-    ok(quicly_received_cid_register(&set, 0, cids[1], CID_LEN, srts[1]) != 0);
+    ok(quicly_consumed_cid_register(&set, 0, cids[1], CID_LEN, srts[1], 0, unregistered_seqs, &num_unregistered) != 0);
+    ok(num_unregistered == 0);
     /* already full */
-    ok(quicly_received_cid_register(&set, 4, cids[4], CID_LEN, srts[4]) == QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT);
+    ok(quicly_consumed_cid_register(&set, 4, cids[4], CID_LEN, srts[4], 0, unregistered_seqs, &num_unregistered) ==
+       QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT);
+    ok(set.cids[0].is_active && "we have CID to send error");
 
     /* try to unregister something doesn't exist */
-    ok(quicly_received_cid_unregister(&set, 255) != 0);
+    ok(quicly_consumed_cid_unregister(&set, 255) != 0);
     /* retire seq=0 */
-    ok(quicly_received_cid_unregister(&set, 0) == 0);
+    ok(quicly_consumed_cid_unregister(&set, 0) == 0);
     /* active CIDs = {*1, 2, 3} */
     ok(set.cids[0].is_active);
     ok(set.cids[0].sequence == 1);
     ok(memcmp(set.cids[0].cid.cid, cids[1], CID_LEN) == 0);
     ok(memcmp(set.cids[0].stateless_reset_token, srts[1], QUICLY_STATELESS_RESET_TOKEN_LEN) == 0);
     /* try to unregister sequence which is already unregistered */
-    ok(quicly_received_cid_unregister(&set, 0) != 0);
+    ok(quicly_consumed_cid_unregister(&set, 0) != 0);
     /* sequence number out of current acceptable window */
-    ok(quicly_received_cid_register(&set, 255, cids[4], CID_LEN, srts[4]) == QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT);
+    ok(quicly_consumed_cid_register(&set, 255, cids[4], CID_LEN, srts[4], 0, unregistered_seqs, &num_unregistered) ==
+       QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT);
+    ok(set.cids[0].is_active && "we have CID to send error");
 
     /* ignore already retired CID */
-    ok(quicly_received_cid_register(&set, 0, cids[0], CID_LEN, srts[0]) == 0);
+    ok(quicly_consumed_cid_register(&set, 0, cids[0], CID_LEN, srts[0], 0, unregistered_seqs, &num_unregistered) == 0);
+    ok(num_unregistered == 0);
 
     /* register 5th CID */
-    ok(quicly_received_cid_register(&set, 4, cids[4], CID_LEN, srts[4]) == 0);
+    ok(quicly_consumed_cid_register(&set, 4, cids[4], CID_LEN, srts[4], 0, unregistered_seqs, &num_unregistered) == 0);
+    ok(num_unregistered == 0);
     /* active CIDs = {*1, 2, 3, 4} */
 
     /* unregister seq=2 */
-    ok(quicly_received_cid_unregister(&set, 2) == 0);
+    ok(quicly_consumed_cid_unregister(&set, 2) == 0);
     /* active CIDs = {*1, 3, 4} */
     ok(set.cids[0].is_active);
     ok(set.cids[0].sequence == 1);
 
-    /* unregister prior to 5 -- seq=1,3,4 should be unregistered at this moment */
-    size_t num_unregistered;
-    uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
-    num_unregistered = quicly_received_cid_unregister_prior_to(&set, 5, unregistered_seqs);
+    /* register 5, unregister prior to 5 -- seq=1,3,4 should be unregistered at this moment */
+    ok(quicly_consumed_cid_register(&set, 5, cids[5], CID_LEN, srts[5], 5, unregistered_seqs, &num_unregistered) == 0);
     /* active CIDs = {} */
     ok(num_unregistered == 3);
     {
@@ -111,10 +121,6 @@ void test_received_cid(void)
         }
         ok(memcmp(seqset, expected, sizeof(seqset)) == 0);
     }
-    ok(set.cids[0].is_active == 0);
-
-    /* install new CID after retiring everything */
-    ok(quicly_received_cid_register(&set, 5, cids[5], CID_LEN, srts[5]) == 0);
     /* active CIDs = {*5} */
     ok(set.cids[0].is_active);
     ok(set.cids[0].sequence == 5);
@@ -122,15 +128,16 @@ void test_received_cid(void)
     ok(memcmp(set.cids[0].stateless_reset_token, srts[5], QUICLY_STATELESS_RESET_TOKEN_LEN) == 0);
 
     /* install CID with out-of-order sequence */
-    ok(quicly_received_cid_register(&set, 8, cids[8], CID_LEN, srts[8]) == 0);
+    ok(quicly_consumed_cid_register(&set, 8, cids[8], CID_LEN, srts[8], 5, unregistered_seqs, &num_unregistered) == 0);
+    ok(num_unregistered == 0);
     /* active CIDs = {*5, 8} */
-    ok(quicly_received_cid_register(&set, 7, cids[7], CID_LEN, srts[7]) == 0);
+    ok(quicly_consumed_cid_register(&set, 7, cids[7], CID_LEN, srts[7], 5, unregistered_seqs, &num_unregistered) == 0);
     /* active CIDs = {*5, 7, 8} */
     ok(set.cids[0].is_active);
     ok(set.cids[0].sequence == 5);
 
     /* unregister prior to 8 -- seq=5,7 should be unregistered at this moment */
-    num_unregistered = quicly_received_cid_unregister_prior_to(&set, 8, unregistered_seqs);
+    ok(quicly_consumed_cid_register(&set, 8, cids[8], CID_LEN, srts[8], 8, unregistered_seqs, &num_unregistered) == 0);
     /* active CIDs = {*8} */
     ok(num_unregistered == 2);
     {

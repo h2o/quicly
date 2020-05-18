@@ -19,24 +19,25 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-
 #include "quicly/issued_cid.h"
 
-void quicly_issued_cid_init(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor, quicly_cid_plaintext_t *plaintext)
+static int has_pending(quicly_issued_cid_set_t *set)
 {
-    memset(set, 0, sizeof(*set));
+    return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+}
 
-    if (encryptor == NULL)
-        return;
+/**
+ * generates a new CID and increments path_id. returns true if successfully generated.
+ */
+static int generate_cid(quicly_issued_cid_set_t *set, size_t idx)
+{
+    if (set->_encryptor == NULL || set->plaintext.path_id >= QUICLY_MAX_PATH_ID)
+        return 0;
 
-    assert(plaintext != NULL);
+    set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
+    set->cids[idx].sequence = set->plaintext.path_id++;
 
-    set->_size = 1;
-    set->cids[0].state = QUICLY_ISSUED_CID_STATE_DELIVERED;
-    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
-        set->cids[i].sequence = UINT64_MAX;
-    set->_plaintext = plaintext;
-    set->_encryptor = encryptor;
+    return 1;
 }
 
 static void swap_cids(quicly_issued_cid_t *a, quicly_issued_cid_t *b)
@@ -72,25 +73,32 @@ static void do_mark_delivered(quicly_issued_cid_set_t *set, size_t idx)
     set->cids[idx].state = QUICLY_ISSUED_CID_STATE_DELIVERED;
 }
 
-/**
- * generates a new CID and increments path_id. returns true if successfully generated.
- */
-static int generate_cid(quicly_issued_cid_set_t *set, size_t idx)
+void quicly_issued_cid_init_set(quicly_issued_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                                const quicly_cid_plaintext_t *new_cid)
 {
-    if (set->_encryptor == NULL || set->_plaintext->path_id >= QUICLY_MAX_PATH_ID)
-        return 0;
+    *set = (quicly_issued_cid_set_t){
+        ._encryptor = encryptor,
+        ._size = 1,
+    };
 
-    set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, set->_plaintext);
-    set->cids[idx].sequence = set->_plaintext->path_id++;
+    /* initialize cids[0] */
+    if (encryptor != NULL) {
+        assert(new_cid->path_id == 0);
+        set->plaintext = *new_cid;
+        generate_cid(set, 0);
+    } else {
+        /* we have a zero-length CID at cids[0] */
+    }
+    set->cids[0].state = QUICLY_ISSUED_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the peer */
 
-    return 1;
+    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
+        set->cids[i].sequence = UINT64_MAX;
 }
 
 int quicly_issued_cid_set_size(quicly_issued_cid_set_t *set, size_t size)
 {
     int is_pending = 0;
 
-    assert(size >= 0);
     assert(size <= PTLS_ELEMENTSOF(set->cids));
     assert(set->_size <= size);
 
@@ -156,31 +164,46 @@ int quicly_issued_cid_on_lost(quicly_issued_cid_set_t *set, uint64_t sequence)
 {
     size_t i = find_index(set, sequence);
     if (i == SIZE_MAX)
-        return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+        return has_pending(set);
 
     /* if it's already delivered, ignore the packet loss event (no need for retransmission) */
     if (set->cids[i].state == QUICLY_ISSUED_CID_STATE_DELIVERED)
-        return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+        return has_pending(set);
 
     do_mark_pending(set, i);
 
     return 1;
 }
 
-int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)
+int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence, int *_has_pending)
 {
+    /* find the CID to be retired, also check if there is at least one CID that has been issued */
     size_t retired_at = set->_size;
+    int becomes_empty = 1;
     for (size_t i = 0; i < set->_size; i++) {
-        if (set->cids[i].sequence != sequence || set->cids[i].state == QUICLY_ISSUED_CID_STATE_IDLE)
+        if (set->cids[i].state == QUICLY_ISSUED_CID_STATE_IDLE)
             continue;
-
-        retired_at = i;
-        set->cids[i].state = QUICLY_ISSUED_CID_STATE_IDLE;
-        set->cids[i].sequence = UINT64_MAX;
-        break;
+        if (set->cids[i].sequence == sequence) {
+            assert(retired_at == set->_size);
+            retired_at = i;
+        } else {
+            becomes_empty = 0;
+        }
     }
-    if (retired_at == set->_size) /* not found */
-        return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+
+    /* nothing to do if given CID has been retired already */
+    if (retired_at == set->_size) {
+        *_has_pending = has_pending(set);
+        return 0;
+    }
+
+    /* it is a protocol violation for the peer to retire the only CID that is available to it */
+    if (becomes_empty)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
+    /* retire given CID */
+    set->cids[retired_at].state = QUICLY_ISSUED_CID_STATE_IDLE;
+    set->cids[retired_at].sequence = UINT64_MAX;
 
     /* move following PENDING CIDs to front */
     for (size_t i = retired_at + 1; i < set->_size; i++) {
@@ -189,11 +212,14 @@ int quicly_issued_cid_retire(quicly_issued_cid_set_t *set, uint64_t sequence)
         swap_cids(&set->cids[i], &set->cids[retired_at]);
         retired_at = i;
     }
+
     /* generate one new CID */
     if (generate_cid(set, retired_at)) {
         do_mark_pending(set, retired_at);
-        return 1;
+        *_has_pending = 1;
+    } else {
+        *_has_pending = has_pending(set);
     }
 
-    return set->cids[0].state == QUICLY_ISSUED_CID_STATE_PENDING;
+    return 0;
 }

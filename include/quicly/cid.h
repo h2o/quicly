@@ -19,9 +19,8 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-
-#ifndef cid_h
-#define cid_h
+#ifndef quicly_cid_h
+#define quicly_cid_h
 
 #ifdef __cplusplus
 extern "C" {

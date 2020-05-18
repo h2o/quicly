@@ -85,11 +85,11 @@ static int verify_array(const quicly_issued_cid_set_t *set)
     return 0;
 }
 
-static size_t num_pending(const quicly_issued_cid_set_t *set)
+static size_t count_by_state(const quicly_issued_cid_set_t *set, enum en_quicly_issued_cid_state_t state)
 {
     size_t num = 0;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        if (set->cids[i].state == QUICLY_ISSUED_CID_STATE_PENDING)
+        if (set->cids[i].state == state)
             num++;
     }
     return num;
@@ -118,18 +118,17 @@ void test_issued_cid(void)
 {
     PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT >= NUM_CIDS);
     quicly_issued_cid_set_t set;
-    quicly_cid_plaintext_t cid_plaintext = {0};
+    static const quicly_cid_plaintext_t cid_plaintext = {0};
 
     /* initialize */
-    quicly_issued_cid_init(&set, &test_encryptor, &cid_plaintext);
+    quicly_issued_cid_init_set(&set, &test_encryptor, &cid_plaintext);
     ok(verify_array(&set) == 0);
-    ok(num_pending(&set) == 0);
+    ok(count_by_state(&set, QUICLY_ISSUED_CID_STATE_PENDING) == 0);
     ok(exists_once(&set, 0, QUICLY_ISSUED_CID_STATE_DELIVERED));
-    cid_plaintext.path_id = 1;
 
     ok(quicly_issued_cid_set_size(&set, NUM_CIDS) != 0);
     ok(verify_array(&set) == 0);
-    ok(num_pending(&set) == NUM_CIDS - 1);
+    ok(count_by_state(&set, QUICLY_ISSUED_CID_STATE_PENDING) == NUM_CIDS - 1);
     ok(exists_once(&set, 0, QUICLY_ISSUED_CID_STATE_DELIVERED));
     ok(exists_once(&set, 1, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(exists_once(&set, 2, QUICLY_ISSUED_CID_STATE_PENDING));
@@ -146,32 +145,38 @@ void test_issued_cid(void)
     quicly_issued_cid_on_acked(&set, 3);
     ok(quicly_issued_cid_on_lost(&set, 2) != 0); /* simulate a packet loss */
     ok(verify_array(&set) == 0);
-    ok(num_pending(&set) == 1);
+    ok(count_by_state(&set, QUICLY_ISSUED_CID_STATE_PENDING) == 1);
     ok(exists_once(&set, 1, QUICLY_ISSUED_CID_STATE_DELIVERED));
     ok(exists_once(&set, 2, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(exists_once(&set, 3, QUICLY_ISSUED_CID_STATE_DELIVERED));
 
     /* retransmit sequence=2 */
     quicly_issued_cid_on_sent(&set, 1);
-    ok(num_pending(&set) == 0);
+    ok(count_by_state(&set, QUICLY_ISSUED_CID_STATE_PENDING) == 0);
 
     /* retire everything */
-    ok(quicly_issued_cid_retire(&set, 0) != 0);
-    ok(quicly_issued_cid_retire(&set, 1) != 0);
-    ok(quicly_issued_cid_retire(&set, 2) != 0);
-    ok(quicly_issued_cid_retire(&set, 3) != 0);
-    ok(num_pending(&set) == 4);
+    int has_pending;
+    ok(quicly_issued_cid_retire(&set, 0, &has_pending) == 0);
+    ok(has_pending);
+    ok(quicly_issued_cid_retire(&set, 1, &has_pending) == 0);
+    ok(has_pending);
+    ok(quicly_issued_cid_retire(&set, 2, &has_pending) == 0);
+    ok(has_pending);
+    ok(quicly_issued_cid_retire(&set, 3, &has_pending) == 0);
+    ok(has_pending);
+    ok(count_by_state(&set, QUICLY_ISSUED_CID_STATE_PENDING) == 4);
     /* partial send */
     quicly_issued_cid_on_sent(&set, 1);
     ok(verify_array(&set) == 0);
-    ok(num_pending(&set) == 3);
+    ok(count_by_state(&set, QUICLY_ISSUED_CID_STATE_PENDING) == 3);
     ok(exists_once(&set, 4, QUICLY_ISSUED_CID_STATE_INFLIGHT));
     ok(exists_once(&set, 5, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(exists_once(&set, 6, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(exists_once(&set, 7, QUICLY_ISSUED_CID_STATE_PENDING));
 
     /* retire one in the middle of PENDING CIDs */
-    ok(quicly_issued_cid_retire(&set, 6) != 0);
+    ok(quicly_issued_cid_retire(&set, 6, &has_pending) == 0);
+    ok(has_pending);
     ok(verify_array(&set) == 0);
 
     quicly_issued_cid_on_sent(&set, 2); /* send 4,5 */
@@ -184,8 +189,10 @@ void test_issued_cid(void)
     ok(exists_once(&set, 8, QUICLY_ISSUED_CID_STATE_PENDING));
 
     /* at this moment sequence=0,1,2,3,6 have been retired */
-    ok(quicly_issued_cid_retire(&set, 4) != 0);
-    ok(quicly_issued_cid_retire(&set, 5) != 0);
+    ok(quicly_issued_cid_retire(&set, 4, &has_pending) == 0);
+    ok(has_pending);
+    ok(quicly_issued_cid_retire(&set, 5, &has_pending) == 0);
+    ok(has_pending);
     /* sequence=0-6 have been retired */
 
     /* try to exhaust CID */
@@ -194,9 +201,10 @@ void test_issued_cid(void)
     while (num_retired < QUICLY_MAX_PATH_ID) {
         if (seq_to_retire == QUICLY_MAX_PATH_ID - 1) {
             /* this is the maximum CID we can generate -- after retiring it, there should be no CID to send */
-            ok(quicly_issued_cid_retire(&set, seq_to_retire) == 0);
+            ok(quicly_issued_cid_retire(&set, seq_to_retire, &has_pending) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
         } else {
-            ok(quicly_issued_cid_retire(&set, seq_to_retire) != 0);
+            ok(quicly_issued_cid_retire(&set, seq_to_retire, &has_pending) == 0);
+            ok(has_pending);
         }
         num_retired++;
         seq_to_retire++;
@@ -204,23 +212,24 @@ void test_issued_cid(void)
 
     /* create a set with a NULL CID encryptor */
     quicly_issued_cid_set_t empty_set;
-    quicly_issued_cid_init(&empty_set, NULL, NULL);
+    quicly_issued_cid_init_set(&empty_set, NULL, NULL);
     ok(quicly_issued_cid_set_size(&empty_set, NUM_CIDS) == 0);
-    ok(quicly_issued_cid_is_empty(&empty_set));
+    ok(count_by_state(&empty_set, QUICLY_ISSUED_CID_STATE_DELIVERED) == 1);
+    ok(count_by_state(&empty_set, QUICLY_ISSUED_CID_STATE_IDLE) == PTLS_ELEMENTSOF(empty_set.cids) - 1);
 
     /* create a set with a size smaller than QUICLY_LOCAL_ACTIVE_CONNECTION_LIMIT */
     PTLS_BUILD_ASSERT(NUM_CIDS >= 2);
     quicly_cid_plaintext_t cid_plaintext2 = {0};
     quicly_issued_cid_set_t small_set;
-    quicly_issued_cid_init(&small_set, &test_encryptor, &cid_plaintext2);
-    cid_plaintext2.path_id = 1;
+    quicly_issued_cid_init_set(&small_set, &test_encryptor, &cid_plaintext2);
     ok(quicly_issued_cid_set_size(&small_set, NUM_CIDS - 1) != 0);
     ok(verify_array(&small_set) == 0);
-    ok(num_pending(&small_set) == NUM_CIDS - 2);
+    ok(count_by_state(&small_set, QUICLY_ISSUED_CID_STATE_PENDING) == NUM_CIDS - 2);
     ok(exists_once(&small_set, 0, QUICLY_ISSUED_CID_STATE_DELIVERED));
     ok(exists_once(&small_set, 1, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(exists_once(&small_set, 2, QUICLY_ISSUED_CID_STATE_PENDING));
     ok(!exists_once(&small_set, 3, QUICLY_ISSUED_CID_STATE_PENDING)); /* seq=3 should not exist yet */
-    ok(quicly_issued_cid_retire(&small_set, 0) != 0);
+    ok(quicly_issued_cid_retire(&small_set, 0, &has_pending) == 0);
+    ok(has_pending);
     ok(exists_once(&small_set, 3, QUICLY_ISSUED_CID_STATE_PENDING));
 }

@@ -19,15 +19,30 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#include <assert.h>
+#include "quicly/constants.h"
+#include "quicly/consumed_cid.h"
 
-#include "quicly/received_cid.h"
-
-void quicly_received_cid_init(struct st_quicly_received_cid_set_t *set)
+void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set, ptls_iovec_t *initial_cid, void (*random_bytes)(void *, size_t))
 {
-    memset(set, 0, sizeof(*set));
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        set->cids[i].sequence = i;
+    set->cids[0] = (quicly_consumed_cid_t){
+        .is_active = 1,
+        .sequence = 0,
+    };
+    if (initial_cid != NULL) {
+        quicly_set_cid(&set->cids[0].cid, *initial_cid);
+    } else {
+        random_bytes(set->cids[0].cid.cid, QUICLY_MIN_INITIAL_DCID_LEN);
+        set->cids[0].cid.len = QUICLY_MIN_INITIAL_DCID_LEN;
     }
+    random_bytes(set->cids[0].stateless_reset_token, sizeof(set->cids[0].stateless_reset_token));
+
+    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
+        set->cids[i] = (quicly_consumed_cid_t){
+            .is_active = 0,
+            .sequence = i,
+        };
+
     set->_largest_sequence_expected = PTLS_ELEMENTSOF(set->cids) - 1;
 }
 
@@ -35,7 +50,7 @@ void quicly_received_cid_init(struct st_quicly_received_cid_set_t *set)
  * promote CID at idx_to_promote as the current CID for communication
  * i.e. swap cids[idx_to_promote] and cids[0]
  */
-static void promote_cid(struct st_quicly_received_cid_set_t *set, size_t idx_to_promote)
+static void promote_cid(quicly_consumed_cid_set_t *set, size_t idx_to_promote)
 {
     uint64_t seq_tmp = set->cids[0].sequence;
 
@@ -47,8 +62,8 @@ static void promote_cid(struct st_quicly_received_cid_set_t *set, size_t idx_to_
     set->cids[idx_to_promote].sequence = seq_tmp;
 }
 
-int quicly_received_cid_register(struct st_quicly_received_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                                 const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
+static int do_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                       const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
 {
     int was_stored = 0;
 
@@ -77,7 +92,8 @@ int quicly_received_cid_register(struct st_quicly_received_cid_set_t *set, uint6
             /* here we know CID is not equal */
             if (set->cids[i].sequence == sequence)
                 return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-        } else if (!was_stored && set->cids[i].sequence == sequence) {
+        } else if (set->cids[i].sequence == sequence) {
+            assert(!was_stored);
             set->cids[i].sequence = sequence;
             quicly_set_cid(&set->cids[i].cid, ptls_iovec_init(cid, cid_len));
             memcpy(set->cids[i].stateless_reset_token, srt, QUICLY_STATELESS_RESET_TOKEN_LEN);
@@ -95,7 +111,7 @@ int quicly_received_cid_register(struct st_quicly_received_cid_set_t *set, uint6
     return 0;
 }
 
-static void do_unregister(struct st_quicly_received_cid_set_t *set, size_t idx_to_unreg)
+static void do_unregister(quicly_consumed_cid_set_t *set, size_t idx_to_unreg)
 {
     assert(set->cids[idx_to_unreg].is_active);
 
@@ -103,9 +119,10 @@ static void do_unregister(struct st_quicly_received_cid_set_t *set, size_t idx_t
     set->cids[idx_to_unreg].sequence = ++set->_largest_sequence_expected;
 }
 
-int quicly_received_cid_unregister(struct st_quicly_received_cid_set_t *set, uint64_t sequence)
+int quicly_consumed_cid_unregister(quicly_consumed_cid_set_t *set, uint64_t sequence)
 {
-    uint64_t min_seq = UINT64_MAX, min_seq_idx = UINT64_MAX;
+    uint64_t min_seq = UINT64_MAX;
+    size_t min_seq_idx = SIZE_MAX;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
         if (sequence == set->cids[i].sequence) {
             do_unregister(set, i);
@@ -121,7 +138,7 @@ int quicly_received_cid_unregister(struct st_quicly_received_cid_set_t *set, uin
 
     if (!set->cids[0].is_active) {
         /* we have retired the current CID (idx=0) */
-        if (min_seq_idx != UINT64_MAX)
+        if (min_seq_idx != SIZE_MAX)
             promote_cid(set, min_seq_idx);
         return 0;
     } else {
@@ -130,8 +147,8 @@ int quicly_received_cid_unregister(struct st_quicly_received_cid_set_t *set, uin
     }
 }
 
-size_t quicly_received_cid_unregister_prior_to(struct st_quicly_received_cid_set_t *set, uint64_t seq_unreg_prior_to,
-                                               uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT])
+static size_t unregister_prior_to(quicly_consumed_cid_set_t *set, uint64_t seq_unreg_prior_to,
+                                  uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT])
 {
     uint64_t min_seq = UINT64_MAX, min_seq_idx = UINT64_MAX;
     size_t num_unregistered = 0;
@@ -157,4 +174,28 @@ size_t quicly_received_cid_unregister_prior_to(struct st_quicly_received_cid_set
     }
 
     return num_unregistered;
+}
+
+int quicly_consumed_cid_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                                 const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to,
+                                 uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT], size_t *num_unregistered_seqs)
+{
+    quicly_consumed_cid_t backup_cid = set->cids[0]; // preserve one valid entry in cids[0] to handle protocol violation
+    int ret;
+
+    assert(sequence >= retire_prior_to);
+
+    /* First, handle retire_prior_to. This order is important as it is possible to receive a NEW_CONNECTION_ID frame such that it
+     * retires active_connection_id_limit CIDs and then installs one new CID. */
+    *num_unregistered_seqs = unregister_prior_to(set, retire_prior_to, unregistered_seqs);
+
+    /* Then, register given value. */
+    if ((ret = do_register(set, sequence, cid, cid_len, srt)) != 0) {
+        /* restore the backup and send the error */
+        if (!set->cids[0].is_active)
+            set->cids[0] = backup_cid;
+        return ret;
+    }
+
+    return ret;
 }

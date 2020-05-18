@@ -35,6 +35,7 @@ extern "C" {
 #include "picotls.h"
 #include "quicly/constants.h"
 #include "quicly/frame.h"
+#include "quicly/issued_cid.h"
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
 #include "quicly/cc.h"
@@ -42,7 +43,7 @@ extern "C" {
 #include "quicly/sendstate.h"
 #include "quicly/maxsender.h"
 #include "quicly/cid.h"
-#include "quicly/received_cid.h"
+#include "quicly/consumed_cid.h"
 
 #ifndef QUICLY_DEBUG
 #define QUICLY_DEBUG 0
@@ -378,23 +379,19 @@ struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
     /**
-     * identifier assigned by the application. `path_id` stores the next value to be issued
+     * connection IDs being issued to the peer
      */
-    quicly_cid_plaintext_t master_id;
+    quicly_issued_cid_set_t issued_cid;
     struct {
         /**
          * the local address (may be AF_UNSPEC)
          */
         quicly_address_t address;
         /**
-         * the SCID used in long header packets
+         * the SCID used in long header packets. Equiavalent to issued_cid[seq=0]. Retaining the value separately is the easiest way
+         * of staying away from the complexity caused by peer sending RCID frames before the handshake concludes.
          */
-        quicly_cid_t src_cid;
-        /**
-         * stateless reset token announced by the host. We have only one token per connection. The token will cached in this
-         * variable when the generate_stateless_reset_token is non-NULL.
-         */
-        uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
+        quicly_cid_t long_header_src_cid;
         /**
          * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
          */
@@ -409,7 +406,7 @@ struct _st_quicly_conn_public_t {
         /**
          * CIDs received from the peer
          */
-        struct st_quicly_received_cid_set_t cid_set;
+        quicly_consumed_cid_set_t cid_set;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
@@ -837,6 +834,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
                                            const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by);
 /**
  *
+ * @param stateless_reset_token  [client-only] if the corresponding transport parameter is used, the provided token is written back
+ *                               to this vector. When the transport parameter does not exist, the vector is left unmodified.
  */
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, void *stateless_reset_token,
                                            int is_client, const uint8_t *src, const uint8_t *end);
@@ -998,7 +997,7 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->master_id;
+    return &c->issued_cid.plaintext;
 }
 
 inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)

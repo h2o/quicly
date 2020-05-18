@@ -19,9 +19,8 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-
-#ifndef retire_cid_h
-#define retire_cid_h
+#ifndef quicly_retire_cid_h
+#define quicly_retire_cid_h
 
 #include "quicly/cid.h"
 
