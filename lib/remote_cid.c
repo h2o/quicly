@@ -21,11 +21,11 @@
  */
 #include <assert.h>
 #include "quicly/constants.h"
-#include "quicly/consumed_cid.h"
+#include "quicly/remote_cid.h"
 
-void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set, ptls_iovec_t *initial_cid, void (*random_bytes)(void *, size_t))
+void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *initial_cid, void (*random_bytes)(void *, size_t))
 {
-    set->cids[0] = (quicly_consumed_cid_t){
+    set->cids[0] = (quicly_remote_cid_t){
         .is_active = 1,
         .sequence = 0,
     };
@@ -38,7 +38,7 @@ void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set, ptls_iovec_t *
     random_bytes(set->cids[0].stateless_reset_token, sizeof(set->cids[0].stateless_reset_token));
 
     for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
-        set->cids[i] = (quicly_consumed_cid_t){
+        set->cids[i] = (quicly_remote_cid_t){
             .is_active = 0,
             .sequence = i,
         };
@@ -50,7 +50,7 @@ void quicly_consumed_cid_init_set(quicly_consumed_cid_set_t *set, ptls_iovec_t *
  * promote CID at idx_to_promote as the current CID for communication
  * i.e. swap cids[idx_to_promote] and cids[0]
  */
-static void promote_cid(quicly_consumed_cid_set_t *set, size_t idx_to_promote)
+static void promote_cid(quicly_remote_cid_set_t *set, size_t idx_to_promote)
 {
     uint64_t seq_tmp = set->cids[0].sequence;
 
@@ -62,7 +62,7 @@ static void promote_cid(quicly_consumed_cid_set_t *set, size_t idx_to_promote)
     set->cids[idx_to_promote].sequence = seq_tmp;
 }
 
-static int do_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+static int do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
                        const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
 {
     int was_stored = 0;
@@ -111,7 +111,7 @@ static int do_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const 
     return 0;
 }
 
-static void do_unregister(quicly_consumed_cid_set_t *set, size_t idx_to_unreg)
+static void do_unregister(quicly_remote_cid_set_t *set, size_t idx_to_unreg)
 {
     assert(set->cids[idx_to_unreg].is_active);
 
@@ -119,7 +119,7 @@ static void do_unregister(quicly_consumed_cid_set_t *set, size_t idx_to_unreg)
     set->cids[idx_to_unreg].sequence = ++set->_largest_sequence_expected;
 }
 
-int quicly_consumed_cid_unregister(quicly_consumed_cid_set_t *set, uint64_t sequence)
+int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence)
 {
     uint64_t min_seq = UINT64_MAX;
     size_t min_seq_idx = SIZE_MAX;
@@ -147,7 +147,7 @@ int quicly_consumed_cid_unregister(quicly_consumed_cid_set_t *set, uint64_t sequ
     }
 }
 
-static size_t unregister_prior_to(quicly_consumed_cid_set_t *set, uint64_t seq_unreg_prior_to,
+static size_t unregister_prior_to(quicly_remote_cid_set_t *set, uint64_t seq_unreg_prior_to,
                                   uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT])
 {
     uint64_t min_seq = UINT64_MAX, min_seq_idx = UINT64_MAX;
@@ -176,11 +176,11 @@ static size_t unregister_prior_to(quicly_consumed_cid_set_t *set, uint64_t seq_u
     return num_unregistered;
 }
 
-int quicly_consumed_cid_register(quicly_consumed_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
                                  const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to,
                                  uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT], size_t *num_unregistered_seqs)
 {
-    quicly_consumed_cid_t backup_cid = set->cids[0]; // preserve one valid entry in cids[0] to handle protocol violation
+    quicly_remote_cid_t backup_cid = set->cids[0]; // preserve one valid entry in cids[0] to handle protocol violation
     int ret;
 
     assert(sequence >= retire_prior_to);

@@ -46,7 +46,7 @@ SET(QUICLY_LIBRARY_FILES
     lib/sendstate.c
     lib/sentmap.c
     lib/streambuf.c
-    lib/consumed_cid.c
+    lib/remote_cid.c
     lib/local_cid.c
     lib/retire_cid.c)
 
@@ -59,7 +59,7 @@ SET(UNITTEST_SOURCE_FILES
     t/sentmap.c
     t/simple.c
     t/stream-concurrency.c
-    t/consumed_cid.c
+    t/remote_cid.c
     t/local_cid.c
     t/retire_cid.c
     t/test.c)

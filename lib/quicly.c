@@ -1809,7 +1809,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     set_address(&conn->_.super.peer.address, remote_addr);
     quicly_local_cid_init_set(&conn->_.super.local_cid, ctx->cid_encryptor, host_cid);
     conn->_.super.host.long_header_src_cid = conn->_.super.local_cid.cids[0].cid;
-    quicly_consumed_cid_init_set(&conn->_.super.peer.cid_set, peer_cid, ctx->tls->random_bytes);
+    quicly_remote_cid_init_set(&conn->_.super.peer.cid_set, peer_cid, ctx->tls->random_bytes);
     conn->_.super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
         conn->_.super.host.bidi.next_stream_id = 0;
@@ -4742,9 +4742,9 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
 
     uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
     size_t num_unregistered_seqs;
-    if ((ret = quicly_consumed_cid_register(&conn->super.peer.cid_set, frame.sequence, frame.cid.base, frame.cid.len,
-                                            frame.stateless_reset_token, frame.retire_prior_to, unregistered_seqs,
-                                            &num_unregistered_seqs)) != 0)
+    if ((ret = quicly_remote_cid_register(&conn->super.peer.cid_set, frame.sequence, frame.cid.base, frame.cid.len,
+                                          frame.stateless_reset_token, frame.retire_prior_to, unregistered_seqs,
+                                          &num_unregistered_seqs)) != 0)
         return ret;
 
     for (size_t i = 0; i < num_unregistered_seqs; i++)
