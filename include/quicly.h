@@ -35,7 +35,7 @@ extern "C" {
 #include "picotls.h"
 #include "quicly/constants.h"
 #include "quicly/frame.h"
-#include "quicly/issued_cid.h"
+#include "quicly/local_cid.h"
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
 #include "quicly/cc.h"
@@ -381,14 +381,14 @@ struct _st_quicly_conn_public_t {
     /**
      * connection IDs being issued to the peer
      */
-    quicly_issued_cid_set_t issued_cid;
+    quicly_local_cid_set_t local_cid;
     struct {
         /**
          * the local address (may be AF_UNSPEC)
          */
         quicly_address_t address;
         /**
-         * the SCID used in long header packets. Equiavalent to issued_cid[seq=0]. Retaining the value separately is the easiest way
+         * the SCID used in long header packets. Equiavalent to local_cid[seq=0]. Retaining the value separately is the easiest way
          * of staying away from the complexity caused by peer sending RCID frames before the handshake concludes.
          */
         quicly_cid_t long_header_src_cid;
@@ -997,7 +997,7 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->issued_cid.plaintext;
+    return &c->local_cid.plaintext;
 }
 
 inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)

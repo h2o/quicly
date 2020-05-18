@@ -426,7 +426,7 @@ static void test_address_token_codec(void)
 static void test_cid(void)
 {
     subtest("received cid", test_received_cid);
-    subtest("issued cid", test_issued_cid);
+    subtest("local cid", test_local_cid);
     subtest("retire cid", test_retire_cid);
 }
 

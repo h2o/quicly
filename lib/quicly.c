@@ -820,7 +820,7 @@ static int schedule_path_challenge_frame(quicly_conn_t *conn, int is_response, c
 /**
  * calculate how many CIDs we provide to the peer
  */
-static size_t issued_cid_size(const quicly_conn_t *conn)
+static size_t local_cid_size(const quicly_conn_t *conn)
 {
     PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT < SIZE_MAX / sizeof(uint64_t));
 
@@ -1807,8 +1807,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->_.super.ctx = ctx;
     set_address(&conn->_.super.host.address, local_addr);
     set_address(&conn->_.super.peer.address, remote_addr);
-    quicly_issued_cid_init_set(&conn->_.super.issued_cid, ctx->cid_encryptor, host_cid);
-    conn->_.super.host.long_header_src_cid = conn->_.super.issued_cid.cids[0].cid;
+    quicly_local_cid_init_set(&conn->_.super.local_cid, ctx->cid_encryptor, host_cid);
+    conn->_.super.host.long_header_src_cid = conn->_.super.local_cid.cids[0].cid;
     quicly_consumed_cid_init_set(&conn->_.super.peer.cid_set, peer_cid, ctx->tls->random_bytes);
     conn->_.super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
@@ -2044,11 +2044,11 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
-    assert(conn->super.issued_cid.cids[0].sequence == 0 && "make sure that issued_cid is in expected state before sending SRT");
+    assert(conn->super.local_cid.cids[0].sequence == 0 && "make sure that local_cid is in expected state before sending SRT");
     if ((ret = quicly_encode_transport_parameter_list(
              &conn->crypto.transport_params.buf, 0, &conn->super.ctx->transport_params,
              conn->retry_odcid.len != 0 ? &conn->retry_odcid : NULL,
-             conn->super.ctx->cid_encryptor != NULL ? conn->super.issued_cid.cids[0].stateless_reset_token : NULL, 0)) != 0)
+             conn->super.ctx->cid_encryptor != NULL ? conn->super.local_cid.cids[0].stateless_reset_token : NULL, 0)) != 0)
         goto Exit;
     properties->additional_extensions = conn->crypto.transport_params.ext;
     conn->crypto.transport_params.ext[0] =
@@ -2495,9 +2495,9 @@ static int on_ack_new_connection_id(quicly_conn_t *conn, const quicly_sent_packe
         return 0;
 
     if (event == QUICLY_SENTMAP_EVENT_ACKED) {
-        quicly_issued_cid_on_acked(&conn->super.issued_cid, sequence);
+        quicly_local_cid_on_acked(&conn->super.local_cid, sequence);
     } else if (event == QUICLY_SENTMAP_EVENT_LOST) {
-        if (quicly_issued_cid_on_lost(&conn->super.issued_cid, sequence))
+        if (quicly_local_cid_on_lost(&conn->super.local_cid, sequence))
             conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
     }
 
@@ -3618,7 +3618,7 @@ static int send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s)
     return 0;
 }
 
-static int send_new_connection_id(quicly_conn_t *conn, quicly_send_context_t *s, struct st_quicly_issued_cid_t *new_cid)
+static int send_new_connection_id(quicly_conn_t *conn, quicly_send_context_t *s, struct st_quicly_local_cid_t *new_cid)
 {
     int ret;
     quicly_sent_t *sent;
@@ -3745,8 +3745,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         }
 
         /* schedule NEW_CONNECTION_IDs */
-        size_t size = issued_cid_size(conn);
-        if (quicly_issued_cid_set_size(&conn->super.issued_cid, size))
+        size_t size = local_cid_size(conn);
+        if (quicly_local_cid_set_size(&conn->super.local_cid, size))
             conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
     }
 
@@ -3868,16 +3868,16 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_CID_FRAME_BIT) != 0) {
                     /* send NEW_CONNECTION_ID */
                     size_t i;
-                    size_t size = quicly_issued_cid_get_size(&conn->super.issued_cid);
+                    size_t size = quicly_local_cid_get_size(&conn->super.local_cid);
                     for (i = 0; i < size; i++) {
                         /* PENDING CIDs are located at the front */
-                        struct st_quicly_issued_cid_t *c = &conn->super.issued_cid.cids[i];
-                        if (c->state != QUICLY_ISSUED_CID_STATE_PENDING)
+                        struct st_quicly_local_cid_t *c = &conn->super.local_cid.cids[i];
+                        if (c->state != QUICLY_LOCAL_CID_STATE_PENDING)
                             break;
                         if ((ret = send_new_connection_id(conn, s, c)) != 0)
                             break;
                     }
-                    quicly_issued_cid_on_sent(&conn->super.issued_cid, i);
+                    quicly_local_cid_on_sent(&conn->super.local_cid, i);
                     if (ret != 0)
                         goto Exit;
                     /* send RETIRE_CONNECTION_ID */
@@ -4635,9 +4635,9 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
          * and the only difference is path_id. Therefore comparing the 3-tuple is enough to cover all CIDs issued by
          * this host.
          */
-        if (conn->super.issued_cid.plaintext.master_id == decoded->cid.dest.plaintext.master_id &&
-            conn->super.issued_cid.plaintext.thread_id == decoded->cid.dest.plaintext.thread_id &&
-            conn->super.issued_cid.plaintext.node_id == decoded->cid.dest.plaintext.node_id)
+        if (conn->super.local_cid.plaintext.master_id == decoded->cid.dest.plaintext.master_id &&
+            conn->super.local_cid.plaintext.thread_id == decoded->cid.dest.plaintext.thread_id &&
+            conn->super.local_cid.plaintext.node_id == decoded->cid.dest.plaintext.node_id)
             goto Found;
         if (is_stateless_reset(conn, decoded))
             goto Found_StatelessReset;
@@ -4766,13 +4766,13 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
 
     QUICLY_PROBE(RETIRE_CONNECTION_ID_RECEIVE, conn, probe_now(), frame.sequence);
 
-    if (frame.sequence >= conn->super.issued_cid.plaintext.path_id) {
+    if (frame.sequence >= conn->super.local_cid.plaintext.path_id) {
         /* Receipt of a RETIRE_CONNECTION_ID frame containing a sequence number greater than any previously sent to the peer
          * MUST be treated as a connection error of type PROTOCOL_VIOLATION. (19.16) */
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     }
 
-    if ((ret = quicly_issued_cid_retire(&conn->super.issued_cid, frame.sequence, &has_pending)) != 0)
+    if ((ret = quicly_local_cid_retire(&conn->super.local_cid, frame.sequence, &has_pending)) != 0)
         return ret;
     if (has_pending)
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_CID_FRAME_BIT;
