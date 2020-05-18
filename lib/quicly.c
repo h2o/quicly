@@ -3639,6 +3639,12 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     size_t min_packets_to_send = 0;
 
     /* handle timeouts */
+    if (conn->idle_timeout.at <= now) {
+        QUICLY_PROBE(IDLE_TIMEOUT, conn, probe_now());
+        conn->super.state = QUICLY_STATE_DRAINING;
+        destroy_all_streams(conn, 0, 0);
+        return QUICLY_ERROR_FREE_CONNECTION;
+    }
     if (conn->egress.loss.alarm_at <= now) {
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1,
                                         conn->egress.loss.largest_acked_packet_plus1 - 1, do_detect_loss, &min_packets_to_send,
@@ -3660,11 +3666,6 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
             }
         }
-    } else if (conn->idle_timeout.at <= now) {
-        QUICLY_PROBE(IDLE_TIMEOUT, conn, probe_now());
-        conn->super.state = QUICLY_STATE_DRAINING;
-        destroy_all_streams(conn, 0, 0);
-        return QUICLY_ERROR_FREE_CONNECTION;
     }
 
     s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size, restrict_sending);
