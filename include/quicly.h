@@ -123,7 +123,7 @@ QUICLY_CALLBACK_TYPE(int, stream_open, quicly_stream_t *stream);
 /**
  * called when the connection is closed by peer
  */
-QUICLY_CALLBACK_TYPE(void, closed_by_peer, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
+QUICLY_CALLBACK_TYPE(void, closed_by_remote, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
                      size_t reason_len);
 /**
  * returns current time in milliseconds
@@ -280,7 +280,7 @@ struct st_quicly_context_t {
     /**
      * callback called when a connection is closed by peer
      */
-    quicly_closed_by_peer_t *closed_by_peer;
+    quicly_closed_by_remote_t *closed_by_remote;
     /**
      * returns current time in milliseconds
      */
@@ -686,11 +686,11 @@ static const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn);
+static const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn);
+static const quicly_transport_parameters_t *quicly_get_remote_transport_parameters(quicly_conn_t *conn);
 /**
  *
  */
@@ -710,11 +710,11 @@ static int quicly_is_client(quicly_conn_t *conn);
 /**
  *
  */
-static quicly_stream_id_t quicly_get_host_next_stream_id(quicly_conn_t *conn, int uni);
+static quicly_stream_id_t quicly_get_local_next_stream_id(quicly_conn_t *conn, int uni);
 /**
  *
  */
-static quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, int uni);
+static quicly_stream_id_t quicly_get_remote_next_stream_id(quicly_conn_t *conn, int uni);
 /**
  * Returns the local address of the connection. This may be AF_UNSPEC, indicating that the operating system is choosing the address.
  */
@@ -1006,13 +1006,13 @@ inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
     return &c->local.offered_cid;
 }
 
-inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
+inline const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->remote.cid_set.cids[0].cid;
 }
 
-inline const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn)
+inline const quicly_transport_parameters_t *quicly_get_remote_transport_parameters(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->remote.transport_params;
@@ -1024,13 +1024,13 @@ inline int quicly_is_client(quicly_conn_t *conn)
     return (c->local.bidi.next_stream_id & 1) == 0;
 }
 
-inline quicly_stream_id_t quicly_get_host_next_stream_id(quicly_conn_t *conn, int uni)
+inline quicly_stream_id_t quicly_get_local_next_stream_id(quicly_conn_t *conn, int uni)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return uni ? c->local.uni.next_stream_id : c->local.bidi.next_stream_id;
 }
 
-inline quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, int uni)
+inline quicly_stream_id_t quicly_get_remote_next_stream_id(quicly_conn_t *conn, int uni)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return uni ? c->remote.uni.next_stream_id : c->remote.bidi.next_stream_id;

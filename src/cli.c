@@ -373,8 +373,8 @@ static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 
 static quicly_stream_open_t stream_open = {&on_stream_open};
 
-static void on_closed_by_peer(quicly_closed_by_peer_t *self, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
-                              size_t reason_len)
+static void on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *conn, int err, uint64_t frame_type,
+                                const char *reason, size_t reason_len)
 {
     if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
         fprintf(stderr, "transport close:code=0x%" PRIx16 ";frame=%" PRIu64 ";reason=%.*s\n", QUICLY_ERROR_GET_ERROR_CODE(err),
@@ -389,7 +389,7 @@ static void on_closed_by_peer(quicly_closed_by_peer_t *self, quicly_conn_t *conn
     }
 }
 
-static quicly_closed_by_peer_t closed_by_peer = {&on_closed_by_peer};
+static quicly_closed_by_remote_t closed_by_remote = {&on_closed_by_remote};
 
 static int on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn, ptls_buffer_t *buf,
                                         quicly_address_token_plaintext_t *token)
@@ -940,7 +940,7 @@ int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t 
     memcpy(session_info.tls_ticket.base, src.base, src.len);
 
     quicly_conn_t *conn = *ptls_get_data_ptr(tls);
-    return save_session(quicly_get_peer_transport_parameters(conn));
+    return save_session(quicly_get_remote_transport_parameters(conn));
 }
 
 static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
@@ -949,7 +949,7 @@ static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicl
     session_info.address_token = ptls_iovec_init(malloc(token.len), token.len);
     memcpy(session_info.address_token.base, token.base, token.len);
 
-    return save_session(quicly_get_peer_transport_parameters(conn));
+    return save_session(quicly_get_remote_transport_parameters(conn));
 }
 
 static quicly_save_resumption_token_t save_resumption_token = {save_resumption_token_cb};
@@ -1045,7 +1045,7 @@ int main(int argc, char **argv)
     ctx = quicly_spec_context;
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
-    ctx.closed_by_peer = &closed_by_peer;
+    ctx.closed_by_remote = &closed_by_remote;
     ctx.save_resumption_token = &save_resumption_token;
     ctx.generate_resumption_token = &generate_resumption_token;
 

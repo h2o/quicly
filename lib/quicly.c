@@ -1958,7 +1958,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         memcpy(conn->token.base, address_token.base, address_token.len);
         conn->token.len = address_token.len;
     }
-    server_cid = quicly_get_peer_cid(conn);
+    server_cid = quicly_get_remote_cid(conn);
 
     QUICLY_PROBE(CONNECT, conn, probe_now(), conn->super.version);
 
@@ -4673,9 +4673,9 @@ static int handle_close(quicly_conn_t *conn, int err, uint64_t frame_type, ptls_
     /* switch to closing state, notify the app (at this moment the streams are accessible), then destroy the streams */
     if ((ret = enter_close(conn, 0, err != QUICLY_ERROR_RECEIVED_STATELESS_RESET)) != 0)
         return ret;
-    if (conn->super.ctx->closed_by_peer != NULL)
-        conn->super.ctx->closed_by_peer->cb(conn->super.ctx->closed_by_peer, conn, err, frame_type,
-                                            (const char *)reason_phrase.base, reason_phrase.len);
+    if (conn->super.ctx->closed_by_remote != NULL)
+        conn->super.ctx->closed_by_remote->cb(conn->super.ctx->closed_by_remote, conn, err, frame_type,
+                                              (const char *)reason_phrase.base, reason_phrase.len);
     destroy_all_streams(conn, err, 0);
 
     return 0;
