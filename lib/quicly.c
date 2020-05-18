@@ -1302,7 +1302,7 @@ static int discard_handshake_context(quicly_conn_t *conn, size_t epoch)
     return 0;
 }
 
-static int apply_peer_transport_params(quicly_conn_t *conn)
+static int apply_remote_transport_params(quicly_conn_t *conn)
 {
     int ret;
 
@@ -1995,7 +1995,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     if (max_early_data_size != 0) {
         conn->super.remote.transport_params = *resumed_transport_params;
-        if ((ret = apply_peer_transport_params(conn)) != 0)
+        if ((ret = apply_remote_transport_params(conn)) != 0)
             goto Exit;
     }
 
@@ -2032,7 +2032,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     ack_frequency_set_next_update_at(conn);
 
     /* update UDP max payload size to:
-     * max(current, min(max_the_peer_sent, remote.tp.max_udp_payload_size, local.tp.max_udp_payload_size)) */
+     * max(current, min(max_the_remote_sent, remote.tp.max_udp_payload_size, local.tp.max_udp_payload_size)) */
     assert(conn->initial != NULL);
     if (conn->egress.max_udp_payload_size < conn->initial->largest_ingress_udp_payload_size) {
         uint16_t size = conn->initial->largest_ingress_udp_payload_size;
@@ -3708,7 +3708,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         break;
     case QUICLY_EPOCH_1RTT: {
         if (is_enc)
-            if ((ret = apply_peer_transport_params(conn)) != 0)
+            if ((ret = apply_remote_transport_params(conn)) != 0)
                 return ret;
         if (conn->application == NULL && (ret = setup_application_space(conn)) != 0)
             return ret;
