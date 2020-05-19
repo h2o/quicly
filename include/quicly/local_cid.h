@@ -42,7 +42,7 @@ enum en_quicly_local_cid_state_t {
      */
     QUICLY_LOCAL_CID_STATE_INFLIGHT,
     /**
-     * this CID has been delivered to the peer (ACKed) and in use
+     * this CID has been delivered to the remote peer (ACKed) and in use
      */
     QUICLY_LOCAL_CID_STATE_DELIVERED,
 };
@@ -58,7 +58,7 @@ typedef struct st_quicly_local_cid_t {
 } quicly_local_cid_t;
 
 /**
- * manages a list of connection IDs we issue to the peer
+ * manages a list of connection IDs we issue to the remote peer
  */
 typedef struct st_quicly_local_cid_set_t {
     /**

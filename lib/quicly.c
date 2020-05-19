@@ -117,7 +117,7 @@ struct st_quicly_pending_path_challenge_t {
 
 struct st_quicly_pn_space_t {
     /**
-     * acks to be sent to peer
+     * acks to be sent to remote peer
      */
     quicly_ranges_t ack_queue;
     /**
@@ -661,8 +661,8 @@ static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
     } else {
         assert(conn->egress.loss.loss_time == INT64_MAX);
     }
-    /* Allow timers not in the future when the peer is not yet validated, since we may not be able to send packets even when timers
-     * fire. */
+    /* Allow timers not in the future when the remote peer is not yet validated, since we may not be able to send packets even when
+     * timers fire. */
     if (timer_must_be_in_future && conn->super.remote.address_validation.validated)
         assert(now < conn->egress.loss.alarm_at);
 }
@@ -818,7 +818,7 @@ static int schedule_path_challenge_frame(quicly_conn_t *conn, int is_response, c
 }
 
 /**
- * calculate how many CIDs we provide to the peer
+ * calculate how many CIDs we provide to the remote peer
  */
 static size_t local_cid_size(const quicly_conn_t *conn)
 {
@@ -893,7 +893,7 @@ void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src,
                            QUICLY_FRAME_TYPE_CRYPTO, NULL);
             goto Exit;
         }
-        /* drop 0-RTT write key if 0-RTT is rejected by peer */
+        /* drop 0-RTT write key if 0-RTT is rejected by remote peer */
         if (conn->application != NULL && !conn->application->one_rtt_writable &&
             conn->application->cipher.egress.key.aead != NULL) {
             assert(quicly_is_client(conn));
@@ -4769,7 +4769,7 @@ static int handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quic
     QUICLY_PROBE(RETIRE_CONNECTION_ID_RECEIVE, conn, probe_now(), frame.sequence);
 
     if (frame.sequence >= conn->super.local_cid.plaintext.path_id) {
-        /* Receipt of a RETIRE_CONNECTION_ID frame containing a sequence number greater than any previously sent to the peer
+        /* Receipt of a RETIRE_CONNECTION_ID frame containing a sequence number greater than any previously sent to the remote peer
          * MUST be treated as a connection error of type PROTOCOL_VIOLATION. (19.16) */
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     }
@@ -4813,8 +4813,8 @@ static int handle_ack_frequency_frame(quicly_conn_t *conn, struct st_quicly_hand
     QUICLY_PROBE(ACK_FREQUENCY_RECEIVE, conn, probe_now(), frame.sequence, frame.packet_tolerance, frame.max_ack_delay,
                  frame.ignore_order);
 
-    /* At the moment, the only value that the peer would send is this value, because our TP.min_ack_delay and max_ack_delay are
-     * equal. */
+    /* At the moment, the only value that the remote peer would send is this value, because our TP.min_ack_delay and max_ack_delay
+     * are equal. */
     if (frame.max_ack_delay != QUICLY_LOCAL_MAX_ACK_DELAY * 1000)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
@@ -5274,7 +5274,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     case QUICLY_EPOCH_HANDSHAKE:
         if (quicly_is_client(conn)) {
             /* Running as a client.
-             * Respect "disable_migration" TP sent by the peer at the end of the TLS handshake. */
+             * Respect "disable_migration" TP sent by the remote peer at the end of the TLS handshake. */
             if (conn->super.local.address.sa.sa_family == AF_UNSPEC && dest_addr != NULL && dest_addr->sa_family != AF_UNSPEC &&
                 ptls_handshake_is_complete(conn->crypto.tls) && conn->super.remote.transport_params.disable_active_migration)
                 set_address(&conn->super.local.address, dest_addr);

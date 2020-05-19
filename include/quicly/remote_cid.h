@@ -29,11 +29,11 @@ extern "C" {
 #endif
 
 /**
- * records a CID given by the peer
+ * records a CID given by the remote peer
  */
 typedef struct st_quicly_remote_cid_t {
     /**
-     * indicates whether this record holds an active (given by peer and not retired) CID
+     * indicates whether this record holds an active (given by remote peer and not retired) CID
      */
     int is_active;
     /**
@@ -55,7 +55,7 @@ typedef struct st_quicly_remote_cid_t {
 } quicly_remote_cid_t;
 
 /**
- * structure to hold active connection IDs received from the peer
+ * structure to hold active connection IDs received from the remote peer
  */
 typedef struct st_quicly_remote_cid_set_t {
     /**

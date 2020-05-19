@@ -89,7 +89,8 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
     } else {
         /* we have a zero-length CID at cids[0] */
     }
-    set->cids[0].state = QUICLY_LOCAL_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the peer */
+    set->cids[0].state =
+        QUICLY_LOCAL_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the remote peer */
 
     for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
         set->cids[i].sequence = UINT64_MAX;
@@ -197,7 +198,7 @@ int quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int 
         return 0;
     }
 
-    /* it is a protocol violation for the peer to retire the only CID that is available to it */
+    /* it is a protocol violation for the remote peer to retire the only CID that is available to it */
     if (becomes_empty)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 

@@ -121,7 +121,7 @@ typedef struct st_quicly_stream_scheduler_t {
  */
 QUICLY_CALLBACK_TYPE(int, stream_open, quicly_stream_t *stream);
 /**
- * called when the connection is closed by peer
+ * called when the connection is closed by remote peer
  */
 QUICLY_CALLBACK_TYPE(void, closed_by_remote, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
                      size_t reason_len);
@@ -213,7 +213,7 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint16_t max_ack_delay;
     /**
-     * quicly ignores the value set for quicly_context_t::transport_parameters. Set to UINT64_MAX when not specified by peer.
+     * quicly ignores the value set for quicly_context_t::transport_parameters. Set to UINT64_MAX when not specified by remote peer.
      */
     uint64_t min_ack_delay_usec;
     /**
@@ -270,7 +270,7 @@ struct st_quicly_context_t {
      */
     quicly_cid_encryptor_t *cid_encryptor;
     /**
-     * callback called when a new stream is opened by peer
+     * callback called when a new stream is opened by remote peer
      */
     quicly_stream_open_t *stream_open;
     /**
@@ -278,7 +278,7 @@ struct st_quicly_context_t {
      */
     quicly_stream_scheduler_t *stream_scheduler;
     /**
-     * callback called when a connection is closed by peer
+     * callback called when a connection is closed by remote peer
      */
     quicly_closed_by_remote_t *closed_by_remote;
     /**
@@ -304,7 +304,7 @@ struct st_quicly_context_t {
  */
 typedef enum {
     /**
-     * before observing the first message from peer
+     * before observing the first message from remote peer
      */
     QUICLY_STATE_FIRSTFLIGHT,
     /**
@@ -312,7 +312,7 @@ typedef enum {
      */
     QUICLY_STATE_CONNECTED,
     /**
-     * sending close, but haven't seen the peer sending close
+     * sending close, but haven't seen the remote peer sending close
      */
     QUICLY_STATE_CLOSING,
     /**
@@ -379,7 +379,7 @@ struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
     /**
-     * connection IDs being issued to the peer
+     * connection IDs being issued to the remote peer
      */
     quicly_local_cid_set_t local_cid;
     struct {
@@ -389,7 +389,7 @@ struct _st_quicly_conn_public_t {
         quicly_address_t address;
         /**
          * the SCID used in long header packets. Equiavalent to local_cid[seq=0]. Retaining the value separately is the easiest way
-         * of staying away from the complexity caused by peer sending RCID frames before the handshake concludes.
+         * of staying away from the complexity caused by remote peer sending RCID frames before the handshake concludes.
          */
         quicly_cid_t long_header_src_cid;
         /**
@@ -404,7 +404,7 @@ struct _st_quicly_conn_public_t {
          */
         quicly_address_t address;
         /**
-         * CIDs received from the peer
+         * CIDs received from the remote peer
          */
         quicly_remote_cid_set_t cid_set;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
@@ -440,7 +440,7 @@ typedef enum {
      */
     QUICLY_SENDER_STATE_UNACKED,
     /**
-     * the sent value acknowledged by peer
+     * the sent value acknowledged by remote peer
      */
     QUICLY_SENDER_STATE_ACKED,
 } quicly_sender_state_t;
@@ -538,7 +538,7 @@ struct st_quicly_stream_t {
             uint16_t error_code;
         } reset_stream;
         /**
-         * sends receive window updates to peer
+         * sends receive window updates to remote peer
          */
         quicly_maxsender_t max_stream_data_sender;
         /**
@@ -853,7 +853,8 @@ int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *serv
  *                       provided to the function.
  * @param address_token  An validated address validation token, if any.  Applications MUST validate the address validation token
  *                       before calling this function, dropping the ones that failed to validate.  When a token is supplied,
- *                       `quicly_accept` will consult the values being supplied assuming that the peer's address has been validated.
+ *                       `quicly_accept` will consult the values being supplied assuming that the remote peer's address has been
+ * validated.
  */
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
