@@ -2539,23 +2539,24 @@ static ssize_t round_send_window(ssize_t window)
  */
 static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, int restrict_sending)
 {
+    uint64_t window = 0;
+    if (restrict_sending) {
+        /* Send min_bytes_to_send on PTO */
+        window = min_bytes_to_send;
+    } else {
+        /* Limit to cwnd */
+        if (conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight)
+            window = conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
+        /* Allow at least one packet on time-threshold loss detection */
+        window = window > min_bytes_to_send ? window : min_bytes_to_send;
+    }
     /* If address is unvalidated, limit sending to 3x bytes received */
     if (!conn->super.remote.address_validation.validated) {
-        uint64_t total = conn->super.stats.num_bytes.received * 3;
-        if (conn->super.stats.num_bytes.sent + MIN_SEND_WINDOW <= total)
-            return total - conn->super.stats.num_bytes.sent;
-        return 0;
+        uint64_t budget3x = conn->super.stats.num_bytes.received * 3;
+        uint64_t remain3x = budget3x > conn->super.stats.num_bytes.sent ? budget3x - conn->super.stats.num_bytes.sent : 0;
+        window = window > remain3x ? remain3x : window;
     }
-
-    /* Validated address. Ensure there's enough window to send minimum number of packets */
-    uint64_t window = 0;
-    if (!restrict_sending && conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight + min_bytes_to_send)
-        window = conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
-    if (window < MIN_SEND_WINDOW)
-        window = 0;
-    if (window < min_bytes_to_send)
-        window = min_bytes_to_send;
-    return window;
+    return window >= MIN_SEND_WINDOW ? window : 0;
 }
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
@@ -3761,6 +3762,12 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     size_t min_packets_to_send = 0;
 
     /* handle timeouts */
+    if (conn->idle_timeout.at <= now) {
+        QUICLY_PROBE(IDLE_TIMEOUT, conn, probe_now());
+        conn->super.state = QUICLY_STATE_DRAINING;
+        destroy_all_streams(conn, 0, 0);
+        return QUICLY_ERROR_FREE_CONNECTION;
+    }
     if (conn->egress.loss.alarm_at <= now) {
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1,
                                         conn->egress.loss.largest_acked_packet_plus1 - 1, do_detect_loss, &min_packets_to_send,
@@ -3782,11 +3789,6 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
             }
         }
-    } else if (conn->idle_timeout.at <= now) {
-        QUICLY_PROBE(IDLE_TIMEOUT, conn, probe_now());
-        conn->super.state = QUICLY_STATE_DRAINING;
-        destroy_all_streams(conn, 0, 0);
-        return QUICLY_ERROR_FREE_CONNECTION;
     }
 
     s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size, restrict_sending);
