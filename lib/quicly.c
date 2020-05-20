@@ -2465,21 +2465,20 @@ static ssize_t round_send_window(ssize_t window)
 static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, int restrict_sending)
 {
     uint64_t window = 0;
-    if (!restrict_sending && conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight + min_bytes_to_send)
+    if (conn->egress.cc.cwnd > conn->egress.sentmap.bytes_in_flight + min_bytes_to_send)
         window = conn->egress.cc.cwnd - conn->egress.sentmap.bytes_in_flight;
     if (window < MIN_SEND_WINDOW)
         window = 0;
-    /* If address is validated, ensure there's enough window to send minimum number of packets */
+    /* Ensure there's enough window to send minimum number of packets on PTO */
+    if (restrict_sending && window < min_bytes_to_send)
+        window = min_bytes_to_send;
+    /* If address is unvalidated, limit sending to 3x bytes received */
     if (conn->super.peer.address_validation.validated) {
-        if (window < min_bytes_to_send)
-            window = min_bytes_to_send;
-        return window;
-    }
-    /* If address is unvalidated, limit sending to the min of 3x bytes received or cwnd */
-    uint64_t total = conn->super.stats.num_bytes.received * 3;
-    if (conn->super.stats.num_bytes.sent + MIN_SEND_WINDOW <= total) {
-        if (total < window + conn->super.stats.num_bytes.sent)
-            window = total - conn->super.stats.num_bytes.sent;
+        uint64_t total = conn->super.stats.num_bytes.received * 3;
+        if (conn->super.stats.num_bytes.sent + MIN_SEND_WINDOW <= total) {
+            if (total < window + conn->super.stats.num_bytes.sent)
+                window = total - conn->super.stats.num_bytes.sent;
+        }
     }
     return window;
 }
