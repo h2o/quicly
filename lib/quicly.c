@@ -2476,7 +2476,7 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
         window = window > min_bytes_to_send ? window : min_bytes_to_send;
     }
     /* If address is unvalidated, limit sending to 3x bytes received */
-    if (conn->super.peer.address_validation.validated) {
+    if (!conn->super.peer.address_validation.validated) {
         uint64_t budget3x = conn->super.stats.num_bytes.received * 3;
         uint64_t remain3x = budget3x > conn->super.stats.num_bytes.sent ? budget3x - conn->super.stats.num_bytes.sent : 0;
         window = window > remain3x ? remain3x : window;
