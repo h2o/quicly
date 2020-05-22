@@ -31,13 +31,40 @@ extern "C" {
 #include "picotls.h"
 #include "quicly/constants.h"
 
-typedef struct st_quicly_cid_t quicly_cid_t;
-typedef struct st_quicly_cid_plaintext_t quicly_cid_plaintext_t;
+/**
+ * Guard value. We would never send path_id of this value.
+ */
+#define QUICLY_MAX_PATH_ID UINT8_MAX
 
-struct st_quicly_cid_t {
+typedef struct st_quicly_cid_t {
     uint8_t cid[QUICLY_MAX_CID_LEN_V1];
     uint8_t len;
-};
+} quicly_cid_t;
+
+/**
+ * The structure of CID issued by quicly.
+ *
+ * Authentication of the CID can be done by validating if server_id and thread_id contain correct values.
+ */
+typedef struct st_quicly_cid_plaintext_t {
+    /**
+     * the internal "connection ID" unique to each connection (rather than QUIC's CID being unique to each path)
+     */
+    uint32_t master_id;
+    /**
+     * path ID of the connection; we issue up to 255 CIDs per connection (see QUICLY_MAX_PATH_ID)
+     */
+    uint32_t path_id : 8;
+    /**
+     * for intra-node routing
+     */
+    uint32_t thread_id : 24;
+    /**
+     * for inter-node routing; available only when using a 16-byte cipher to encrypt CIDs, otherwise set to zero. See
+     * quicly_context_t::is_clustered.
+     */
+    uint64_t node_id;
+} quicly_cid_plaintext_t;
 
 /**
  * CID encryption
@@ -62,38 +89,10 @@ typedef struct st_quicly_cid_encryptor_t {
     int (*generate_stateless_reset_token)(struct st_quicly_cid_encryptor_t *self, void *token, const void *cid);
 } quicly_cid_encryptor_t;
 
-/**
- * Guard value. We would never send path_id of this value.
- */
-#define QUICLY_MAX_PATH_ID UINT8_MAX
-
-/**
- * The structure of CID issued by quicly.
- *
- * Authentication of the CID can be done by validating if server_id and thread_id contain correct values.
- */
-struct st_quicly_cid_plaintext_t {
-    /**
-     * the internal "connection ID" unique to each connection (rather than QUIC's CID being unique to each path)
-     */
-    uint32_t master_id;
-    /**
-     * path ID of the connection; we issue up to 255 CIDs per connection (see QUICLY_MAX_PATH_ID)
-     */
-    uint32_t path_id : 8;
-    /**
-     * for intra-node routing
-     */
-    uint32_t thread_id : 24;
-    /**
-     * for inter-node routing; available only when using a 16-byte cipher to encrypt CIDs, otherwise set to zero. See
-     * quicly_context_t::is_clustered.
-     */
-    uint64_t node_id;
-};
-
 static void quicly_set_cid(quicly_cid_t *dest, ptls_iovec_t src);
 static int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec);
+
+/* inline functions */
 
 inline int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec)
 {
