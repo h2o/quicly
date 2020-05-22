@@ -400,13 +400,13 @@ struct _st_quicly_conn_public_t {
     } local;
     struct {
         /**
-         * the remote address (cannot be AF_UNSPEC)
-         */
-        quicly_address_t address;
-        /**
          * CIDs received from the remote peer
          */
         quicly_remote_cid_set_t cid_set;
+        /**
+         * the remote address (cannot be AF_UNSPEC)
+         */
+        quicly_address_t address;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
