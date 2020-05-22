@@ -378,11 +378,11 @@ struct st_quicly_default_scheduler_state_t {
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
-    /**
-     * connection IDs being issued to the remote peer
-     */
-    quicly_local_cid_set_t local_cid;
     struct {
+        /**
+         * connection IDs being issued to the remote peer
+         */
+        quicly_local_cid_set_t cid_set;
         /**
          * the local address (may be AF_UNSPEC)
          */
@@ -998,7 +998,7 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->local_cid.plaintext;
+    return &c->local.cid_set.plaintext;
 }
 
 inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
