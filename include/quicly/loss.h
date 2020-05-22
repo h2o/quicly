@@ -90,11 +90,11 @@ typedef struct quicly_loss_t {
      */
     const quicly_loss_conf_t *conf;
     /**
-     * pointer to transport parameter containing the peer's max_ack_delay
+     * pointer to transport parameter containing the remote peer's max_ack_delay
      */
     uint16_t *max_ack_delay;
     /**
-     * pointer to transport parameter containing the peer's ack exponent
+     * pointer to transport parameter containing the remote peer's ack exponent
      */
     uint8_t *ack_delay_exponent;
     /**

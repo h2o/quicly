@@ -384,7 +384,7 @@ static void test_address_token_codec(void)
     input.remote.sin.sin_family = AF_INET;
     input.remote.sin.sin_addr.s_addr = htonl(0x7f000001);
     input.remote.sin.sin_port = htons(443);
-    set_cid(&input.retry.odcid, ptls_iovec_init("abcdefgh", 8));
+    quicly_set_cid(&input.retry.odcid, ptls_iovec_init("abcdefgh", 8));
     input.retry.cidpair_hash = 12345;
     strcpy((char *)input.appdata.bytes, "hello world");
     input.appdata.len = strlen((char *)input.appdata.bytes);
@@ -421,6 +421,13 @@ static void test_address_token_codec(void)
     ptls_buffer_dispose(&buf);
     ptls_aead_free(enc);
     ptls_aead_free(dec);
+}
+
+static void test_cid(void)
+{
+    subtest("received cid", test_received_cid);
+    subtest("local cid", test_local_cid);
+    subtest("retire cid", test_retire_cid);
 }
 
 int main(int argc, char **argv)
@@ -488,6 +495,7 @@ int main(int argc, char **argv)
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
+    subtest("cid", test_cid);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("loss", test_loss);

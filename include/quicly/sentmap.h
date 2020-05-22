@@ -109,6 +109,12 @@ struct st_quicly_sent_t {
             int is_inflight;
             uint64_t generation;
         } new_token;
+        struct {
+            uint64_t sequence;
+        } new_connection_id;
+        struct {
+            uint64_t sequence;
+        } retire_connection_id;
     } data;
 };
 

@@ -35,12 +35,15 @@ extern "C" {
 #include "picotls.h"
 #include "quicly/constants.h"
 #include "quicly/frame.h"
+#include "quicly/local_cid.h"
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
 #include "quicly/cc.h"
 #include "quicly/recvstate.h"
 #include "quicly/sendstate.h"
 #include "quicly/maxsender.h"
+#include "quicly/cid.h"
+#include "quicly/remote_cid.h"
 
 #ifndef QUICLY_DEBUG
 #define QUICLY_DEBUG 0
@@ -78,8 +81,6 @@ typedef union st_quicly_address_t {
     struct sockaddr_in6 sin6;
 } quicly_address_t;
 
-typedef struct st_quicly_cid_t quicly_cid_t;
-typedef struct st_quicly_cid_plaintext_t quicly_cid_plaintext_t;
 typedef struct st_quicly_context_t quicly_context_t;
 typedef struct st_quicly_stream_t quicly_stream_t;
 typedef struct st_quicly_send_context_t quicly_send_context_t;
@@ -94,29 +95,6 @@ typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintex
     typedef struct st_quicly_##name##_t {                                                                                          \
         ret (*cb)(struct st_quicly_##name##_t * self, __VA_ARGS__);                                                                \
     } quicly_##name##_t
-
-/**
- * CID encryption
- */
-typedef struct st_quicly_cid_encryptor_t {
-    /**
-     * encrypts CID and optionally generates a stateless reset token
-     */
-    void (*encrypt_cid)(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
-                        const quicly_cid_plaintext_t *plaintext);
-    /**
-     * decrypts CID. plaintext->thread_id should contain a randomly distributed number when validation fails, so that the value can
-     * be used for distributing load among the threads within the process.
-     * @param len length of encrypted bytes if known, or 0 if unknown (short header packet)
-     * @return length of the CID, or SIZE_MAX if decryption failed
-     */
-    size_t (*decrypt_cid)(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
-                          size_t len);
-    /**
-     * generates a stateless reset token (returns if generated)
-     */
-    int (*generate_stateless_reset_token)(struct st_quicly_cid_encryptor_t *self, void *token, const void *cid);
-} quicly_cid_encryptor_t;
 
 /**
  * stream scheduler
@@ -143,9 +121,9 @@ typedef struct st_quicly_stream_scheduler_t {
  */
 QUICLY_CALLBACK_TYPE(int, stream_open, quicly_stream_t *stream);
 /**
- * called when the connection is closed by peer
+ * called when the connection is closed by remote peer
  */
-QUICLY_CALLBACK_TYPE(void, closed_by_peer, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
+QUICLY_CALLBACK_TYPE(void, closed_by_remote, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
                      size_t reason_len);
 /**
  * returns current time in milliseconds
@@ -235,49 +213,18 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint16_t max_ack_delay;
     /**
-     * quicly ignores the value set for quicly_context_t::transport_parameters. Set to UINT64_MAX when not specified by peer.
+     * quicly ignores the value set for quicly_context_t::transport_parameters. Set to UINT64_MAX when not specified by remote peer.
      */
     uint64_t min_ack_delay_usec;
     /**
      *
      */
     uint8_t disable_active_migration : 1;
+    /**
+     *
+     */
+    uint64_t active_connection_id_limit;
 } quicly_transport_parameters_t;
-
-struct st_quicly_cid_t {
-    uint8_t cid[QUICLY_MAX_CID_LEN_V1];
-    uint8_t len;
-};
-
-/**
- * Guard value. We would never send path_id of this value.
- */
-#define QUICLY_MAX_PATH_ID UINT8_MAX
-
-/**
- * The structure of CID issued by quicly.
- *
- * Authentication of the CID can be done by validating if server_id and thread_id contain correct values.
- */
-struct st_quicly_cid_plaintext_t {
-    /**
-     * the internal "connection ID" unique to each connection (rather than QUIC's CID being unique to each path)
-     */
-    uint32_t master_id;
-    /**
-     * path ID of the connection; we issue up to 255 CIDs per connection (see QUICLY_MAX_PATH_ID)
-     */
-    uint32_t path_id : 8;
-    /**
-     * for intra-node routing
-     */
-    uint32_t thread_id : 24;
-    /**
-     * for inter-node routing; available only when using a 16-byte cipher to encrypt CIDs, otherwise set to zero. See
-     * quicly_context_t::is_clustered.
-     */
-    uint64_t node_id;
-};
 
 struct st_quicly_context_t {
     /**
@@ -286,8 +233,8 @@ struct st_quicly_context_t {
     ptls_context_t *tls;
     /**
      * Maximum size of packets that we are willing to send when path-specific information is unavailable. As a path-specific
-     * * optimization, quicly acting as a server expands this value to `min(host.tp.max_udp_payload_size,
-     * * peer.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters from the client.
+     * * optimization, quicly acting as a server expands this value to `min(local.tp.max_udp_payload_size,
+     * * remote.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters from the client.
      */
     uint16_t initial_egress_max_udp_payload_size;
     /**
@@ -323,7 +270,7 @@ struct st_quicly_context_t {
      */
     quicly_cid_encryptor_t *cid_encryptor;
     /**
-     * callback called when a new stream is opened by peer
+     * callback called when a new stream is opened by remote peer
      */
     quicly_stream_open_t *stream_open;
     /**
@@ -331,9 +278,9 @@ struct st_quicly_context_t {
      */
     quicly_stream_scheduler_t *stream_scheduler;
     /**
-     * callback called when a connection is closed by peer
+     * callback called when a connection is closed by remote peer
      */
-    quicly_closed_by_peer_t *closed_by_peer;
+    quicly_closed_by_remote_t *closed_by_remote;
     /**
      * returns current time in milliseconds
      */
@@ -357,7 +304,7 @@ struct st_quicly_context_t {
  */
 typedef enum {
     /**
-     * before observing the first message from peer
+     * before observing the first message from remote peer
      */
     QUICLY_STATE_FIRSTFLIGHT,
     /**
@@ -365,7 +312,7 @@ typedef enum {
      */
     QUICLY_STATE_CONNECTED,
     /**
-     * sending close, but haven't seen the peer sending close
+     * sending close, but haven't seen the remote peer sending close
      */
     QUICLY_STATE_CLOSING,
     /**
@@ -381,7 +328,7 @@ struct st_quicly_conn_streamgroup_state_t {
 
 /**
  * Values that do not need to be gathered upon the invocation of `quicly_get_stats`. We use typedef to define the same fields in
- * the same order for quicly_stats_t and `struct st_quicly_public_conn_t::stats`.
+ * the same order for quicly_stats_t and `struct st_quicly_conn_public_t::stats`.
  */
 #define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
     struct {                                                                                                                       \
@@ -431,53 +378,48 @@ struct st_quicly_default_scheduler_state_t {
 struct _st_quicly_conn_public_t {
     quicly_context_t *ctx;
     quicly_state_t state;
-    /**
-     * identifier assigned by the application. `path_id` stores the next value to be issued
-     */
-    quicly_cid_plaintext_t master_id;
     struct {
+        /**
+         * connection IDs being issued to the remote peer.
+         * `quicly_conn_public_t::local.cid_set.plaintext.master_id has to be located right after `ctx` and `state`, as probes rely
+         * on that assumption.
+         */
+        quicly_local_cid_set_t cid_set;
         /**
          * the local address (may be AF_UNSPEC)
          */
         quicly_address_t address;
         /**
-         * the SCID used in long header packets
+         * the SCID used in long header packets. Equiavalent to local_cid[seq=0]. Retaining the value separately is the easiest way
+         * of staying away from the complexity caused by remote peer sending RCID frames before the handshake concludes.
          */
-        quicly_cid_t src_cid;
-        /**
-         * stateless reset token announced by the host. We have only one token per connection. The token will cached in this
-         * variable when the generate_stateless_reset_token is non-NULL.
-         */
-        uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
+        quicly_cid_t long_header_src_cid;
         /**
          * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
          */
         quicly_cid_t offered_cid;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
-    } host;
+    } local;
     struct {
+        /**
+         * CIDs received from the remote peer
+         */
+        quicly_remote_cid_set_t cid_set;
         /**
          * the remote address (cannot be AF_UNSPEC)
          */
         quicly_address_t address;
-        /**
-         * CID used for emitting the packets
-         */
-        quicly_cid_t cid;
-        /**
-         * stateless reset token corresponding to the CID
-         */
-        struct {
-            uint8_t *token;
-            uint8_t _buf[QUICLY_STATELESS_RESET_TOKEN_LEN];
-        } stateless_reset;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
             unsigned validated : 1;
             unsigned send_probe : 1;
         } address_validation;
-    } peer;
+        /**
+         * largest value of Retire Prior To field observed so far
+         */
+        uint64_t largest_retire_prior_to;
+    } remote;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
         QUICLY_STATS_PREBUILT_FIELDS;
@@ -500,7 +442,7 @@ typedef enum {
      */
     QUICLY_SENDER_STATE_UNACKED,
     /**
-     * the sent value acknowledged by peer
+     * the sent value acknowledged by remote peer
      */
     QUICLY_SENDER_STATE_ACKED,
 } quicly_sender_state_t;
@@ -598,7 +540,7 @@ struct st_quicly_stream_t {
             uint16_t error_code;
         } reset_stream;
         /**
-         * sends receive window updates to peer
+         * sends receive window updates to remote peer
          */
         quicly_maxsender_t max_stream_data_sender;
         /**
@@ -734,10 +676,6 @@ uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uin
 /**
  *
  */
-static int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec);
-/**
- *
- */
 static quicly_context_t *quicly_get_context(quicly_conn_t *conn);
 /**
  *
@@ -750,11 +688,11 @@ static const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn);
+static const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn);
+static const quicly_transport_parameters_t *quicly_get_remote_transport_parameters(quicly_conn_t *conn);
 /**
  *
  */
@@ -774,11 +712,11 @@ static int quicly_is_client(quicly_conn_t *conn);
 /**
  *
  */
-static quicly_stream_id_t quicly_get_host_next_stream_id(quicly_conn_t *conn, int uni);
+static quicly_stream_id_t quicly_get_local_next_stream_id(quicly_conn_t *conn, int uni);
 /**
  *
  */
-static quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, int uni);
+static quicly_stream_id_t quicly_get_remote_next_stream_id(quicly_conn_t *conn, int uni);
 /**
  * Returns the local address of the connection. This may be AF_UNSPEC, indicating that the operating system is choosing the address.
  */
@@ -898,6 +836,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, co
                                            const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by);
 /**
  *
+ * @param stateless_reset_token  [client-only] if the corresponding transport parameter is used, the provided token is written back
+ *                               to this vector. When the transport parameter does not exist, the vector is left unmodified.
  */
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, void *stateless_reset_token,
                                            int is_client, const uint8_t *src, const uint8_t *end);
@@ -915,7 +855,8 @@ int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *serv
  *                       provided to the function.
  * @param address_token  An validated address validation token, if any.  Applications MUST validate the address validation token
  *                       before calling this function, dropping the ones that failed to validate.  When a token is supplied,
- *                       `quicly_accept` will consult the values being supplied assuming that the peer's address has been validated.
+ *                       `quicly_accept` will consult the values being supplied assuming that the remote peer's address has been
+ * validated.
  */
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
@@ -1047,12 +988,7 @@ inline quicly_state_t quicly_get_state(quicly_conn_t *conn)
 inline uint32_t quicly_num_streams(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return c->host.bidi.num_streams + c->host.uni.num_streams + c->peer.bidi.num_streams + c->peer.uni.num_streams;
-}
-
-inline int quicly_cid_is_equal(const quicly_cid_t *cid, ptls_iovec_t vec)
-{
-    return cid->len == vec.len && memcmp(cid->cid, vec.base, vec.len) == 0;
+    return c->local.bidi.num_streams + c->local.uni.num_streams + c->remote.bidi.num_streams + c->remote.uni.num_streams;
 }
 
 inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
@@ -1064,55 +1000,55 @@ inline quicly_context_t *quicly_get_context(quicly_conn_t *conn)
 inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->master_id;
+    return &c->local.cid_set.plaintext;
 }
 
 inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->host.offered_cid;
+    return &c->local.offered_cid;
 }
 
-inline const quicly_cid_t *quicly_get_peer_cid(quicly_conn_t *conn)
+inline const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->peer.cid;
+    return &c->remote.cid_set.cids[0].cid;
 }
 
-inline const quicly_transport_parameters_t *quicly_get_peer_transport_parameters(quicly_conn_t *conn)
+inline const quicly_transport_parameters_t *quicly_get_remote_transport_parameters(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->peer.transport_params;
+    return &c->remote.transport_params;
 }
 
 inline int quicly_is_client(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return (c->host.bidi.next_stream_id & 1) == 0;
+    return (c->local.bidi.next_stream_id & 1) == 0;
 }
 
-inline quicly_stream_id_t quicly_get_host_next_stream_id(quicly_conn_t *conn, int uni)
+inline quicly_stream_id_t quicly_get_local_next_stream_id(quicly_conn_t *conn, int uni)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return uni ? c->host.uni.next_stream_id : c->host.bidi.next_stream_id;
+    return uni ? c->local.uni.next_stream_id : c->local.bidi.next_stream_id;
 }
 
-inline quicly_stream_id_t quicly_get_peer_next_stream_id(quicly_conn_t *conn, int uni)
+inline quicly_stream_id_t quicly_get_remote_next_stream_id(quicly_conn_t *conn, int uni)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return uni ? c->peer.uni.next_stream_id : c->peer.bidi.next_stream_id;
+    return uni ? c->remote.uni.next_stream_id : c->remote.bidi.next_stream_id;
 }
 
 inline struct sockaddr *quicly_get_sockname(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->host.address.sa;
+    return &c->local.address.sa;
 }
 
 inline struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->peer.address.sa;
+    return &c->remote.address.sa;
 }
 
 inline void **quicly_get_data(quicly_conn_t *conn)
