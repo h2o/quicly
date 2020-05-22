@@ -62,6 +62,11 @@ typedef struct st_quicly_local_cid_t {
  */
 typedef struct st_quicly_local_cid_set_t {
     /**
+     * Identifier of the connection used by quicly. Three tuple of (node_id, thread_id, master_id) is used to identify the
+     * connection. `path_id` is maintained by the "local_cid" module, and used for identifying each CID being issued.
+     */
+    quicly_cid_plaintext_t plaintext;
+    /**
      * storage to retain local CIDs
      *
      * Pending CIDs (state == STATE_PENDING) are moved to the front of the array, in the order it was marked as pending.
@@ -75,11 +80,6 @@ typedef struct st_quicly_local_cid_set_t {
      */
     size_t _size;
     quicly_cid_encryptor_t *_encryptor;
-    /**
-     * Identifier of the connection used by quicly. Three tuple of (node_id, thread_id, master_id) is used to identify the
-     * connection. `path_id` is maintained by the "local_cid" module, and used for identifying each CID being issued.
-     */
-    quicly_cid_plaintext_t plaintext;
 } quicly_local_cid_set_t;
 
 /**

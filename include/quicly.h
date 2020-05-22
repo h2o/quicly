@@ -380,7 +380,9 @@ struct _st_quicly_conn_public_t {
     quicly_state_t state;
     struct {
         /**
-         * connection IDs being issued to the remote peer
+         * connection IDs being issued to the remote peer.
+         * `quicly_conn_public_t::local.cid_set.plaintext.master_id has to be located right after `ctx` and `state`, as probes rely
+         * on that assumption.
          */
         quicly_local_cid_set_t cid_set;
         /**
