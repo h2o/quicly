@@ -1994,7 +1994,16 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     ptls_buffer_dispose(&buf);
 
     if (max_early_data_size != 0) {
-        conn->super.remote.transport_params = *resumed_transport_params;
+        /* when attempting 0-RTT, apply the remembered transport parameters */
+#define APPLY(n) conn->super.remote.transport_params.n = resumed_transport_params->n
+        APPLY(active_connection_id_limit);
+        APPLY(max_data);
+        APPLY(max_stream_data.bidi_local);
+        APPLY(max_stream_data.bidi_remote);
+        APPLY(max_stream_data.uni);
+        APPLY(max_streams_bidi);
+        APPLY(max_streams_uni);
+#undef APPLY
         if ((ret = apply_remote_transport_params(conn)) != 0)
             goto Exit;
     }
