@@ -3595,27 +3595,38 @@ Exit:
 
 static int send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s)
 {
+    uint64_t error_code, offending_frame_type;
+    const char *reason_phrase;
     int ret;
 
+    /* determine the payload, masking the application error when sending the frame using an unauthenticated epoch */
+    error_code = conn->egress.connection_close.error_code;
+    offending_frame_type = conn->egress.connection_close.frame_type;
+    reason_phrase = conn->egress.connection_close.reason_phrase;
+    if (offending_frame_type == UINT64_MAX) {
+        switch (get_epoch(s->current.first_byte)) {
+        case QUICLY_EPOCH_INITIAL:
+        case QUICLY_EPOCH_HANDSHAKE:
+            error_code = QUICLY_TRANSPORT_ERROR_APPLICATION;
+            offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
+            reason_phrase = "";
+            break;
+        }
+    }
+
     /* write frame */
-    if ((ret = allocate_frame(conn, s,
-                              quicly_close_frame_capacity(conn->egress.connection_close.error_code,
-                                                          conn->egress.connection_close.frame_type,
-                                                          conn->egress.connection_close.reason_phrase))) != 0)
+    if ((ret = allocate_frame(conn, s, quicly_close_frame_capacity(error_code, offending_frame_type, reason_phrase))) != 0)
         return ret;
-    s->dst = quicly_encode_close_frame(s->dst, conn->egress.connection_close.error_code, conn->egress.connection_close.frame_type,
-                                       conn->egress.connection_close.reason_phrase);
+    s->dst = quicly_encode_close_frame(s->dst, error_code, offending_frame_type, reason_phrase);
 
     /* update counter */
     ++conn->egress.connection_close.num_sent;
 
     /* probe */
-    if (conn->egress.connection_close.frame_type != UINT64_MAX) {
-        QUICLY_PROBE(TRANSPORT_CLOSE_SEND, conn, probe_now(), conn->egress.connection_close.error_code,
-                     conn->egress.connection_close.frame_type, conn->egress.connection_close.reason_phrase);
+    if (offending_frame_type != UINT64_MAX) {
+        QUICLY_PROBE(TRANSPORT_CLOSE_SEND, conn, probe_now(), error_code, offending_frame_type, reason_phrase);
     } else {
-        QUICLY_PROBE(APPLICATION_CLOSE_SEND, conn, probe_now(), conn->egress.connection_close.error_code,
-                     conn->egress.connection_close.reason_phrase);
+        QUICLY_PROBE(APPLICATION_CLOSE_SEND, conn, probe_now(), error_code, reason_phrase);
     }
 
     return 0;
