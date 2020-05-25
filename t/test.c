@@ -278,7 +278,8 @@ static void test_transport_parameters(void)
                                           0x07, 0x04, 0x80, 0x10, 0x00, 0x00, 0x04, 0x04, 0x81, 0x00, 0x00, 0x00,
                                           0x01, 0x04, 0x80, 0x00, 0x75, 0x30, 0x08, 0x01, 0x0a, 0x0a, 0x01, 0x0a};
     memset(&decoded, 0x55, sizeof(decoded));
-    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, 0, valid_bytes, valid_bytes + sizeof(valid_bytes)) == 0);
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, 0, valid_bytes,
+                                              valid_bytes + sizeof(valid_bytes)) == 0);
     ok(decoded.max_stream_data.bidi_local = 0x100000);
     ok(decoded.max_stream_data.bidi_remote = 0x100000);
     ok(decoded.max_stream_data.uni = 0x100000);
@@ -292,7 +293,7 @@ static void test_transport_parameters(void)
 
     static const uint8_t dup_bytes[] = {0x05, 0x04, 0x80, 0x10, 0x00, 0x00, 0x05, 0x04, 0x80, 0x10, 0x00, 0x00};
     memset(&decoded, 0x55, sizeof(decoded));
-    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, 0, dup_bytes, dup_bytes + sizeof(dup_bytes)) ==
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, 0, dup_bytes, dup_bytes + sizeof(dup_bytes)) ==
        QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
 }
 
@@ -384,8 +385,9 @@ static void test_address_token_codec(void)
     input.remote.sin.sin_family = AF_INET;
     input.remote.sin.sin_addr.s_addr = htonl(0x7f000001);
     input.remote.sin.sin_port = htons(443);
-    quicly_set_cid(&input.retry.odcid, ptls_iovec_init("abcdefgh", 8));
-    input.retry.cidpair_hash = 12345;
+    quicly_set_cid(&input.retry.original_dcid, ptls_iovec_init("abcdefgh", 8));
+    quicly_set_cid(&input.retry.client_cid, ptls_iovec_init("01234", 5));
+    quicly_set_cid(&input.retry.server_cid, ptls_iovec_init("abcdef0123456789", 16));
     strcpy((char *)input.appdata.bytes, "hello world");
     input.appdata.len = strlen((char *)input.appdata.bytes);
     ptls_buffer_init(&buf, "", 0);
@@ -400,9 +402,10 @@ static void test_address_token_codec(void)
     ok(input.remote.sa.sa_family == output.remote.sa.sa_family);
     ok(input.remote.sin.sin_addr.s_addr == output.remote.sin.sin_addr.s_addr);
     ok(input.remote.sin.sin_port == output.remote.sin.sin_port);
-    ok(input.retry.odcid.len == output.retry.odcid.len);
-    ok(memcmp(input.retry.odcid.cid, output.retry.odcid.cid, input.retry.odcid.len) == 0);
-    ok(input.retry.cidpair_hash == output.retry.cidpair_hash);
+    ok(quicly_cid_is_equal(&output.retry.original_dcid,
+                           ptls_iovec_init(input.retry.original_dcid.cid, input.retry.original_dcid.len)));
+    ok(quicly_cid_is_equal(&output.retry.client_cid, ptls_iovec_init(input.retry.client_cid.cid, input.retry.client_cid.len)));
+    ok(quicly_cid_is_equal(&output.retry.server_cid, ptls_iovec_init(input.retry.server_cid.cid, input.retry.server_cid.len)));
     ok(input.appdata.len == output.appdata.len);
     ok(memcmp(input.appdata.bytes, output.appdata.bytes, input.appdata.len) == 0);
 

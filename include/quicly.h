@@ -640,8 +640,9 @@ struct st_quicly_address_token_plaintext_t {
     quicly_address_t local, remote;
     union {
         struct {
-            quicly_cid_t odcid;
-            uint64_t cidpair_hash;
+            quicly_cid_t original_dcid;
+            quicly_cid_t client_cid;
+            quicly_cid_t server_cid;
         } retry;
         struct {
             uint8_t bytes[256];
@@ -833,13 +834,16 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
  *
  */
 int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
-                                           const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by);
+                                           const quicly_cid_t *original_dcid, const quicly_cid_t *initial_scid,
+                                           const quicly_cid_t *retry_scid, const void *stateless_reset_token, size_t expand_by);
 /**
+ * Decodes the transport parameters.
  *
  * @param stateless_reset_token  [client-only] if the corresponding transport parameter is used, the provided token is written back
  *                               to this vector. When the transport parameter does not exist, the vector is left unmodified.
  */
-int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, void *stateless_reset_token,
+int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *original_dcid,
+                                           quicly_cid_t *initial_scid, quicly_cid_t *retry_scid, void *stateless_reset_token,
                                            int is_client, const uint8_t *src, const uint8_t *end);
 /**
  * Initiates a new connection.

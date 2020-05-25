@@ -648,10 +648,9 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
             goto Expired;
         if (!port_is_equal)
             goto AddressMismatch;
-        uint64_t cidhash_actual;
-        if (quicly_retry_calc_cidpair_hash(&ptls_openssl_sha256, client_cid, server_cid, &cidhash_actual) != 0)
-            goto InternalError;
-        if (token->retry.cidpair_hash != cidhash_actual)
+        if (!quicly_cid_is_equal(&token->retry.client_cid, client_cid))
+            goto CIDMismatch;
+        if (!quicly_cid_is_equal(&token->retry.server_cid, server_cid))
             goto CIDMismatch;
         break;
     case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
@@ -676,9 +675,6 @@ UnknownAddressType:
     return 0;
 Expired:
     *err_desc = "token expired";
-    return 0;
-InternalError:
-    *err_desc = "internal error";
     return 0;
 CIDMismatch:
     *err_desc = "CID mismatch";
@@ -884,7 +880,7 @@ static void load_session(void)
             src = end;
         });
         ptls_decode_open_block(src, end, 2, {
-            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, 1, src, end)) != 0)
+            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, NULL, NULL, 1, src, end)) != 0)
                 goto Exit;
             src = end;
         });
@@ -914,7 +910,7 @@ int save_session(const quicly_transport_parameters_t *transport_params)
     ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.address_token.base, session_info.address_token.len); });
     ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.tls_ticket.base, session_info.tls_ticket.len); });
     ptls_buffer_push_block(&buf, 2, {
-        if ((ret = quicly_encode_transport_parameter_list(&buf, 1, transport_params, NULL, NULL, 0)) != 0)
+        if ((ret = quicly_encode_transport_parameter_list(&buf, 1, transport_params, NULL, NULL, NULL, NULL, 0)) != 0)
             goto Exit;
     });
 
