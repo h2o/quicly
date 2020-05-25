@@ -1596,26 +1596,26 @@ Exit:
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, void *stateless_reset_token,
                                            int is_client, const uint8_t *src, const uint8_t *end)
 {
-/* When non-negative, ext_index contains the literal position within the list of extensions recognized by this function. That index
- * is being used to find duplicates using a 64-bit bitmap (found_ext_bits). When the extension is being processed, ext_index is set
- * to -1. */
-#define DECODE_ONE_EXTENSION(_id, block)                                                                                           \
+/* When non-negative, tp_index contains the literal position within the list of transport parameters recognized by this function.
+ * That index is being used to find duplicates using a 64-bit bitmap (found_bits). When the transport parameter is being processed,
+ * tp_index is set to -1. */
+#define DECODE_TP(_id, block)                                                                                                      \
     do {                                                                                                                           \
-        if (ext_index >= 0) {                                                                                                      \
+        if (tp_index >= 0) {                                                                                                       \
             if (id == (_id)) {                                                                                                     \
-                if ((found_ext_bits & ((uint64_t)1 << ext_index)) != 0) {                                                          \
+                if ((found_bits & ((uint64_t)1 << tp_index)) != 0) {                                                               \
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;                                                              \
                     goto Exit;                                                                                                     \
                 }                                                                                                                  \
-                found_ext_bits |= (uint64_t)1 << ext_index;                                                                        \
-                {block} ext_index = -1;                                                                                            \
+                found_bits |= (uint64_t)1 << tp_index;                                                                             \
+                {block} tp_index = -1;                                                                                             \
             } else {                                                                                                               \
-                ++ext_index;                                                                                                       \
+                ++tp_index;                                                                                                        \
             }                                                                                                                      \
         }                                                                                                                          \
     } while (0)
 
-    uint64_t found_ext_bits = 0;
+    uint64_t found_bits = 0;
     int ret;
 
     /* set parameters to their default values */
@@ -1630,9 +1630,9 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
             ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
             goto Exit;
         }
-        int ext_index = 0;
+        int tp_index = 0;
         ptls_decode_open_block(src, end, -1, {
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID, {
                 size_t cidlen = end - src;
                 if (!(is_client && cidlen <= QUICLY_MAX_CID_LEN_V1)) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
@@ -1642,7 +1642,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                     quicly_set_cid(odcid, ptls_iovec_init(src, cidlen));
                 src = end;
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
@@ -1654,31 +1654,31 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
                 params->max_udp_payload_size = (uint16_t)v;
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL, {
                 if ((params->max_stream_data.bidi_local = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE, {
                 if ((params->max_stream_data.bidi_remote = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI, {
                 if ((params->max_stream_data.uni = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA, {
                 if ((params->max_data = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN, {
                 if (!(is_client && end - src == QUICLY_STATELESS_RESET_TOKEN_LEN)) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
@@ -1686,25 +1686,25 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 memcpy(stateless_reset_token, src, QUICLY_STATELESS_RESET_TOKEN_LEN);
                 src = end;
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_IDLE_TIMEOUT, {
                 if ((params->max_idle_timeout = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI, {
                 if ((params->max_streams_bidi = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI, {
                 if ((params->max_streams_uni = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_ACK_DELAY_EXPONENT, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
@@ -1716,7 +1716,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
                 params->ack_delay_exponent = (uint8_t)v;
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
@@ -1728,7 +1728,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
                 params->max_ack_delay = (uint16_t)v;
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
                 if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
@@ -1738,7 +1738,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                     goto Exit;
                 }
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT, {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
@@ -1750,9 +1750,9 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
                 params->active_connection_id_limit = v;
             });
-            DECODE_ONE_EXTENSION(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
             /* skip unknown extension */
-            if (ext_index >= 0)
+            if (tp_index >= 0)
                 src = end;
         });
     }
@@ -1771,7 +1771,7 @@ Exit:
         ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
     return ret;
 
-#undef DECODE_ONE_EXTENSION
+#undef DECODE_TP
 }
 
 static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_properties_t *properties, uint16_t type)
