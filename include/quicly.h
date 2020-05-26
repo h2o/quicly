@@ -395,9 +395,12 @@ struct _st_quicly_conn_public_t {
          */
         quicly_cid_t long_header_src_cid;
         /**
-         * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
+         * [server only] retains the original DCID used by the client
          */
         quicly_cid_t offered_cid;
+        /**
+         * stream-level limits
+         */
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
     } local;
     struct {
