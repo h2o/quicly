@@ -420,6 +420,7 @@ static const quicly_transport_parameters_t default_transport_params = {.max_udp_
 static void lock_now(quicly_conn_t *conn, int is_reentrant)
 {
     if (conn->stash.now == 0) {
+        assert(conn->stash.lock_count == 0);
         /* update _now, but never let it go back */
         conn->stash.now = conn->super.ctx->now->cb(conn->super.ctx->now);
         static __thread int64_t prev_now;
@@ -430,6 +431,7 @@ static void lock_now(quicly_conn_t *conn, int is_reentrant)
         }
     } else {
         assert(is_reentrant && "caller must be reentrant");
+        assert(conn->stash.lock_count != 0);
     }
 
     ++conn->stash.lock_count;
