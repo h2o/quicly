@@ -194,6 +194,13 @@ typedef struct st_quicly_streams_blocked_frame_t {
 
 static int quicly_decode_streams_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_streams_blocked_frame_t *frame);
 
+static size_t quicly_new_connection_id_frame_capacity(uint64_t sequence, uint64_t retire_prior_to, uint8_t cid_len);
+static uint8_t *quicly_encode_new_connection_id_frame(uint8_t *dst, uint64_t sequence, uint64_t retire_prior_to, const uint8_t *cid,
+                                                      uint8_t cid_len, const uint8_t *stateless_reset_token);
+
+static size_t quicly_retire_connection_id_frame_capacity(uint64_t sequence);
+static uint8_t *quicly_encode_retire_connection_id_frame(uint8_t *dst, uint64_t sequence);
+
 typedef struct st_quicly_new_connection_id_frame_t {
     uint64_t sequence;
     uint64_t retire_prior_to;
@@ -202,6 +209,13 @@ typedef struct st_quicly_new_connection_id_frame_t {
 } quicly_new_connection_id_frame_t;
 
 static int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint8_t *end, quicly_new_connection_id_frame_t *frame);
+
+typedef struct st_quicly_retire_connection_id_frame_t {
+    uint64_t sequence;
+} quicly_retire_connection_id_frame_t;
+
+static int quicly_decode_retire_connection_id_frame(const uint8_t **src, const uint8_t *end,
+                                                    quicly_retire_connection_id_frame_t *frame);
 
 static uint8_t *quicly_encode_stop_sending_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code);
 
@@ -575,12 +589,51 @@ inline int quicly_decode_streams_blocked_frame(const uint8_t **src, const uint8_
     return 0;
 }
 
+inline size_t quicly_new_connection_id_frame_capacity(uint64_t sequence, uint64_t retire_prior_to, uint8_t cid_len)
+{
+    size_t frame_type_len = 1; /* capacity to store the frame type field */
+    size_t length_len = 1;     /* capacity to store the length field (length of CID) */
+    return frame_type_len + quicly_encodev_capacity(sequence) + quicly_encodev_capacity(retire_prior_to) + length_len + cid_len +
+           QUICLY_STATELESS_RESET_TOKEN_LEN;
+}
+
+inline uint8_t *quicly_encode_new_connection_id_frame(uint8_t *dst, uint64_t sequence, uint64_t retire_prior_to, const uint8_t *cid,
+                                                      uint8_t cid_len, const uint8_t *stateless_reset_token)
+{
+    *dst++ = QUICLY_FRAME_TYPE_NEW_CONNECTION_ID;
+    dst = quicly_encodev(dst, sequence);
+    dst = quicly_encodev(dst, retire_prior_to);
+    *dst++ = cid_len;
+    memcpy(dst, cid, cid_len);
+    dst += cid_len;
+    memcpy(dst, stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
+    dst += QUICLY_STATELESS_RESET_TOKEN_LEN;
+
+    return dst;
+}
+
+inline size_t quicly_retire_connection_id_frame_capacity(uint64_t sequence)
+{
+    return 1 + quicly_encodev_capacity(sequence);
+}
+
+inline uint8_t *quicly_encode_retire_connection_id_frame(uint8_t *dst, uint64_t sequence)
+{
+    *dst++ = QUICLY_FRAME_TYPE_RETIRE_CONNECTION_ID;
+    dst = quicly_encodev(dst, sequence);
+
+    return dst;
+}
+
 inline int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint8_t *end, quicly_new_connection_id_frame_t *frame)
 {
     /* sequence */
     if ((frame->sequence = quicly_decodev(src, end)) == UINT64_MAX)
         goto Fail;
     if ((frame->retire_prior_to = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Fail;
+    /* The Retire Prior To field MUST be less than or equal to the Sequence Number field. */
+    if (frame->sequence < frame->retire_prior_to)
         goto Fail;
     if (end - *src < 1)
         goto Fail;
@@ -589,7 +642,7 @@ inline int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint
         uint8_t cid_len = *(*src)++;
         if (!(1 <= cid_len && cid_len <= QUICLY_MAX_CID_LEN_V1))
             goto Fail;
-        frame->cid = ptls_iovec_init(src, cid_len);
+        frame->cid = ptls_iovec_init(*src, cid_len);
         *src += cid_len;
     }
 
@@ -598,6 +651,18 @@ inline int quicly_decode_new_connection_id_frame(const uint8_t **src, const uint
         goto Fail;
     frame->stateless_reset_token = *src;
     *src += QUICLY_STATELESS_RESET_TOKEN_LEN;
+
+    return 0;
+Fail:
+    return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+}
+
+inline int quicly_decode_retire_connection_id_frame(const uint8_t **src, const uint8_t *end,
+                                                    quicly_retire_connection_id_frame_t *frame)
+{
+    /* sequence */
+    if ((frame->sequence = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Fail;
 
     return 0;
 Fail:
