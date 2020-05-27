@@ -372,11 +372,14 @@ struct st_quicly_conn_t {
      */
     struct {
         /**
-         * Use `now`, `lock_now`, `unlock_now`.
-         * This value holds current time that remains constant while quicly functions that deal with time are running. This variable
-         * set to zero while such functions are not running.
+         * This value holds current time that remains constant while quicly functions that deal with time are running. Only
+         * available when the lock is held using `lock_now`.
          */
         int64_t now;
+        /**
+         *
+         */
+        uint8_t lock_count;
         struct {
             /**
              * This cache is used to concatenate acked ranges of streams before processing them, reducing the frequency of function
@@ -414,19 +417,9 @@ static const quicly_transport_parameters_t default_transport_params = {.max_udp_
                                                                        .max_ack_delay = QUICLY_DEFAULT_MAX_ACK_DELAY,
                                                                        .min_ack_delay_usec = UINT64_MAX};
 
-struct st_quicly_lock_now_state_t {
-    uint8_t unlock_on_exit; /* boolean */
-};
-
-static void lock_now(quicly_conn_t *conn, struct st_quicly_lock_now_state_t *state)
+static void lock_now(quicly_conn_t *conn, int is_reentrant)
 {
-    if (conn->stash.now != 0) {
-        assert(state != NULL && "caller is not reentrant");
-        state->unlock_on_exit = 0;
-    } else {
-        if (state != NULL)
-            state->unlock_on_exit = 1;
-
+    if (conn->stash.now == 0) {
         /* update _now, but never let it go back */
         conn->stash.now = conn->super.ctx->now->cb(conn->super.ctx->now);
         static __thread int64_t prev_now;
@@ -435,14 +428,18 @@ static void lock_now(quicly_conn_t *conn, struct st_quicly_lock_now_state_t *sta
         } else {
             prev_now = conn->stash.now;
         }
+    } else {
+        assert(is_reentrant && "caller must be reentrant");
     }
+
+    ++conn->stash.lock_count;
 }
 
-static void unlock_now(quicly_conn_t *conn, struct st_quicly_lock_now_state_t *state)
+static void unlock_now(quicly_conn_t *conn)
 {
     assert(conn->stash.now != 0);
 
-    if (state == NULL || state->unlock_on_exit)
+    if (--conn->stash.lock_count == 0)
         conn->stash.now = 0;
 }
 
@@ -1775,7 +1772,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
 
     memset(conn, 0, sizeof(*conn));
     conn->_.super.ctx = ctx;
-    lock_now(&conn->_, NULL);
+    lock_now(&conn->_, 0);
     conn->_.super.master_id = *new_cid;
     set_address(&conn->_.super.host.address, local_addr);
     set_address(&conn->_.super.peer.address, remote_addr);
@@ -1976,7 +1973,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
 Exit:
     if (conn != NULL)
-        unlock_now(conn, NULL);
+        unlock_now(conn);
     if (ret != 0) {
         if (conn != NULL)
             quicly_free(conn);
@@ -3786,7 +3783,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
     quicly_send_context_t s = {{NULL, -1}, {NULL, NULL, NULL}, packets, *num_packets};
     int ret;
 
-    lock_now(conn, NULL);
+    lock_now(conn, 0);
 
     /* bail out if there's nothing is scheduled to be sent */
     if (conn->stash.now < quicly_get_first_timeout(conn)) {
@@ -3840,7 +3837,7 @@ int quicly_send(quicly_conn_t *conn, quicly_datagram_t **packets, size_t *num_pa
 
 Exit:
     *num_packets = s.num_packets;
-    unlock_now(conn, NULL);
+    unlock_now(conn);
     return ret;
 }
 
@@ -4004,14 +4001,13 @@ int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char
 
 int quicly_close(quicly_conn_t *conn, int err, const char *reason_phrase)
 {
-    struct st_quicly_lock_now_state_t lock_now_state;
     int ret;
 
     assert(err == 0 || QUICLY_ERROR_IS_QUIC_APPLICATION(err) || QUICLY_ERROR_IS_CONCEALED(err));
 
-    lock_now(conn, &lock_now_state);
+    lock_now(conn, 1);
     ret = initiate_close(conn, err, QUICLY_FRAME_TYPE_PADDING /* used when err == 0 */, reason_phrase);
-    unlock_now(conn, &lock_now_state);
+    unlock_now(conn);
 
     return ret;
 }
@@ -4859,7 +4855,7 @@ Exit:
             initiate_close(*conn, ret, offending_frame_type, "");
             ret = 0;
         }
-        unlock_now(*conn, NULL);
+        unlock_now(*conn);
     }
     return ret;
 }
@@ -4877,7 +4873,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     uint64_t pn, offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
     int is_ack_only, ret;
 
-    lock_now(conn, NULL);
+    lock_now(conn, 0);
 
     QUICLY_PROBE(RECEIVE, conn, conn->stash.now,
                  QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), packet->octets.base,
@@ -5132,7 +5128,7 @@ Exit:
         ret = 0;
         break;
     }
-    unlock_now(conn, NULL);
+    unlock_now(conn);
     return ret;
 }
 
