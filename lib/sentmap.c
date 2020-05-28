@@ -157,19 +157,19 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
 
     /* iterate through the frames */
     for (next_entry(iter); iter->p->acked != quicly_sentmap__type_packet; next_entry(iter)) {
-        if (notify_lost && ret == 0)
-            ret = iter->p->acked(conn, &packet, iter->p, QUICLY_SENTMAP_EVENT_LOST);
-        if (ret == 0)
-            ret = iter->p->acked(conn, &packet, iter->p, event);
+        if (notify_lost || event != QUICLY_SENTMAP_EVENT_EXPIRED) {
+            if ((ret = iter->p->acked(conn, &packet, event == QUICLY_SENTMAP_EVENT_ACKED, iter->p)) != 0)
+                goto Exit;
+        }
         if (event != QUICLY_SENTMAP_EVENT_LOST)
             discard_entry(map, iter);
     }
 
+Exit:
     return ret;
 }
 
-int quicly_sentmap__type_packet(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
-                                quicly_sentmap_event_t event)
+int quicly_sentmap__type_packet(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
 {
     assert(!"quicly_sentmap__type_packet cannot be called");
     return QUICLY_TRANSPORT_ERROR_INTERNAL;
