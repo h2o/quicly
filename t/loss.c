@@ -266,6 +266,7 @@ static void test_even(void)
 }
 
 struct loss_cond_t loss_cond_down, loss_cond_up;
+static unsigned num_failures_in_loss_core;
 
 static void loss_core(void)
 {
@@ -303,7 +304,7 @@ static void loss_core(void)
     test_streambuf_t *client_streambuf = NULL, *server_streambuf = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
     size_t i, stall_count = 0;
-    for (i = 0; i < 2000; ++i) {
+    for (i = 0; i < 100; ++i) {
         int64_t client_timeout = quicly_get_first_timeout(client), server_timeout = quicly_get_first_timeout(server),
                 min_timeout = client_timeout < server_timeout ? client_timeout : server_timeout;
         assert(min_timeout != INT64_MAX);
@@ -361,7 +362,7 @@ Fail:
     fprintf(stderr, "%s: i=%zu\n", __FUNCTION__, i);
     fwrite(transmit_log.base, 1, transmit_log.off, stderr);
     ptls_buffer_dispose(&transmit_log);
-    ok(0);
+    ++num_failures_in_loss_core;
     return;
 Exit:
     fprintf(stderr, "no memory\n");
@@ -374,65 +375,115 @@ static void test_downstream(void)
 
     loss_cond_up = cond_true;
 
+    num_failures_in_loss_core = 0;
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 3, 4);
         subtest("75%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 2);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 2);
         subtest("50%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 4);
         subtest("25%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 10);
         subtest("10%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 20);
         subtest("5%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 40);
         subtest("2.5%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 64);
         subtest("1.6%", loss_core);
     }
+    ok(num_failures_in_loss_core <= 0);
 }
 
 static void test_bidirectional(void)
 {
     size_t i;
 
+    num_failures_in_loss_core = 0;
     for (i = 0; i != 100; ++i) {
-#if 0 /* TODO enable this after adding code that retransmits ACK every 1 PTO even when a single packet is received */
         init_cond_rand(&loss_cond_down, 3, 4);
         init_cond_rand(&loss_cond_up, 3, 4);
         subtest("75%", loss_core);
-#endif
+    }
+    ok(num_failures_in_loss_core <= 81);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 2);
         init_cond_rand(&loss_cond_up, 1, 2);
         subtest("50%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 2);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 4);
         init_cond_rand(&loss_cond_up, 1, 4);
         subtest("25%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 10);
         init_cond_rand(&loss_cond_up, 1, 10);
         subtest("10%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 20);
         init_cond_rand(&loss_cond_up, 1, 20);
         subtest("5%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 40);
         init_cond_rand(&loss_cond_up, 1, 40);
         subtest("2.5%", loss_core);
+    }
+    ok(num_failures_in_loss_core <= 0);
 
+    num_failures_in_loss_core = 0;
+    for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 64);
         init_cond_rand(&loss_cond_up, 1, 64);
         subtest("1.6%", loss_core);
     }
+    ok(num_failures_in_loss_core <= 0);
 }
 
 void test_loss(void)
