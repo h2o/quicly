@@ -103,7 +103,7 @@ static void init_cond_rand(struct loss_cond_t *cond, unsigned nloss, unsigned nt
 }
 
 static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sent, size_t *num_received, struct loss_cond_t *cond,
-                         int64_t latency)
+                         int64_t latency, ptls_buffer_t *logger)
 {
     quicly_address_t destaddr, srcaddr;
     struct iovec packets[32];
@@ -122,23 +122,36 @@ static int transmit_cond(quicly_conn_t *src, quicly_conn_t *dst, size_t *num_sen
     if (*num_sent != 0) {
         size_t i;
         for (i = 0; i != *num_sent; ++i) {
-            if (cond->cb(cond)) {
-                quicly_decoded_packet_t decoded[4];
-                size_t num_decoded = decode_packets(decoded, packets + i, 1), j;
-                assert(num_decoded != 0);
-                for (j = 0; j != num_decoded; ++j) {
+            int pass = cond->cb(cond);
+            if (logger != NULL)
+                ptls_buffer_pushv(logger, pass ? "    pass" : "    drop", 8);
+            quicly_decoded_packet_t decoded[4];
+            size_t num_decoded = decode_packets(decoded, packets + i, 1), j;
+            assert(num_decoded != 0);
+            for (j = 0; j != num_decoded; ++j) {
+                if (logger != NULL) {
+                    char buf[16];
+                    sprintf(buf, "%c%02x:%zu", j == 0 ? ':' : ',', decoded[j].octets.base[0], decoded[j].octets.len);
+                    ptls_buffer_pushv(logger, buf, strlen(buf));
+                }
+                if (pass) {
                     ret = quicly_receive(dst, NULL, &fake_address.sa, decoded + j);
                     if (!(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED)) {
                         fprintf(stderr, "%s: quicly_receive: i=%zu, j=%zu, ret=%d\n", __FUNCTION__, i, j, ret);
                         return ret;
                     }
                 }
-                ++*num_received;
             }
+            if (logger != NULL)
+                ptls_buffer_push(logger, '\n');
+            if (pass)
+                ++*num_received;
         }
     }
     quic_now += latency;
 
+Exit:
+    assert(ret == 0);
     return 0;
 }
 
@@ -177,7 +190,7 @@ static void test_even(void)
     }
 
     /* server sends 2 datagrams (Initial+Handshake,Handshake+1RTT), the latter gets dropped */
-    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0, NULL);
     ok(ret == 0);
     ok(num_sent == 2);
     ok(num_received == 1);
@@ -187,7 +200,7 @@ static void test_even(void)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
     /* client sends Handshake that gets dropped */
-    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0, NULL);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 0);
@@ -198,7 +211,7 @@ static void test_even(void)
     quic_now += 1000;
 
     /* server resends 2 datagrams, the latter gets dropped again */
-    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0, NULL);
     ok(ret == 0);
     ok(num_sent == 2);
     ok(num_received == 1);
@@ -208,7 +221,7 @@ static void test_even(void)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
 
     /* client sends Handshake again */
-    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0, NULL);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 1);
@@ -216,7 +229,7 @@ static void test_even(void)
     quic_now += 1000;
 
     /* server retransmits the unacked (Handshake+1RTT) packet */
-    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0, NULL);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 1);
@@ -225,7 +238,7 @@ static void test_even(void)
     ok(quicly_connection_is_ready(client));
 
     /* client sends ClientFinished, gets lost */
-    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0, NULL);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 0);
@@ -233,7 +246,7 @@ static void test_even(void)
     quic_now += 1000;
 
     /* server retransmits the unacked packet */
-    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0);
+    ret = transmit_cond(server, client, &num_sent, &num_received, &cond_down, 0, NULL);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 0);
@@ -241,7 +254,7 @@ static void test_even(void)
     quic_now += 1000;
 
     /* client resends ClientFinished */
-    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0);
+    ret = transmit_cond(client, server, &num_sent, &num_received, &cond_up, 0, NULL);
     ok(ret == 0);
     ok(num_sent == 1);
     ok(num_received == 1);
@@ -258,13 +271,6 @@ static void loss_core(void)
 {
     size_t num_sent_up, num_sent_down, num_received;
     int ret;
-
-#if 0 /* enable this to log the transaction of beginning from a specific subtest (in the case of the following, 9,3,37) */
-    if (test_index[0] == 9 && test_index[1] == 2 && test_index[2] == 15) {
-        quic_ctx.event_log.cb = quicly_new_default_event_logger(stdout);
-        quic_ctx.event_log.mask = UINT64_MAX;
-    }
-#endif
 
     quic_now = 1;
 
@@ -290,6 +296,9 @@ static void loss_core(void)
         quic_now += 10;
     }
 
+    ptls_buffer_t transmit_log;
+    ptls_buffer_init(&transmit_log, "", 0);
+
     quicly_stream_t *client_stream = NULL, *server_stream = NULL;
     test_streambuf_t *client_streambuf = NULL, *server_streambuf = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
@@ -301,7 +310,10 @@ static void loss_core(void)
         assert(min_timeout == 0 || quic_now < min_timeout + 40); /* we might have spent two RTTs in the loop below */
         if (quic_now < min_timeout)
             quic_now = min_timeout;
-        if ((ret = transmit_cond(server, client, &num_sent_down, &num_received, &loss_cond_down, 10)) != 0)
+        char logbuf[32];
+        sprintf(logbuf, "at:%" PRId64 "\n  down:\n", quic_now);
+        ptls_buffer_pushv(&transmit_log, logbuf, strlen(logbuf));
+        if ((ret = transmit_cond(server, client, &num_sent_down, &num_received, &loss_cond_down, 10, &transmit_log)) != 0)
             goto Fail;
         server_timeout = quicly_get_first_timeout(server);
         assert(server_timeout > quic_now - 20);
@@ -317,10 +329,12 @@ static void loss_core(void)
             } else if (client_streambuf->is_detached) {
                 ok(buffer_is(&client_streambuf->super.ingress, resp));
                 ok(max_data_is_equal(client, server));
+                ptls_buffer_dispose(&transmit_log);
                 return;
             }
         }
-        if ((ret = transmit_cond(client, server, &num_sent_up, &num_received, &loss_cond_up, 10)) != 0)
+        ptls_buffer_pushv(&transmit_log, "  up:\n", 6);
+        if ((ret = transmit_cond(client, server, &num_sent_up, &num_received, &loss_cond_up, 10, &transmit_log)) != 0)
             goto Fail;
         client_timeout = quicly_get_first_timeout(client);
         assert(client_timeout > quic_now - 20);
@@ -345,7 +359,13 @@ static void loss_core(void)
 
 Fail:
     fprintf(stderr, "%s: i=%zu\n", __FUNCTION__, i);
+    fwrite(transmit_log.base, 1, transmit_log.off, stderr);
+    ptls_buffer_dispose(&transmit_log);
     ok(0);
+    return;
+Exit:
+    fprintf(stderr, "no memory\n");
+    abort();
 }
 
 static void test_downstream(void)
