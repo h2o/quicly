@@ -395,10 +395,6 @@ struct _st_quicly_conn_public_t {
          */
         quicly_cid_t long_header_src_cid;
         /**
-         * [server only] retains the original DCID used by the client
-         */
-        quicly_cid_t offered_cid;
-        /**
          * stream-level limits
          */
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
@@ -423,6 +419,11 @@ struct _st_quicly_conn_public_t {
          */
         uint64_t largest_retire_prior_to;
     } remote;
+    /**
+     * Retains the original DCID used by the client. Servers use this to route packets incoming packets. Clients use this when
+     * validating the Transport Parameters sent by the server.
+     */
+    quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
         QUICLY_STATS_PREBUILT_FIELDS;
@@ -688,7 +689,7 @@ static const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn);
+static const quicly_cid_t *quicly_get_original_dcid(quicly_conn_t *conn);
 /**
  *
  */
@@ -1021,10 +1022,10 @@ inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
     return &c->local.cid_set.plaintext;
 }
 
-inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
+inline const quicly_cid_t *quicly_get_original_dcid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->local.offered_cid;
+    return &c->original_dcid;
 }
 
 inline const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn)
