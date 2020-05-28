@@ -235,9 +235,15 @@ static void test_vector(void)
     ptls_iovec_t payload;
     int ret;
 
+    /* Decode, as if the input packet was a compatible version, so that a packet image of draft-27 can be used for testing the newer
+     * versions. The assumption here is that the packet header format and AEAD constants would remain the same. */
+    quicly_encode32(datagram + 1, QUICLY_PROTOCOL_VERSION);
     size_t off = 0;
     ok(quicly_decode_packet(&quic_ctx, &packet, datagram, sizeof(datagram), &off) == sizeof(datagram));
     ok(off == sizeof(datagram));
+    quicly_encode32(datagram + 1, 0xff00001b);
+
+    /* decrypt */
     ret = setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress, packet.cid.dest.encrypted, 0, NULL);
     ok(ret == 0);
     ok(decrypt_packet(ingress.header_protection, aead_decrypt_fixed_key, ingress.aead, &next_expected_pn, &packet, &pn, &payload) ==
@@ -253,18 +259,22 @@ static void test_vector(void)
 static void test_retry_aead(void)
 {
     quicly_cid_t odcid = {{0x29, 0xb0, 0x09, 0x2f, 0xf9, 0x2b, 0xb4, 0xe8}, 8};
-    static const uint8_t packet_bytes[] = {
+    uint8_t packet_bytes[] = {
         0xf2, 0xff, 0x00, 0x00, 0x1b, 0x04, 0x64, 0x9c, 0x87, 0x9e, 0x08, 0xd6, 0xb0, 0x09, 0x2f, 0xf9, 0x2b, 0xb4, 0xe8, 0xc6,
         0xa3, 0x3c, 0xfb, 0x60, 0xbe, 0xbe, 0xb2, 0x10, 0x0c, 0xee, 0x31, 0x4f, 0x35, 0x11, 0x4e, 0x6b, 0xb2, 0xc5, 0xab, 0x68,
         0xb4, 0x85, 0xf0, 0x7a, 0x4b, 0x51, 0xd5, 0xcc, 0xaa, 0xf1, 0xaa, 0x3f, 0x70, 0xba, 0x33, 0xc0, 0x61, 0xe4, 0x45, 0x5d,
         0x3b, 0xa2, 0x73, 0xb3, 0x13, 0x7b, 0x06, 0x05, 0x29, 0x1d, 0x1e, 0x5a, 0xd6, 0xac, 0xf7, 0xa3, 0xcb, 0x34, 0x92, 0x17,
         0xb1, 0x2a, 0x43, 0x03, 0xfa, 0xf0, 0xeb, 0xf0, 0x11, 0x47, 0xb4, 0x8f, 0xc9, 0xe2, 0x9d, 0x00};
 
+    /* decode (see `test_vector` for the rationale of overwriting the version) */
     quicly_decoded_packet_t decoded;
+    quicly_encode32(packet_bytes + 1, QUICLY_PROTOCOL_VERSION);
     size_t off = 0, decoded_len = quicly_decode_packet(&quic_ctx, &decoded, packet_bytes, sizeof(packet_bytes), &off);
     ok(decoded_len == sizeof(packet_bytes));
     ok(off == sizeof(packet_bytes));
+    quicly_encode32(packet_bytes + 1, 0xff00001b);
 
+    /* decrypt */
     ptls_aead_context_t *retry_aead = create_retry_aead(&quic_ctx, 0);
     ok(validate_retry_tag(&decoded, &odcid, retry_aead));
     ptls_aead_free(retry_aead);
