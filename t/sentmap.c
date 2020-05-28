@@ -71,7 +71,7 @@ void test_sentmap(void)
             ok(sent->packet_number == at * 5 + i);
             ok(sent->sent_at == at);
             ok(sent->ack_epoch == 0);
-            ok(sent->bytes_in_flight == 1);
+            ok(sent->cc_bytes_in_flight == 1);
             quicly_sentmap_skip(&iter);
         }
     }
@@ -91,7 +91,7 @@ void test_sentmap(void)
     size_t cnt = 0;
     for (quicly_sentmap_init_iter(&map, &iter); (sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX;
          quicly_sentmap_skip(&iter)) {
-        ok(sent->bytes_in_flight != 0);
+        ok(sent->cc_bytes_in_flight != 0);
         ok(sent->packet_number <= 10 || 40 < sent->packet_number);
         ++cnt;
     }

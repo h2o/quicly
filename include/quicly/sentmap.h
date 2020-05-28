@@ -53,9 +53,13 @@ typedef struct st_quicly_sent_packet_t {
      */
     uint8_t ack_eliciting : 1;
     /**
-     * number of bytes in-flight for the packet (becomes zero once deemed lost)
+     * if the frames being contained are considered inflight (becomes zero when deemed lost or when PTO fires)
      */
-    uint16_t bytes_in_flight;
+    uint8_t frames_in_flight : 1;
+    /**
+     * number of bytes in-flight for the packet, from the context of CC (becomes zero when deemed lost, but not when PTO fires)
+     */
+    uint16_t cc_bytes_in_flight;
 } quicly_sent_packet_t;
 
 typedef enum en_quicly_sentmap_event_t {
@@ -63,6 +67,10 @@ typedef enum en_quicly_sentmap_event_t {
      * a packet has been acked
      */
     QUICLY_SENTMAP_EVENT_ACKED,
+    /**
+     * PTO - the packet is still considered inflight, but the contents of the frames are scheduled for retransmission
+     */
+    QUICLY_SENTMAP_EVENT_PTO,
     /**
      * a packet is deemed lost
      */
@@ -78,7 +86,7 @@ typedef enum en_quicly_sentmap_event_t {
  * after first being deemed lost.
  * @param conn    connection
  * @param packet  the packet to which `quicly_sent_t` belongs to
- * @param acked   true if acked, false if deemed lost
+ * @param acked   true if acked, false if the information has to be scheduled for retransmission
  * @param data    data
  */
 typedef int (*quicly_sent_acked_cb)(struct st_quicly_conn_t *conn, const quicly_sent_packet_t *packet, int acked,
@@ -252,9 +260,10 @@ inline void quicly_sentmap_commit(quicly_sentmap_t *map, uint16_t bytes_in_fligh
 
     if (bytes_in_flight != 0) {
         map->_pending_packet->data.packet.ack_eliciting = 1;
-        map->_pending_packet->data.packet.bytes_in_flight = bytes_in_flight;
+        map->_pending_packet->data.packet.cc_bytes_in_flight = bytes_in_flight;
         map->bytes_in_flight += bytes_in_flight;
     }
+    map->_pending_packet->data.packet.frames_in_flight = 1;
     map->_pending_packet = NULL;
 }
 

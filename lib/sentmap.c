@@ -133,7 +133,7 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
                           struct st_quicly_conn_t *conn)
 {
     quicly_sent_packet_t packet;
-    int notify_lost = 0, ret = 0;
+    int ret = 0;
 
     assert(iter->p != &quicly_sentmap__end_iter);
     assert(iter->p->acked == quicly_sentmap__type_packet);
@@ -141,27 +141,26 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
     /* copy packet info */
     packet = iter->p->data.packet;
 
-    /* update packet-level metrics (make adjustments to notify the loss when discarding a packet that is still deemed inflight) */
-    if (packet.bytes_in_flight != 0) {
-        if (event == QUICLY_SENTMAP_EVENT_EXPIRED)
-            notify_lost = 1;
-        assert(map->bytes_in_flight >= packet.bytes_in_flight);
-        map->bytes_in_flight -= packet.bytes_in_flight;
+    /* update CC state unless the event is PTO */
+    if (packet.cc_bytes_in_flight != 0 && event != QUICLY_SENTMAP_EVENT_PTO) {
+        assert(map->bytes_in_flight >= packet.cc_bytes_in_flight);
+        map->bytes_in_flight -= packet.cc_bytes_in_flight;
     }
-    iter->p->data.packet.bytes_in_flight = 0;
+    iter->p->data.packet.frames_in_flight = 0;
+    iter->p->data.packet.cc_bytes_in_flight = 0;
 
-    /* Remove entry from sentmap, unless packet is deemed lost. If lost, then hold on to this packet until removed by a
-     * QUICLY_SENTMAP_EVENT_EXPIRED event. */
-    if (event != QUICLY_SENTMAP_EVENT_LOST)
+    int should_notify = packet.frames_in_flight,
+        should_discard = event == QUICLY_SENTMAP_EVENT_ACKED || event == QUICLY_SENTMAP_EVENT_EXPIRED;
+
+    /* Advance to next packet, while if necessary, doing either or both of the following:
+     * * discard entries (if should_discard is set)
+     * * invoke the frame-level callbacks (if should_notify is set) */
+    if (should_discard)
         discard_entry(map, iter);
-
-    /* iterate through the frames */
     for (next_entry(iter); iter->p->acked != quicly_sentmap__type_packet; next_entry(iter)) {
-        if (notify_lost || event != QUICLY_SENTMAP_EVENT_EXPIRED) {
-            if ((ret = iter->p->acked(conn, &packet, event == QUICLY_SENTMAP_EVENT_ACKED, iter->p)) != 0)
-                goto Exit;
-        }
-        if (event != QUICLY_SENTMAP_EVENT_LOST)
+        if (should_notify && (ret = iter->p->acked(conn, &packet, event == QUICLY_SENTMAP_EVENT_ACKED, iter->p)) != 0)
+            goto Exit;
+        if (should_discard)
             discard_entry(map, iter);
     }
 
