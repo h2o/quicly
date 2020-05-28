@@ -153,7 +153,7 @@ static void test_even(void)
     init_cond_even(&cond_down);
     init_cond_even(&cond_up);
 
-    quic_now = 0;
+    quic_now = 1;
 
     { /* transmit first flight */
         quicly_address_t destaddr, srcaddr;
@@ -266,7 +266,7 @@ static void loss_core(void)
     }
 #endif
 
-    quic_now = 0;
+    quic_now = 1;
 
     { /* transmit first flight */
         quicly_address_t destaddr, srcaddr;
