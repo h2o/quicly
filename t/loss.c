@@ -300,6 +300,15 @@ static void loss_core(void)
     ptls_buffer_t transmit_log;
     ptls_buffer_init(&transmit_log, "", 0);
 
+    {
+        char buf[64];
+        sprintf(buf, "odcid: ");
+        const quicly_cid_t *odcid = quicly_get_offered_cid(server);
+        ptls_hexdump(buf + strlen(buf), odcid->cid, odcid->len);
+        strcat(buf, "\n");
+        ptls_buffer_pushv(&transmit_log, buf, strlen(buf));
+    }
+
     quicly_stream_t *client_stream = NULL, *server_stream = NULL;
     test_streambuf_t *client_streambuf = NULL, *server_streambuf = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
