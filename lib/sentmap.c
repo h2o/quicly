@@ -145,9 +145,9 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
     if (packet.cc_bytes_in_flight != 0 && event != QUICLY_SENTMAP_EVENT_PTO) {
         assert(map->bytes_in_flight >= packet.cc_bytes_in_flight);
         map->bytes_in_flight -= packet.cc_bytes_in_flight;
+        iter->p->data.packet.cc_bytes_in_flight = 0;
     }
     iter->p->data.packet.frames_in_flight = 0;
-    iter->p->data.packet.cc_bytes_in_flight = 0;
 
     int should_notify = packet.frames_in_flight,
         should_discard = event == QUICLY_SENTMAP_EVENT_ACKED || event == QUICLY_SENTMAP_EVENT_EXPIRED;
