@@ -155,8 +155,10 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
     /* Advance to next packet, while if necessary, doing either or both of the following:
      * * discard entries (if should_discard is set)
      * * invoke the frame-level callbacks (if should_notify is set) */
-    if (should_discard)
+    if (should_discard) {
         discard_entry(map, iter);
+        --map->num_packets;
+    }
     for (next_entry(iter); iter->p->acked != quicly_sentmap__type_packet; next_entry(iter)) {
         if (should_notify && (ret = iter->p->acked(conn, &packet, event == QUICLY_SENTMAP_EVENT_ACKED, iter->p)) != 0)
             goto Exit;

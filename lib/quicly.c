@@ -3134,14 +3134,18 @@ UpdateState:
 
 static void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
 {
-    /* TODO find a better threshold */
     int64_t retire_before = conn->stash.now - get_sentmap_expiration_time(conn);
     const quicly_sent_packet_t *sent;
 
     quicly_sentmap_init_iter(&conn->egress.sentmap, iter);
 
-    while ((sent = quicly_sentmap_get(iter))->sent_at <= retire_before && sent->cc_bytes_in_flight == 0)
+    /* Retire entries older than 4 PTO, unless the connection is alive and the number of packets in the sentmap is below 32 packets.
+     * The exception exists in order to recognize excessively late-ACKs when under heavy loss. */
+    while ((sent = quicly_sentmap_get(iter))->sent_at <= retire_before && sent->cc_bytes_in_flight == 0) {
+        if (conn->super.state <= QUICLY_STATE_CONNECTED && conn->egress.sentmap.num_packets < 32)
+            break;
         quicly_sentmap_update(&conn->egress.sentmap, iter, QUICLY_SENTMAP_EVENT_EXPIRED, conn);
+    }
 }
 
 int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs)

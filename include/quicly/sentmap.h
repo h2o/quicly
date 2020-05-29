@@ -174,9 +174,13 @@ struct st_quicly_sent_block_t {
  */
 typedef struct st_quicly_sentmap_t {
     /**
-     * the linked list includes entries that are deemed lost (up to 3*SRTT) as well
+     * the linked list includes entries that are deemed lost, but not expired yet
      */
     struct st_quicly_sent_block_t *head, *tail;
+    /**
+     * number of packets contained
+     */
+    size_t num_packets;
     /**
      * bytes in-flight
      */
@@ -265,6 +269,8 @@ inline void quicly_sentmap_commit(quicly_sentmap_t *map, uint16_t bytes_in_fligh
     }
     map->_pending_packet->data.packet.frames_in_flight = 1;
     map->_pending_packet = NULL;
+
+    ++map->num_packets;
 }
 
 inline quicly_sent_t *quicly_sentmap_allocate(quicly_sentmap_t *map, quicly_sent_acked_cb acked)
