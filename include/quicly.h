@@ -837,18 +837,22 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
 /**
  *
  */
-int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
+int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_transport_parameters_t *params,
                                            const quicly_cid_t *original_dcid, const quicly_cid_t *initial_scid,
                                            const quicly_cid_t *retry_scid, const void *stateless_reset_token, size_t expand_by);
 /**
- * Decodes the transport parameters.
- *
- * @param stateless_reset_token  [client-only] if the corresponding transport parameter is used, the provided token is written back
- *                               to this vector. When the transport parameter does not exist, the vector is left unmodified.
+ * Decodes the Transport Parameters.
+ * For the four optional output parameters (`original_dcid`, `initial_scid`, `retry_scid`, `stateless_reset_token`), this function
+ * returns an error if NULL were supplied as the arguments and the corresponding Transport Parameters were received.
+ * If corresponding Transport Parameters were not found for any of the non-null connection ID slots, an error is returned.
+ * Stateless reset is an optional feature of QUIC, and therefore no error is returned when the vector for storing the token is
+ * provided and the corresponding Transport Parameter is missing. In that case, the provided vector remains unmodified. The caller
+ * pre-fills the vector with an unpredictable value (i.e. random), then calls this function to set the stateless reset token to the
+ * value supplied by peer.
  */
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *original_dcid,
                                            quicly_cid_t *initial_scid, quicly_cid_t *retry_scid, void *stateless_reset_token,
-                                           int is_client, const uint8_t *src, const uint8_t *end);
+                                           const uint8_t *src, const uint8_t *end);
 /**
  * Initiates a new connection.
  * @param new_cid the CID to be used for the connection. path_id is ignored.

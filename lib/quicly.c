@@ -1548,7 +1548,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
     return 0;
 }
 
-int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
+int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_transport_parameters_t *params,
                                            const quicly_cid_t *original_dcid, const quicly_cid_t *initial_scid,
                                            const quicly_cid_t *retry_scid, const void *stateless_reset_token, size_t expand_by)
 {
@@ -1624,7 +1624,7 @@ Exit:
 
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *original_dcid,
                                            quicly_cid_t *initial_scid, quicly_cid_t *retry_scid, void *stateless_reset_token,
-                                           int is_client, const uint8_t *src, const uint8_t *end)
+                                           const uint8_t *src, const uint8_t *end)
 {
 /* When non-negative, tp_index contains the literal position within the list of transport parameters recognized by this function.
  * That index is being used to find duplicates using a 64-bit bitmap (found_bits). When the transport parameter is being processed,
@@ -1644,12 +1644,8 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
             }                                                                                                                      \
         }                                                                                                                          \
     } while (0)
-#define DECODE_CID_TP(_id, client_only, dest)                                                                                      \
+#define DECODE_CID_TP(_id, dest)                                                                                                   \
     DECODE_TP(_id, {                                                                                                               \
-        if (!is_client && client_only) {                                                                                           \
-            ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;                                                                      \
-            goto Exit;                                                                                                             \
-        }                                                                                                                          \
         size_t cidl = end - src;                                                                                                   \
         if (cidl > QUICLY_MAX_CID_LEN_V1) {                                                                                        \
             ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;                                                                      \
@@ -1686,9 +1682,9 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
         }
         int tp_index = 0;
         ptls_decode_open_block(src, end, -1, {
-            DECODE_CID_TP(QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID, 1, original_dcid);
-            DECODE_CID_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_SOURCE_CONNECTION_ID, 0, initial_scid);
-            DECODE_CID_TP(QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID, 1, retry_scid);
+            DECODE_CID_TP(QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID, original_dcid);
+            DECODE_CID_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_SOURCE_CONNECTION_ID, initial_scid);
+            DECODE_CID_TP(QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID, retry_scid);
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -1726,7 +1722,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_STATELESS_RESET_TOKEN, {
-                if (!(is_client && end - src == QUICLY_STATELESS_RESET_TOKEN_LEN)) {
+                if (!(stateless_reset_token != NULL && end - src == QUICLY_STATELESS_RESET_TOKEN_LEN)) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
@@ -1958,7 +1954,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* decode */
     assert(conn->super.remote.cid_set.cids[0].sequence == 0);
     if ((ret = quicly_decode_transport_parameter_list(&params, &original_dcid, &initial_scid, is_retry(conn) ? &retry_scid : NULL,
-                                                      conn->super.remote.cid_set.cids[0].stateless_reset_token, 1, src, end)) != 0)
+                                                      conn->super.remote.cid_set.cids[0].stateless_reset_token, src, end)) != 0)
         goto Exit;
 
     /* validate CIDs */
@@ -2040,9 +2036,8 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     /* handshake */
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     if ((ret = quicly_encode_transport_parameter_list(
-             &conn->crypto.transport_params.buf, 1, &conn->super.ctx->transport_params, NULL,
-             &conn->super.local.cid_set.cids[0].cid, NULL, NULL,
-             conn->super.ctx->expand_client_hello ? conn->super.ctx->initial_egress_max_udp_payload_size : 0)) != 0)
+             &conn->crypto.transport_params.buf, &conn->super.ctx->transport_params, NULL, &conn->super.local.cid_set.cids[0].cid,
+             NULL, NULL, conn->super.ctx->expand_client_hello ? conn->super.ctx->initial_egress_max_udp_payload_size : 0)) != 0)
         goto Exit;
     conn->crypto.transport_params.ext[0] =
         (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS,
@@ -2106,7 +2101,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     { /* decode transport_parameters extension */
         const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
-        if ((ret = quicly_decode_transport_parameter_list(&conn->super.remote.transport_params, NULL, &initial_scid, NULL, NULL, 0,
+        if ((ret = quicly_decode_transport_parameter_list(&conn->super.remote.transport_params, NULL, &initial_scid, NULL, NULL,
                                                           src, end)) != 0)
             goto Exit;
         if (!quicly_cid_is_equal(&conn->super.remote.cid_set.cids[0].cid, ptls_iovec_init(initial_scid.cid, initial_scid.len))) {
@@ -2135,7 +2130,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     assert(conn->super.local.cid_set.cids[0].sequence == 0 && "make sure that local_cid is in expected state before sending SRT");
     if ((ret = quicly_encode_transport_parameter_list(
-             &conn->crypto.transport_params.buf, 0, &conn->super.ctx->transport_params, &conn->super.original_dcid,
+             &conn->crypto.transport_params.buf, &conn->super.ctx->transport_params, &conn->super.original_dcid,
              &conn->super.local.cid_set.cids[0].cid, is_retry(conn) ? &conn->retry_scid : NULL,
              conn->super.ctx->cid_encryptor != NULL ? conn->super.local.cid_set.cids[0].stateless_reset_token : NULL, 0)) != 0)
         goto Exit;
