@@ -401,7 +401,7 @@ static void loss_check_stats(int64_t *time_spent, unsigned max_failures, double 
     double time_median = (time_spent[49] + time_spent[50]) / 2.;
     double time_90th = (double)time_spent[89];
 
-    printf("fail: %u, times: avg: %.1f, mean: %.1f, 90th: %.1f\n", num_failures_in_loss_core, time_mean, time_median, time_90th);
+    printf("fail: %u, times: mean: %.1f, median: %.1f, 90th: %.1f\n", num_failures_in_loss_core, time_mean, time_median, time_90th);
     ok(num_failures_in_loss_core <= max_failures);
     ok(time_mean >= expected_time_mean * 0.8);
     ok(time_mean <= expected_time_mean * 1.2);
