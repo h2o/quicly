@@ -435,7 +435,7 @@ static void test_bidirectional(void)
         init_cond_rand(&loss_cond_up, 3, 4);
         subtest("75%", loss_core);
     }
-    ok(num_failures_in_loss_core <= 81);
+    ok(num_failures_in_loss_core <= 82);
 
     num_failures_in_loss_core = 0;
     for (i = 0; i != 100; ++i) {
