@@ -380,7 +380,7 @@ static void test_downstream(void)
         init_cond_rand(&loss_cond_down, 3, 4);
         subtest("75%", loss_core);
     }
-    ok(num_failures_in_loss_core <= 2);
+    ok(num_failures_in_loss_core <= 3);
 
     num_failures_in_loss_core = 0;
     for (i = 0; i != 100; ++i) {
@@ -443,7 +443,7 @@ static void test_bidirectional(void)
         init_cond_rand(&loss_cond_up, 1, 2);
         subtest("50%", loss_core);
     }
-    ok(num_failures_in_loss_core <= 3);
+    ok(num_failures_in_loss_core <= 4);
 
     num_failures_in_loss_core = 0;
     for (i = 0; i != 100; ++i) {
