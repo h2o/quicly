@@ -388,25 +388,25 @@ static int cmp_int64(const void *_x, const void *_y)
     return 0;
 }
 
-static void loss_check_stats(int64_t *time_spent, unsigned max_failures, double expected_time_avg, double expected_time_mean,
+static void loss_check_stats(int64_t *time_spent, unsigned max_failures, double expected_time_mean, double expected_time_median,
                              double expected_time_90th)
 {
     int64_t sum = 0;
     for (size_t i = 0; i < 100; ++i)
         sum += time_spent[i];
 
-    double time_avg = sum / 100.;
+    double time_mean = sum / 100.;
 
     qsort(time_spent, 100, sizeof(time_spent[0]), cmp_int64);
-    double time_mean = (time_spent[49] + time_spent[50]) / 2.;
+    double time_median = (time_spent[49] + time_spent[50]) / 2.;
     double time_90th = (double)time_spent[89];
 
-    printf("fail: %u, times: avg: %.1f, mean: %.1f, 90th: %.1f\n", num_failures_in_loss_core, time_avg, time_mean, time_90th);
+    printf("fail: %u, times: avg: %.1f, mean: %.1f, 90th: %.1f\n", num_failures_in_loss_core, time_mean, time_median, time_90th);
     ok(num_failures_in_loss_core <= max_failures);
-    ok(time_avg >= expected_time_avg * 0.8);
-    ok(time_avg <= expected_time_avg * 1.2);
     ok(time_mean >= expected_time_mean * 0.8);
     ok(time_mean <= expected_time_mean * 1.2);
+    ok(time_median >= expected_time_median * 0.8);
+    ok(time_median <= expected_time_median * 1.2);
     //ok(time_90th >= expected_time_90th * 0.9); 90th is fragile to errors, we track this as an guarantee
     ok(time_90th <= expected_time_90th * 1.2);
 
