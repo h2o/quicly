@@ -2953,10 +2953,14 @@ Emit: /* emit an ACK frame */
         goto Emit;
     }
 
+    QUICLY_PROBE(ACK_SEND, conn, conn->stash.now, space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end - 1, ack_delay);
+
     /* when there are no less than QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK (8) gaps, bundle PING once every 4 packets being sent */
     if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 4 == 0 &&
-        dst < s->dst_end)
+        dst < s->dst_end) {
         *dst++ = QUICLY_FRAME_TYPE_PING;
+        QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
+    }
 
     s->dst = dst;
 
@@ -3596,6 +3600,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
                 goto Exit;
             *s->dst++ = QUICLY_FRAME_TYPE_PING;
             conn->egress.last_retransmittable_sent_at = conn->stash.now;
+            QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
         }
     }
 
@@ -3829,6 +3834,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if ((ret = _do_allocate_frame(conn, s, 1, 1)) != 0)
                     goto Exit;
                 *s->dst++ = QUICLY_FRAME_TYPE_PING;
+                QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
             }
             /* take actions only permitted for short header packets */
             if (conn->application->one_rtt_writable) {
@@ -4731,6 +4737,8 @@ static int handle_padding_frame(quicly_conn_t *conn, struct st_quicly_handle_pay
 
 static int handle_ping_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
+    QUICLY_PROBE(PING_RECEIVE, conn, conn->stash.now);
+
     return 0;
 }
 
