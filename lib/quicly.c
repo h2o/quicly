@@ -487,23 +487,6 @@ static ptls_cipher_suite_t *get_aes128gcmsha256(quicly_context_t *ctx)
     return *cs;
 }
 
-static inline uint8_t get_epoch(uint8_t first_byte)
-{
-    if (!QUICLY_PACKET_IS_LONG_HEADER(first_byte))
-        return QUICLY_EPOCH_1RTT;
-
-    switch (first_byte & QUICLY_PACKET_TYPE_BITMASK) {
-    case QUICLY_PACKET_TYPE_INITIAL:
-        return QUICLY_EPOCH_INITIAL;
-    case QUICLY_PACKET_TYPE_HANDSHAKE:
-        return QUICLY_EPOCH_HANDSHAKE;
-    case QUICLY_PACKET_TYPE_0RTT:
-        return QUICLY_EPOCH_0RTT;
-    default:
-        assert(!"FIXME");
-    }
-}
-
 static ptls_aead_context_t *create_retry_aead(quicly_context_t *ctx, int is_enc)
 {
     static const uint8_t secret[] = {0x65, 0x6e, 0x61, 0xe3, 0x36, 0xae, 0x94, 0x17, 0xf7, 0xf0, 0xed,
@@ -2563,6 +2546,7 @@ struct st_quicly_send_context_t {
     struct {
         struct st_quicly_cipher_context_t *cipher;
         uint8_t first_byte;
+        uint8_t epoch;
     } current;
     /**
      * packet under construction
@@ -2574,6 +2558,7 @@ struct st_quicly_send_context_t {
          * contains multiple QUIC packet.
          */
         uint8_t *first_byte_at;
+        uint8_t epoch;
         uint8_t ack_eliciting : 1;
     } target;
     /**
@@ -2624,6 +2609,35 @@ enum en_quicly_send_packet_mode_t {
     QUICLY_COMMIT_SEND_PACKET_MODE_SMALL,
     QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED,
 };
+
+static inline void setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, uint8_t epoch)
+{
+    switch (epoch) {
+    case QUICLY_EPOCH_INITIAL:
+        s->current.cipher = &conn->initial->cipher.egress;
+        s->current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
+        s->current.epoch = QUICLY_EPOCH_INITIAL;
+        break;
+    case QUICLY_EPOCH_HANDSHAKE:
+        s->current.cipher = &conn->handshake->cipher.egress;
+        s->current.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
+        s->current.epoch = QUICLY_EPOCH_HANDSHAKE;
+        break;
+    case QUICLY_EPOCH_0RTT:
+        s->current.cipher = &conn->application->cipher.egress.key;
+        s->current.first_byte = QUICLY_PACKET_TYPE_0RTT;
+        s->current.epoch = QUICLY_EPOCH_0RTT;
+        break;
+    case QUICLY_EPOCH_1RTT:
+        s->current.cipher = &conn->application->cipher.egress.key;
+        s->current.first_byte = QUICLY_QUIC_BIT;
+        s->current.epoch = QUICLY_EPOCH_1RTT;
+        break;
+    default:
+        assert(!"logic flaw");
+        break;
+    }
+}
 
 static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enum en_quicly_send_packet_mode_t mode)
 {
@@ -2687,7 +2701,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
     QUICLY_PROBE(PACKET_COMMIT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  !s->target.ack_eliciting);
     QUICLY_PROBE(QUICTRACE_SENT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
-                 get_epoch(*s->target.first_byte_at));
+                 s->target.epoch);
 
     ++conn->egress.packet_number;
     ++conn->super.stats.num_packets.sent;
@@ -2763,7 +2777,7 @@ static int build_packet_header(quicly_conn_t *conn, quicly_send_context_t *s)
 
     if (conn->super.state < QUICLY_STATE_CLOSING) {
         /* register to sentmap */
-        uint8_t ack_epoch = get_epoch(s->current.first_byte);
+        uint8_t ack_epoch = s->current.epoch;
         if (ack_epoch == QUICLY_EPOCH_0RTT)
             ack_epoch = QUICLY_EPOCH_1RTT;
         int ret;
@@ -2818,7 +2832,6 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     /* allocate packet */
     if (coalescible) {
         s->dst_end += s->target.cipher->aead->algo->tag_size; /* restore the AEAD tag size (tag size can differ bet. epochs) */
-        s->target.cipher = s->current.cipher;
     } else {
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
@@ -2827,10 +2840,11 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
             return QUICLY_ERROR_SENDBUF_FULL;
-        s->target.cipher = s->current.cipher;
         s->dst = s->payload_buf.datagram;
         s->dst_end = s->dst + conn->egress.max_udp_payload_size;
     }
+    s->target.cipher = s->current.cipher;
+    s->target.epoch = s->current.epoch;
     s->target.ack_eliciting = 0;
 
     /* emit header */
@@ -3523,15 +3537,15 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
 
     switch (epoch) {
     case QUICLY_EPOCH_INITIAL:
-        if (conn->initial == NULL || (s->current.cipher = &conn->initial->cipher.egress)->aead == NULL)
+        if (conn->initial == NULL || conn->initial->cipher.egress.aead == NULL)
             return 0;
-        s->current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
+        setup_send_context(conn, s, QUICLY_EPOCH_INITIAL);
         ack_space = &conn->initial->super;
         break;
     case QUICLY_EPOCH_HANDSHAKE:
-        if (conn->handshake == NULL || (s->current.cipher = &conn->handshake->cipher.egress)->aead == NULL)
+        if (conn->handshake == NULL || conn->handshake->cipher.egress.aead == NULL)
             return 0;
-        s->current.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
+        setup_send_context(conn, s, QUICLY_EPOCH_HANDSHAKE);
         ack_space = &conn->handshake->super;
         break;
     default:
@@ -3775,8 +3789,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         goto Exit;
 
     /* send encrypted frames */
-    if (conn->application != NULL && (s->current.cipher = &conn->application->cipher.egress.key)->header_protection != NULL) {
-        s->current.first_byte = conn->application->one_rtt_writable ? QUICLY_QUIC_BIT : QUICLY_PACKET_TYPE_0RTT;
+    if (conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL) {
+        setup_send_context(conn, s, conn->application->one_rtt_writable ? QUICLY_EPOCH_1RTT : QUICLY_EPOCH_0RTT);
         /* acks */
         if (conn->application->one_rtt_writable && conn->egress.send_ack_at <= conn->stash.now &&
             conn->application->super.unacked_count != 0) {
