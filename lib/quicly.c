@@ -2728,6 +2728,52 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
+static int build_packet_header(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    QUICLY_PROBE(PACKET_PREPARE, conn, conn->stash.now, s->current.first_byte,
+                 QUICLY_PROBE_HEXDUMP(conn->super.remote.cid_set.cids[0].cid.cid, conn->super.remote.cid_set.cids[0].cid.len));
+
+    s->target.first_byte_at = s->dst;
+    *s->dst++ = s->current.first_byte | 0x1 /* pnlen == 2 */;
+    if (QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
+        s->dst = quicly_encode32(s->dst, conn->super.version);
+        *s->dst++ = conn->super.remote.cid_set.cids[0].cid.len;
+        s->dst = emit_cid(s->dst, &conn->super.remote.cid_set.cids[0].cid);
+        *s->dst++ = conn->super.local.long_header_src_cid.len;
+        s->dst = emit_cid(s->dst, &conn->super.local.long_header_src_cid);
+        /* token */
+        if (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL) {
+            s->dst = quicly_encodev(s->dst, conn->token.len);
+            assert(s->dst_end - s->dst > conn->token.len);
+            memcpy(s->dst, conn->token.base, conn->token.len);
+            s->dst += conn->token.len;
+        }
+        /* payload length is filled laterwards (see commit_send_packet) */
+        *s->dst++ = 0;
+        *s->dst++ = 0;
+    } else {
+        s->dst = emit_cid(s->dst, &conn->super.remote.cid_set.cids[0].cid);
+    }
+
+    s->dst += QUICLY_SEND_PN_SIZE; /* space for PN bits, filled in at commit time */
+    s->dst_payload_from = s->dst;
+    assert(s->target.cipher->aead != NULL);
+    s->dst_end -= s->target.cipher->aead->algo->tag_size;
+    assert(s->dst_end - s->dst >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
+
+    if (conn->super.state < QUICLY_STATE_CLOSING) {
+        /* register to sentmap */
+        uint8_t ack_epoch = get_epoch(s->current.first_byte);
+        if (ack_epoch == QUICLY_EPOCH_0RTT)
+            ack_epoch = QUICLY_EPOCH_1RTT;
+        int ret;
+        if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, conn->stash.now, ack_epoch)) != 0)
+            return ret;
+    }
+
+    return 0;
+}
+
 static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, int ack_eliciting)
 {
     int coalescible, ret;
@@ -2787,59 +2833,24 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     }
     s->target.ack_eliciting = 0;
 
-    QUICLY_PROBE(PACKET_PREPARE, conn, conn->stash.now, s->current.first_byte,
-                 QUICLY_PROBE_HEXDUMP(conn->super.remote.cid_set.cids[0].cid.cid, conn->super.remote.cid_set.cids[0].cid.len));
-
     /* emit header */
-    s->target.first_byte_at = s->dst;
-    *s->dst++ = s->current.first_byte | 0x1 /* pnlen == 2 */;
-    if (QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte)) {
-        s->dst = quicly_encode32(s->dst, conn->super.version);
-        *s->dst++ = conn->super.remote.cid_set.cids[0].cid.len;
-        s->dst = emit_cid(s->dst, &conn->super.remote.cid_set.cids[0].cid);
-        *s->dst++ = conn->super.local.long_header_src_cid.len;
-        s->dst = emit_cid(s->dst, &conn->super.local.long_header_src_cid);
-        /* token */
-        if (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL) {
-            s->dst = quicly_encodev(s->dst, conn->token.len);
-            assert(s->dst_end - s->dst > conn->token.len);
-            memcpy(s->dst, conn->token.base, conn->token.len);
-            s->dst += conn->token.len;
-        }
-        /* payload length is filled laterwards (see commit_send_packet) */
-        *s->dst++ = 0;
-        *s->dst++ = 0;
-    } else {
-        s->dst = emit_cid(s->dst, &conn->super.remote.cid_set.cids[0].cid);
-    }
-    s->dst += QUICLY_SEND_PN_SIZE; /* space for PN bits, filled in at commit time */
-    s->dst_payload_from = s->dst;
-    assert(s->target.cipher->aead != NULL);
-    s->dst_end -= s->target.cipher->aead->algo->tag_size;
-    assert(s->dst_end - s->dst >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
+    if ((ret = build_packet_header(conn, s)) != 0)
+        return ret;
 
-    if (conn->super.state < QUICLY_STATE_CLOSING) {
-        /* register to sentmap */
-        uint8_t ack_epoch = get_epoch(s->current.first_byte);
-        if (ack_epoch == QUICLY_EPOCH_0RTT)
-            ack_epoch = QUICLY_EPOCH_1RTT;
-        if ((ret = quicly_sentmap_prepare(&conn->egress.sentmap, conn->egress.packet_number, conn->stash.now, ack_epoch)) != 0)
-            return ret;
-        /* adjust ack-frequency */
-        if (conn->stash.now >= conn->egress.ack_frequency.update_at) {
-            if (conn->egress.packet_number >= QUICLY_FIRST_ACK_FREQUENCY_PACKET_NUMBER && conn->initial == NULL &&
-                conn->handshake == NULL) {
-                uint32_t fraction_of_cwnd = conn->egress.cc.cwnd / QUICLY_ACK_FREQUENCY_CWND_FRACTION;
-                if (fraction_of_cwnd >= conn->egress.max_udp_payload_size * 3) {
-                    uint32_t packet_tolerance = fraction_of_cwnd / conn->egress.max_udp_payload_size;
-                    if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
-                        packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
-                    s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
-                                                               conn->super.remote.transport_params.max_ack_delay * 1000, 0);
-                }
+    /* adjust ack-frequency */
+    if (conn->stash.now >= conn->egress.ack_frequency.update_at && conn->super.state < QUICLY_STATE_CLOSING) {
+        if (conn->egress.packet_number >= QUICLY_FIRST_ACK_FREQUENCY_PACKET_NUMBER && conn->initial == NULL &&
+            conn->handshake == NULL) {
+            uint32_t fraction_of_cwnd = conn->egress.cc.cwnd / QUICLY_ACK_FREQUENCY_CWND_FRACTION;
+            if (fraction_of_cwnd >= conn->egress.max_udp_payload_size * 3) {
+                uint32_t packet_tolerance = fraction_of_cwnd / conn->egress.max_udp_payload_size;
+                if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
+                    packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
+                s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
+                                                           conn->super.remote.transport_params.max_ack_delay * 1000, 0);
             }
-            ack_frequency_set_next_update_at(conn);
         }
+        ack_frequency_set_next_update_at(conn);
     }
 
 TargetReady:
