@@ -5275,10 +5275,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             }
             if (quicly_is_client(conn)) {
                 /* client: update cid if this is the first Initial packet that's being received */
-                if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
-                    memcpy(conn->super.remote.cid_set.cids[0].cid.cid, packet->cid.src.base, packet->cid.src.len);
-                    conn->super.remote.cid_set.cids[0].cid.len = packet->cid.src.len;
-                }
+                if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
+                    quicly_set_cid(&conn->super.remote.cid_set.cids[0].cid, packet->cid.src);
             } else {
                 /* server: ignore packets that are too small */
                 if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE) {
@@ -5798,11 +5796,11 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, const quicly_transpo
 #define DECODE_CID(field)                                                                                                          \
     do {                                                                                                                           \
         ptls_decode_open_block(src, end, 1, {                                                                                      \
-            if ((plaintext->retry.field.len = end - src) > sizeof(plaintext->retry.field.cid)) {                                   \
+            if (end - src > sizeof(plaintext->retry.field.cid)) {                                                                  \
                 ret = PTLS_ALERT_DECODE_ERROR;                                                                                     \
                 goto Exit;                                                                                                         \
             }                                                                                                                      \
-            memcpy(plaintext->retry.field.cid, src, plaintext->retry.field.len);                                                   \
+            quicly_set_cid(&plaintext->retry.field, ptls_iovec_init(src, end - src));                                              \
             src = end;                                                                                                             \
         });                                                                                                                        \
     } while (0)
