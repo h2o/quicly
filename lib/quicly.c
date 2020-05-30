@@ -1951,10 +1951,14 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     quicly_transport_parameters_t params;
     quicly_cid_t original_dcid, initial_scid, retry_scid = {};
 
+    /* obtain pointer to initial CID of the peer. It is guaranteeed to exist in the first slot, as TP is received before any frame
+     * that updates the CID set. */
+    quicly_remote_cid_t *remote_cid = &conn->super.remote.cid_set.cids[0];
+    assert(remote_cid->sequence == 0);
+
     /* decode */
-    assert(conn->super.remote.cid_set.cids[0].sequence == 0);
     if ((ret = quicly_decode_transport_parameter_list(&params, &original_dcid, &initial_scid, is_retry(conn) ? &retry_scid : NULL,
-                                                      conn->super.remote.cid_set.cids[0].stateless_reset_token, src, end)) != 0)
+                                                      remote_cid->stateless_reset_token, src, end)) != 0)
         goto Exit;
 
     /* validate CIDs */
@@ -1962,7 +1966,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
         ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
         goto Exit;
     }
-    if (!quicly_cid_is_equal(&conn->super.remote.cid_set.cids[0].cid, ptls_iovec_init(initial_scid.cid, initial_scid.len))) {
+    if (!quicly_cid_is_equal(&remote_cid->cid, ptls_iovec_init(initial_scid.cid, initial_scid.len))) {
         ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
         goto Exit;
     }
