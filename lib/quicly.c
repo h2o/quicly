@@ -2547,6 +2547,7 @@ struct st_quicly_send_context_t {
         struct st_quicly_cipher_context_t *cipher;
         uint8_t first_byte;
         uint8_t epoch;
+        uint8_t probe_lower_epochs : 1;
     } current;
     /**
      * packet under construction
@@ -2831,8 +2832,10 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
 
     /* allocate packet */
     if (coalescible) {
+        /* coalesced */
         s->dst_end += s->target.cipher->aead->algo->tag_size; /* restore the AEAD tag size (tag size can differ bet. epochs) */
     } else {
+        /* new datagram */
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
         s->send_window = round_send_window(s->send_window);
@@ -2842,7 +2845,44 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
             return QUICLY_ERROR_SENDBUF_FULL;
         s->dst = s->payload_buf.datagram;
         s->dst_end = s->dst + conn->egress.max_udp_payload_size;
+
+        /* prepend PTO probes of lower epochs */
+        if (s->current.probe_lower_epochs) {
+            uint8_t requested_epoch = s->current.epoch;
+            for (uint8_t prepend_epoch = 0; prepend_epoch < requested_epoch; ++prepend_epoch) {
+                switch (prepend_epoch) {
+                case QUICLY_EPOCH_INITIAL:
+                    if (conn->initial == NULL || conn->initial->cipher.egress.aead == NULL)
+                        continue;
+                    break;
+                case QUICLY_EPOCH_0RTT:
+                    continue;
+                case QUICLY_EPOCH_HANDSHAKE:
+                    if (conn->handshake == NULL || conn->handshake->cipher.egress.aead == NULL)
+                        continue;
+                    break;
+                default:
+                    assert(!"logic flaw");
+                    abort();
+                    break;
+
+                }
+                setup_send_context(conn, s, prepend_epoch);
+                if (s->current.cipher == NULL)
+                    continue;
+                s->target.cipher = s->current.cipher;
+                s->target.epoch = s->current.epoch;
+                if ((ret = build_packet_header(conn, s)) != 0)
+                    return ret;
+                *s->dst++ = QUICLY_FRAME_TYPE_PING;
+                QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
+                if ((ret = commit_send_packet(conn, s, QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED)) != 0)
+                    return ret;
+            }
+            setup_send_context(conn, s, requested_epoch);
+        }
     }
+
     s->target.cipher = s->current.cipher;
     s->target.epoch = s->current.epoch;
     s->target.ack_eliciting = 0;
@@ -3772,6 +3812,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                          conn->egress.loss.pto_count);
             if ((ret = mark_packets_on_pto(conn)) != 0)
                 goto Exit;
+            s->current.probe_lower_epochs = 1;
         }
     }
 
