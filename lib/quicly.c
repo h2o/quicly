@@ -3282,14 +3282,13 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
             (largest_acked >= QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD &&
              sent->packet_number <= largest_acked - QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD))) { /* packet threshold */
         if (sent->cc_bytes_in_flight != 0 && conn->egress.max_lost_pn <= sent->packet_number) {
-            if (sent->packet_number != largest_newly_lost_pn) {
-                ++conn->super.stats.num_packets.lost;
-                largest_newly_lost_pn = sent->packet_number;
-                quicly_cc_on_lost(&conn->egress.cc, sent->cc_bytes_in_flight, sent->packet_number, conn->egress.packet_number,
-                                  conn->egress.max_udp_payload_size);
-                QUICLY_PROBE(PACKET_LOST, conn, conn->stash.now, largest_newly_lost_pn);
-                QUICLY_PROBE(QUICTRACE_LOST, conn, conn->stash.now, largest_newly_lost_pn);
-            }
+            assert(sent->packet_number != largest_newly_lost_pn);
+            ++conn->super.stats.num_packets.lost;
+            largest_newly_lost_pn = sent->packet_number;
+            quicly_cc_on_lost(&conn->egress.cc, sent->cc_bytes_in_flight, sent->packet_number, conn->egress.packet_number,
+                              conn->egress.max_udp_payload_size);
+            QUICLY_PROBE(PACKET_LOST, conn, conn->stash.now, largest_newly_lost_pn);
+            QUICLY_PROBE(QUICTRACE_LOST, conn, conn->stash.now, largest_newly_lost_pn);
             if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_LOST, conn)) != 0)
                 return ret;
         } else {
