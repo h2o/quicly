@@ -2492,6 +2492,16 @@ static ssize_t round_send_window(ssize_t window)
     return window;
 }
 
+static inline uint64_t calc_remain_3x(quicly_conn_t *conn)
+{
+    if (conn->super.remote.address_validation.validated)
+        return UINT64_MAX;
+    uint64_t budget3x = conn->super.stats.num_bytes.received * 3;
+    if (budget3x <= conn->super.stats.num_bytes.sent)
+        return 0;
+    return budget3x - conn->super.stats.num_bytes.sent;
+}
+
 /* Helper function to compute send window based on:
  * * state of peer validation,
  * * current cwnd,
@@ -2511,12 +2521,11 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
         /* Allow at least one packet on time-threshold loss detection */
         window = window > min_bytes_to_send ? window : min_bytes_to_send;
     }
-    /* If address is unvalidated, limit sending to 3x bytes received */
-    if (!conn->super.remote.address_validation.validated) {
-        uint64_t budget3x = conn->super.stats.num_bytes.received * 3;
-        uint64_t remain3x = budget3x > conn->super.stats.num_bytes.sent ? budget3x - conn->super.stats.num_bytes.sent : 0;
-        window = window > remain3x ? remain3x : window;
-    }
+    /* Cap the window by the amount allowed by address validation */
+    uint64_t remain3x = calc_remain_3x(conn);
+    if (remain3x < window)
+        window = remain3x;
+
     return window >= MIN_SEND_WINDOW ? window : 0;
 }
 
@@ -2532,15 +2541,15 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
             return 0;
         if (scheduler_can_send(conn))
             return 0;
-    } else if (!conn->super.remote.address_validation.validated) {
-        return conn->idle_timeout.at;
     }
 
-    int64_t at = conn->egress.loss.alarm_at;
-    if (conn->egress.send_ack_at < at)
-        at = conn->egress.send_ack_at;
-    if (conn->idle_timeout.at < at)
-        at = conn->idle_timeout.at;
+    int64_t at = conn->idle_timeout.at;
+    if (calc_remain_3x(conn) > 0) {
+        if (conn->egress.loss.alarm_at < at)
+            at = conn->egress.loss.alarm_at;
+        if (conn->egress.send_ack_at < at)
+            at = conn->egress.send_ack_at;
+    }
 
     return at;
 }
