@@ -2875,6 +2875,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
                 if ((ret = build_packet_header(conn, s)) != 0)
                     return ret;
                 *s->dst++ = QUICLY_FRAME_TYPE_PING;
+                s->target.ack_eliciting = 1;
                 QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
                 if ((ret = commit_send_packet(conn, s, QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED)) != 0)
                     return ret;
@@ -2976,6 +2977,7 @@ Emit: /* emit an ACK frame */
     if (space->ack_queue.num_ranges >= QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK && conn->egress.packet_number % 4 == 0 &&
         dst < s->dst_end) {
         *dst++ = QUICLY_FRAME_TYPE_PING;
+        s->target.ack_eliciting = 1;
         QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
     }
 
