@@ -303,7 +303,7 @@ static void loss_core(void)
     {
         char buf[64];
         sprintf(buf, "odcid: ");
-        const quicly_cid_t *odcid = quicly_get_offered_cid(server);
+        const quicly_cid_t *odcid = quicly_get_original_dcid(server);
         ptls_hexdump(buf + strlen(buf), odcid->cid, odcid->len);
         strcat(buf, "\n");
         ptls_buffer_pushv(&transmit_log, buf, strlen(buf));

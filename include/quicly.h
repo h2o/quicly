@@ -64,7 +64,7 @@ extern "C" {
 
 #define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
 
-#define QUICLY_PROTOCOL_VERSION 0xff00001b
+#define QUICLY_PROTOCOL_VERSION 0xff00001c
 
 #define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte)&0xf0) == 0xc0)
 
@@ -395,9 +395,8 @@ struct _st_quicly_conn_public_t {
          */
         quicly_cid_t long_header_src_cid;
         /**
-         * TODO clear this at some point (probably when the server releases all the keys below epoch=3)
+         * stream-level limits
          */
-        quicly_cid_t offered_cid;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
     } local;
     struct {
@@ -420,6 +419,11 @@ struct _st_quicly_conn_public_t {
          */
         uint64_t largest_retire_prior_to;
     } remote;
+    /**
+     * Retains the original DCID used by the client. Servers use this to route packets incoming packets. Clients use this when
+     * validating the Transport Parameters sent by the server.
+     */
+    quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
         QUICLY_STATS_PREBUILT_FIELDS;
@@ -640,8 +644,9 @@ struct st_quicly_address_token_plaintext_t {
     quicly_address_t local, remote;
     union {
         struct {
-            quicly_cid_t odcid;
-            uint64_t cidpair_hash;
+            quicly_cid_t original_dcid;
+            quicly_cid_t client_cid;
+            quicly_cid_t server_cid;
         } retry;
         struct {
             uint8_t bytes[256];
@@ -684,7 +689,7 @@ static const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn);
+static const quicly_cid_t *quicly_get_original_dcid(quicly_conn_t *conn);
 /**
  *
  */
@@ -832,15 +837,22 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
 /**
  *
  */
-int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, int is_client, const quicly_transport_parameters_t *params,
-                                           const quicly_cid_t *odcid, const void *stateless_reset_token, size_t expand_by);
+int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_transport_parameters_t *params,
+                                           const quicly_cid_t *original_dcid, const quicly_cid_t *initial_scid,
+                                           const quicly_cid_t *retry_scid, const void *stateless_reset_token, size_t expand_by);
 /**
- *
- * @param stateless_reset_token  [client-only] if the corresponding transport parameter is used, the provided token is written back
- *                               to this vector. When the transport parameter does not exist, the vector is left unmodified.
+ * Decodes the Transport Parameters.
+ * For the four optional output parameters (`original_dcid`, `initial_scid`, `retry_scid`, `stateless_reset_token`), this function
+ * returns an error if NULL were supplied as the arguments and the corresponding Transport Parameters were received.
+ * If corresponding Transport Parameters were not found for any of the non-null connection ID slots, an error is returned.
+ * Stateless reset is an optional feature of QUIC, and therefore no error is returned when the vector for storing the token is
+ * provided and the corresponding Transport Parameter is missing. In that case, the provided vector remains unmodified. The caller
+ * pre-fills the vector with an unpredictable value (i.e. random), then calls this function to set the stateless reset token to the
+ * value supplied by peer.
  */
-int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *odcid, void *stateless_reset_token,
-                                           int is_client, const uint8_t *src, const uint8_t *end);
+int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *original_dcid,
+                                           quicly_cid_t *initial_scid, quicly_cid_t *retry_scid, void *stateless_reset_token,
+                                           const uint8_t *src, const uint8_t *end);
 /**
  * Initiates a new connection.
  * @param new_cid the CID to be used for the connection. path_id is ignored.
@@ -922,18 +934,29 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
  */
 void quicly_amend_ptls_context(ptls_context_t *ptls);
 /**
- * Encrypts an address token by serializing the plaintext structure and appending an authentication tag.  Bytes between `start_off`
- * and `buf->off` (at the moment of invocation) is considered part of a token covered by AAD.
+ * Encrypts an address token by serializing the plaintext structure and appending an authentication tag.
+ *
+ * @param random_bytes  PRNG
+ * @param aead          the AEAD context to be used for decrypting the token
+ * @param tp            Transport parameters. Used for detecting and rejecting resumption tokens associated to an incompatible set
+ *                      of transport parameters. This argument is ignored when encrypting a Retry token.
+ * @param buf           buffer to where the token being built is appended
+ * @param start_off     Specifies the start offset of the token. When `start_off < buf->off`, the bytes in between will be
+ *                      considered as part of the token and will be covered by the AEAD. Applications can use this location to embed
+ *                      the identifier of the AEAD key being used.
+ * @param plaintext     the token to be encrypted
  */
-int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead_context_t *aead, ptls_buffer_t *buf,
-                                 size_t start_off, const quicly_address_token_plaintext_t *plaintext);
+int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead_context_t *aead,
+                                 const quicly_transport_parameters_t *tp, ptls_buffer_t *buf, size_t start_off,
+                                 const quicly_address_token_plaintext_t *plaintext);
 /**
  * Decrypts an address token.
  * If decryption succeeds, returns zero. If the token is unusable due to decryption failure, returns PTLS_DECODE_ERROR. If the token
  * is unusable and the connection should be reset, returns QUICLY_ERROR_INVALID_TOKEN.
  */
-int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token_plaintext_t *plaintext, const void *src,
-                                 size_t len, size_t prefix_len, const char **err_desc);
+int quicly_decrypt_address_token(ptls_aead_context_t *aead, const quicly_transport_parameters_t *tp,
+                                 quicly_address_token_plaintext_t *plaintext, const void *src, size_t len, size_t prefix_len,
+                                 const char **err_desc);
 /**
  *
  */
@@ -1003,10 +1026,10 @@ inline const quicly_cid_plaintext_t *quicly_get_master_id(quicly_conn_t *conn)
     return &c->local.cid_set.plaintext;
 }
 
-inline const quicly_cid_t *quicly_get_offered_cid(quicly_conn_t *conn)
+inline const quicly_cid_t *quicly_get_original_dcid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->local.offered_cid;
+    return &c->original_dcid;
 }
 
 inline const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn)
