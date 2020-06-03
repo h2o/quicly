@@ -491,7 +491,7 @@ static void test_bidirectional(void)
         subtest("50%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    loss_check_stats(time_spent, 1, 7457, 2700, 14159);
+    loss_check_stats(time_spent, 2, 18599.5, 2607, 26900);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 4);
