@@ -5353,6 +5353,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                     goto Exit;
                 assert(conn->handshake == NULL);
                 conn->egress.pending_flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
+                update_loss_alarm(conn, 0);
             }
         }
         break;
