@@ -219,7 +219,7 @@ struct st_quicly_conn_t {
          *
          */
         struct {
-            quicly_maxsender_t *uni, *bidi;
+            quicly_maxsender_t uni, bidi;
         } max_streams;
         /**
          *
@@ -1015,11 +1015,26 @@ static struct st_quicly_conn_streamgroup_state_t *get_streamgroup_state(quicly_c
 
 static int should_send_max_streams(quicly_conn_t *conn, int uni)
 {
+    uint64_t concurrency;
     quicly_maxsender_t *maxsender;
-    if ((maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi) == NULL)
+    struct st_quicly_conn_streamgroup_state_t *group;
+
+#define INIT_VARS(type)                                                                                                            \
+    do {                                                                                                                           \
+        concurrency = conn->super.ctx->transport_params.max_streams_##type;                                                        \
+        maxsender = &conn->ingress.max_streams.type;                                                                               \
+        group = &conn->super.remote.type;                                                                                          \
+    } while (0)
+    if (uni) {
+        INIT_VARS(uni);
+    } else {
+        INIT_VARS(bidi);
+    }
+#undef INIT_VARS
+
+    if (concurrency == 0)
         return 0;
 
-    struct st_quicly_conn_streamgroup_state_t *group = uni ? &conn->super.remote.uni : &conn->super.remote.bidi;
     if (!quicly_maxsender_should_send_max(maxsender, group->next_stream_id / 4, group->num_streams, 768))
         return 0;
 
@@ -1096,7 +1111,7 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
 
 quicly_stream_id_t quicly_get_ingress_max_streams(quicly_conn_t *conn, int uni)
 {
-    quicly_maxsender_t *maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;
+    quicly_maxsender_t *maxsender = uni ? &conn->ingress.max_streams.uni : &conn->ingress.max_streams.bidi;
     return maxsender->max_committed;
 }
 
@@ -1417,10 +1432,8 @@ void quicly_free(quicly_conn_t *conn)
     destroy_all_streams(conn, 0, 1);
 
     quicly_maxsender_dispose(&conn->ingress.max_data.sender);
-    if (conn->ingress.max_streams.uni != NULL)
-        quicly_maxsender_dispose(conn->ingress.max_streams.uni);
-    if (conn->ingress.max_streams.bidi != NULL)
-        quicly_maxsender_dispose(conn->ingress.max_streams.bidi);
+    quicly_maxsender_dispose(&conn->ingress.max_streams.uni);
+    quicly_maxsender_dispose(&conn->ingress.max_streams.bidi);
     while (conn->egress.path_challenge.head != NULL) {
         struct st_quicly_pending_path_challenge_t *pending = conn->egress.path_challenge.head;
         conn->egress.path_challenge.head = pending->next;
@@ -1838,8 +1851,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     ptls_t *tls = NULL;
     struct {
         quicly_conn_t _;
-        quicly_maxsender_t max_streams_bidi;
-        quicly_maxsender_t max_streams_uni;
     } * conn;
 
     assert(remote_addr != NULL && remote_addr->sa_family != AF_UNSPEC);
@@ -1887,14 +1898,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     quicly_linklist_init(&conn->_.super._default_scheduler.blocked);
     conn->_.streams = kh_init(quicly_stream_t);
     quicly_maxsender_init(&conn->_.ingress.max_data.sender, conn->_.super.ctx->transport_params.max_data);
-    if (conn->_.super.ctx->transport_params.max_streams_uni != 0) {
-        conn->_.ingress.max_streams.uni = &conn->max_streams_uni;
-        quicly_maxsender_init(conn->_.ingress.max_streams.uni, conn->_.super.ctx->transport_params.max_streams_uni);
-    }
-    if (conn->_.super.ctx->transport_params.max_streams_bidi != 0) {
-        conn->_.ingress.max_streams.bidi = &conn->max_streams_bidi;
-        quicly_maxsender_init(conn->_.ingress.max_streams.bidi, conn->_.super.ctx->transport_params.max_streams_bidi);
-    }
+    quicly_maxsender_init(&conn->_.ingress.max_streams.uni, conn->_.super.ctx->transport_params.max_streams_uni);
+    quicly_maxsender_init(&conn->_.ingress.max_streams.bidi, conn->_.super.ctx->transport_params.max_streams_bidi);
     quicly_sentmap_init(&conn->_.egress.sentmap);
     quicly_loss_init(&conn->_.egress.loss, &conn->_.super.ctx->loss,
                      conn->_.super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
@@ -2470,7 +2475,7 @@ static int on_ack_max_data(quicly_conn_t *conn, const quicly_sent_packet_t *pack
 static int on_ack_max_streams(quicly_conn_t *conn, const quicly_sent_packet_t *packet, quicly_sent_t *sent,
                               quicly_sentmap_event_t event)
 {
-    quicly_maxsender_t *maxsender = sent->data.max_streams.uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;
+    quicly_maxsender_t *maxsender = sent->data.max_streams.uni ? &conn->ingress.max_streams.uni : &conn->ingress.max_streams.bidi;
     assert(maxsender != NULL); /* we would only receive an ACK if we have sent the frame */
 
     switch (event) {
@@ -3379,7 +3384,7 @@ static int send_max_streams(quicly_conn_t *conn, int uni, quicly_send_context_t 
     if (!should_send_max_streams(conn, uni))
         return 0;
 
-    quicly_maxsender_t *maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;
+    quicly_maxsender_t *maxsender = uni ? &conn->ingress.max_streams.uni : &conn->ingress.max_streams.bidi;
     struct st_quicly_conn_streamgroup_state_t *group = uni ? &conn->super.remote.uni : &conn->super.remote.bidi;
     int ret;
 
@@ -4542,11 +4547,10 @@ static int handle_streams_blocked_frame(quicly_conn_t *conn, struct st_quicly_ha
 
     QUICLY_PROBE(STREAMS_BLOCKED_RECEIVE, conn, conn->stash.now, frame.count, uni);
 
-    quicly_maxsender_t *maxsender = uni ? conn->ingress.max_streams.uni : conn->ingress.max_streams.bidi;
-    if (maxsender != NULL) {
+    if (should_send_max_streams(conn, uni)) {
+        quicly_maxsender_t *maxsender = uni ? &conn->ingress.max_streams.uni : &conn->ingress.max_streams.bidi;
         quicly_maxsender_request_transmit(maxsender);
-        if (should_send_max_streams(conn, uni))
-            conn->egress.send_ack_at = 0;
+        conn->egress.send_ack_at = 0;
     }
 
     return 0;
