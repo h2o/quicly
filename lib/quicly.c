@@ -2562,7 +2562,7 @@ static ssize_t round_send_window(ssize_t window)
     return window;
 }
 
-static inline uint64_t calc_remain_3x(quicly_conn_t *conn)
+static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
 {
     if (conn->super.remote.address_validation.validated)
         return UINT64_MAX;
@@ -2592,9 +2592,9 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
         window = window > min_bytes_to_send ? window : min_bytes_to_send;
     }
     /* Cap the window by the amount allowed by address validation */
-    uint64_t remain3x = calc_remain_3x(conn);
-    if (remain3x < window)
-        window = remain3x;
+    uint64_t remain_allowance = calc_amplification_limit_allowance(conn);
+    if (remain_allowance < window)
+        window = remain_allowance;
 
     return window >= MIN_SEND_WINDOW ? window : 0;
 }
@@ -2613,8 +2613,9 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
             return 0;
     }
 
+    /* if something can be sent, return the earliest timeout. Otherwise return the idle timeout. */
     int64_t at = conn->idle_timeout.at;
-    if (calc_remain_3x(conn) > 0) {
+    if (calc_amplification_limit_allowance(conn) > 0) {
         if (conn->egress.loss.alarm_at < at)
             at = conn->egress.loss.alarm_at;
         if (conn->egress.send_ack_at < at)
