@@ -2501,9 +2501,12 @@ static int on_ack_streams_blocked(quicly_conn_t *conn, const quicly_sent_packet_
 
 static int on_ack_handshake_done(quicly_conn_t *conn, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
 {
-    /* When HANDSHAKE_DONE is deemed lost, schedule retransmission (TODO handle late ack) */
-    if (!acked)
+    /* When lost, reschedule for transmission. When acked, suppress retransmission if scheduled. */
+    if (acked) {
+        conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
+    } else {
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
+    }
     return 0;
 }
 
