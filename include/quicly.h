@@ -934,8 +934,15 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
  */
 void quicly_amend_ptls_context(ptls_context_t *ptls);
 /**
- * Encrypts an address token by serializing the plaintext structure and appending an authentication tag.  Bytes between `start_off`
- * and `buf->off` (at the moment of invocation) is considered part of a token covered by AAD.
+ * Encrypts an address token by serializing the plaintext structure and appending an authentication tag.
+ *
+ * @param random_bytes  PRNG
+ * @param aead          the AEAD context to be used for decrypting the token
+ * @param buf           buffer to where the token being built is appended
+ * @param start_off     Specifies the start offset of the token. When `start_off < buf->off`, the bytes in between will be
+ *                      considered as part of the token and will be covered by the AEAD. Applications can use this location to embed
+ *                      the identifier of the AEAD key being used.
+ * @param plaintext     the token to be encrypted
  */
 int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead_context_t *aead, ptls_buffer_t *buf,
                                  size_t start_off, const quicly_address_token_plaintext_t *plaintext);
