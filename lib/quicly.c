@@ -5750,9 +5750,8 @@ Exit:
     return ret;
 }
 
-int quicly_build_session_ticket_auth_data(quicly_conn_t *conn, ptls_buffer_t *auth_data)
+int quicly_build_session_ticket_auth_data(ptls_buffer_t *auth_data, quicly_context_t *ctx)
 {
-    const quicly_transport_parameters_t *tp = &conn->super.ctx->transport_params;
     int ret;
 
 #define PUSH_TP(id, block)                                                                                                         \
@@ -5763,18 +5762,19 @@ int quicly_build_session_ticket_auth_data(quicly_conn_t *conn, ptls_buffer_t *au
 
     ptls_buffer_push_block(auth_data, -1, {
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
-                { ptls_buffer_push_quicint(auth_data, tp->active_connection_id_limit); });
-        PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA, { ptls_buffer_push_quicint(auth_data, tp->max_data); });
+                { ptls_buffer_push_quicint(auth_data, ctx->transport_params.active_connection_id_limit); });
+        PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA,
+                { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_data); });
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL,
-                { ptls_buffer_push_quicint(auth_data, tp->max_stream_data.bidi_local); });
+                { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_stream_data.bidi_local); });
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_REMOTE,
-                { ptls_buffer_push_quicint(auth_data, tp->max_stream_data.bidi_remote); });
+                { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_stream_data.bidi_remote); });
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_UNI,
-                { ptls_buffer_push_quicint(auth_data, tp->max_stream_data.uni); });
+                { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_stream_data.uni); });
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_BIDI,
-                { ptls_buffer_push_quicint(auth_data, tp->max_streams_bidi); });
+                { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_streams_bidi); });
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
-                { ptls_buffer_push_quicint(auth_data, tp->max_streams_uni); });
+                { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_streams_uni); });
     });
 
 #undef PUSH_TP
