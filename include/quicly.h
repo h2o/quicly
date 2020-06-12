@@ -331,6 +331,7 @@ struct st_quicly_conn_streamgroup_state_t {
  * the same order for quicly_stats_t and `struct st_quicly_conn_public_t::stats`.
  */
 #define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
+    uint8_t stats_version;                                                                                                         \
     struct {                                                                                                                       \
         uint64_t received;                                                                                                         \
         uint64_t decryption_failed;                                                                                                \
@@ -345,7 +346,7 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t received;                                                                                                         \
         uint64_t sent;                                                                                                             \
-    } num_bytes
+    } num_bytes;
 
 typedef struct st_quicly_stats_t {
     /**

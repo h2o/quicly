@@ -64,6 +64,32 @@ struct quicly_rtt_t {
     uint32_t latest;
 };
 
+struct quicly_cc_t {
+    uint32_t cwnd;
+    uint32_t ssthresh;
+    uint32_t stash;
+    uint64_t recovery_end;
+};
+
+struct quicly_stats_t {
+    uint8_t stats_version;
+    struct {
+        uint64_t received;
+        uint64_t decryption_failed;
+        uint64_t sent;
+        uint64_t lost;
+        uint64_t ack_received;
+        uint64_t late_acked;
+    } num_packets;
+    struct {
+        uint64_t received;
+        uint64_t sent;
+    } num_bytes;
+
+    struct quicly_rtt_t rtt;
+    struct quicly_cc_t cc;
+};
+
 EOT
 } elsif ($arch eq 'darwin') {
 } else {
@@ -109,6 +135,22 @@ for my $probe (@probes) {
                 push @ap, map{"*(uint32_t *)copyin(arg$i + $_, 4)"} qw(0 4 12);
             } else {
                 push @ap, map{"arg${i}->$_"} qw(minimum smoothed latest);
+            }
+        } elsif ($type eq 'struct st_quicly_stats_t *') {
+            push @fmt, map {qq("$_":\%u)} qw(min_rtt smoothed_rtt rttvar);
+            push @fmt, map {qq("$_":\%u)} qw(cwnd ssthresh);
+            push @fmt, map {qq("$_":\%llu)} qw(pkts_out packets_acked loss_total loss_spurious pkts_in decryption_failed);
+            push @fmt, map {qq("$_":\%llu)} qw(total_bytes_out total_bytes_in);
+            if ($arch eq 'linux') {
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->rtt.$_"} qw(minimum smoothed variance);
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->cc.$_"} qw(cwnd ssthresh);
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_bytes.$_"} qw(sent received);
+            } else {
+                push @ap, map{"arg${i}->rtt.$_"} qw(minimum smoothed variance);
+                push @ap, map{"arg${i}->cc.$_"} qw(cwnd ssthresh);
+                push @ap, map{"arg${i}->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
+                push @ap, map{"arg${i}->num_bytes.$_"} qw(sent received);
             }
         } else {
             $name = 'time'
