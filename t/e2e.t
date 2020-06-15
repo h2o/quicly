@@ -43,6 +43,33 @@ subtest "hello" => sub {
                 and $1 eq 'packet-commit' and $2 eq 'quictrace-sent' and $3 eq 'send' and $4 eq 'free';
         };
     };
+    # check if the client receives extra connection IDs
+    subtest "initial-ncid" => sub {
+        my $events = slurp_file("$tempdir/events");
+        complex $events, sub {
+            my @seen;
+            my @expected = (0, 1, 1, 1); # expecting to see sequence=1,2,3 as we set active_connection_id_limit to 4
+            foreach (split(/\n/)) {
+                if ( /"type":"new-connection-id-receive",.*"sequence":([0-9]+),/ ) {
+                    # $1 contains sequence number
+                    $seen[$1] = 1;
+                }
+            }
+            # check if @seen is equivalent to @expected
+            if (scalar @seen != scalar @expected) {
+                return 0;
+            }
+            for (my $i = 0; $i < scalar @seen; $i++) {
+                if (not defined $seen[$i]) {
+                    $seen[$i] = 0;
+                }
+                if ($seen[$i] != $expected[$i]) {
+                    return 0;
+                }
+            }
+            return 1;
+        };
+    };
 };
 
 subtest "version-negotiation" => sub {
@@ -51,8 +78,8 @@ subtest "version-negotiation" => sub {
     is $resp, "hello world\n";
     my $events = slurp_file("$tempdir/events");
     if ($events =~ /"type":"connect",.*"version":(\d+)(?:.|\n)*"type":"version-switch",.*"new-version":(\d+)/m) {
-        is $2, 0xff00001b;
-        isnt $1, 0xff00001b;
+        is $2, 0xff00001c;
+        isnt $1, 0xff00001c;
     } else {
         fail "no quic-version-switch event";
         diag $events;

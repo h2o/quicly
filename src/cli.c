@@ -377,8 +377,8 @@ static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 
 static quicly_stream_open_t stream_open = {&on_stream_open};
 
-static void on_closed_by_peer(quicly_closed_by_peer_t *self, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
-                              size_t reason_len)
+static void on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *conn, int err, uint64_t frame_type,
+                                const char *reason, size_t reason_len)
 {
     if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
         fprintf(stderr, "transport close:code=0x%" PRIx16 ";frame=%" PRIu64 ";reason=%.*s\n", QUICLY_ERROR_GET_ERROR_CODE(err),
@@ -393,12 +393,13 @@ static void on_closed_by_peer(quicly_closed_by_peer_t *self, quicly_conn_t *conn
     }
 }
 
-static quicly_closed_by_peer_t closed_by_peer = {&on_closed_by_peer};
+static quicly_closed_by_remote_t closed_by_remote = {&on_closed_by_remote};
 
 static int on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn, ptls_buffer_t *buf,
                                         quicly_address_token_plaintext_t *token)
 {
-    return quicly_encrypt_address_token(tlsctx.random_bytes, address_token_aead.enc, buf, buf->off, token);
+    return quicly_encrypt_address_token(tlsctx.random_bytes, address_token_aead.enc, &quicly_get_context(conn)->transport_params,
+                                        buf, buf->off, token);
 }
 
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
@@ -651,10 +652,9 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
             goto Expired;
         if (!port_is_equal)
             goto AddressMismatch;
-        uint64_t cidhash_actual;
-        if (quicly_retry_calc_cidpair_hash(&ptls_openssl_sha256, client_cid, server_cid, &cidhash_actual) != 0)
-            goto InternalError;
-        if (token->retry.cidpair_hash != cidhash_actual)
+        if (!quicly_cid_is_equal(&token->retry.client_cid, client_cid))
+            goto CIDMismatch;
+        if (!quicly_cid_is_equal(&token->retry.server_cid, server_cid))
             goto CIDMismatch;
         break;
     case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
@@ -679,9 +679,6 @@ UnknownAddressType:
     return 0;
 Expired:
     *err_desc = "token expired";
-    return 0;
-InternalError:
-    *err_desc = "internal error";
     return 0;
 CIDMismatch:
     *err_desc = "CID mismatch";
@@ -780,8 +777,8 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                         quicly_address_token_plaintext_t *token = NULL, token_buf;
                         if (packet.token.len != 0) {
                             const char *err_desc = NULL;
-                            int ret = quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base,
-                                                                   packet.token.len, 0, &err_desc);
+                            int ret = quicly_decrypt_address_token(address_token_aead.dec, &ctx.transport_params, &token_buf,
+                                                                   packet.token.base, packet.token.len, 0, &err_desc);
                             if (ret == 0 && validate_token(&sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf, &err_desc)) {
                                 token = &token_buf;
                             } else if (enforce_retry && (ret == QUICLY_TRANSPORT_ERROR_INVALID_TOKEN ||
@@ -887,7 +884,7 @@ static void load_session(void)
             src = end;
         });
         ptls_decode_open_block(src, end, 2, {
-            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, 1, src, end)) != 0)
+            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, NULL, NULL, src, end)) != 0)
                 goto Exit;
             src = end;
         });
@@ -917,7 +914,7 @@ int save_session(const quicly_transport_parameters_t *transport_params)
     ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.address_token.base, session_info.address_token.len); });
     ptls_buffer_push_block(&buf, 2, { ptls_buffer_pushv(&buf, session_info.tls_ticket.base, session_info.tls_ticket.len); });
     ptls_buffer_push_block(&buf, 2, {
-        if ((ret = quicly_encode_transport_parameter_list(&buf, 1, transport_params, NULL, NULL, 0)) != 0)
+        if ((ret = quicly_encode_transport_parameter_list(&buf, transport_params, NULL, NULL, NULL, NULL, 0)) != 0)
             goto Exit;
     });
 
@@ -944,7 +941,7 @@ int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t 
     memcpy(session_info.tls_ticket.base, src.base, src.len);
 
     quicly_conn_t *conn = *ptls_get_data_ptr(tls);
-    return save_session(quicly_get_peer_transport_parameters(conn));
+    return save_session(quicly_get_remote_transport_parameters(conn));
 }
 
 static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
@@ -953,7 +950,7 @@ static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicl
     session_info.address_token = ptls_iovec_init(malloc(token.len), token.len);
     memcpy(session_info.address_token.base, token.base, token.len);
 
-    return save_session(quicly_get_peer_transport_parameters(conn));
+    return save_session(quicly_get_remote_transport_parameters(conn));
 }
 
 static quicly_save_resumption_token_t save_resumption_token = {save_resumption_token_cb};
@@ -1049,7 +1046,7 @@ int main(int argc, char **argv)
     ctx = quicly_spec_context;
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
-    ctx.closed_by_peer = &closed_by_peer;
+    ctx.closed_by_remote = &closed_by_remote;
     ctx.save_resumption_token = &save_resumption_token;
     ctx.generate_resumption_token = &generate_resumption_token;
 

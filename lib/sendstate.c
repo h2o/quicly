@@ -185,6 +185,6 @@ int quicly_sendstate_lost(quicly_sendstate_t *state, quicly_sendstate_sent_t *ar
     }
 
 Exit:
-    assert(state->acked.ranges[0].end <= state->pending.ranges[0].start);
+    assert(state->pending.num_ranges == 0 || state->acked.ranges[0].end <= state->pending.ranges[0].start);
     return check_amount_of_state(state);
 }
