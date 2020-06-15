@@ -142,10 +142,10 @@ for my $probe (@probes) {
             push @fmt, map {qq("$_":\%llu)} qw(pkts_out packets_acked loss_total loss_spurious pkts_in decryption_failed);
             push @fmt, map {qq("$_":\%llu)} qw(total_bytes_out total_bytes_in);
             if ($arch eq 'linux') {
-                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->rtt.$_"} qw(minimum smoothed variance);
-                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->cc.$_"} qw(cwnd ssthresh);
-                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
-                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_bytes.$_"} qw(sent received);
+                push @ap, map{"(unsigned long long)((struct st_quicly_stats_t *)arg$i)->rtt.$_"} qw(minimum smoothed variance);
+                push @ap, map{"(unsigned long long)((struct st_quicly_stats_t *)arg$i)->cc.$_"} qw(cwnd ssthresh);
+                push @ap, map{"(unsigned long long)((struct st_quicly_stats_t *)arg$i)->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
+                push @ap, map{"(unsigned long long)((struct st_quicly_stats_t *)arg$i)->num_bytes.$_"} qw(sent received);
             } else {
                 push @ap, map{"arg${i}->rtt.$_"} qw(minimum smoothed variance);
                 push @ap, map{"arg${i}->cc.$_"} qw(cwnd ssthresh);

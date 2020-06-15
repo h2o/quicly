@@ -331,7 +331,6 @@ struct st_quicly_conn_streamgroup_state_t {
  * the same order for quicly_stats_t and `struct st_quicly_conn_public_t::stats`.
  */
 #define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
-    uint8_t stats_version;                                                                                                         \
     struct {                                                                                                                       \
         uint64_t received;                                                                                                         \
         uint64_t decryption_failed;                                                                                                \
@@ -346,9 +345,10 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t received;                                                                                                         \
         uint64_t sent;                                                                                                             \
-    } num_bytes;
+    } num_bytes
 
 typedef struct st_quicly_stats_t {
+    uint8_t stats_version;
     /**
      * The pre-built fields. This MUST be the first member of `quicly_stats_t` so that we can use `memcpy`.
      */
@@ -427,6 +427,7 @@ struct _st_quicly_conn_public_t {
     quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
+        uint8_t stats_version;
         QUICLY_STATS_PREBUILT_FIELDS;
     } stats;
     uint32_t version;
