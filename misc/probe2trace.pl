@@ -144,13 +144,13 @@ for my $probe (@probes) {
             if ($arch eq 'linux') {
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->rtt.$_"} qw(minimum smoothed variance);
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->cc.$_"} qw(cwnd ssthresh);
-                push @ap, map{"(unsigned long long)((struct st_quicly_stats_t *)arg$i)->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
-                push @ap, map{"(unsigned long long)((struct st_quicly_stats_t *)arg$i)->num_bytes.$_"} qw(sent received);
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_bytes.$_"} qw(sent received);
             } else {
                 push @ap, map{"arg${i}->rtt.$_"} qw(minimum smoothed variance);
                 push @ap, map{"arg${i}->cc.$_"} qw(cwnd ssthresh);
-                push @ap, map{"arg${i}->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
-                push @ap, map{"arg${i}->num_bytes.$_"} qw(sent received);
+                push @ap, map{"(unsigned long long)arg${i}->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
+                push @ap, map{"(unsigned long long)arg${i}->num_bytes.$_"} qw(sent received);
             }
         } else {
             $name = 'time'
