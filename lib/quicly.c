@@ -1420,6 +1420,13 @@ static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key
 void quicly_free(quicly_conn_t *conn)
 {
     QUICLY_PROBE(FREE, conn, conn->stash.now);
+#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
+    if (QUICLY_CONN_STATS_ENABLED()) {
+        quicly_stats_t stats;
+        quicly_get_stats(conn, &stats);
+        QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
+    }
+#endif
 
     destroy_all_streams(conn, 0, 1);
 

@@ -36,9 +36,21 @@ extern "C" {
 #include "quicly/constants.h"
 
 typedef struct st_quicly_cc_t {
+    /**
+     * Current congestion window.
+     */
     uint32_t cwnd;
+    /**
+     * Current slow start threshold.
+     */
     uint32_t ssthresh;
+    /**
+     * Stash of acknowledged bytes, used during congestion avoidance.
+     */
     uint32_t stash;
+    /**
+     * Packet number indicating end of recovery period, if in recovery.
+     */
     uint64_t recovery_end;
 } quicly_cc_t;
 
