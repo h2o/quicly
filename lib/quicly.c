@@ -1417,20 +1417,16 @@ static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key
     }
 }
 
-static void dump_conn_stats(quicly_conn_t *conn) {
-#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
-    if (!QUICLY_CONN_STATS_ENABLED())
-        return;
-    quicly_stats_t stats;
-    quicly_get_stats(conn, &stats);
-    QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
-#endif
-}
-
 void quicly_free(quicly_conn_t *conn)
 {
     QUICLY_PROBE(FREE, conn, conn->stash.now);
-    dump_conn_stats(conn);
+#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
+    if (QUICLY_CONN_STATS_ENABLED()) {
+        quicly_stats_t stats;
+        quicly_get_stats(conn, &stats);
+        QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
+    }
+#endif
 
     destroy_all_streams(conn, 0, 1);
 
@@ -1869,7 +1865,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
 
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
-    conn->super.stats.stats_version = 1;
     lock_now(conn, 0);
     set_address(&conn->super.local.address, local_addr);
     set_address(&conn->super.remote.address, remote_addr);

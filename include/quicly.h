@@ -349,11 +349,11 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t lost;                                                                                                             \
         /**                                                                                                                        \
-         * Total number of packets for which an acknowledgement has been received.                                                 \
+         * Total number of packets for which acknowledgements have been received.                                                  \
          */                                                                                                                        \
         uint64_t ack_received;                                                                                                     \
         /**                                                                                                                        \
-         * Total number of packets for which an acknowledgement was received after they were marked lost.                          \
+         * Total number of packets for which acknowledgements were received after being marked lost.                               \
          */                                                                                                                        \
         uint64_t late_acked;                                                                                                       \
     } num_packets;                                                                                                                 \
@@ -369,7 +369,6 @@ struct st_quicly_conn_streamgroup_state_t {
     } num_bytes
 
 typedef struct st_quicly_stats_t {
-    uint8_t stats_version;
     /**
      * The pre-built fields. This MUST be the first member of `quicly_stats_t` so that we can use `memcpy`.
      */
@@ -448,7 +447,6 @@ struct _st_quicly_conn_public_t {
     quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
-        uint8_t stats_version;
         QUICLY_STATS_PREBUILT_FIELDS;
     } stats;
     uint32_t version;

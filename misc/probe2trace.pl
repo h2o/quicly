@@ -72,7 +72,6 @@ struct quicly_cc_t {
 };
 
 struct quicly_stats_t {
-    uint8_t stats_version;
     struct {
         uint64_t received;
         uint64_t decryption_failed;
@@ -81,6 +80,7 @@ struct quicly_stats_t {
         uint64_t ack_received;
         uint64_t late_acked;
     } num_packets;
+
     struct {
         uint64_t received;
         uint64_t sent;
