@@ -333,27 +333,27 @@ struct st_quicly_conn_streamgroup_state_t {
 #define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
     struct {                                                                                                                       \
         /**                                                                                                                        \
-         * Total number of QUIC packets received.                                                                                  \
+         * Total number of packets received.                                                                                       \
          */                                                                                                                        \
         uint64_t received;                                                                                                         \
         /**                                                                                                                        \
-         * Total number of QUIC packets that failed decryption.                                                                    \
+         * Total number of packets that failed decryption.                                                                         \
          */                                                                                                                        \
         uint64_t decryption_failed;                                                                                                \
         /**                                                                                                                        \
-         * Total number of QUIC packets sent.                                                                                      \
+         * Total number of packets sent.                                                                                           \
          */                                                                                                                        \
         uint64_t sent;                                                                                                             \
         /**                                                                                                                        \
-         * Total number of QUIC packets marked lost.                                                                               \
+         * Total number of packets marked lost.                                                                                    \
          */                                                                                                                        \
         uint64_t lost;                                                                                                             \
         /**                                                                                                                        \
-         * Total number of QUIC packets acknowledged.                                                                              \
+         * Total number of packets for which an acknowledgement has been received.                                                 \
          */                                                                                                                        \
-        uint64_t acked;                                                                                                            \
+        uint64_t ack_received;                                                                                                     \
         /**                                                                                                                        \
-         * Total number of QUIC packets acked after marked lost.                                                                   \
+         * Total number of packets for which an acknowledgement was received after they were marked lost.                          \
          */                                                                                                                        \
         uint64_t late_acked;                                                                                                       \
     } num_packets;                                                                                                                 \

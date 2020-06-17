@@ -4379,7 +4379,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                     ++conn->super.stats.num_packets.late_acked;
                 }
             }
-            ++conn->super.stats.num_packets.acked;
+            ++conn->super.stats.num_packets.ack_received;
             largest_newly_acked.pn = pn_acked;
             largest_newly_acked.sent_at = sent->sent_at;
             QUICLY_PROBE(PACKET_ACKED, conn, conn->stash.now, pn_acked, is_late_ack);
