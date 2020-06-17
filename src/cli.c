@@ -130,7 +130,7 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64
             ", bytes-sent: %" PRIu64 ", srtt: %" PRIu32 "\n",
             stats.num_packets.received, stats.num_packets.decryption_failed, stats.num_packets.sent, stats.num_packets.lost,
-            stats.num_packets.ack_received, stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent,
+            stats.num_packets.acked, stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent,
             stats.rtt.smoothed);
 }
 

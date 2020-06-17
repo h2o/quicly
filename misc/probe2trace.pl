@@ -78,7 +78,7 @@ struct quicly_stats_t {
         uint64_t decryption_failed;
         uint64_t sent;
         uint64_t lost;
-        uint64_t ack_received;
+        uint64_t acked;
         uint64_t late_acked;
     } num_packets;
     struct {
@@ -137,19 +137,19 @@ for my $probe (@probes) {
                 push @ap, map{"arg${i}->$_"} qw(minimum smoothed latest);
             }
         } elsif ($type eq 'struct st_quicly_stats_t *') {
-            push @fmt, map {qq("$_":\%u)} qw(min_rtt smoothed_rtt rttvar);
-            push @fmt, map {qq("$_":\%u)} qw(cwnd ssthresh);
-            push @fmt, map {qq("$_":\%llu)} qw(pkts_out packets_acked loss_total loss_spurious pkts_in decryption_failed);
-            push @fmt, map {qq("$_":\%llu)} qw(total_bytes_out total_bytes_in);
+            push @fmt, map {qq("rtt_$_":\%u)} qw(minimum smoothed latest);
+            push @fmt, map {qq("cc_$_":\%u)} qw(cwnd ssthresh);
+            push @fmt, map {qq("num_packets_$_":\%llu)} qw(sent acked lost late_acked received decryption_failed);
+            push @fmt, map {qq("num_bytes_$_":\%llu)} qw(sent received);
             if ($arch eq 'linux') {
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->rtt.$_"} qw(minimum smoothed variance);
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->cc.$_"} qw(cwnd ssthresh);
-                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_packets.$_"} qw(sent acked lost late_acked received decryption_failed);
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->num_bytes.$_"} qw(sent received);
             } else {
                 push @ap, map{"arg${i}->rtt.$_"} qw(minimum smoothed variance);
                 push @ap, map{"arg${i}->cc.$_"} qw(cwnd ssthresh);
-                push @ap, map{"(unsigned long long)arg${i}->num_packets.$_"} qw(sent ack_received lost late_acked received decryption_failed);
+                push @ap, map{"(unsigned long long)arg${i}->num_packets.$_"} qw(sent acked lost late_acked received decryption_failed);
                 push @ap, map{"(unsigned long long)arg${i}->num_bytes.$_"} qw(sent received);
             }
         } else {

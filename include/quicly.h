@@ -332,18 +332,39 @@ struct st_quicly_conn_streamgroup_state_t {
  */
 #define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
     struct {                                                                                                                       \
+        /**                                                                                                                        \
+         * Total number of QUIC packets received.                                                                                  \
+         */                                                                                                                        \
         uint64_t received;                                                                                                         \
+        /**                                                                                                                        \
+         * Total number of QUIC packets that failed decryption.                                                                    \
+         */                                                                                                                        \
         uint64_t decryption_failed;                                                                                                \
+        /**                                                                                                                        \
+         * Total number of QUIC packets sent.                                                                                      \
+         */                                                                                                                        \
         uint64_t sent;                                                                                                             \
+        /**                                                                                                                        \
+         * Total number of QUIC packets marked lost.                                                                               \
+         */                                                                                                                        \
         uint64_t lost;                                                                                                             \
-        uint64_t ack_received;                                                                                                     \
+        /**                                                                                                                        \
+         * Total number of QUIC packets acknowledged.                                                                              \
+         */                                                                                                                        \
+        uint64_t acked;                                                                                                            \
+        /**                                                                                                                        \
+         * Total number of QUIC packets acked after marked lost.                                                                   \
+         */                                                                                                                        \
         uint64_t late_acked;                                                                                                       \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
-         * This value is calculated at UDP datagram-level, and used for determining the amplification limit.                       \
+         * Total bytes received, at UDP datagram-level. Used for determining the amplification limit.                              \
          */                                                                                                                        \
         uint64_t received;                                                                                                         \
+        /**                                                                                                                        \
+         * Total bytes sent, at UDP datagram-level.                                                                                \
+         */                                                                                                                        \
         uint64_t sent;                                                                                                             \
     } num_bytes
 
@@ -354,11 +375,11 @@ typedef struct st_quicly_stats_t {
      */
     QUICLY_STATS_PREBUILT_FIELDS;
     /**
-     * RTT
+     * RTT stats.
      */
     quicly_rtt_t rtt;
     /**
-     * Congestion control (experimental; TODO cherry-pick what can be exposed as part of a stable API)
+     * Congestion control stats (experimental; TODO cherry-pick what can be exposed as part of a stable API).
      */
     quicly_cc_t cc;
 } quicly_stats_t;
