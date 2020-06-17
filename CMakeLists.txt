@@ -24,7 +24,7 @@ IF ((CMAKE_SIZEOF_VOID_P EQUAL 8) AND
 ELSE ()
     SET(WITH_FUSION_DEFAULT "OFF")
 ENDIF ()
-SET(WITH_FUSION "whether or not to use fusion AES-GCM engine in the cli command" ${WITH_FUSION_DEFAULT})
+OPTION(WITH_FUSION "whether or not to use fusion AES-GCM engine in the cli command" ${WITH_FUSION_DEFAULT})
 
 # CMake defaults to a Debug build, whereas quicly defaults to an optimized (Release) build
 IF(NOT CMAKE_BUILD_TYPE)
