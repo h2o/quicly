@@ -79,6 +79,10 @@ typedef struct st_quicly_cc_t {
      * Maximum congestion window during the connection.
      */
     uint32_t cwnd_maximum;
+    /**
+     * Total number of number of loss episodes (congestion window reductions).
+     */
+    uint32_t num_loss_episodes;
 } quicly_cc_t;
 
 /**

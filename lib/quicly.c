@@ -3307,6 +3307,8 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
              sent->packet_number <= largest_acked - QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD))) { /* packet threshold */
         if (sent->cc_bytes_in_flight != 0 && conn->egress.max_lost_pn <= sent->packet_number) {
             ++conn->super.stats.num_packets.lost;
+            if (sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD > largest_acked)
+                ++conn->super.stats.num_packets.lost_time_threshold;
             largest_newly_lost_pn = sent->packet_number;
             quicly_cc_on_lost(&conn->egress.cc, sent->cc_bytes_in_flight, sent->packet_number, conn->egress.packet_number,
                               conn->egress.max_udp_payload_size);
@@ -3845,6 +3847,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             /* PTO (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
             QUICLY_PROBE(PTO, conn, conn->stash.now, conn->egress.sentmap.bytes_in_flight, conn->egress.cc.cwnd,
                          conn->egress.loss.pto_count);
+            ++conn->super.stats.num_ptos;
             if ((ret = mark_packets_on_pto(conn)) != 0)
                 goto Exit;
         }
