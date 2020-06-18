@@ -381,10 +381,6 @@ typedef struct st_quicly_stats_t {
      * Congestion control stats (experimental; TODO cherry-pick what can be exposed as part of a stable API).
      */
     quicly_cc_t cc;
-    /**
-     * Initial congestion window.
-     */
-    uint32_t cc_cwnd_initial;
 } quicly_stats_t;
 
 /**

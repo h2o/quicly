@@ -40,9 +40,13 @@ typedef enum {
      * Reno, with 0.7 beta reduction
      */
     CC_RENO_MODIFIED
-} quicly_congestion_controller_t;
+} quicly_cc_type_t;
 
 typedef struct st_quicly_cc_t {
+    /**
+     * Congestion controller type.
+     */
+    quicly_cc_type_t type;
     /**
      * Current congestion window.
      */
@@ -60,6 +64,10 @@ typedef struct st_quicly_cc_t {
      */
     uint64_t recovery_end;
     /**
+     * Initial congestion window.
+     */
+    uint32_t cwnd_initial;
+    /**
      * Congestion window at the end of slow start.
      */
     uint32_t cwnd_exiting_slow_start;
@@ -71,10 +79,6 @@ typedef struct st_quicly_cc_t {
      * Maximum congestion window during the connection.
      */
     uint32_t cwnd_maximum;
-    /**
-     * Congestion controller in use.
-     */
-    quicly_congestion_controller_t controller;
 } quicly_cc_t;
 
 /**

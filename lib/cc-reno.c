@@ -28,8 +28,8 @@
 void quicly_cc_init(quicly_cc_t *cc, uint32_t initcwnd)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
-    cc->controller = CC_RENO_MODIFIED;
-    cc->cwnd = initcwnd;
+    cc->type = CC_RENO_MODIFIED;
+    cc->cwnd = cc->cwnd_initial = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
@@ -44,6 +44,8 @@ void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked,
     /* Slow start. */
     if (cc->cwnd < cc->ssthresh) {
         cc->cwnd += bytes;
+        if (cc->cwnd_maximum < cc->cwnd)
+            cc->cwnd_maximum = cc->cwnd;
         return;
     }
     /* Congestion avoidance. */
@@ -54,6 +56,8 @@ void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked,
     uint32_t count = cc->stash / cc->cwnd;
     cc->stash -= count * cc->cwnd;
     cc->cwnd += count * max_udp_payload_size;
+    if (cc->cwnd_maximum < cc->cwnd)
+        cc->cwnd_maximum = cc->cwnd;
 }
 
 void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, uint32_t max_udp_payload_size)
@@ -63,9 +67,6 @@ void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64
         return;
     cc->recovery_end = next_pn;
 
-    /* Populate congestion control stats. */
-    if (cc->cwnd_maximum < cc->cwnd)
-        cc->cwnd_maximum = cc->cwnd;
     if (cc->cwnd_exiting_slow_start == 0)
         cc->cwnd_exiting_slow_start = cc->cwnd;
 
