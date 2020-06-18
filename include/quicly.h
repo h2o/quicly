@@ -161,7 +161,7 @@ typedef struct st_quicly_crypto_engine_t {
     /**
      * Callback used for encrypting the send packet. The engine must AEAD-encrypt the payload using `packet_protect_ctx` and apply
      * header protection using `header_protect_ctx`. Quicly does not read or write the content of the UDP datagram payload after
-     * this function is being called. Therefore, an engine might retain the information provided by this function, and apply the
+     * this function is called. Therefore, an engine might retain the information provided by this function, and apply the
      * changes at a later moment (e.g., hardware crypto offload).
      */
     void (*encrypt_packet)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn, ptls_cipher_context_t *header_protect_ctx,
