@@ -29,7 +29,7 @@ void quicly_cc_init(quicly_cc_t *cc, uint32_t initcwnd)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
     cc->type = CC_RENO_MODIFIED;
-    cc->cwnd = cc->cwnd_initial = initcwnd;
+    cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
