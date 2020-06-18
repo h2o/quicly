@@ -35,6 +35,13 @@ extern "C" {
 #include <string.h>
 #include "quicly/constants.h"
 
+typedef enum {
+    /**
+     * Reno, with 0.7 beta reduction
+     */
+    CC_RENO_MODIFIED
+} quicly_congestion_controller_t;
+
 typedef struct st_quicly_cc_t {
     /**
      * Current congestion window.
@@ -52,12 +59,28 @@ typedef struct st_quicly_cc_t {
      * Packet number indicating end of recovery period, if in recovery.
      */
     uint64_t recovery_end;
+    /**
+     * Congestion window at the end of slow start.
+     */
+    uint32_t cwnd_exiting_slow_start;
+    /**
+     * Minimum congestion window during the connection.
+     */
+    uint32_t cwnd_minimum;
+    /**
+     * Maximum congestion window during the connection.
+     */
+    uint32_t cwnd_maximum;
+    /**
+     * Congestion controller in use.
+     */
+    quicly_congestion_controller_t controller;
 } quicly_cc_t;
 
 /**
  * Initializes the congestion controller.
  */
-void quicly_cc_init(quicly_cc_t *cc, uint32_t max_udp_payload_size);
+void quicly_cc_init(quicly_cc_t *cc, uint32_t initcwnd);
 /**
  * Called when a packet is newly acknowledged.
  */
