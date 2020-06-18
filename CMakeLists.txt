@@ -24,7 +24,7 @@ IF ((CMAKE_SIZEOF_VOID_P EQUAL 8) AND
 ELSE ()
     SET(WITH_FUSION_DEFAULT "OFF")
 ENDIF ()
-OPTION(WITH_FUSION "whether or not to use fusion AES-GCM engine in the cli command" ${WITH_FUSION_DEFAULT})
+OPTION(WITH_FUSION "whether or not to use the Fusion AES-GCM engine in the cli binary" ${WITH_FUSION_DEFAULT})
 
 # CMake defaults to a Debug build, whereas quicly defaults to an optimized (Release) build
 IF(NOT CMAKE_BUILD_TYPE)
@@ -149,4 +149,3 @@ IF (BUILD_FUZZER)
         TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS} ${LIB_FUZZER})
     ENDIF(OSS_FUZZ)
 ENDIF()
-
