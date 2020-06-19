@@ -2753,17 +2753,16 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
     }
     quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE, (uint16_t)conn->egress.packet_number);
 
-    /* AEAD protection */
-    s->dst = s->dst_payload_from + ptls_aead_encrypt(s->target.cipher->aead, s->dst_payload_from, s->dst_payload_from,
-                                                     s->dst - s->dst_payload_from, conn->egress.packet_number,
-                                                     s->target.first_byte_at, s->dst_payload_from - s->target.first_byte_at);
+    /* encrypt the packet */
+    s->dst += s->target.cipher->aead->algo->tag_size;
     datagram_size = s->dst - s->payload_buf.datagram;
     assert(datagram_size <= conn->egress.max_udp_payload_size);
 
-    conn->super.ctx->crypto_engine->finalize_send_packet(
-        conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead,
-        ptls_iovec_init(s->payload_buf.datagram, datagram_size), s->target.first_byte_at - s->payload_buf.datagram,
-        s->dst_payload_from - s->payload_buf.datagram, mode == QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED);
+    conn->super.ctx->crypto_engine->encrypt_packet(conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection,
+                                                   s->target.cipher->aead, ptls_iovec_init(s->payload_buf.datagram, datagram_size),
+                                                   s->target.first_byte_at - s->payload_buf.datagram,
+                                                   s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number,
+                                                   mode == QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED);
 
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
@@ -4097,11 +4096,9 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, struct sockaddr *d
     size_t datagram_len = dst - (uint8_t *)datagram;
 
     /* encrypt packet */
-    ptls_aead_encrypt(egress.aead, payload_from, payload_from, dst - payload_from - egress.aead->algo->tag_size, 0, datagram,
-                      payload_from - (uint8_t *)datagram);
-    quicly_default_crypto_engine.finalize_send_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
-                                                      ptls_iovec_init(datagram, datagram_len), 0,
-                                                      payload_from - (uint8_t *)datagram, 0);
+    quicly_default_crypto_engine.encrypt_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
+                                                ptls_iovec_init(datagram, datagram_len), 0, payload_from - (uint8_t *)datagram, 0,
+                                                0);
 
     dispose_cipher(&egress);
     return datagram_len;
@@ -5626,9 +5623,9 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
     /* encrypt, abusing the internal API to supply full IV */
     if ((ret = ptls_buffer_reserve(buf, aead->algo->tag_size)) != 0)
         goto Exit;
-    aead->do_encrypt_init(aead, buf->base + enc_start - aead->algo->iv_size, buf->base + start_off, enc_start - start_off);
-    ptls_aead_encrypt_update(aead, buf->base + enc_start, buf->base + enc_start, buf->off - enc_start);
-    ptls_aead_encrypt_final(aead, buf->base + buf->off);
+    aead->algo->setup_crypto(aead, 1, NULL, buf->base + enc_start - aead->algo->iv_size);
+    ptls_aead_encrypt(aead, buf->base + enc_start, buf->base + enc_start, buf->off - enc_start, 0, buf->base + start_off,
+                      enc_start - start_off);
     buf->off += aead->algo->tag_size;
 
 Exit:
@@ -5671,9 +5668,10 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
     int ret;
 
     /* decrypt */
-    if ((ptlen = aead->do_decrypt(aead, ptbuf, token + prefix_len + 1 + aead->algo->iv_size,
-                                  len - (prefix_len + 1 + aead->algo->iv_size), token + prefix_len + 1, token,
-                                  prefix_len + 1 + aead->algo->iv_size)) == SIZE_MAX) {
+    aead->algo->setup_crypto(aead, 0, NULL, token + prefix_len + 1);
+    if ((ptlen = ptls_aead_decrypt(aead, ptbuf, token + prefix_len + 1 + aead->algo->iv_size,
+                                   len - (prefix_len + 1 + aead->algo->iv_size), 0, token, prefix_len + 1 + aead->algo->iv_size)) ==
+        SIZE_MAX) {
         ret = PTLS_ALERT_DECRYPT_ERROR;
         *err_desc = "token decryption failure";
         goto Exit;
