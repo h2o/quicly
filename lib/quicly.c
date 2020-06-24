@@ -3845,8 +3845,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
         if (restrict_sending) {
             /* PTO: when handshake is in progress, send from the very first unacknowledged byte so as to maximize the chance of
-             * making progress. When handshake is complete, transmit new data if any, or retransmit the oldest unacknowledged
-             * data that is considered inflight. */
+             * making progress. When handshake is complete, transmit new data if any, else retransmit the oldest unacknowledged data
+             * that is considered inflight. */
             QUICLY_PROBE(PTO, conn, conn->stash.now, conn->egress.sentmap.bytes_in_flight, conn->egress.cc.cwnd,
                          conn->egress.loss.pto_count);
             ++conn->super.stats.num_ptos;
