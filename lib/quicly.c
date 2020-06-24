@@ -3256,7 +3256,7 @@ int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs)
 }
 
 /**
- * Mark frames of given epoch for retransmission, until `*bytes_to_mark` becomes zero.
+ * Mark frames of given epoch as pending, until `*bytes_to_mark` becomes zero.
  */
 static int mark_packets_on_pto(quicly_conn_t *conn, uint8_t ack_epoch, size_t *bytes_to_mark)
 {
