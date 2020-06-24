@@ -346,6 +346,10 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t lost;                                                                                                             \
         /**                                                                                                                        \
+         * Total number of packets marked lost via time-threshold loss detection.                                                  \
+         */                                                                                                                        \
+        uint64_t lost_time_threshold;                                                                                              \
+        /**                                                                                                                        \
          * Total number of packets for which acknowledgements have been received.                                                  \
          */                                                                                                                        \
         uint64_t ack_received;                                                                                                     \
@@ -363,7 +367,11 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total bytes sent, at UDP datagram-level.                                                                                \
          */                                                                                                                        \
         uint64_t sent;                                                                                                             \
-    } num_bytes
+    } num_bytes;                                                                                                                   \
+    /**                                                                                                                            \
+     * Total number of PTOs during the connections.                                                                                \
+     */                                                                                                                            \
+    uint32_t num_ptos
 
 typedef struct st_quicly_stats_t {
     /**

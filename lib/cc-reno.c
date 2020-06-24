@@ -67,6 +67,7 @@ void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64
         return;
     cc->recovery_end = next_pn;
 
+    ++cc->num_loss_episodes;
     if (cc->cwnd_exiting_slow_start == 0)
         cc->cwnd_exiting_slow_start = cc->cwnd;
 
