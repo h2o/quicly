@@ -122,7 +122,7 @@ for my $probe (@probes) {
             push @fmt, map {qq("cc_$_":\%u)} qw(type cwnd ssthresh cwnd_initial cwnd_exiting_slow_start cwnd_minimum cwnd_maximum num_loss_episodes);
             push @fmt, map {qq("num_packets_$_":\%llu)} qw(sent ack_received lost lost_time_threshold late_acked received decryption_failed);
             push @fmt, map {qq("num_bytes_$_":\%llu)} qw(sent received);
-            push @fmt, "num_ptos:\%u";
+            push @fmt, qq("num_ptos":\%u);
             if ($arch eq 'linux') {
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->rtt.$_"} qw(minimum smoothed variance);
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->cc.$_"} qw(type cwnd ssthresh cwnd_initial cwnd_exiting_slow_start cwnd_minimum cwnd_maximum num_loss_episodes);
