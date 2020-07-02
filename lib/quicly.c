@@ -237,10 +237,6 @@ struct st_quicly_conn_t {
          */
         quicly_sentmap_t sentmap;
         /**
-         * all packets where pn < max_lost_pn are deemed lost
-         */
-        uint64_t max_lost_pn;
-        /**
          * loss recovery
          */
         quicly_loss_t loss;
@@ -3304,13 +3300,12 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
     init_acks_iter(conn, &iter);
 
     /* Mark packets as lost if they are smaller than the largest_acked and outside either time-threshold or packet-threshold
-     * windows.
-     */
+     * windows. Once marked as lost, cc_bytes_in_flight becomes zero. */
     while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
            (sent->sent_at <= conn->stash.now - delay_until_lost || /* time threshold */
             (largest_acked >= QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD &&
              sent->packet_number <= largest_acked - QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD))) { /* packet threshold */
-        if (sent->cc_bytes_in_flight != 0 && conn->egress.max_lost_pn <= sent->packet_number) {
+        if (sent->cc_bytes_in_flight != 0) {
             ++conn->super.stats.num_packets.lost;
             if (sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD > largest_acked)
                 ++conn->super.stats.num_packets.lost_time_threshold;
@@ -3326,8 +3321,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
         }
     }
     if (largest_newly_lost_pn != UINT64_MAX) {
-        conn->egress.max_lost_pn = largest_newly_lost_pn + 1;
-        QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, conn->egress.max_lost_pn, conn->egress.sentmap.bytes_in_flight,
+        QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, largest_newly_lost_pn + 1, conn->egress.sentmap.bytes_in_flight,
                      conn->egress.cc.cwnd);
         QUICLY_PROBE(QUICTRACE_CC_LOST, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                      conn->egress.sentmap.bytes_in_flight);
