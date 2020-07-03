@@ -105,11 +105,11 @@ typedef struct quicly_loss_t {
     /**
      * pointer to transport parameter containing the remote peer's max_ack_delay
      */
-    uint16_t *max_ack_delay;
+    const uint16_t *max_ack_delay;
     /**
      * pointer to transport parameter containing the remote peer's ack exponent
      */
-    uint8_t *ack_delay_exponent;
+    const uint8_t *ack_delay_exponent;
     /**
      * The number of consecutive PTOs (PTOs that have fired without receiving an ack).
      */
@@ -146,8 +146,8 @@ typedef struct quicly_loss_t {
 
 typedef void (*quicly_loss_on_detect_cb)(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold);
 
-static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
-                             uint8_t *ack_delay_exponent);
+static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
+                             const uint8_t *ack_delay_exponent);
 static void quicly_loss_dispose(quicly_loss_t *r);
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
                                      int can_send_stream_data, int handshake_is_in_progress, uint64_t total_bytes_sent,
@@ -222,8 +222,8 @@ inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, ui
     return rtt->smoothed + (rtt->variance != 0 ? rtt->variance * 4 : min_pto) + max_ack_delay;
 }
 
-inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
-                             uint8_t *ack_delay_exponent)
+inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
+                             const uint8_t *ack_delay_exponent)
 {
     *r = (quicly_loss_t){.conf = conf,
                          .max_ack_delay = max_ack_delay,
