@@ -3780,7 +3780,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     }
     if (conn->egress.loss.alarm_at <= conn->stash.now) {
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
-                                        &min_packets_to_send, &restrict_sending, on_loss_detected)) != 0)
+                                        conn->initial == NULL && conn->handshake == NULL, &min_packets_to_send, &restrict_sending,
+                                        on_loss_detected)) != 0)
             goto Exit;
         assert(min_packets_to_send > 0);
         assert(min_packets_to_send <= s->max_datagrams);
@@ -4348,8 +4349,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
      * so far. So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
-    quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.pn, conn->stash.now, largest_newly_acked.sent_at,
-                                frame.ack_delay, includes_ack_eliciting);
+    quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.pn, state->epoch, conn->stash.now,
+                                largest_newly_acked.sent_at, frame.ack_delay, includes_ack_eliciting);
 
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
@@ -4364,7 +4365,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     /* loss-detection  */
     quicly_loss_detect_loss(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
-                            on_loss_detected);
+                            conn->initial == NULL && conn->handshake == NULL, on_loss_detected);
     update_loss_alarm(conn, 0);
 
     return 0;
