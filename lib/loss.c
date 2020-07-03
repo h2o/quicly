@@ -43,7 +43,9 @@ int quicly_loss_detect_loss(quicly_loss_t *loss, int64_t now, uint32_t max_ack_d
     /* This function ensures that the value returned in loss_time is when the next application timer should be set for loss
      * detection. if no timer is required, loss_time is set to INT64_MAX. */
 
-    const uint64_t largest_acked = loss->largest_acked_packet_plus1 - 1;
+    /* Largest_acked is set to 0 when no packets are acked. This is technically incorrect, but does not cause issues in this
+     * function because only the packets with PN below that threshold will be processed. */
+    const uint64_t largest_acked = loss->largest_acked_packet_plus1 != 0 ? loss->largest_acked_packet_plus1 - 1 : 0;
     const uint32_t delay_until_lost = ((loss->rtt.latest > loss->rtt.smoothed ? loss->rtt.latest : loss->rtt.smoothed) * 9 + 7) / 8;
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
