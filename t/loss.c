@@ -65,11 +65,11 @@ static void test_time_detection(void)
     ok(loss.loss_time == INT64_MAX);
 
     /* commit packets 3 packets (pn=0..2); check that loss timer is not active */
-    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 0, now, 0) == 0);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 0, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
-    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 1, now, 0) == 0);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 1, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
-    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 2, now, 0) == 0);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 2, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
     ASSERT(quicly_loss_detect_loss(&loss, now, quicly_spec_context.transport_params.max_ack_delay, on_loss_detected) == 0);
     ok(loss.loss_time == INT64_MAX);
@@ -109,13 +109,13 @@ static void test_pn_detection(void)
     ok(loss.loss_time == INT64_MAX);
 
     /* commit packets 3 packets (pn=0..2); check that loss timer is not active */
-    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 0, now, 0) == 0);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 0, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
-    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 1, now, 0) == 0);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 1, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
-    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 2, now, 0) == 0);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 2, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
-    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 3, now, 0) == 0);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 3, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
     ASSERT(quicly_loss_detect_loss(&loss, now, quicly_spec_context.transport_params.max_ack_delay, on_loss_detected) == 0);
     ok(loss.loss_time == INT64_MAX);
