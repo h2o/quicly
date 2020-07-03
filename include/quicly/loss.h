@@ -162,7 +162,7 @@ static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
 static int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, quicly_loss_do_detect_cb do_detect,
                                 size_t *min_packets_to_send, int *restrict_sending);
 
-static int quicly_loss_detect_loss(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect);
+int quicly_loss_detect_loss(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect);
 
 /* inline definitions */
 
@@ -331,22 +331,6 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, quicly_
     *restrict_sending = 1;
     if (r->pto_count > 0)
         *min_packets_to_send = 2;
-
-    return 0;
-}
-
-inline int quicly_loss_detect_loss(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect)
-{
-    uint32_t delay_until_lost = ((r->rtt.latest > r->rtt.smoothed ? r->rtt.latest : r->rtt.smoothed) * 9 + 7) / 8;
-    int64_t loss_time;
-    int ret;
-
-    r->loss_time = INT64_MAX;
-
-    if ((ret = do_detect(r, delay_until_lost, &loss_time)) != 0)
-        return ret;
-    if (loss_time != INT64_MAX)
-        r->loss_time = loss_time;
 
     return 0;
 }
