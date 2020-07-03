@@ -3861,9 +3861,21 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                                    restrict_sending ||
                                        (conn->super.remote.address_validation.send_probe && conn->handshake == NULL))) != 0)
         goto Exit;
-    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, s, ack_only,
-                                   restrict_sending || conn->super.remote.address_validation.send_probe)) != 0)
-        goto Exit;
+    if (conn->handshake != NULL) {
+        int send_probe;
+        if (restrict_sending) {
+            /* Send Handshake probe only if there is outstanding Handshake data. This condition prevents the server from sending
+             * Handshake PTO packets when the client acks the Handshake packets up to the one that contains Finished then spends
+             * multiple of RTTs to verify the certificate chain. */
+            quicly_stream_t *s = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + QUICLY_EPOCH_HANDSHAKE));
+            assert(s != NULL);
+            send_probe = conn->application == NULL || s->sendstate.acked.ranges[0].end < s->sendstate.size_inflight;
+        } else {
+            send_probe = conn->super.remote.address_validation.send_probe;
+        }
+        if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, s, ack_only, send_probe)) != 0)
+            goto Exit;
+    }
 
     /* send encrypted frames */
     if (conn->application != NULL && (s->current.cipher = &conn->application->cipher.egress.key)->header_protection != NULL) {
