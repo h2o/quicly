@@ -34,6 +34,7 @@ extern "C" {
 #include <stdint.h>
 #include <string.h>
 #include "quicly/constants.h"
+#include "quicly/loss.h"
 
 typedef enum {
     /**
@@ -42,11 +43,37 @@ typedef enum {
     CC_RENO_MODIFIED
 } quicly_cc_type_t;
 
+typedef struct st_quicly_cc_conf_t {
+    /**
+     * Congestion controller type.
+     */
+    quicly_cc_type_t type;
+} quicly_cc_conf_t;
+
+#define QUICLY_CC_SPEC_CONF                                                                                                        \
+    {                                                                                                                              \
+        CC_RENO_MODIFIED /* type */                                                                                                \
+    }
+
+#define QUICLY_CC_PERFORMANT_CONF                                                                                                  \
+    {                                                                                                                              \
+        CC_RENO_MODIFIED /* type */                                                                                                \
+    }
+
+/**
+ * Holds pointers to concrete congestion control implementation functions.
+ */
+struct st_quicly_cc_impl_t;
+
 typedef struct st_quicly_cc_t {
     /**
      * Congestion controller type.
      */
     quicly_cc_type_t type;
+    /**
+     * Congestion controller implementation.
+     */
+    const struct st_quicly_cc_impl_t *impl;
     /**
      * Current congestion window.
      */
@@ -56,13 +83,23 @@ typedef struct st_quicly_cc_t {
      */
     uint32_t ssthresh;
     /**
-     * Stash of acknowledged bytes, used during congestion avoidance.
-     */
-    uint32_t stash;
-    /**
      * Packet number indicating end of recovery period, if in recovery.
      */
     uint64_t recovery_end;
+    /**
+     * State information specific to the congestion controller implementation.
+     */
+    union {
+        /**
+         * State information for Reno congestion control.
+         */
+        struct {
+            /**
+             * Stash of acknowledged bytes, used during congestion avoidance.
+             */
+            uint32_t stash;
+        } reno;
+    } state;
     /**
      * Initial congestion window.
      */
@@ -85,23 +122,32 @@ typedef struct st_quicly_cc_t {
     uint32_t num_loss_episodes;
 } quicly_cc_t;
 
+struct st_quicly_cc_impl_t {
+    void (*quicly_cc_init)(quicly_cc_t *, const quicly_cc_conf_t *, uint32_t);
+    void (*quicly_cc_on_acked)(quicly_cc_t *, const quicly_loss_t *, uint32_t, uint64_t, uint32_t, uint32_t);
+    void (*quicly_cc_on_lost)(quicly_cc_t *, const quicly_loss_t *, uint32_t, uint64_t, uint64_t, uint32_t);
+    void (*quicly_cc_on_persistent_congestion)(quicly_cc_t *, const quicly_loss_t *);
+};
+
 /**
  * Initializes the congestion controller.
  */
-void quicly_cc_init(quicly_cc_t *cc, uint32_t initcwnd);
+void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd);
 /**
  * Called when a packet is newly acknowledged.
  */
-void quicly_cc_on_acked(quicly_cc_t *cc, uint32_t bytes, uint64_t largest_acked, uint32_t inflight, uint32_t max_udp_payload_size);
+void quicly_cc_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
+                        uint32_t max_udp_payload_size);
 /**
  * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
  * used for setting the recovery window.
  */
-void quicly_cc_on_lost(quicly_cc_t *cc, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, uint32_t max_udp_payload_size);
+void quicly_cc_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
+                       uint32_t max_udp_payload_size);
 /**
  * Called when persistent congestion is observed.
  */
-void quicly_cc_on_persistent_congestion(quicly_cc_t *cc);
+void quicly_cc_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss);
 /**
  * Calculates the initial congestion window size given the maximum UDP payload size.
  */

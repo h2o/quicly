@@ -294,6 +294,10 @@ struct st_quicly_context_t {
      * crypto engine (offload API)
      */
     quicly_crypto_engine_t *crypto_engine;
+    /**
+     * congestion control parameters
+     */
+    quicly_cc_conf_t cc;
 };
 
 /**
