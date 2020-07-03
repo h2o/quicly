@@ -164,9 +164,11 @@ static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
  *  * if restrict_sending is true, limit sending to min_packets_to_send, otherwise as limited by congestion/flow control
  * and then call quicly_loss_update_alarm and update the alarm
  */
-static int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, quicly_loss_do_detect_cb do_detect,
-                                size_t *min_packets_to_send, int *restrict_sending);
-
+static int quicly_loss_on_alarm(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect, size_t *min_packets_to_send,
+                                int *restrict_sending);
+/**
+ *
+ */
 int quicly_loss_detect_loss(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect);
 
 /* inline definitions */
@@ -327,8 +329,8 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
 }
 
-inline int quicly_loss_on_alarm(quicly_loss_t *r, uint64_t largest_sent, quicly_loss_do_detect_cb do_detect,
-                                size_t *min_packets_to_send, int *restrict_sending)
+inline int quicly_loss_on_alarm(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect, size_t *min_packets_to_send,
+                                int *restrict_sending)
 {
     r->alarm_at = INT64_MAX;
     *min_packets_to_send = 1;

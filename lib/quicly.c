@@ -3833,8 +3833,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         return QUICLY_ERROR_FREE_CONNECTION;
     }
     if (conn->egress.loss.alarm_at <= conn->stash.now) {
-        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1, do_detect_loss, &min_packets_to_send,
-                                        &restrict_sending)) != 0)
+        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, do_detect_loss, &min_packets_to_send, &restrict_sending)) != 0)
             goto Exit;
         assert(min_packets_to_send > 0);
         assert(min_packets_to_send <= s->max_datagrams);
