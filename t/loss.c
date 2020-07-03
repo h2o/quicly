@@ -135,8 +135,64 @@ static void test_pn_detection(void)
     quicly_loss_dispose(&loss);
 }
 
+static void test_slow_cert_verify(void)
+{
+    quicly_loss_t loss;
+    int64_t last_retransmittable_sent_at;
+    size_t min_packets_to_send;
+    int restrict_sending;
+
+    now = 0;
+    num_packets_lost = 0;
+
+    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+                     &quicly_spec_context.transport_params.ack_delay_exponent);
+    ok(loss.loss_time == INT64_MAX);
+
+    /* sent Handshake+1RTT packet */
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 1, now, QUICLY_EPOCH_HANDSHAKE) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 2, now, QUICLY_EPOCH_1RTT) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10);
+    last_retransmittable_sent_at = now;
+    quicly_loss_update_alarm(&loss, now, last_retransmittable_sent_at, 1, 0, 1, 0, 1);
+
+    now += 10;
+
+    /* receive ack for the Handshake packet, but 1RTT packet remains unacknowledged */
+    acked(&loss, 1);
+    ASSERT(quicly_loss_detect_loss(&loss, now, quicly_spec_context.transport_params.max_ack_delay, on_loss_detected) == 0);
+    ok(loss.loss_time == INT64_MAX);
+    ok(num_packets_lost == 0);
+
+    /* PTO fires */
+    now = loss.alarm_at;
+    ASSERT(quicly_loss_on_alarm(&loss, now, quicly_spec_context.transport_params.max_ack_delay, &min_packets_to_send,
+                                &restrict_sending, on_loss_detected) == 0);
+    ok(restrict_sending);
+    ok(min_packets_to_send == 2);
+    ok(num_packets_lost == 0);
+
+    /* therefore send probes */
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 3, now, QUICLY_EPOCH_HANDSHAKE) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 4, now, QUICLY_EPOCH_1RTT) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10);
+
+    now += 10;
+
+    /* again receives an ack for the Handshake packet, but 1RTT packet remains unacknowledged */
+    acked(&loss, 3);
+    ASSERT(quicly_loss_detect_loss(&loss, now, quicly_spec_context.transport_params.max_ack_delay, on_loss_detected) == 0);
+    ok(loss.loss_time == INT64_MAX);
+    ok(num_packets_lost == 0);
+
+    quicly_loss_dispose(&loss);
+}
+
 void test_loss(void)
 {
     subtest("time-detection", test_time_detection);
     subtest("pn-detection", test_pn_detection);
+    subtest("slow-cert-verify", test_slow_cert_verify);
 }
