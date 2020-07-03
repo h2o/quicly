@@ -3283,16 +3283,32 @@ static int mark_packets_on_pto(quicly_conn_t *conn)
     return 0;
 }
 
+static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold)
+{
+    quicly_conn_t *conn = (void *)((char *)loss - offsetof(quicly_conn_t, egress.loss));
+
+    ++conn->super.stats.num_packets.lost;
+    if (is_time_threshold)
+        ++conn->super.stats.num_packets.lost_time_threshold;
+    quicly_cc_on_lost(&conn->egress.cc, lost_packet->cc_bytes_in_flight, lost_packet->packet_number, conn->egress.packet_number,
+                      conn->egress.max_udp_payload_size);
+    QUICLY_PROBE(PACKET_LOST, conn, conn->stash.now, lost_packet->packet_number);
+    QUICLY_PROBE(QUICTRACE_LOST, conn, conn->stash.now, lost_packet->packet_number);
+    QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, lost_packet->packet_number + 1, conn->egress.sentmap.bytes_in_flight,
+                 conn->egress.cc.cwnd);
+    QUICLY_PROBE(QUICTRACE_CC_LOST, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
+                 conn->egress.sentmap.bytes_in_flight);
+}
+
 /* this function ensures that the value returned in loss_time is when the next
  * application timer should be set for loss detection. if no timer is required,
  * loss_time is set to INT64_MAX.
  */
-static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time)
+static int do_detect_loss(quicly_loss_t *loss, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time)
 {
-    quicly_conn_t *conn = (void *)((char *)ld - offsetof(quicly_conn_t, egress.loss));
+    quicly_conn_t *conn = (void *)((char *)loss - offsetof(quicly_conn_t, egress.loss));
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
-    uint64_t largest_newly_lost_pn = UINT64_MAX;
     int ret;
 
     *loss_time = INT64_MAX;
@@ -3302,28 +3318,15 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
     /* Mark packets as lost if they are smaller than the largest_acked and outside either time-threshold or packet-threshold
      * windows. Once marked as lost, cc_bytes_in_flight becomes zero. */
     while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
-           (sent->sent_at <= conn->stash.now - delay_until_lost || /* time threshold */
+           (sent->sent_at <= conn->stash.now - delay_until_lost ||                          /* time threshold */
             sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD <= largest_acked)) { /* packet threshold */
         if (sent->cc_bytes_in_flight != 0) {
-            ++conn->super.stats.num_packets.lost;
-            if (sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD > largest_acked)
-                ++conn->super.stats.num_packets.lost_time_threshold;
-            largest_newly_lost_pn = sent->packet_number;
-            quicly_cc_on_lost(&conn->egress.cc, sent->cc_bytes_in_flight, sent->packet_number, conn->egress.packet_number,
-                              conn->egress.max_udp_payload_size);
-            QUICLY_PROBE(PACKET_LOST, conn, conn->stash.now, largest_newly_lost_pn);
-            QUICLY_PROBE(QUICTRACE_LOST, conn, conn->stash.now, largest_newly_lost_pn);
+            on_loss_detected(loss, sent, sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD > largest_acked);
             if ((ret = quicly_sentmap_update(&conn->egress.sentmap, &iter, QUICLY_SENTMAP_EVENT_LOST)) != 0)
                 return ret;
         } else {
             quicly_sentmap_skip(&iter);
         }
-    }
-    if (largest_newly_lost_pn != UINT64_MAX) {
-        QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, largest_newly_lost_pn + 1, conn->egress.sentmap.bytes_in_flight,
-                     conn->egress.cc.cwnd);
-        QUICLY_PROBE(QUICTRACE_CC_LOST, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
-                     conn->egress.sentmap.bytes_in_flight);
     }
 
     /* schedule time-threshold alarm if there is a packet outstanding that is smaller than largest_acked */
