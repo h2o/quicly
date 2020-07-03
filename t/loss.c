@@ -53,7 +53,7 @@ static void acked(quicly_loss_t *loss, uint64_t pn)
     quicly_loss_on_ack_received(loss, pn, now, sent_at, 0, 1);
 }
 
-static void test_loss_simple(void)
+static void test_time_detection(void)
 {
     quicly_loss_t loss;
 
@@ -97,7 +97,46 @@ static void test_loss_simple(void)
     quicly_loss_dispose(&loss);
 }
 
+static void test_pn_detection(void)
+{
+    quicly_loss_t loss;
+
+    now = 0;
+    num_packets_lost = 0;
+
+    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+                     &quicly_spec_context.transport_params.ack_delay_exponent);
+    ok(loss.loss_time == INT64_MAX);
+
+    /* commit packets 3 packets (pn=0..2); check that loss timer is not active */
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 0, now, 0) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 1, now, 0) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 2, now, 0) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10);
+    ASSERT(quicly_sentmap_prepare(&loss.sentmap, 3, now, 0) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10);
+    ASSERT(quicly_loss_detect_loss(&loss, now, quicly_spec_context.transport_params.max_ack_delay, on_loss_detected) == 0);
+    ok(loss.loss_time == INT64_MAX);
+
+    /* receive ack for the 3rd packet; loss timer is activated but no packets are declared as lost */
+    acked(&loss, 2);
+    ASSERT(quicly_loss_detect_loss(&loss, now, quicly_spec_context.transport_params.max_ack_delay, on_loss_detected) == 0);
+    ok(loss.loss_time != INT64_MAX);
+    ok(num_packets_lost == 0);
+
+    /* receive ack for the 4th packet; loss timer is active and pn=0 is declared lost */
+    acked(&loss, 3);
+    ASSERT(quicly_loss_detect_loss(&loss, now, quicly_spec_context.transport_params.max_ack_delay, on_loss_detected) == 0);
+    ok(loss.loss_time != INT64_MAX);
+    ok(num_packets_lost == 1);
+
+    quicly_loss_dispose(&loss);
+}
+
 void test_loss(void)
 {
-    subtest("simple", test_loss_simple);
+    subtest("time-detection", test_time_detection);
+    subtest("pn-detection", test_pn_detection);
 }
