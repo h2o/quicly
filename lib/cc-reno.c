@@ -25,17 +25,15 @@
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
 
-void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd)
+static void quicly_reno_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd)
 {
-    memset(cc, 0, sizeof(quicly_cc_t));
-    cc->type = CC_RENO_MODIFIED;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
 /* TODO: Avoid increase if sender was application limited. */
-void quicly_cc_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                        uint32_t max_udp_payload_size)
+static void quicly_reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked,
+                                 uint32_t inflight, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
     /* Do not increase congestion window while in recovery. */
@@ -61,8 +59,8 @@ void quicly_cc_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t byt
         cc->cwnd_maximum = cc->cwnd;
 }
 
-void quicly_cc_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
-                       uint32_t max_udp_payload_size)
+static void quicly_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
+                                uint32_t max_udp_payload_size)
 {
     /* Nothing to do if loss is in recovery window. */
     if (lost_pn < cc->recovery_end)
@@ -83,10 +81,13 @@ void quicly_cc_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t byte
         cc->cwnd_minimum = cc->cwnd;
 }
 
-void quicly_cc_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
+void quicly_reno_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
 {
     /* TODO */
 }
+
+const struct st_quicly_cc_impl_t quicly_cc_reno_impl = {quicly_reno_init, quicly_reno_on_acked, quicly_reno_on_lost,
+                                                        quicly_reno_on_persistent_congestion};
 
 uint32_t quicly_cc_calc_initial_cwnd(uint16_t max_udp_payload_size)
 {

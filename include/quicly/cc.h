@@ -129,25 +129,52 @@ struct st_quicly_cc_impl_t {
     void (*quicly_cc_on_persistent_congestion)(quicly_cc_t *, const quicly_loss_t *);
 };
 
+extern const struct st_quicly_cc_impl_t quicly_cc_reno_impl;
+
 /**
  * Initializes the congestion controller.
  */
-void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd);
+static inline void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd)
+{
+    memset(cc, 0, sizeof(quicly_cc_t));
+    cc->type = conf->type;
+
+    switch (cc->type) {
+    case CC_RENO_MODIFIED:
+    default:
+        cc->impl = &quicly_cc_reno_impl;
+        break;
+    }
+    cc->impl->quicly_cc_init(cc, conf, initcwnd);
+}
+
 /**
  * Called when a packet is newly acknowledged.
  */
-void quicly_cc_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                        uint32_t max_udp_payload_size);
+static inline void quicly_cc_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked,
+                                      uint32_t inflight, uint32_t max_udp_payload_size)
+{
+    cc->impl->quicly_cc_on_acked(cc, loss, bytes, largest_acked, inflight, max_udp_payload_size);
+}
+
 /**
  * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
  * used for setting the recovery window.
  */
-void quicly_cc_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
-                       uint32_t max_udp_payload_size);
+static inline void quicly_cc_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
+                                     uint32_t max_udp_payload_size)
+{
+    cc->impl->quicly_cc_on_lost(cc, loss, bytes, lost_pn, next_pn, max_udp_payload_size);
+}
+
 /**
  * Called when persistent congestion is observed.
  */
-void quicly_cc_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss);
+static inline void quicly_cc_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
+{
+    cc->impl->quicly_cc_on_persistent_congestion(cc, loss);
+}
+
 /**
  * Calculates the initial congestion window size given the maximum UDP payload size.
  */
