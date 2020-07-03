@@ -116,8 +116,8 @@ subtest "0-rtt" => sub {
     ok -e "$tempdir/session", "session saved";
     system "$cli -s $tempdir/session -e $tempdir/events 127.0.0.1 $port > /dev/null 2>&1";
     my $events = slurp_file("$tempdir/events");
-    like $events, qr/"type":"stream-send".*"stream-id":0,(.|\n)*"type":"packet-commit".*"pn":1,/m, "stream 0 on pn 1";
-    like $events, qr/"type":"cc-ack-received".*"largest-acked":1,/m, "pn 1 acked";
+    like $events, qr/"type":"stream-send".*"stream-id":0,(.|\n)*"type":"packet-commit".*"pn":2,/m, "stream 0 on pn 2";
+    like $events, qr/"type":"cc-ack-received".*"largest-acked":1,/m, "pn 2 acked";
 };
 
 unlink "$tempdir/session";

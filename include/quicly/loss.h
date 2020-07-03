@@ -119,9 +119,10 @@ typedef struct quicly_loss_t {
      */
     int64_t time_of_last_packet_sent;
     /**
-     * The largest packet number acknowledged in an ack frame, added by one (so that zero can mean "below any PN").
+     * The largest packet number acknowledged in an ack frame (or zero if no packets have been acknowledged; note: quicly never
+     * sends PN=0).
      */
-    uint64_t largest_acked_packet_plus1;
+    uint64_t largest_acked_packet;
     /**
      * Total number of application data bytes sent when the last tail occurred, not including retransmissions.
      */
@@ -230,7 +231,7 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
                          .ack_delay_exponent = ack_delay_exponent,
                          .pto_count = 0,
                          .time_of_last_packet_sent = 0,
-                         .largest_acked_packet_plus1 = 0,
+                         .largest_acked_packet = 0,
                          .total_bytes_sent = 0,
                          .loss_time = INT64_MAX,
                          .alarm_at = INT64_MAX};
@@ -321,9 +322,9 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
         r->pto_count = 0;
 
     /* If largest newly acked is not larger than before, skip RTT sample */
-    if (largest_newly_acked == UINT64_MAX || r->largest_acked_packet_plus1 > largest_newly_acked)
+    if (largest_newly_acked == UINT64_MAX || r->largest_acked_packet >= largest_newly_acked)
         return;
-    r->largest_acked_packet_plus1 = largest_newly_acked + 1;
+    r->largest_acked_packet = largest_newly_acked;
 
     /* If ack does not acknowledge any ack-eliciting packet, skip RTT sample */
     if (!ack_eliciting)
