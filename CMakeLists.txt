@@ -65,6 +65,7 @@ SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
     t/frame.c
     t/local_cid.c
+    t/loss.c
     t/lossy.c
     t/maxsender.c
     t/ranges.c

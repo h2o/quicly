@@ -10,6 +10,7 @@
 		E904233D24AED0410072C5B7 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E904233C24AED0410072C5B7 /* loss.c */; };
 		E904233E24AED0410072C5B7 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E904233C24AED0410072C5B7 /* loss.c */; };
 		E904233F24AED0410072C5B7 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E904233C24AED0410072C5B7 /* loss.c */; };
+		E904234124AEFB980072C5B7 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E904234024AEFB980072C5B7 /* loss.c */; };
 		E9056C081F56965300E2B96C /* linklist.h in Headers */ = {isa = PBXBuildFile; fileRef = E9056C071F56965300E2B96C /* linklist.h */; };
 		E920D21C1F43DE4100799777 /* recvstate.h in Headers */ = {isa = PBXBuildFile; fileRef = E920D21B1F43DE4100799777 /* recvstate.h */; };
 		E920D21E1F43E05000799777 /* recvstate.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D21D1F43E05000799777 /* recvstate.c */; };
@@ -138,6 +139,7 @@
 
 /* Begin PBXFileReference section */
 		E904233C24AED0410072C5B7 /* loss.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
+		E904234024AEFB980072C5B7 /* loss.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E9056C071F56965300E2B96C /* linklist.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = linklist.h; sourceTree = "<group>"; };
 		E920D21B1F43DE4100799777 /* recvstate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = recvstate.h; sourceTree = "<group>"; };
 		E920D21D1F43E05000799777 /* recvstate.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = recvstate.c; sourceTree = "<group>"; };
@@ -399,6 +401,7 @@
 				E9736534246FD3DA0039AA49 /* remote_cid.c */,
 				E99F8C281F4EAEF800C26B3D /* frame.c */,
 				E9736533246FD3DA0039AA49 /* local_cid.c */,
+				E904234024AEFB980072C5B7 /* loss.c */,
 				E920D22F1F49EE0B00799777 /* lossy.c */,
 				E99B75E61F5CF96900CF503E /* maxsender.c */,
 				E9F6A4291F3C3B7B0083F0B2 /* ranges.c */,
@@ -707,6 +710,7 @@
 				E920D2301F49EE0B00799777 /* lossy.c in Sources */,
 				E99B75E71F5CF96900CF503E /* maxsender.c in Sources */,
 				E9F6A42F1F41375B0083F0B2 /* sendstate.c in Sources */,
+				E904234124AEFB980072C5B7 /* loss.c in Sources */,
 				E920D2251F49412900799777 /* simple.c in Sources */,
 				E9736538246FD3DA0039AA49 /* retire_cid.c in Sources */,
 				E920D21F1F43E05000799777 /* recvstate.c in Sources */,
