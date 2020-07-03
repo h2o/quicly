@@ -144,7 +144,7 @@ typedef struct quicly_loss_t {
     quicly_sentmap_t sentmap;
 } quicly_loss_t;
 
-typedef int (*quicly_loss_do_detect_cb)(quicly_loss_t *r, uint32_t delay_until_lost, int64_t *loss_time);
+typedef void (*quicly_loss_on_detect_cb)(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold);
 
 static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
                              uint8_t *ack_delay_exponent);
@@ -163,12 +163,12 @@ static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
  *  * if restrict_sending is true, limit sending to min_packets_to_send, otherwise as limited by congestion/flow control
  * and then call quicly_loss_update_alarm and update the alarm
  */
-static int quicly_loss_on_alarm(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect, size_t *min_packets_to_send,
-                                int *restrict_sending);
+static int quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, size_t *min_packets_to_send,
+                                int *restrict_sending, quicly_loss_on_detect_cb on_loss_detected);
 /**
  *
  */
-int quicly_loss_detect_loss(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect);
+int quicly_loss_detect_loss(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, quicly_loss_on_detect_cb on_loss_detected);
 /**
  * initializes the sentmap iterator, eviting the entries considered too old.
  */
@@ -338,15 +338,15 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
 }
 
-inline int quicly_loss_on_alarm(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect, size_t *min_packets_to_send,
-                                int *restrict_sending)
+inline int quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, size_t *min_packets_to_send,
+                                int *restrict_sending, quicly_loss_on_detect_cb on_loss_detected)
 {
     r->alarm_at = INT64_MAX;
     *min_packets_to_send = 1;
     if (r->loss_time != INT64_MAX) {
         /* Time threshold loss detection. Send at least 1 packet, but no restrictions on sending otherwise. */
         *restrict_sending = 0;
-        return quicly_loss_detect_loss(r, do_detect);
+        return quicly_loss_detect_loss(r, now, max_ack_delay, on_loss_detected);
     }
     /* PTO. Send at least and at most 1 packet during speculative probing and 2 packets otherwise. */
     ++r->pto_count;
@@ -361,7 +361,6 @@ inline int64_t quicly_loss_get_sentmap_expiration_time(quicly_loss_t *loss, uint
 {
     return quicly_rtt_get_pto(&loss->rtt, max_ack_delay, loss->conf->min_pto) * 4;
 }
-
 
 #ifdef __cplusplus
 }

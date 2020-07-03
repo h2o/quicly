@@ -3289,50 +3289,6 @@ static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lo
                  conn->egress.loss.sentmap.bytes_in_flight);
 }
 
-/* this function ensures that the value returned in loss_time is when the next
- * application timer should be set for loss detection. if no timer is required,
- * loss_time is set to INT64_MAX.
- */
-static int do_detect_loss(quicly_loss_t *loss, uint32_t delay_until_lost, int64_t *loss_time)
-{
-    quicly_conn_t *conn = (void *)((char *)loss - offsetof(quicly_conn_t, egress.loss));
-    const uint64_t largest_acked = conn->egress.loss.largest_acked_packet_plus1 - 1;
-    quicly_sentmap_iter_t iter;
-    const quicly_sent_packet_t *sent;
-    int ret;
-
-    *loss_time = INT64_MAX;
-
-    init_acks_iter(conn, &iter);
-
-    /* Mark packets as lost if they are smaller than the largest_acked and outside either time-threshold or packet-threshold
-     * windows. Once marked as lost, cc_bytes_in_flight becomes zero. */
-    while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
-           (sent->sent_at <= conn->stash.now - delay_until_lost ||                          /* time threshold */
-            sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD <= largest_acked)) { /* packet threshold */
-        if (sent->cc_bytes_in_flight != 0) {
-            on_loss_detected(loss, sent, sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD > largest_acked);
-            if ((ret = quicly_sentmap_update(&conn->egress.loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_LOST)) != 0)
-                return ret;
-        } else {
-            quicly_sentmap_skip(&iter);
-        }
-    }
-
-    /* schedule time-threshold alarm if there is a packet outstanding that is smaller than largest_acked */
-    while (sent->packet_number < largest_acked && sent->sent_at != INT64_MAX) {
-        if (sent->cc_bytes_in_flight != 0) {
-            assert(conn->stash.now < sent->sent_at + delay_until_lost);
-            *loss_time = sent->sent_at + delay_until_lost;
-            break;
-        }
-        quicly_sentmap_skip(&iter);
-        sent = quicly_sentmap_get(&iter);
-    }
-
-    return 0;
-}
-
 static int send_max_streams(quicly_conn_t *conn, int uni, quicly_send_context_t *s)
 {
     if (!should_send_max_streams(conn, uni))
@@ -3827,7 +3783,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         return QUICLY_ERROR_FREE_CONNECTION;
     }
     if (conn->egress.loss.alarm_at <= conn->stash.now) {
-        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, do_detect_loss, &min_packets_to_send, &restrict_sending)) != 0)
+        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
+                                        &min_packets_to_send, &restrict_sending, on_loss_detected)) != 0)
             goto Exit;
         assert(min_packets_to_send > 0);
         assert(min_packets_to_send <= s->max_datagrams);
@@ -4410,7 +4367,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                  conn->egress.loss.sentmap.bytes_in_flight);
 
     /* loss-detection  */
-    quicly_loss_detect_loss(&conn->egress.loss, do_detect_loss);
+    quicly_loss_detect_loss(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
+                            on_loss_detected);
     update_loss_alarm(conn, 0);
 
     return 0;
