@@ -3303,8 +3303,7 @@ static int do_detect_loss(quicly_loss_t *ld, uint64_t largest_acked, uint32_t de
      * windows. Once marked as lost, cc_bytes_in_flight becomes zero. */
     while ((sent = quicly_sentmap_get(&iter))->packet_number < largest_acked &&
            (sent->sent_at <= conn->stash.now - delay_until_lost || /* time threshold */
-            (largest_acked >= QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD &&
-             sent->packet_number <= largest_acked - QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD))) { /* packet threshold */
+            sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD <= largest_acked)) { /* packet threshold */
         if (sent->cc_bytes_in_flight != 0) {
             ++conn->super.stats.num_packets.lost;
             if (sent->packet_number + QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD > largest_acked)
