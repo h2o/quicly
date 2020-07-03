@@ -64,7 +64,7 @@ void test_sentmap(void)
     }
 
     /* check all acks */
-    quicly_sentmap_init_iter(&map, &iter, -1, 0);
+    quicly_sentmap_init_iter(&map, &iter);
     for (at = 0; at < 10; ++at) {
         for (i = 1; i <= 5; ++i) {
             const quicly_sent_packet_t *sent = quicly_sentmap_get(&iter);
@@ -79,7 +79,7 @@ void test_sentmap(void)
     ok(num_blocks(&map) == 150 / 16 + 1);
 
     /* pop acks between 11 <= packet_number <= 40 */
-    quicly_sentmap_init_iter(&map, &iter, -1, 0);
+    quicly_sentmap_init_iter(&map, &iter);
     while (quicly_sentmap_get(&iter)->packet_number <= 10)
         quicly_sentmap_skip(&iter);
     assert(quicly_sentmap_get(&iter)->packet_number == 11);
@@ -89,7 +89,7 @@ void test_sentmap(void)
     ok(on_acked_ackcnt == 0);
 
     size_t cnt = 0;
-    for (quicly_sentmap_init_iter(&map, &iter, -1, 0); (sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX;
+    for (quicly_sentmap_init_iter(&map, &iter); (sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX;
          quicly_sentmap_skip(&iter)) {
         ok(sent->cc_bytes_in_flight != 0);
         ok(sent->packet_number <= 10 || 40 < sent->packet_number);

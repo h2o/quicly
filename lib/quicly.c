@@ -3222,8 +3222,8 @@ UpdateState:
 
 static inline void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
 {
-    quicly_sentmap_init_iter(&conn->egress.loss.sentmap, iter, conn->stash.now - get_sentmap_expiration_time(conn),
-                             conn->super.state >= QUICLY_STATE_CLOSING);
+    quicly_loss_init_sentmap_iter(&conn->egress.loss, iter, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
+                                  conn->super.state >= QUICLY_STATE_CLOSING);
 }
 
 int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs)

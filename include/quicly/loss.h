@@ -170,6 +170,11 @@ static int quicly_loss_on_alarm(quicly_loss_t *r, quicly_loss_do_detect_cb do_de
  */
 int quicly_loss_detect_loss(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect);
 /**
+ * initializes the sentmap iterator, eviting the entries considered too old.
+ */
+void quicly_loss_init_sentmap_iter(quicly_loss_t *loss, quicly_sentmap_iter_t *iter, int64_t now, uint32_t max_ack_delay,
+                                   int is_closing);
+/**
  * Returns the timeout for sentmap entries. This timeout is also used as the duration of CLOSING / DRAINING state, and therefore be
  * longer than 3PTO. At the moment, the value is 4PTO.
  */
