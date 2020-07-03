@@ -122,6 +122,31 @@ struct st_quicly_sent_block_t *quicly_sentmap__new_block(quicly_sentmap_t *map)
     return block;
 }
 
+void quicly_sentmap_init_iter(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, int64_t retire_before, int is_closing)
+{
+    /* setup the iterator */
+    iter->ref = &map->head;
+    if (map->head != NULL) {
+        assert(map->head->num_entries != 0);
+        for (iter->p = map->head->entries; iter->p->acked == NULL; ++iter->p)
+            ;
+        assert(iter->p->acked == quicly_sentmap__type_packet);
+        iter->count = map->head->num_entries;
+    } else {
+        iter->p = (quicly_sent_t *)&quicly_sentmap__end_iter;
+        iter->count = 0;
+    }
+
+    /* Retire entries older than the time specified, unless the connection is alive and the number of packets in the sentmap is
+     * below 32 packets. This exception exists in order to recognize excessively late-ACKs when under heavy loss. */
+    const quicly_sent_packet_t *sent;
+    while ((sent = quicly_sentmap_get(iter))->sent_at <= retire_before && sent->cc_bytes_in_flight == 0) {
+        if (!is_closing && map->num_packets < 32)
+            break;
+        quicly_sentmap_update(map, iter, QUICLY_SENTMAP_EVENT_EXPIRED);
+    }
+}
+
 void quicly_sentmap_skip(quicly_sentmap_iter_t *iter)
 {
     do {
