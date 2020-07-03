@@ -21,7 +21,7 @@
 		E920D22B1F49533800799777 /* sentmap.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D22A1F49533800799777 /* sentmap.c */; };
 		E920D22C1F49533800799777 /* sentmap.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D22A1F49533800799777 /* sentmap.c */; };
 		E920D22E1F4981E500799777 /* sentmap.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D22D1F4981E500799777 /* sentmap.c */; };
-		E920D2301F49EE0B00799777 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D22F1F49EE0B00799777 /* loss.c */; };
+		E920D2301F49EE0B00799777 /* lossy.c in Sources */ = {isa = PBXBuildFile; fileRef = E920D22F1F49EE0B00799777 /* lossy.c */; };
 		E92D43ED1F41DCF5002AC767 /* sendstate.h in Headers */ = {isa = PBXBuildFile; fileRef = E92D43EC1F41DCF5002AC767 /* sendstate.h */; };
 		E93E546A1F663851001C50FE /* pembase64.c in Sources */ = {isa = PBXBuildFile; fileRef = E93E54681F663849001C50FE /* pembase64.c */; };
 		E93E546B1F663852001C50FE /* pembase64.c in Sources */ = {isa = PBXBuildFile; fileRef = E93E54681F663849001C50FE /* pembase64.c */; };
@@ -147,7 +147,7 @@
 		E920D2281F4951BA00799777 /* sentmap.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = sentmap.h; sourceTree = "<group>"; };
 		E920D22A1F49533800799777 /* sentmap.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = sentmap.c; sourceTree = "<group>"; };
 		E920D22D1F4981E500799777 /* sentmap.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = sentmap.c; sourceTree = "<group>"; };
-		E920D22F1F49EE0B00799777 /* loss.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
+		E920D22F1F49EE0B00799777 /* lossy.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = lossy.c; sourceTree = "<group>"; };
 		E92D43EC1F41DCF5002AC767 /* sendstate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = sendstate.h; sourceTree = "<group>"; };
 		E93E54681F663849001C50FE /* pembase64.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pembase64.c; sourceTree = "<group>"; };
 		E93E54BA1F69B750001C50FE /* loss.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = loss.h; sourceTree = "<group>"; };
@@ -399,7 +399,7 @@
 				E9736534246FD3DA0039AA49 /* remote_cid.c */,
 				E99F8C281F4EAEF800C26B3D /* frame.c */,
 				E9736533246FD3DA0039AA49 /* local_cid.c */,
-				E920D22F1F49EE0B00799777 /* loss.c */,
+				E920D22F1F49EE0B00799777 /* lossy.c */,
 				E99B75E61F5CF96900CF503E /* maxsender.c */,
 				E9F6A4291F3C3B7B0083F0B2 /* ranges.c */,
 				E9736535246FD3DA0039AA49 /* retire_cid.c */,
@@ -704,7 +704,7 @@
 				E9D31DD1232DEDB400ACD5EC /* quicly-probes.d in Sources */,
 				E9736530246FD3B50039AA49 /* local_cid.c in Sources */,
 				E920D22C1F49533800799777 /* sentmap.c in Sources */,
-				E920D2301F49EE0B00799777 /* loss.c in Sources */,
+				E920D2301F49EE0B00799777 /* lossy.c in Sources */,
 				E99B75E71F5CF96900CF503E /* maxsender.c in Sources */,
 				E9F6A42F1F41375B0083F0B2 /* sendstate.c in Sources */,
 				E920D2251F49412900799777 /* simple.c in Sources */,

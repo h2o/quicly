@@ -64,15 +64,15 @@ SET(QUICLY_LIBRARY_FILES
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
     t/frame.c
+    t/local_cid.c
+    t/lossy.c
     t/maxsender.c
-    t/loss.c
     t/ranges.c
+    t/remote_cid.c
+    t/retire_cid.c
     t/sentmap.c
     t/simple.c
     t/stream-concurrency.c
-    t/remote_cid.c
-    t/local_cid.c
-    t/retire_cid.c
     t/test.c)
 
 IF (WITH_DTRACE)

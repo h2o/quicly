@@ -534,7 +534,7 @@ static void test_bidirectional(void)
     loss_check_stats(time_spent, 0, 84.5, 80, 80);
 }
 
-void test_loss(void)
+void test_lossy(void)
 {
     subtest("even", test_even);
 
