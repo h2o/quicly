@@ -3304,9 +3304,10 @@ static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lo
  * application timer should be set for loss detection. if no timer is required,
  * loss_time is set to INT64_MAX.
  */
-static int do_detect_loss(quicly_loss_t *loss, uint64_t largest_acked, uint32_t delay_until_lost, int64_t *loss_time)
+static int do_detect_loss(quicly_loss_t *loss, uint32_t delay_until_lost, int64_t *loss_time)
 {
     quicly_conn_t *conn = (void *)((char *)loss - offsetof(quicly_conn_t, egress.loss));
+    const uint64_t largest_acked = conn->egress.loss.largest_acked_packet_plus1 - 1;
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
     int ret;
@@ -3837,8 +3838,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         return QUICLY_ERROR_FREE_CONNECTION;
     }
     if (conn->egress.loss.alarm_at <= conn->stash.now) {
-        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1,
-                                        conn->egress.loss.largest_acked_packet_plus1 - 1, do_detect_loss, &min_packets_to_send,
+        if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->egress.packet_number - 1, do_detect_loss, &min_packets_to_send,
                                         &restrict_sending)) != 0)
             goto Exit;
         assert(min_packets_to_send > 0);
@@ -4422,7 +4422,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                  conn->egress.sentmap.bytes_in_flight);
 
     /* loss-detection  */
-    quicly_loss_detect_loss(&conn->egress.loss, frame.largest_acknowledged, do_detect_loss);
+    quicly_loss_detect_loss(&conn->egress.loss, do_detect_loss);
     update_loss_alarm(conn, 0);
 
     return 0;
