@@ -152,12 +152,11 @@ static void quicly_loss_dispose(quicly_loss_t *r);
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
                                      int can_send_stream_data, int handshake_is_in_progress, uint64_t total_bytes_sent,
                                      int is_after_send);
-
-/* called when an ACK is received
+/**
+ * called when an ACK is received
  */
 static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, int64_t now, int64_t sent_at,
                                         uint64_t ack_delay_encoded, int ack_eliciting);
-
 /* This function updates the loss detection timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
  *  * send min_packets_to_send number of packets immmediately. min_packets_to_send should never be 0.
@@ -170,6 +169,11 @@ static int quicly_loss_on_alarm(quicly_loss_t *r, quicly_loss_do_detect_cb do_de
  *
  */
 int quicly_loss_detect_loss(quicly_loss_t *r, quicly_loss_do_detect_cb do_detect);
+/**
+ * Returns the timeout for sentmap entries. This timeout is also used as the duration of CLOSING / DRAINING state, and therefore be
+ * longer than 3PTO. At the moment, the value is 4PTO.
+ */
+static int64_t quicly_loss_get_sentmap_expiration_time(quicly_loss_t *loss, uint32_t max_ack_delay);
 
 /* inline definitions */
 
@@ -347,6 +351,12 @@ inline int quicly_loss_on_alarm(quicly_loss_t *r, quicly_loss_do_detect_cb do_de
 
     return 0;
 }
+
+inline int64_t quicly_loss_get_sentmap_expiration_time(quicly_loss_t *loss, uint32_t max_ack_delay)
+{
+    return quicly_rtt_get_pto(&loss->rtt, max_ack_delay, loss->conf->min_pto) * 4;
+}
+
 
 #ifdef __cplusplus
 }

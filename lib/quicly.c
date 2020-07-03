@@ -523,15 +523,9 @@ static int is_retry(quicly_conn_t *conn)
     return conn->retry_scid.len != UINT8_MAX;
 }
 
-/**
- * Returns the timeout for sentmap entries. This timeout is also used as the duration of CLOSING / DRAINING state, and therefore be
- * longer than 3PTO. At the moment, the value is 4PTO.
- */
 static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
 {
-    return quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.remote.transport_params.max_ack_delay,
-                              conn->egress.loss.conf->min_pto) *
-           4;
+    return quicly_loss_get_sentmap_expiration_time(&conn->egress.loss, conn->super.remote.transport_params.max_ack_delay);
 }
 
 static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
