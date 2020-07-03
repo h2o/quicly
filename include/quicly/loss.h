@@ -30,6 +30,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 #include "quicly/constants.h"
+#include "quicly/sentmap.h"
 
 typedef struct quicly_loss_conf_t {
     /**
@@ -137,13 +138,17 @@ typedef struct quicly_loss_t {
      * rtt
      */
     quicly_rtt_t rtt;
+    /**
+     * sentmap
+     */
+    quicly_sentmap_t sentmap;
 } quicly_loss_t;
 
 typedef int (*quicly_loss_do_detect_cb)(quicly_loss_t *r, uint32_t delay_until_lost, int64_t *loss_time);
 
 static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, uint16_t *max_ack_delay,
                              uint8_t *ack_delay_exponent);
-
+static void quicly_loss_dispose(quicly_loss_t *r);
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
                                      int can_send_stream_data, int handshake_is_in_progress, uint64_t total_bytes_sent,
                                      int is_after_send);
@@ -219,6 +224,12 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
                          .loss_time = INT64_MAX,
                          .alarm_at = INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
+    quicly_sentmap_init(&r->sentmap);
+}
+
+inline void quicly_loss_dispose(quicly_loss_t *r)
+{
+    quicly_sentmap_dispose(&r->sentmap);
 }
 
 inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
