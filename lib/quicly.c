@@ -2583,7 +2583,8 @@ static uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
     return budget3x - conn->super.stats.num_bytes.sent;
 }
 
-/* Helper function to compute send window based on:
+/**
+ * Helper function to compute send window based on:
  * * state of peer validation,
  * * current cwnd,
  * * minimum send requirements in |min_bytes_to_send|, and
@@ -2609,6 +2610,20 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
     return window >= MIN_SEND_WINDOW ? window : 0;
 }
 
+/**
+ * Checks if the server is waiting for ClientFinished. When that is the case, the loss timer is disactivated, to avoid repeatedly
+ * sending 1-RTT packets while the client spends time verifying the certificate chain at the same time buffering 1-RTT packets.
+ */
+static int is_point5rtt_with_no_handshake_data_to_send(quicly_conn_t *conn)
+{
+    /* bail out unless this is a server-side connection waiting for ClientFinished */
+    if (!(conn->handshake != NULL && conn->application != NULL && !quicly_is_client(conn)))
+        return 0;
+    quicly_stream_t *stream = quicly_get_stream(conn, (quicly_stream_id_t)-1 - QUICLY_EPOCH_HANDSHAKE);
+    assert(stream != NULL);
+    return stream->sendstate.pending.num_ranges == 0 && stream->sendstate.acked.ranges[0].end == stream->sendstate.size_inflight;
+}
+
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
     if (conn->super.state >= QUICLY_STATE_CLOSING)
@@ -2626,7 +2641,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
     /* if something can be sent, return the earliest timeout. Otherwise return the idle timeout. */
     int64_t at = conn->idle_timeout.at;
-    if (remain_amp_allowance > 0) {
+    if (remain_amp_allowance > 0 && !is_point5rtt_with_no_handshake_data_to_send(conn)) {
         if (conn->egress.loss.alarm_at < at)
             at = conn->egress.loss.alarm_at;
         if (conn->egress.send_ack_at < at)
