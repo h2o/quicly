@@ -357,6 +357,30 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total number of packets for which acknowledgements were received after being marked lost.                               \
          */                                                                                                                        \
         uint64_t late_acked;                                                                                                       \
+        /**                                                                                                                        \
+         * Total number of ack-only packets received.                                                                              \
+         */                                                                                                                        \
+        uint64_t ack_only_received;                                                                                                \
+        /**                                                                                                                        \
+         * Total number of ack-only packets sent. (TODO)                                                                           \
+         */                                                                                                                        \
+        uint64_t ack_only_sent;                                                                                                    \
+        /**                                                                                                                        \
+         * Total number of packets received during the handshake.                                                                  \
+         */                                                                                                                        \
+        uint64_t handshake_received;                                                                                               \
+        /**                                                                                                                        \
+         * Total number of packets sent during the handshake.                                                                      \
+         */                                                                                                                        \
+        uint64_t handshake_sent;                                                                                                   \
+        /**                                                                                                                        \
+         * Total number of 0-RTT packets received.                                                                                 \
+         */                                                                                                                        \
+        uint64_t zerortt_received;                                                                                                 \
+        /**                                                                                                                        \
+         * Total number of 0-RTT packets sent.                                                                                     \
+         */                                                                                                                        \
+        uint64_t zerortt_sent;                                                                                                     \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -367,9 +391,17 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total bytes sent, at UDP datagram-level.                                                                                \
          */                                                                                                                        \
         uint64_t sent;                                                                                                             \
+        /**                                                                                                                        \
+         * Total stream bytes received.                                                                                            \
+         */                                                                                                                        \
+        uint64_t stream_received;                                                                                                  \
+        /**                                                                                                                        \
+         * Total stream bytes sent.                                                                                                \
+         */                                                                                                                        \
+        uint64_t stream_sent;                                                                                                      \
     } num_bytes;                                                                                                                   \
     /**                                                                                                                            \
-     * Total number of PTOs during the connections.                                                                                \
+     * Total number of PTOs during the connection.                                                                                 \
      */                                                                                                                            \
     uint32_t num_ptos
 
@@ -386,6 +418,32 @@ typedef struct st_quicly_stats_t {
      * Congestion control stats (experimental; TODO cherry-pick what can be exposed as part of a stable API).
      */
     quicly_cc_t cc;
+    /**
+     * Connection duration.
+     */
+    uint64_t duration;
+    /**
+     * QUIC version.
+     */
+    uint32_t version;
+    /**
+     * Maximum packet size used.
+     */
+    uint16_t max_packet_size;
+    /**
+     * Largest allowed and largest opened stream of each type, for locally created streams.
+     */
+    quicly_stream_id_t largest_allowed_local_uni_stream_id;
+    quicly_stream_id_t largest_open_local_uni_stream_id;
+    quicly_stream_id_t largest_allowed_local_bidi_stream_id;
+    quicly_stream_id_t largest_open_local_bidi_stream_id;
+    /**
+     * Largest allowed and largest opened stream of each type, for streams created by remote endpoint.
+     */
+    quicly_stream_id_t largest_allowed_remote_uni_stream_id;
+    quicly_stream_id_t largest_open_remote_uni_stream_id;
+    quicly_stream_id_t largest_allowed_remote_bidi_stream_id;
+    quicly_stream_id_t largest_open_remote_bidi_stream_id;
 } quicly_stats_t;
 
 /**

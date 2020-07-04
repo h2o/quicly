@@ -411,6 +411,10 @@ struct st_quicly_conn_t {
             } active_acked_cache;
         } on_ack_stream;
     } stash;
+    /**
+     * Start time of the connection.
+     */
+    int64_t conn_start_at;
 };
 
 struct st_quicly_handle_payload_state_t {
@@ -1097,6 +1101,18 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     /* set or generate the non-pre-built stats fields here */
     stats->rtt = conn->egress.loss.rtt;
     stats->cc = conn->egress.cc;
+    stats->duration = conn->stash.now - conn->conn_start_at;
+    stats->version = conn->super.version;
+    stats->max_packet_size = conn->egress.max_udp_payload_size;
+
+    stats->largest_allowed_local_uni_stream_id = conn->egress.max_streams.uni.count * 4  + 2 + !quicly_is_client(conn);
+    stats->largest_open_local_uni_stream_id =  (conn->super.local.uni.next_stream_id < 4) ? conn->super.local.uni.next_stream_id : conn->super.local.uni.next_stream_id - 4;
+    stats->largest_allowed_local_bidi_stream_id = conn->egress.max_streams.bidi.count * 4  + !quicly_is_client(conn);
+    stats->largest_open_local_bidi_stream_id =  (conn->super.local.bidi.next_stream_id < 4) ? conn->super.local.bidi.next_stream_id : conn->super.local.bidi.next_stream_id - 4;
+    stats->largest_allowed_remote_uni_stream_id = conn->ingress.max_streams.uni.max_committed * 4  + 2 + quicly_is_client(conn);
+    stats->largest_open_remote_uni_stream_id =  (conn->super.remote.uni.next_stream_id < 4) ? conn->super.remote.uni.next_stream_id : conn->super.remote.uni.next_stream_id - 4;
+    stats->largest_allowed_remote_bidi_stream_id = conn->ingress.max_streams.bidi.max_committed * 4  + quicly_is_client(conn);;
+    stats->largest_open_remote_bidi_stream_id =  (conn->super.remote.bidi.next_stream_id < 4) ? conn->super.remote.bidi.next_stream_id : conn->super.remote.bidi.next_stream_id - 4;
     return 0;
 }
 
@@ -1252,6 +1268,13 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
     } else if (conn->egress.send_ack_at == INT64_MAX) {
         conn->egress.send_ack_at = conn->stash.now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
+
+    if (is_ack_only)
+        ++conn->super.stats.num_packets.ack_only_received;
+    if (epoch == QUICLY_EPOCH_INITIAL || epoch == QUICLY_EPOCH_HANDSHAKE)
+        ++conn->super.stats.num_packets.handshake_received;
+    if (epoch == QUICLY_EPOCH_0RTT)
+        ++conn->super.stats.num_packets.zerortt_received;
 
     ret = 0;
 Exit:
@@ -1865,6 +1888,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
     lock_now(conn, 0);
+    conn->conn_start_at = conn->stash.now;
     set_address(&conn->super.local.address, local_addr);
     set_address(&conn->super.remote.address, remote_addr);
     quicly_local_cid_init_set(&conn->super.local.cid_set, ctx->cid_encryptor, local_cid);
@@ -2781,6 +2805,10 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
 
     ++conn->egress.packet_number;
     ++conn->super.stats.num_packets.sent;
+    if (get_epoch(*s->target.first_byte_at) == QUICLY_EPOCH_INITIAL || get_epoch(*s->target.first_byte_at) == QUICLY_EPOCH_HANDSHAKE)
+        ++conn->super.stats.num_packets.handshake_sent;
+    if (get_epoch(*s->target.first_byte_at) == QUICLY_EPOCH_0RTT)
+        ++conn->super.stats.num_packets.zerortt_sent;
 
     if (mode != QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED) {
         conn->super.stats.num_bytes.sent += datagram_size;
@@ -3198,6 +3226,7 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 UpdateState:
     QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, end_off - off, is_fin);
     QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, end_off - off, is_fin);
+    stream->conn->super.stats.num_bytes.stream_sent += end_off - off;
     /* update sendstate (and also MAX_DATA counter) */
     if (stream->sendstate.size_inflight < end_off) {
         if (stream->stream_id >= 0)
@@ -4278,6 +4307,7 @@ static int handle_stream_frame(quicly_conn_t *conn, struct st_quicly_handle_payl
     if ((ret = quicly_decode_stream_frame(state->frame_type, &state->src, state->end, &frame)) != 0)
         return ret;
     QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, conn->stash.now, frame.stream_id, frame.offset, frame.data.len, (int)frame.is_fin);
+    conn->super.stats.num_bytes.stream_received += frame.data.len;
     if ((ret = get_stream_or_open_if_new(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
     return apply_stream_frame(stream, &frame);
