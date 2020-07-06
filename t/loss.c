@@ -58,7 +58,7 @@ static void test_time_detection(void)
                      &quicly_spec_context.transport_params.ack_delay_exponent);
     ok(loss.loss_time == INT64_MAX);
 
-    /* commit packets 3 packets (pn=0..2); check that loss timer is not active */
+    /* commit 3 packets (pn=0..2); check that loss timer is not active */
     ok(quicly_sentmap_prepare(&loss.sentmap, 0, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
     ok(quicly_sentmap_prepare(&loss.sentmap, 1, now, QUICLY_EPOCH_INITIAL) == 0);
@@ -102,7 +102,7 @@ static void test_pn_detection(void)
                      &quicly_spec_context.transport_params.ack_delay_exponent);
     ok(loss.loss_time == INT64_MAX);
 
-    /* commit packets 3 packets (pn=0..2); check that loss timer is not active */
+    /* commit 4 packets (pn=0..3); check that loss timer is not active */
     ok(quicly_sentmap_prepare(&loss.sentmap, 0, now, QUICLY_EPOCH_INITIAL) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10);
     ok(quicly_sentmap_prepare(&loss.sentmap, 1, now, QUICLY_EPOCH_INITIAL) == 0);
