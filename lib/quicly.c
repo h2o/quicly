@@ -1230,7 +1230,7 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
 
     if (ack_now) {
         conn->egress.send_ack_at = conn->stash.now;
-    } else if (conn->egress.send_ack_at == INT64_MAX) {
+    } else if (conn->egress.send_ack_at == INT64_MAX && space->unacked_count != 0) {
         conn->egress.send_ack_at = conn->stash.now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
@@ -3826,8 +3826,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     if (conn->application != NULL && (s->current.cipher = &conn->application->cipher.egress.key)->header_protection != NULL) {
         s->current.first_byte = conn->application->one_rtt_writable ? QUICLY_QUIC_BIT : QUICLY_PACKET_TYPE_0RTT;
         /* acks */
-        if (conn->application->one_rtt_writable && conn->egress.send_ack_at <= conn->stash.now &&
-            conn->application->super.unacked_count != 0) {
+        if (conn->application->one_rtt_writable && conn->application->super.unacked_count != 0) {
             if ((ret = send_ack(conn, &conn->application->super, s)) != 0)
                 goto Exit;
         }

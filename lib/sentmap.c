@@ -148,7 +148,7 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
     }
     iter->p->data.packet.frames_in_flight = 0;
 
-    int should_notify = packet.frames_in_flight,
+    int should_notify = event == QUICLY_SENTMAP_EVENT_ACKED || packet.frames_in_flight,
         should_discard = event == QUICLY_SENTMAP_EVENT_ACKED || event == QUICLY_SENTMAP_EVENT_EXPIRED;
 
     /* Advance to next packet, while if necessary, doing either or both of the following:
