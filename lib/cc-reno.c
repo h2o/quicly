@@ -81,7 +81,7 @@ static void quicly_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint
         cc->cwnd_minimum = cc->cwnd;
 }
 
-void quicly_reno_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
+static void quicly_reno_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
 {
     /* TODO */
 }

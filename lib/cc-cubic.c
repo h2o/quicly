@@ -146,7 +146,7 @@ static void quicly_cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uin
         cc->cwnd_minimum = cc->cwnd;
 }
 
-void quicly_cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
+static void quicly_cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
 {
     /* TODO */
 }
