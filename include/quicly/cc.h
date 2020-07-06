@@ -33,6 +33,7 @@ extern "C" {
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 #include "quicly/constants.h"
 #include "quicly/loss.h"
 
@@ -40,7 +41,11 @@ typedef enum {
     /**
      * Reno, with 0.7 beta reduction
      */
-    CC_RENO_MODIFIED
+    CC_RENO_MODIFIED,
+    /**
+     * CUBIC (RFC 8312)
+     */
+    CC_CUBIC
 } quicly_cc_type_t;
 
 typedef struct st_quicly_cc_conf_t {
@@ -99,6 +104,27 @@ typedef struct st_quicly_cc_t {
              */
             uint32_t stash;
         } reno;
+        /**
+         * State information for CUBIC congestion control.
+         */
+        struct {
+            /**
+             * Time offset from the latest congestion event until cwnd reaches W_max again.
+             */
+            double k;
+            /**
+             * Last cwnd value before the latest congestion event.
+             */
+            uint32_t w_max;
+            /**
+             * W_max value from the previous congestion event.
+             */
+            uint32_t w_last_max;
+            /**
+             * Timestamp of the latest congestion event.
+             */
+            clock_t avoidance_start;
+        } cubic;
     } state;
     /**
      * Initial congestion window.
@@ -130,6 +156,7 @@ struct st_quicly_cc_impl_t {
 };
 
 extern const struct st_quicly_cc_impl_t quicly_cc_reno_impl;
+extern const struct st_quicly_cc_impl_t quicly_cc_cubic_impl;
 
 /**
  * Initializes the congestion controller.
@@ -140,6 +167,9 @@ static inline void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf,
     cc->type = conf->type;
 
     switch (cc->type) {
+    case CC_CUBIC:
+        cc->impl = &quicly_cc_cubic_impl;
+        break;
     case CC_RENO_MODIFIED:
     default:
         cc->impl = &quicly_cc_reno_impl;

@@ -1,0 +1,155 @@
+/*
+ * Copyright (c) 2019 Fastly, Janardhan Iyengar
+ * Copyright (c) 2020 RWTH Aachen University, COMSYS Network Architectures Group, Leo Blöcher
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to
+ * deal in the Software without restriction, including without limitation the
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+
+#include <math.h>
+#include "quicly/cc.h"
+
+#define QUICLY_MIN_CWND 2
+
+typedef double cubic_float_t;
+#define QUICLY_CUBIC_C ((cubic_float_t)0.4)
+#define QUICLY_CUBIC_BETA ((cubic_float_t)0.7)
+
+/* Calculates the elapsed time since the last congestion event (parameter t) */
+static cubic_float_t calc_cubic_t(const quicly_cc_t *cc)
+{
+    cubic_float_t clock_delta = clock() - cc->state.cubic.avoidance_start;
+    return clock_delta / CLOCKS_PER_SEC;
+}
+
+/* Equation 1 (using bytes as unit instead of MSS) */
+static uint32_t calc_w_cubic(const quicly_cc_t *cc, cubic_float_t t_sec, uint32_t max_udp_payload_size)
+{
+    cubic_float_t tk = t_sec - cc->state.cubic.k;
+    return (QUICLY_CUBIC_C * (tk * tk * tk) * max_udp_payload_size) + cc->state.cubic.w_max;
+}
+
+/* Equation 2 */
+/* K depends solely on W_max, so we update both together on congestion events */
+static void update_cubic_k(quicly_cc_t *cc, uint32_t max_udp_payload_size)
+{
+    cubic_float_t w_max_mss = cc->state.cubic.w_max / (cubic_float_t)max_udp_payload_size;
+    cc->state.cubic.k = cbrt(w_max_mss * ((1 - QUICLY_CUBIC_BETA) / QUICLY_CUBIC_C));
+}
+
+/* Equation 4 (using bytes as unit instead of MSS) */
+static uint32_t calc_w_est(const quicly_cc_t *cc, cubic_float_t t_sec, cubic_float_t rtt_sec, uint32_t max_udp_payload_size)
+{
+    return (cc->state.cubic.w_max * QUICLY_CUBIC_BETA) +
+           ((3 * (1 - QUICLY_CUBIC_BETA) / (1 + QUICLY_CUBIC_BETA)) * (t_sec / rtt_sec) * max_udp_payload_size);
+}
+
+static void quicly_cubic_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd)
+{
+    cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
+    cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
+}
+
+/* TODO: Avoid increase if sender was application limited. */
+static void quicly_cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked,
+                                  uint32_t inflight, uint32_t max_udp_payload_size)
+{
+    assert(inflight >= bytes);
+    /* Do not increase congestion window while in recovery. */
+    if (largest_acked < cc->recovery_end)
+        return;
+
+    /* Slow start. */
+    if (cc->cwnd < cc->ssthresh) {
+        cc->cwnd += bytes;
+        if (cc->cwnd_maximum < cc->cwnd)
+            cc->cwnd_maximum = cc->cwnd;
+        return;
+    }
+
+    /* Congestion avoidance. */
+    cubic_float_t t_sec = calc_cubic_t(cc);
+    cubic_float_t rtt_sec = loss->rtt.smoothed / (cubic_float_t)1000; /* ms -> s */
+
+    uint32_t w_cubic = calc_w_cubic(cc, t_sec, max_udp_payload_size);
+    uint32_t w_est = calc_w_est(cc, t_sec, rtt_sec, max_udp_payload_size);
+
+    if (w_cubic < w_est) {
+        /* 4.2 TCP-Friendly Region */
+        /* Prevent cwnd from shrinking if W_est is reduced due to RTT increase */
+        if (w_est > cc->cwnd) {
+            cc->cwnd = w_est;
+            if (cc->cwnd_maximum < cc->cwnd)
+                cc->cwnd_maximum = cc->cwnd;
+        }
+    } else {
+        /* 4.3/4.4 CUBIC Region */
+        /* Prevent cwnd from shrinking after fast convergence (W_max < cwnd) */
+        cubic_float_t increment = calc_w_cubic(cc, t_sec + rtt_sec, max_udp_payload_size);
+        if (increment > cc->cwnd) {
+            /* (W_cubic(t+RTT) - cwnd)/cwnd * MSS = (W_cubic(t+RTT)/cwnd - 1) * MSS */
+            increment = ((increment / cc->cwnd) - 1) * max_udp_payload_size;
+            cc->cwnd += increment;
+            if (cc->cwnd_maximum < cc->cwnd)
+                cc->cwnd_maximum = cc->cwnd;
+        }
+    }
+}
+
+static void quicly_cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
+                                 uint32_t max_udp_payload_size)
+{
+    /* Nothing to do if loss is in recovery window. */
+    if (lost_pn < cc->recovery_end)
+        return;
+    cc->recovery_end = next_pn;
+
+    ++cc->num_loss_episodes;
+    if (cc->cwnd_exiting_slow_start == 0)
+        cc->cwnd_exiting_slow_start = cc->cwnd;
+
+    cc->state.cubic.avoidance_start = clock();
+    cc->state.cubic.w_max = cc->cwnd;
+
+    /* 4.6 Fast Convergence */
+    /* Zero initialisation ensures this condition is false during slow start */
+    if (cc->state.cubic.w_max < cc->state.cubic.w_last_max) {
+        cc->state.cubic.w_last_max = cc->state.cubic.w_max;
+        cc->state.cubic.w_max *= (1.0 + QUICLY_CUBIC_BETA) / 2.0;
+    } else {
+        cc->state.cubic.w_last_max = cc->state.cubic.w_max;
+    }
+    update_cubic_k(cc, max_udp_payload_size);
+
+    /* 4.5 Multiplicative Decrease */
+    cc->cwnd *= QUICLY_CUBIC_BETA;
+    if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
+        cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+    cc->ssthresh = cc->cwnd;
+
+    if (cc->cwnd_minimum > cc->cwnd)
+        cc->cwnd_minimum = cc->cwnd;
+}
+
+void quicly_cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
+{
+    /* TODO */
+}
+
+const struct st_quicly_cc_impl_t quicly_cc_cubic_impl = {quicly_cubic_init, quicly_cubic_on_acked, quicly_cubic_on_lost,
+                                                         quicly_cubic_on_persistent_congestion};
