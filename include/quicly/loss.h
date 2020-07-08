@@ -170,7 +170,7 @@ static int quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint32_t max_ack_
  */
 int quicly_loss_detect_loss(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, quicly_loss_on_detect_cb on_loss_detected);
 /**
- * initializes the sentmap iterator, eviting the entries considered too old.
+ * initializes the sentmap iterator, evicting the entries considered too old.
  */
 void quicly_loss_init_sentmap_iter(quicly_loss_t *loss, quicly_sentmap_iter_t *iter, int64_t now, uint32_t max_ack_delay,
                                    int is_closing);
