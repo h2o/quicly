@@ -59,15 +59,15 @@ static uint32_t calc_w_est(const quicly_cc_t *cc, cubic_float_t t_sec, cubic_flo
            ((3 * (1 - QUICLY_CUBIC_BETA) / (1 + QUICLY_CUBIC_BETA)) * (t_sec / rtt_sec) * max_udp_payload_size);
 }
 
-static void quicly_cubic_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd)
+static void cubic_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd)
 {
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
 /* TODO: Avoid increase if sender was application limited. */
-static void quicly_cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked,
-                                  uint32_t inflight, uint32_t max_udp_payload_size)
+static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
+                           uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
     /* Do not increase congestion window while in recovery. */
@@ -111,8 +111,8 @@ static void quicly_cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, ui
     }
 }
 
-static void quicly_cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
-                                 uint32_t max_udp_payload_size)
+static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
+                          uint32_t max_udp_payload_size)
 {
     /* Nothing to do if loss is in recovery window. */
     if (lost_pn < cc->recovery_end)
@@ -146,10 +146,9 @@ static void quicly_cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uin
         cc->cwnd_minimum = cc->cwnd;
 }
 
-static void quicly_cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
+static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
 {
     /* TODO */
 }
 
-const struct st_quicly_cc_impl_t quicly_cc_cubic_impl = {quicly_cubic_init, quicly_cubic_on_acked, quicly_cubic_on_lost,
-                                                         quicly_cubic_on_persistent_congestion};
+const struct st_quicly_cc_impl_t quicly_cc_cubic_impl = {cubic_init, cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion};

@@ -149,10 +149,23 @@ typedef struct st_quicly_cc_t {
 } quicly_cc_t;
 
 struct st_quicly_cc_impl_t {
-    void (*quicly_cc_init)(quicly_cc_t *, const quicly_cc_conf_t *, uint32_t);
-    void (*quicly_cc_on_acked)(quicly_cc_t *, const quicly_loss_t *, uint32_t, uint64_t, uint32_t, uint32_t);
-    void (*quicly_cc_on_lost)(quicly_cc_t *, const quicly_loss_t *, uint32_t, uint64_t, uint64_t, uint32_t);
-    void (*quicly_cc_on_persistent_congestion)(quicly_cc_t *, const quicly_loss_t *);
+    /**
+     * Initializes the congestion controller.
+     */
+    void (*cc_init)(quicly_cc_t *, const quicly_cc_conf_t *, uint32_t);
+    /**
+     * Called when a packet is newly acknowledged.
+     */
+    void (*cc_on_acked)(quicly_cc_t *, const quicly_loss_t *, uint32_t, uint64_t, uint32_t, uint32_t);
+    /**
+     * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
+     * used for setting the recovery window.
+     */
+    void (*cc_on_lost)(quicly_cc_t *, const quicly_loss_t *, uint32_t, uint64_t, uint64_t, uint32_t);
+    /**
+     * Called when persistent congestion is observed.
+     */
+    void (*cc_on_persistent_congestion)(quicly_cc_t *, const quicly_loss_t *);
 };
 
 extern const struct st_quicly_cc_impl_t quicly_cc_reno_impl;
@@ -175,34 +188,7 @@ static inline void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf,
         cc->impl = &quicly_cc_reno_impl;
         break;
     }
-    cc->impl->quicly_cc_init(cc, conf, initcwnd);
-}
-
-/**
- * Called when a packet is newly acknowledged.
- */
-static inline void quicly_cc_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked,
-                                      uint32_t inflight, uint32_t max_udp_payload_size)
-{
-    cc->impl->quicly_cc_on_acked(cc, loss, bytes, largest_acked, inflight, max_udp_payload_size);
-}
-
-/**
- * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
- * used for setting the recovery window.
- */
-static inline void quicly_cc_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
-                                     uint32_t max_udp_payload_size)
-{
-    cc->impl->quicly_cc_on_lost(cc, loss, bytes, lost_pn, next_pn, max_udp_payload_size);
-}
-
-/**
- * Called when persistent congestion is observed.
- */
-static inline void quicly_cc_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
-{
-    cc->impl->quicly_cc_on_persistent_congestion(cc, loss);
+    cc->impl->cc_init(cc, conf, initcwnd);
 }
 
 /**
