@@ -290,7 +290,7 @@ inline quicly_sent_t *quicly_sentmap_allocate(quicly_sentmap_t *map, quicly_sent
 
 inline void quicly_sentmap_init_iter(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter)
 {
-    /* setup the iterator */
+    /* set up the iterator */
     iter->ref = &map->head;
     if (map->head != NULL) {
         assert(map->head->num_entries != 0);
