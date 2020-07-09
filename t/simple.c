@@ -90,8 +90,8 @@ static void test_handshake(void)
         ok(ret == 0);
     }
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
-    ok(quicly_get_first_timeout(server) > quic_now + quic_ctx.transport_params.max_ack_delay);
-    quic_now = quicly_get_first_timeout(server);
+    ok(quicly_get_first_timeout(client) == quic_now + QUICLY_DELAYED_ACK_TIMEOUT);
+    quic_now = quicly_get_first_timeout(client);
     num_packets = PTLS_ELEMENTSOF(packets);
     ret = quicly_send(client, &dest, &src, packets, &num_packets, packetsbuf, sizeof(packetsbuf));
     ok(ret == 0);
