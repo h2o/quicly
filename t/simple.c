@@ -138,6 +138,7 @@ static void simple_http(void)
     quicly_streambuf_egress_shutdown(server_stream);
     ok(quicly_num_streams(server) == 1);
 
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(server, client);
 
     ok(client_streambuf->is_detached);
