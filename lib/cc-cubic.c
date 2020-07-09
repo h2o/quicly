@@ -30,11 +30,11 @@ typedef double cubic_float_t;
 #define QUICLY_CUBIC_C ((cubic_float_t)0.4)
 #define QUICLY_CUBIC_BETA ((cubic_float_t)0.7)
 
-/* Calculates the elapsed time since the last congestion event (parameter t) */
-static cubic_float_t calc_cubic_t(const quicly_cc_t *cc)
+/* Calculates the time elapsed since the last congestion event (parameter t) */
+static cubic_float_t calc_cubic_t(const quicly_cc_t *cc, int64_t now)
 {
-    cubic_float_t clock_delta = clock() - cc->state.cubic.avoidance_start;
-    return clock_delta / CLOCKS_PER_SEC;
+    cubic_float_t clock_delta = now - cc->state.cubic.avoidance_start;
+    return clock_delta / 1000; /* ms -> s */
 }
 
 /* Equation 1 (using bytes as unit instead of MSS) */
@@ -59,7 +59,7 @@ static uint32_t calc_w_est(const quicly_cc_t *cc, cubic_float_t t_sec, cubic_flo
            ((3 * (1 - QUICLY_CUBIC_BETA) / (1 + QUICLY_CUBIC_BETA)) * (t_sec / rtt_sec) * max_udp_payload_size);
 }
 
-static void cubic_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd)
+static void cubic_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd, int64_t now)
 {
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
@@ -67,7 +67,7 @@ static void cubic_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t i
 
 /* TODO: Avoid increase if sender was application limited. */
 static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                           uint32_t max_udp_payload_size)
+                           int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
     /* Do not increase congestion window while in recovery. */
@@ -83,7 +83,7 @@ static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t 
     }
 
     /* Congestion avoidance. */
-    cubic_float_t t_sec = calc_cubic_t(cc);
+    cubic_float_t t_sec = calc_cubic_t(cc, now);
     cubic_float_t rtt_sec = loss->rtt.smoothed / (cubic_float_t)1000; /* ms -> s */
 
     uint32_t w_cubic = calc_w_cubic(cc, t_sec, max_udp_payload_size);
@@ -99,7 +99,7 @@ static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t 
         }
     } else {
         /* 4.3/4.4 CUBIC Region */
-        /* Prevent cwnd from shrinking after fast convergence (W_max < cwnd) */
+        /* Prevent cwnd from shrinking after fast convergence (beta*W_max < cwnd) */
         cubic_float_t increment = calc_w_cubic(cc, t_sec + rtt_sec, max_udp_payload_size);
         if (increment > cc->cwnd) {
             /* (W_cubic(t+RTT) - cwnd)/cwnd * MSS = (W_cubic(t+RTT)/cwnd - 1) * MSS */
@@ -112,7 +112,7 @@ static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t 
 }
 
 static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
-                          uint32_t max_udp_payload_size)
+                          int64_t now, uint32_t max_udp_payload_size)
 {
     /* Nothing to do if loss is in recovery window. */
     if (lost_pn < cc->recovery_end)
@@ -123,7 +123,7 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (cc->cwnd_exiting_slow_start == 0)
         cc->cwnd_exiting_slow_start = cc->cwnd;
 
-    cc->state.cubic.avoidance_start = clock();
+    cc->state.cubic.avoidance_start = now;
     cc->state.cubic.w_max = cc->cwnd;
 
     /* 4.6 Fast Convergence */
@@ -146,7 +146,7 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         cc->cwnd_minimum = cc->cwnd;
 }
 
-static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss)
+static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
 {
     /* TODO */
 }

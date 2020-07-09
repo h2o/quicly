@@ -33,7 +33,6 @@ extern "C" {
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
-#include <time.h>
 #include "quicly/constants.h"
 #include "quicly/loss.h"
 
@@ -123,7 +122,7 @@ typedef struct st_quicly_cc_t {
             /**
              * Timestamp of the latest congestion event.
              */
-            clock_t avoidance_start;
+            int64_t avoidance_start;
         } cubic;
     } state;
     /**
@@ -152,20 +151,22 @@ struct st_quicly_cc_impl_t {
     /**
      * Initializes the congestion controller.
      */
-    void (*cc_init)(quicly_cc_t *, const quicly_cc_conf_t *, uint32_t);
+    void (*cc_init)(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd, int64_t now);
     /**
      * Called when a packet is newly acknowledged.
      */
-    void (*cc_on_acked)(quicly_cc_t *, const quicly_loss_t *, uint32_t, uint64_t, uint32_t, uint32_t);
+    void (*cc_on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
+                        int64_t now, uint32_t max_udp_payload_size);
     /**
      * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
      * used for setting the recovery window.
      */
-    void (*cc_on_lost)(quicly_cc_t *, const quicly_loss_t *, uint32_t, uint64_t, uint64_t, uint32_t);
+    void (*cc_on_lost)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, int64_t now,
+                       uint32_t max_udp_payload_size);
     /**
      * Called when persistent congestion is observed.
      */
-    void (*cc_on_persistent_congestion)(quicly_cc_t *, const quicly_loss_t *);
+    void (*cc_on_persistent_congestion)(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
 };
 
 extern const struct st_quicly_cc_impl_t quicly_cc_reno_impl;
@@ -174,7 +175,7 @@ extern const struct st_quicly_cc_impl_t quicly_cc_cubic_impl;
 /**
  * Initializes the congestion controller.
  */
-static inline void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd)
+static inline void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd, int64_t now)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
     cc->type = conf->type;
@@ -188,7 +189,7 @@ static inline void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf,
         cc->impl = &quicly_cc_reno_impl;
         break;
     }
-    cc->impl->cc_init(cc, conf, initcwnd);
+    cc->impl->cc_init(cc, conf, initcwnd, now);
 }
 
 /**
