@@ -56,7 +56,7 @@ static void test_handshake(void)
     ok(ret == 0);
     ok(num_packets != 0);
 
-    /* receive ServerFinished, send ClientFinished */
+    /* receive server flight upto ServerFinished, send ClientFinished */
     num_decoded = decode_packets(decoded, packets, num_packets);
     for (i = 0; i != num_decoded; ++i) {
         ret = quicly_receive(client, NULL, &fake_address.sa, decoded + i);
