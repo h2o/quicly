@@ -1230,7 +1230,7 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
 
     if (ack_now) {
         conn->egress.send_ack_at = conn->stash.now;
-    } else if (conn->egress.send_ack_at == INT64_MAX) {
+    } else if (conn->egress.send_ack_at == INT64_MAX && space->unacked_count != 0) {
         conn->egress.send_ack_at = conn->stash.now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
