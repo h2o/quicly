@@ -3869,7 +3869,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     if (conn->application != NULL && (s->current.cipher = &conn->application->cipher.egress.key)->header_protection != NULL) {
         s->current.first_byte = conn->application->one_rtt_writable ? QUICLY_QUIC_BIT : QUICLY_PACKET_TYPE_0RTT;
         /* acks */
-        if (conn->application->one_rtt_writable && conn->application->super.unacked_count != 0) {
+        if (conn->application->one_rtt_writable && conn->egress.send_ack_at <= conn->stash.now &&
+            conn->application->super.unacked_count != 0) {
             if ((ret = send_ack(conn, &conn->application->super, s)) != 0)
                 goto Exit;
         }
