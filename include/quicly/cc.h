@@ -47,33 +47,12 @@ typedef enum {
     CC_CUBIC
 } quicly_cc_type_t;
 
-typedef struct st_quicly_cc_conf_t {
-    /**
-     * Congestion controller type.
-     */
-    quicly_cc_type_t type;
-} quicly_cc_conf_t;
-
-#define QUICLY_CC_SPEC_CONF                                                                                                        \
-    {                                                                                                                              \
-        CC_RENO_MODIFIED /* type */                                                                                                \
-    }
-
-#define QUICLY_CC_PERFORMANT_CONF                                                                                                  \
-    {                                                                                                                              \
-        CC_RENO_MODIFIED /* type */                                                                                                \
-    }
-
 /**
  * Holds pointers to concrete congestion control implementation functions.
  */
 struct st_quicly_cc_impl_t;
 
 typedef struct st_quicly_cc_t {
-    /**
-     * Congestion controller type.
-     */
-    quicly_cc_type_t type;
     /**
      * Congestion controller implementation.
      */
@@ -149,9 +128,9 @@ typedef struct st_quicly_cc_t {
 
 struct st_quicly_cc_impl_t {
     /**
-     * Initializes the congestion controller.
+     * Congestion controller type.
      */
-    void (*cc_init)(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd, int64_t now);
+    quicly_cc_type_t type;
     /**
      * Called when a packet is newly acknowledged.
      */
@@ -169,28 +148,11 @@ struct st_quicly_cc_impl_t {
     void (*cc_on_persistent_congestion)(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
 };
 
-extern const struct st_quicly_cc_impl_t quicly_cc_reno_impl;
-extern const struct st_quicly_cc_impl_t quicly_cc_cubic_impl;
-
 /**
  * Initializes the congestion controller.
  */
-static inline void quicly_cc_init(quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint32_t initcwnd, int64_t now)
-{
-    memset(cc, 0, sizeof(quicly_cc_t));
-    cc->type = conf->type;
-
-    switch (cc->type) {
-    case CC_CUBIC:
-        cc->impl = &quicly_cc_cubic_impl;
-        break;
-    case CC_RENO_MODIFIED:
-    default:
-        cc->impl = &quicly_cc_reno_impl;
-        break;
-    }
-    cc->impl->cc_init(cc, conf, initcwnd, now);
-}
+void quicly_cc_reno_init(quicly_cc_t *cc, uint32_t initcwnd);
+void quicly_cc_cubic_init(quicly_cc_t *cc, uint32_t initcwnd);
 
 /**
  * Calculates the initial congestion window size given the maximum UDP payload size.

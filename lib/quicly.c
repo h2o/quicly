@@ -1888,7 +1888,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
     conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
     conn->egress.ack_frequency.update_at = INT64_MAX;
     conn->egress.send_ack_at = INT64_MAX;
-    quicly_cc_init(&conn->egress.cc, &conn->super.ctx->cc, initcwnd, conn->stash.now);
+    conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->stash.now);
     quicly_retire_cid_init(&conn->egress.retire_cid);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);

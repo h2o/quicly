@@ -139,6 +139,11 @@ QUICLY_CALLBACK_TYPE(int, save_resumption_token, quicly_conn_t *conn, ptls_iovec
 QUICLY_CALLBACK_TYPE(int, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
                      quicly_address_token_plaintext_t *token);
 /**
+ * called to initialize a congestion controller for a new connection.
+ * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
+ */
+QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int64_t now);
+/**
  * crypto offload API
  */
 typedef struct st_quicly_crypto_engine_t {
@@ -295,9 +300,9 @@ struct st_quicly_context_t {
      */
     quicly_crypto_engine_t *crypto_engine;
     /**
-     * congestion control parameters
+     * initializes a congestion controller for given connection.
      */
-    quicly_cc_conf_t cc;
+    quicly_init_cc_t *init_cc;
 };
 
 /**
