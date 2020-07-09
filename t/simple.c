@@ -106,8 +106,8 @@ static void test_handshake(void)
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
 
     /* both endpoints have nothing to send */
-    ok(quicly_get_first_timeout(server) >= quic_now + quic_ctx.transport_params.max_idle_timeout);
-    ok(quicly_get_first_timeout(client) >= quic_now + quic_ctx.transport_params.max_idle_timeout);
+    ok(quicly_get_first_timeout(server) == quic_now + quic_ctx.transport_params.max_idle_timeout);
+    ok(quicly_get_first_timeout(client) == quic_now + quic_ctx.transport_params.max_idle_timeout);
 }
 
 static void simple_http(void)
