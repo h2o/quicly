@@ -1230,7 +1230,7 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
 
     if (ack_now) {
         conn->egress.send_ack_at = conn->stash.now;
-    } else if (conn->egress.send_ack_at == INT64_MAX) {
+    } else if (conn->egress.send_ack_at == INT64_MAX && space->unacked_count != 0) {
         conn->egress.send_ack_at = conn->stash.now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
@@ -3255,24 +3255,25 @@ int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs)
     return ret;
 }
 
-static int mark_packets_on_pto(quicly_conn_t *conn)
+/**
+ * Mark frames of given epoch as pending, until `*bytes_to_mark` becomes zero.
+ */
+static int mark_frames_on_pto(quicly_conn_t *conn, uint8_t ack_epoch, size_t *bytes_to_mark)
 {
-    int64_t mark_no_later_than =
-        conn->stash.now -
-        quicly_rtt_get_pto(&conn->egress.loss.rtt,
-                           conn->initial != NULL || conn->handshake != NULL ? 0 : conn->super.remote.transport_params.max_ack_delay,
-                           conn->egress.loss.conf->min_pto);
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
     int ret;
 
     init_acks_iter(conn, &iter);
 
-    while ((sent = quicly_sentmap_get(&iter))->sent_at <= mark_no_later_than) {
-        if (sent->frames_in_flight) {
+    while ((sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
+        if (sent->ack_epoch == ack_epoch && sent->frames_in_flight) {
+            *bytes_to_mark = *bytes_to_mark > sent->cc_bytes_in_flight ? *bytes_to_mark - sent->cc_bytes_in_flight : 0;
             if ((ret = quicly_sentmap_update(&conn->egress.loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_PTO)) != 0)
                 return ret;
             assert(!sent->frames_in_flight);
+            if (*bytes_to_mark == 0)
+                break;
         } else {
             quicly_sentmap_skip(&iter);
         }
@@ -3800,11 +3801,21 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         assert(min_packets_to_send <= s->max_datagrams);
 
         if (restrict_sending) {
-            /* PTO (try to send new data when handshake is done, otherwise retire oldest handshake packets and retransmit) */
+            /* PTO: when handshake is in progress, send from the very first unacknowledged byte so as to maximize the chance of
+             * making progress. When handshake is complete, transmit new data if any, else retransmit the oldest unacknowledged data
+             * that is considered inflight. */
             QUICLY_PROBE(PTO, conn, conn->stash.now, conn->egress.loss.sentmap.bytes_in_flight, conn->egress.cc.cwnd,
                          conn->egress.loss.pto_count);
             ++conn->super.stats.num_ptos;
-            if ((ret = mark_packets_on_pto(conn)) != 0)
+            size_t bytes_to_mark = min_packets_to_send * conn->egress.max_udp_payload_size;
+            if (conn->initial != NULL && (ret = mark_frames_on_pto(conn, QUICLY_EPOCH_INITIAL, &bytes_to_mark)) != 0)
+                goto Exit;
+            if (bytes_to_mark != 0 && conn->handshake != NULL &&
+                (ret = mark_frames_on_pto(conn, QUICLY_EPOCH_HANDSHAKE, &bytes_to_mark)) != 0)
+                goto Exit;
+            /* Mark already sent 1-RTT data for PTO only if there's no new data, i.e., when scheduler_can_send() return false. */
+            if (bytes_to_mark != 0 && !scheduler_can_send(conn) &&
+                (ret = mark_frames_on_pto(conn, QUICLY_EPOCH_1RTT, &bytes_to_mark)) != 0)
                 goto Exit;
         }
     }
