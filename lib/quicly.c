@@ -1103,16 +1103,16 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     stats->cc = conn->egress.cc;
     stats->duration = conn->stash.now - conn->conn_start_at;
     stats->version = conn->super.version;
-    stats->max_packet_size = conn->egress.max_udp_payload_size;
+    stats->max_udp_payload_size = conn->egress.max_udp_payload_size;
 
-    stats->largest_allowed_local_uni_stream_id = conn->egress.max_streams.uni.count * 4  + 2 + !quicly_is_client(conn);
-    stats->largest_open_local_uni_stream_id =  (conn->super.local.uni.next_stream_id < 4) ? conn->super.local.uni.next_stream_id : conn->super.local.uni.next_stream_id - 4;
-    stats->largest_allowed_local_bidi_stream_id = conn->egress.max_streams.bidi.count * 4  + !quicly_is_client(conn);
-    stats->largest_open_local_bidi_stream_id =  (conn->super.local.bidi.next_stream_id < 4) ? conn->super.local.bidi.next_stream_id : conn->super.local.bidi.next_stream_id - 4;
-    stats->largest_allowed_remote_uni_stream_id = conn->ingress.max_streams.uni.max_committed * 4  + 2 + quicly_is_client(conn);
-    stats->largest_open_remote_uni_stream_id =  (conn->super.remote.uni.next_stream_id < 4) ? conn->super.remote.uni.next_stream_id : conn->super.remote.uni.next_stream_id - 4;
-    stats->largest_allowed_remote_bidi_stream_id = conn->ingress.max_streams.bidi.max_committed * 4  + quicly_is_client(conn);;
-    stats->largest_open_remote_bidi_stream_id =  (conn->super.remote.bidi.next_stream_id < 4) ? conn->super.remote.bidi.next_stream_id : conn->super.remote.bidi.next_stream_id - 4;
+    stats->allowed_local_uni_streams = conn->egress.max_streams.uni.count;
+    stats->opened_local_uni_streams =  conn->super.local.uni.next_stream_id / 4;
+    stats->allowed_local_bidi_streams = conn->egress.max_streams.bidi.count;
+    stats->opened_local_bidi_streams =  conn->super.local.bidi.next_stream_id / 4;
+    stats->allowed_remote_uni_streams = conn->ingress.max_streams.uni.max_committed;
+    stats->opened_remote_uni_streams =  conn->super.remote.uni.next_stream_id / 4;
+    stats->allowed_remote_bidi_streams = conn->ingress.max_streams.bidi.max_committed;
+    stats->opened_remote_bidi_streams =  conn->super.remote.bidi.next_stream_id / 4;
     return 0;
 }
 

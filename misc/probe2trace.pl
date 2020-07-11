@@ -126,9 +126,9 @@ for my $probe (@probes) {
             push @fmt, qq("num_ptos":\%u);
             push @fmt, qq("duration":\%llu);
             push @fmt, qq("version":\%u);
-            push @fmt, qq("max_packet_size":\%u);
-            push @fmt, map {qq("largest_allowed_$_":\%llu)} qw(local_uni_stream_id local_bidi_stream_id remote_uni_stream_id remote_bidi_stream_id);
-            push @fmt, map {qq("largest_open_$_":\%llu)} qw(local_uni_stream_id local_bidi_stream_id remote_uni_stream_id remote_bidi_stream_id);
+            push @fmt, qq("max_udp_payload_size":\%u);
+            push @fmt, map {qq("allowed_$_":\%llu)} qw(local_uni_streams local_bidi_streams remote_uni_streams remote_bidi_streams);
+            push @fmt, map {qq("opened_$_":\%llu)} qw(local_uni_streams local_bidi_streams remote_uni_streams remote_bidi_streams);
             if ($arch eq 'linux') {
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->rtt.$_"} qw(minimum smoothed variance);
                 push @ap, map{"((struct st_quicly_stats_t *)arg$i)->cc.$_"} qw(type cwnd ssthresh cwnd_initial cwnd_exiting_slow_start cwnd_minimum cwnd_maximum num_loss_episodes);
@@ -138,9 +138,9 @@ for my $probe (@probes) {
                 push @ap, "((struct st_quicly_stats_t *)arg$i)->num_ptos";
                 push @ap, "((struct st_quicly_stats_t *)arg$i)->duration";
                 push @ap, "((struct st_quicly_stats_t *)arg$i)->version";
-                push @ap, "((struct st_quicly_stats_t *)arg$i)->max_packet_size";
-                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->largest_allowed_$_"} qw(local_uni_stream_id local_bidi_stream_id remote_uni_stream_id remote_bidi_stream_id);
-                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->largest_open_$_"} qw(local_uni_stream_id local_bidi_stream_id remote_uni_stream_id remote_bidi_stream_id);
+                push @ap, "((struct st_quicly_stats_t *)arg$i)->max_udp_payload_size";
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->allowed_$_"} qw(local_uni_streams local_bidi_streams remote_uni_streams remote_bidi_streams);
+                push @ap, map{"((struct st_quicly_stats_t *)arg$i)->opened_$_"} qw(local_uni_streams local_bidi_streams remote_uni_streams remote_bidi_streams);
             } else {
                 push @ap, map{"arg${i}->rtt.$_"} qw(minimum smoothed variance);
                 push @ap, map{"arg${i}->cc.$_"} qw(type cwnd ssthresh cwnd_initial cwnd_exiting_slow_start cwnd_minimum cwnd_maximum num_loss_episodes);
@@ -150,9 +150,9 @@ for my $probe (@probes) {
                 push @ap, "arg${i}->num_ptos";
                 push @ap, "(unsigned long long)arg${i}->duration";
                 push @ap, "arg${i}->version";
-                push @ap, "arg${i}->max_packet_size";
-                push @ap, map{"(unsigned long long)arg${i}->largest_allowed_$_"} qw(local_uni_stream_id local_bidi_stream_id remote_uni_stream_id remote_bidi_stream_id);
-                push @ap, map{"(unsigned long long)arg${i}->largest_open_$_"} qw(local_uni_stream_id local_bidi_stream_id remote_uni_stream_id remote_bidi_stream_id);
+                push @ap, "arg${i}->max_udp_payload_size";
+                push @ap, map{"(unsigned long long)arg${i}->allowed_$_"} qw(local_uni_streams local_bidi_streams remote_uni_streams remote_bidi_streams);
+                push @ap, map{"(unsigned long long)arg${i}->opened_$_"} qw(local_uni_streams local_bidi_streams remote_uni_streams remote_bidi_streams);
             }
         } else {
             $name = 'time'

@@ -427,23 +427,23 @@ typedef struct st_quicly_stats_t {
      */
     uint32_t version;
     /**
-     * Maximum packet size used.
+     * Maximum UDP payload size used.
      */
-    uint16_t max_packet_size;
+    uint16_t max_udp_payload_size;
     /**
-     * Largest allowed and largest opened stream of each type, for locally created streams.
+     * Number of allowed and opened streams of each type, for locally created streams.
      */
-    quicly_stream_id_t largest_allowed_local_uni_stream_id;
-    quicly_stream_id_t largest_open_local_uni_stream_id;
-    quicly_stream_id_t largest_allowed_local_bidi_stream_id;
-    quicly_stream_id_t largest_open_local_bidi_stream_id;
+    quicly_stream_id_t allowed_local_uni_streams;
+    quicly_stream_id_t opened_local_uni_streams;
+    quicly_stream_id_t allowed_local_bidi_streams;
+    quicly_stream_id_t opened_local_bidi_streams;
     /**
-     * Largest allowed and largest opened stream of each type, for streams created by remote endpoint.
+     * Number of allowed and opened streams of each type, for streams created by remote endpoint.
      */
-    quicly_stream_id_t largest_allowed_remote_uni_stream_id;
-    quicly_stream_id_t largest_open_remote_uni_stream_id;
-    quicly_stream_id_t largest_allowed_remote_bidi_stream_id;
-    quicly_stream_id_t largest_open_remote_bidi_stream_id;
+    quicly_stream_id_t allowed_remote_uni_streams;
+    quicly_stream_id_t opened_remote_uni_streams;
+    quicly_stream_id_t allowed_remote_bidi_streams;
+    quicly_stream_id_t opened_remote_bidi_streams;
 } quicly_stats_t;
 
 /**
