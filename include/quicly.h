@@ -126,7 +126,8 @@ QUICLY_CALLBACK_TYPE(int, stream_open, quicly_stream_t *stream);
 QUICLY_CALLBACK_TYPE(void, closed_by_remote, quicly_conn_t *conn, int err, uint64_t frame_type, const char *reason,
                      size_t reason_len);
 /**
- * returns current time in milliseconds
+ * Returns current time in milliseconds. The returned value MUST monotonically increase (i.e., it is the responsibility of the
+ * callback implementation to guarantee that the returned value never goes back to the past).
  */
 QUICLY_CALLBACK_TYPE0(int64_t, now);
 /**
