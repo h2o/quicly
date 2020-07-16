@@ -37,14 +37,14 @@ static cubic_float_t calc_cubic_t(const quicly_cc_t *cc, int64_t now)
     return clock_delta / 1000; /* ms -> s */
 }
 
-/* Equation 1 (using bytes as unit instead of MSS) */
+/* RFC 8312, Equation 1; using bytes as unit instead of MSS */
 static uint32_t calc_w_cubic(const quicly_cc_t *cc, cubic_float_t t_sec, uint32_t max_udp_payload_size)
 {
     cubic_float_t tk = t_sec - cc->state.cubic.k;
     return (QUICLY_CUBIC_C * (tk * tk * tk) * max_udp_payload_size) + cc->state.cubic.w_max;
 }
 
-/* Equation 2 */
+/* RFC 8312, Equation 2 */
 /* K depends solely on W_max, so we update both together on congestion events */
 static void update_cubic_k(quicly_cc_t *cc, uint32_t max_udp_payload_size)
 {
@@ -52,7 +52,7 @@ static void update_cubic_k(quicly_cc_t *cc, uint32_t max_udp_payload_size)
     cc->state.cubic.k = cbrt(w_max_mss * ((1 - QUICLY_CUBIC_BETA) / QUICLY_CUBIC_C));
 }
 
-/* Equation 4 (using bytes as unit instead of MSS) */
+/* RFC 8312, Equation 4; using bytes as unit instead of MSS */
 static uint32_t calc_w_est(const quicly_cc_t *cc, cubic_float_t t_sec, cubic_float_t rtt_sec, uint32_t max_udp_payload_size)
 {
     return (cc->state.cubic.w_max * QUICLY_CUBIC_BETA) +
@@ -84,25 +84,22 @@ static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t 
     uint32_t w_est = calc_w_est(cc, t_sec, rtt_sec, max_udp_payload_size);
 
     if (w_cubic < w_est) {
-        /* 4.2 TCP-Friendly Region */
+        /* RFC 8312, Section 4.2; TCP-Friendly Region */
         /* Prevent cwnd from shrinking if W_est is reduced due to RTT increase */
-        if (w_est > cc->cwnd) {
+        if (w_est > cc->cwnd)
             cc->cwnd = w_est;
-            if (cc->cwnd_maximum < cc->cwnd)
-                cc->cwnd_maximum = cc->cwnd;
-        }
     } else {
-        /* 4.3/4.4 CUBIC Region */
-        /* Prevent cwnd from shrinking after fast convergence (beta*W_max < cwnd) */
-        cubic_float_t increment = calc_w_cubic(cc, t_sec + rtt_sec, max_udp_payload_size);
-        if (increment > cc->cwnd) {
+        /* RFC 8312, Section 4.3/4.4; CUBIC Region */
+        cubic_float_t w_cubic_target = calc_w_cubic(cc, t_sec + rtt_sec, max_udp_payload_size);
+        /* After fast convergence W_max < W_last_max holds, and hence W_cubic(0) = beta * W_max < beta * W_last_max = cwnd.
+         * cwnd could thus shrink without this check (but only after fast convergence). */
+        if (w_cubic_target > cc->cwnd)
             /* (W_cubic(t+RTT) - cwnd)/cwnd * MSS = (W_cubic(t+RTT)/cwnd - 1) * MSS */
-            increment = ((increment / cc->cwnd) - 1) * max_udp_payload_size;
-            cc->cwnd += increment;
-            if (cc->cwnd_maximum < cc->cwnd)
-                cc->cwnd_maximum = cc->cwnd;
-        }
+            cc->cwnd += ((w_cubic_target / cc->cwnd) - 1) * max_udp_payload_size;
     }
+
+    if (cc->cwnd_maximum < cc->cwnd)
+        cc->cwnd_maximum = cc->cwnd;
 }
 
 static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
@@ -120,8 +117,8 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     cc->state.cubic.avoidance_start = now;
     cc->state.cubic.w_max = cc->cwnd;
 
-    /* 4.6 Fast Convergence */
-    /* Zero initialisation ensures this condition is false during slow start */
+    /* RFC 8312, Section 4.6; Fast Convergence */
+    /* w_last_max is initialized to zero; therefore this condition is false when exiting slow start */
     if (cc->state.cubic.w_max < cc->state.cubic.w_last_max) {
         cc->state.cubic.w_last_max = cc->state.cubic.w_max;
         cc->state.cubic.w_max *= (1.0 + QUICLY_CUBIC_BETA) / 2.0;
@@ -130,7 +127,7 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     }
     update_cubic_k(cc, max_udp_payload_size);
 
-    /* 4.5 Multiplicative Decrease */
+    /* RFC 8312, Section 4.5; Multiplicative Decrease */
     cc->cwnd *= QUICLY_CUBIC_BETA;
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
