@@ -114,6 +114,7 @@ provider quicly {
     probe quictrace_cc_ack(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd, size_t inflight);
     probe quictrace_cc_lost(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd, size_t inflight);
 
+    probe stream_on_open(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream);
     probe stream_on_destroy(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, int err);
     probe stream_on_send_shift(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, size_t delta);
     probe stream_on_send_emit(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, size_t off,

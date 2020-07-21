@@ -4224,6 +4224,7 @@ static int get_stream_or_open_if_new(quicly_conn_t *conn, uint64_t stream_id, qu
                     ret = PTLS_ERROR_NO_MEMORY;
                     goto Exit;
                 }
+                QUICLY_PROBE(STREAM_ON_OPEN, conn, conn->stash.now, *stream);
                 if ((ret = conn->super.ctx->stream_open->cb(conn->super.ctx->stream_open, *stream)) != 0) {
                     *stream = NULL;
                     goto Exit;
@@ -5424,6 +5425,7 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
     }
 
     /* application-layer initialization */
+    QUICLY_PROBE(STREAM_ON_OPEN, conn, conn->stash.now, stream);
     if ((ret = conn->super.ctx->stream_open->cb(conn->super.ctx->stream_open, stream)) != 0)
         return ret;
 
