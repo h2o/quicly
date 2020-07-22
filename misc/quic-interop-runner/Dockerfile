@@ -8,11 +8,11 @@ RUN apt-get update && \
 
 RUN cd /
 
-# quicly
-RUN git clone https://github.com/h2o/quicly.git
-
 # build with --build-arg CACHEBUST=$(date +%s)
 ARG CACHEBUST=1
+
+# quicly
+RUN git clone https://github.com/h2o/quicly.git
 
 RUN cd quicly &&  git pull && git submodule update --init --recursive && cmake . && make
 COPY server.key quicly
