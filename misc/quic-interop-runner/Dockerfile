@@ -1,4 +1,4 @@
-FROM kazuho/h2o-ci:ubuntu1904
+FROM h2oserver/h2o-ci:ubuntu2004
 
 USER root
 WORKDIR /
