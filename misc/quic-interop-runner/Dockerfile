@@ -6,8 +6,6 @@ WORKDIR /
 RUN apt-get update && \
   apt-get install -y net-tools iputils-ping tcpdump ethtool iperf
 
-RUN cd /
-
 # build with --build-arg CACHEBUST=$(date +%s)
 ARG CACHEBUST=1
 
