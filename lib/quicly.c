@@ -2848,22 +2848,13 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
         s->dst = s->payload_buf.datagram + max_size;
     }
 
-    /* encode packet size, packet number, key-phase */
+    /* encode packet size */
     if (QUICLY_PACKET_IS_LONG_HEADER(*s->target.first_byte_at)) {
         uint16_t length = s->dst - s->dst_payload_from + s->target.cipher->aead->algo->tag_size + QUICLY_SEND_PN_SIZE;
         /* length is always 2 bytes, see _do_prepare_packet */
         length |= 0x4000;
         quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE - 2, length);
-    } else {
-        if (conn->egress.packet_number >= conn->application->cipher.egress.key_update_pn.next) {
-            int ret;
-            if ((ret = update_1rtt_egress_key(conn)) != 0)
-                return ret;
-        }
-        if ((conn->application->cipher.egress.key_phase & 1) != 0)
-            *s->target.first_byte_at |= QUICLY_KEY_PHASE_BIT;
     }
-    quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE, (uint16_t)conn->egress.packet_number);
 
     /* encrypt the packet */
     s->dst += s->target.cipher->aead->algo->tag_size;
@@ -3013,8 +3004,16 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         *s->dst++ = 0;
     } else {
         s->dst = emit_cid(s->dst, &conn->super.remote.cid_set.cids[0].cid);
+        /* set the key-phase bit, as well as updating 1rtt key if necessary */
+        if (conn->egress.packet_number >= conn->application->cipher.egress.key_update_pn.next) {
+            int ret;
+            if ((ret = update_1rtt_egress_key(conn)) != 0)
+                return ret;
+        }
+        if ((conn->application->cipher.egress.key_phase & 1) != 0)
+            *s->target.first_byte_at |= QUICLY_KEY_PHASE_BIT;
     }
-    s->dst += QUICLY_SEND_PN_SIZE; /* space for PN bits, filled in at commit time */
+    s->dst = quicly_encode16(s->dst, (uint16_t)conn->egress.packet_number); /* packet number */
     s->dst_payload_from = s->dst;
     assert(s->target.cipher->aead != NULL);
     s->dst_end -= s->target.cipher->aead->algo->tag_size;
