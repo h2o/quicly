@@ -1284,7 +1284,7 @@ static void free_application_space(struct st_quicly_application_space_t **space)
 #undef DISPOSE_INGRESS
         if ((*space)->cipher.egress.key.aead != NULL)
             dispose_cipher(&(*space)->cipher.egress.key);
-        memset((*space)->cipher.egress.secret, 0, sizeof((*space)->cipher.egress.secret));
+        ptls_clear_memory((*space)->cipher.egress.secret, sizeof((*space)->cipher.egress.secret));
         do_free_pn_space(&(*space)->super);
         *space = NULL;
     }
