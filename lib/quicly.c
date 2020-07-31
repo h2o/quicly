@@ -577,7 +577,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
             packet->cid.dest.might_be_client_generated = 0;
             break;
         }
-        if (packet->version != QUICLY_PROTOCOL_VERSION) {
+        if (packet->version != QUICLY_PROTOCOL_VERSION_CURRENT) {
             /* VN packet or packets of unknown version cannot be parsed. `encrypted_off` is set to the first byte after SCID. */
             packet->encrypted_off = src - packet->octets.base;
         } else if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_RETRY) {
@@ -1877,7 +1877,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         ctx->tls->random_bytes(&conn->super.version, sizeof(conn->super.version));
         conn->super.version = (conn->super.version & 0xf0f0f0f0) | 0x0a0a0a0a;
     } else {
-        conn->super.version = QUICLY_PROTOCOL_VERSION;
+        conn->super.version = QUICLY_PROTOCOL_VERSION_CURRENT;
     }
     conn->super.remote.largest_retire_prior_to = 0;
     quicly_linklist_init(&conn->super._default_scheduler.active);
@@ -3472,7 +3472,7 @@ size_t quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *d
         dst += src_cid.len;
     }
     /* supported_versions */
-    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION);
+    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION_CURRENT);
 
     return dst - (uint8_t *)payload;
 }
@@ -3529,7 +3529,7 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
     ctx->tls->random_bytes(buf.base + buf.off, 1);
     buf.base[buf.off] = QUICLY_PACKET_TYPE_RETRY | (buf.base[buf.off] & 0x0f);
     ++buf.off;
-    ptls_buffer_push32(&buf, QUICLY_PROTOCOL_VERSION);
+    ptls_buffer_push32(&buf, QUICLY_PROTOCOL_VERSION_CURRENT);
     ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, dest_cid.base, dest_cid.len); });
     ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, src_cid.base, src_cid.len); });
     if (token_prefix.len != 0) {
@@ -4058,7 +4058,7 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, struct sockaddr *d
     /* build packet */
     PTLS_BUILD_ASSERT(QUICLY_SEND_PN_SIZE == 2);
     *dst++ = QUICLY_PACKET_TYPE_INITIAL | 0x1 /* 2-byte PN */;
-    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION);
+    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION_CURRENT);
     *dst++ = dest_cid.len;
     memcpy(dst, dest_cid.base, dest_cid.len);
     dst += dest_cid.len;
@@ -4599,7 +4599,7 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
 
 static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
-#define CAN_SELECT(v) ((v) != conn->super.version && (v) == QUICLY_PROTOCOL_VERSION)
+#define CAN_SELECT(v) ((v) != conn->super.version && (v) == QUICLY_PROTOCOL_VERSION_CURRENT)
 
     const uint8_t *src = packet->octets.base + packet->encrypted_off, *end = packet->octets.base + packet->octets.len;
 
@@ -5041,7 +5041,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
-    if (packet->version != QUICLY_PROTOCOL_VERSION) {
+    if (packet->version != QUICLY_PROTOCOL_VERSION_CURRENT) {
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
@@ -5163,7 +5163,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 goto Exit;
             }
         }
-        if (packet->version != QUICLY_PROTOCOL_VERSION) {
+        if (packet->version != QUICLY_PROTOCOL_VERSION_CURRENT) {
             ret = QUICLY_ERROR_PACKET_IGNORED;
             goto Exit;
         }

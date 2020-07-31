@@ -753,7 +753,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
                     if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
-                        if (packet.version != QUICLY_PROTOCOL_VERSION) {
+                        if (packet.version != QUICLY_PROTOCOL_VERSION_CURRENT) {
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
                             size_t payload_len = quicly_send_version_negotiation(&ctx, &remote.sa, packet.cid.src, NULL,
                                                                                  packet.cid.dest.encrypted, payload);

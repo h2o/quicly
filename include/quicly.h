@@ -64,7 +64,10 @@ extern "C" {
 
 #define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
 
-#define QUICLY_PROTOCOL_VERSION 0xff00001d
+/**
+ * The current version being supported. At the moment, it is draft-29.
+ */
+#define QUICLY_PROTOCOL_VERSION_CURRENT 0xff00001d
 
 #define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte)&0xf0) == 0xc0)
 
