@@ -102,6 +102,10 @@ typedef struct st_quicly_cc_t {
              * Timestamp of the latest congestion event.
              */
             int64_t avoidance_start;
+            /**
+             * Timestamp of the most recent send operation.
+             */
+            int64_t last_sent_time;
         } cubic;
     } state;
     /**
@@ -146,6 +150,10 @@ struct st_quicly_cc_impl_t {
      * Called when persistent congestion is observed.
      */
     void (*cc_on_persistent_congestion)(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
+    /**
+     * Called after a packet is sent.
+     */
+    void (*cc_on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
 };
 
 /**
