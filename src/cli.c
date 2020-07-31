@@ -753,7 +753,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
                     if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
-                        if (packet.version != QUICLY_PROTOCOL_VERSION_CURRENT) {
+                        if (!quicly_is_supported_version(packet.version)) {
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
                             size_t payload_len = quicly_send_version_negotiation(&ctx, &remote.sa, packet.cid.src, NULL,
                                                                                  packet.cid.dest.encrypted, payload);
@@ -792,8 +792,9 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                 /* Token that looks like retry was unusable, and we require retry. There's no chance of the
                                  * handshake succeeding. Therefore, send close without aquiring state. */
                                 uint8_t payload[ctx.transport_params.max_udp_payload_size];
-                                size_t payload_len = quicly_send_close_invalid_token(&ctx, &remote.sa, packet.cid.src, NULL,
-                                                                                     packet.cid.dest.encrypted, err_desc, payload);
+                                size_t payload_len =
+                                    quicly_send_close_invalid_token(&ctx, packet.version, &remote.sa, packet.cid.src, NULL,
+                                                                    packet.cid.dest.encrypted, err_desc, payload);
                                 assert(payload_len != SIZE_MAX);
                                 send_one_packet(fd, &remote.sa, payload, payload_len);
                             }
@@ -805,10 +806,10 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             uint8_t new_server_cid[8], payload[ctx.transport_params.max_udp_payload_size];
                             memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
                             new_server_cid[0] ^= 0xff;
-                            size_t payload_len = quicly_send_retry(&ctx, address_token_aead.enc, &remote.sa, packet.cid.src, NULL,
-                                                                   ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
-                                                                   packet.cid.dest.encrypted, ptls_iovec_init(NULL, 0),
-                                                                   ptls_iovec_init(NULL, 0), NULL, payload);
+                            size_t payload_len = quicly_send_retry(
+                                &ctx, address_token_aead.enc, packet.version, &remote.sa, packet.cid.src, NULL,
+                                ptls_iovec_init(new_server_cid, sizeof(new_server_cid)), packet.cid.dest.encrypted,
+                                ptls_iovec_init(NULL, 0), ptls_iovec_init(NULL, 0), NULL, payload);
                             assert(payload_len != SIZE_MAX);
                             send_one_packet(fd, &remote.sa, payload, payload_len);
                             break;
@@ -1145,7 +1146,7 @@ int main(int argc, char **argv)
             hs_properties.client.negotiate_before_key_exchange = 1;
             break;
         case 'n':
-            ctx.enforce_version_negotiation = 1;
+            ctx.initial_version = 0xabababa;
             break;
         case 'O':
             suppress_output = 1;

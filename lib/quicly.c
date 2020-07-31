@@ -577,36 +577,42 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
             packet->cid.dest.might_be_client_generated = 0;
             break;
         }
-        if (packet->version != QUICLY_PROTOCOL_VERSION_CURRENT) {
+        switch (packet->version) {
+        case QUICLY_PROTOCOL_VERSION_CURRENT:
+        case QUICLY_PROTOCOL_VERSION_DRAFT27:
+            /* these are the recognized versions, and they share the same packet header format */
+            if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_RETRY) {
+                /* retry */
+                if (src_end - src <= PTLS_AESGCM_TAG_SIZE)
+                    goto Error;
+                packet->token = ptls_iovec_init(src, src_end - src - PTLS_AESGCM_TAG_SIZE);
+                src += packet->token.len;
+                packet->encrypted_off = src - packet->octets.base;
+            } else {
+                /* coalescible long header packet */
+                if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
+                    /* initial has a token */
+                    uint64_t token_len;
+                    if ((token_len = quicly_decodev(&src, src_end)) == UINT64_MAX)
+                        goto Error;
+                    if (src_end - src < token_len)
+                        goto Error;
+                    packet->token = ptls_iovec_init(src, token_len);
+                    src += token_len;
+                }
+                if ((rest_length = quicly_decodev(&src, src_end)) == UINT64_MAX)
+                    goto Error;
+                if (rest_length < 1)
+                    goto Error;
+                if (src_end - src < rest_length)
+                    goto Error;
+                packet->encrypted_off = src - packet->octets.base;
+                packet->octets.len = packet->encrypted_off + rest_length;
+            }
+            break;
+        default:
             /* VN packet or packets of unknown version cannot be parsed. `encrypted_off` is set to the first byte after SCID. */
             packet->encrypted_off = src - packet->octets.base;
-        } else if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_RETRY) {
-            /* retry */
-            if (src_end - src <= PTLS_AESGCM_TAG_SIZE)
-                goto Error;
-            packet->token = ptls_iovec_init(src, src_end - src - PTLS_AESGCM_TAG_SIZE);
-            src += packet->token.len;
-            packet->encrypted_off = src - packet->octets.base;
-        } else {
-            /* coalescible long header packet */
-            if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
-                /* initial has a token */
-                uint64_t token_len;
-                if ((token_len = quicly_decodev(&src, src_end)) == UINT64_MAX)
-                    goto Error;
-                if (src_end - src < token_len)
-                    goto Error;
-                packet->token = ptls_iovec_init(src, token_len);
-                src += token_len;
-            }
-            if ((rest_length = quicly_decodev(&src, src_end)) == UINT64_MAX)
-                goto Error;
-            if (rest_length < 1)
-                goto Error;
-            if (src_end - src < rest_length)
-                goto Error;
-            packet->encrypted_off = src - packet->octets.base;
-            packet->octets.len = packet->encrypted_off + rest_length;
         }
         packet->_is_stateless_reset_cached = QUICLY__DECODED_PACKET_CACHED_NOT_STATELESS_RESET;
     } else {
@@ -1831,8 +1837,8 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
     return type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS;
 }
 
-static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *server_name, struct sockaddr *remote_addr,
-                                        struct sockaddr *local_addr, ptls_iovec_t *remote_cid,
+static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol_version, const char *server_name,
+                                        struct sockaddr *remote_addr, struct sockaddr *local_addr, ptls_iovec_t *remote_cid,
                                         const quicly_cid_plaintext_t *local_cid, ptls_handshake_properties_t *handshake_properties,
                                         uint32_t initcwnd)
 {
@@ -1873,12 +1879,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, const char *serve
         conn->super.remote.uni.next_stream_id = 2;
     }
     conn->super.remote.transport_params = default_transport_params;
-    if (server_name != NULL && ctx->enforce_version_negotiation) {
-        ctx->tls->random_bytes(&conn->super.version, sizeof(conn->super.version));
-        conn->super.version = (conn->super.version & 0xf0f0f0f0) | 0x0a0a0a0a;
-    } else {
-        conn->super.version = QUICLY_PROTOCOL_VERSION_CURRENT;
-    }
+    conn->super.version = protocol_version;
     conn->super.remote.largest_retire_prior_to = 0;
     quicly_linklist_init(&conn->super._default_scheduler.active);
     quicly_linklist_init(&conn->super._default_scheduler.blocked);
@@ -2000,7 +2001,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     size_t max_early_data_size = 0;
     int ret;
 
-    if ((conn = create_connection(ctx, server_name, dest_addr, src_addr, NULL, new_cid, handshake_properties,
+    if ((conn = create_connection(ctx, ctx->initial_version, server_name, dest_addr, src_addr, NULL, new_cid, handshake_properties,
                                   quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
@@ -3473,6 +3474,7 @@ size_t quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *d
     }
     /* supported_versions */
     dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION_CURRENT);
+    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION_DRAFT27);
 
     return dst - (uint8_t *)payload;
 }
@@ -3497,9 +3499,10 @@ int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t c
     return 0;
 }
 
-size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, struct sockaddr *dest_addr,
-                         ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, ptls_iovec_t odcid,
-                         ptls_iovec_t token_prefix, ptls_iovec_t appdata, ptls_aead_context_t **retry_aead_cache, uint8_t *datagram)
+size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encrypt_ctx, uint32_t protocol_version,
+                         struct sockaddr *dest_addr, ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid,
+                         ptls_iovec_t odcid, ptls_iovec_t token_prefix, ptls_iovec_t appdata,
+                         ptls_aead_context_t **retry_aead_cache, uint8_t *datagram)
 {
     quicly_address_token_plaintext_t token;
     ptls_buffer_t buf;
@@ -3529,7 +3532,7 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
     ctx->tls->random_bytes(buf.base + buf.off, 1);
     buf.base[buf.off] = QUICLY_PACKET_TYPE_RETRY | (buf.base[buf.off] & 0x0f);
     ++buf.off;
-    ptls_buffer_push32(&buf, QUICLY_PROTOCOL_VERSION_CURRENT);
+    ptls_buffer_push32(&buf, protocol_version);
     ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, dest_cid.base, dest_cid.len); });
     ptls_buffer_push_block(&buf, 1, { ptls_buffer_pushv(&buf, src_cid.base, src_cid.len); });
     if (token_prefix.len != 0) {
@@ -4044,8 +4047,9 @@ Exit:
     return ret;
 }
 
-size_t quicly_send_close_invalid_token(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
-                                       struct sockaddr *src_addr, ptls_iovec_t src_cid, const char *err_desc, void *datagram)
+size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, struct sockaddr *dest_addr,
+                                       ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, const char *err_desc,
+                                       void *datagram)
 {
     struct st_quicly_cipher_context_t egress = {};
 
@@ -4058,7 +4062,7 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, struct sockaddr *d
     /* build packet */
     PTLS_BUILD_ASSERT(QUICLY_SEND_PN_SIZE == 2);
     *dst++ = QUICLY_PACKET_TYPE_INITIAL | 0x1 /* 2-byte PN */;
-    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION_CURRENT);
+    dst = quicly_encode32(dst, protocol_version);
     *dst++ = dest_cid.len;
     memcpy(dst, dest_cid.base, dest_cid.len);
     dst += dest_cid.len;
@@ -4599,20 +4603,34 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
 
 static int handle_version_negotiation_packet(quicly_conn_t *conn, quicly_decoded_packet_t *packet)
 {
-#define CAN_SELECT(v) ((v) != conn->super.version && (v) == QUICLY_PROTOCOL_VERSION_CURRENT)
-
     const uint8_t *src = packet->octets.base + packet->encrypted_off, *end = packet->octets.base + packet->octets.len;
+    struct {
+        unsigned current : 1;
+        unsigned draft27 : 1;
+    } can_select = {};
 
     if (src == end || (end - src) % 4 != 0)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
     while (src != end) {
         uint32_t supported_version = quicly_decode32(&src);
-        if (CAN_SELECT(supported_version))
-            return negotiate_using_version(conn, supported_version);
+        switch (supported_version) {
+        case QUICLY_PROTOCOL_VERSION_CURRENT:
+            can_select.current = 1;
+            break;
+        case QUICLY_PROTOCOL_VERSION_DRAFT27:
+            can_select.draft27 = 1;
+            break;
+        }
     }
-    return QUICLY_ERROR_NO_COMPATIBLE_VERSION;
 
-#undef CAN_SELECT
+    if (can_select.current) {
+        return negotiate_using_version(conn, QUICLY_PROTOCOL_VERSION_CURRENT);
+    } else if (can_select.draft27) {
+        return negotiate_using_version(conn, QUICLY_PROTOCOL_VERSION_DRAFT27);
+    } else {
+        return QUICLY_ERROR_NO_COMPATIBLE_VERSION;
+    }
 }
 
 static int compare_socket_address(struct sockaddr *x, struct sockaddr *y)
@@ -5041,7 +5059,11 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
-    if (packet->version != QUICLY_PROTOCOL_VERSION_CURRENT) {
+    switch (packet->version) {
+    case QUICLY_PROTOCOL_VERSION_CURRENT:
+    case QUICLY_PROTOCOL_VERSION_DRAFT27:
+        break;
+    default:
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
@@ -5062,7 +5084,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         goto Exit;
 
     /* create connection */
-    if ((*conn = create_connection(ctx, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
+    if ((*conn = create_connection(ctx, packet->version, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
                                    quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
@@ -5163,7 +5185,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 goto Exit;
             }
         }
-        if (packet->version != QUICLY_PROTOCOL_VERSION_CURRENT) {
+        if (packet->version != conn->super.version) {
             ret = QUICLY_ERROR_PACKET_IGNORED;
             goto Exit;
         }
