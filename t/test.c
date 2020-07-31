@@ -241,7 +241,8 @@ static void test_vector(void)
     ok(off == sizeof(datagram));
 
     /* decrypt */
-    ret = setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress, packet.cid.dest.encrypted, 0, NULL);
+    ret = setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress, packet.cid.dest.encrypted, 0,
+                                   get_initial_salt(QUICLY_PROTOCOL_VERSION_CURRENT), NULL);
     ok(ret == 0);
     ok(decrypt_packet(ingress.header_protection, aead_decrypt_fixed_key, ingress.aead, &next_expected_pn, &packet, &pn, &payload) ==
        0);
