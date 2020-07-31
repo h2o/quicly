@@ -999,12 +999,13 @@ static void usage(const char *cmd)
            "  -c certificate-file\n"
            "  -k key-file               specifies the credentials to be used for running the\n"
            "                            server. If omitted, the command runs as a client.\n"
-           "  -K num-packets            perform key update every num-packets packets\n"
+           "  -d draft-number           specifies the draft version number to be used (e.g., 29)\n"
            "  -e event-log-file         file to log events\n"
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
            "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
+           "  -K num-packets            perform key update every num-packets packets\n"
            "  -l log-file               file to log traffic secrets\n"
            "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
            "  -m <bytes>                max data (in bytes; default: 16MB)\n"
@@ -1067,7 +1068,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:C:c:k:K:Ee:Gi:I:l:M:m:NnOp:P:Rr:S:s:u:U:Vvx:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:C:c:d:k:Ee:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvx:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
@@ -1096,12 +1097,14 @@ int main(int argc, char **argv)
         case 'k':
             load_private_key(ctx.tls, optarg);
             break;
-        case 'K':
-            if (sscanf(optarg, "%" PRIu64, &ctx.max_packets_per_key) != 1) {
-                fprintf(stderr, "failed to parse key update interval: %s\n", optarg);
+        case 'd': {
+            uint8_t draft_ver;
+            if (sscanf(optarg, "%" SCNu8, &draft_ver) != 1) {
+                fprintf(stderr, "failed to parse draft number: %s\n", optarg);
                 exit(1);
             }
-            break;
+            ctx.initial_version = 0xff000000 | draft_ver;
+        } break;
         case 'E':
             ctx.expand_client_hello = 1;
             break;
@@ -1123,6 +1126,12 @@ int main(int argc, char **argv)
                 fprintf(stderr, "failed to parse idle timeout: %s\n", optarg);
                 exit(1);
             }
+        case 'K':
+            if (sscanf(optarg, "%" PRIu64, &ctx.max_packets_per_key) != 1) {
+                fprintf(stderr, "failed to parse key update interval: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'l':
             setup_log_event(ctx.tls, optarg);
             break;
