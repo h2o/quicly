@@ -3908,6 +3908,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 goto Exit;
             if (s->dst_end - s->dst >= required_space) {
                 s->dst = quicly_encode_datagram_frame(s->dst, conn->egress.datagram_frame_payload);
+                QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, conn->egress.datagram_frame_payload.base,
+                             conn->egress.datagram_frame_payload.len);
                 conn->egress.datagram_frame_payload = ptls_iovec_init(NULL, 0);
             }
         }
