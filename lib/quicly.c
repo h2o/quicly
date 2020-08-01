@@ -2090,7 +2090,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
                                         ptls_iovec_init(server_cid->cid, server_cid->len), 1, initial_salt, conn)) != 0)
         goto Exit;
 
-    /* handshake */
+    /* handshake (we always encode authentication CIDs, as we do not (yet) regenerate ClientHello when receiving Retry) */
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     if ((ret = quicly_encode_transport_parameter_list(
              &conn->crypto.transport_params.buf, &conn->super.ctx->transport_params, NULL, &conn->super.local.cid_set.cids[0].cid,
@@ -2191,8 +2191,10 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     assert(conn->super.local.cid_set.cids[0].sequence == 0 && "make sure that local_cid is in expected state before sending SRT");
     if ((ret = quicly_encode_transport_parameter_list(
-             &conn->crypto.transport_params.buf, &conn->super.ctx->transport_params, &conn->super.original_dcid,
-             &conn->super.local.cid_set.cids[0].cid, is_retry(conn) ? &conn->retry_scid : NULL,
+             &conn->crypto.transport_params.buf, &conn->super.ctx->transport_params,
+             needs_cid_auth(conn) || is_retry(conn) ? &conn->super.original_dcid : NULL,
+             needs_cid_auth(conn) ? &conn->super.local.cid_set.cids[0].cid : NULL,
+             needs_cid_auth(conn) && is_retry(conn) ? &conn->retry_scid : NULL,
              conn->super.ctx->cid_encryptor != NULL ? conn->super.local.cid_set.cids[0].stateless_reset_token : NULL, 0)) != 0)
         goto Exit;
     properties->additional_extensions = conn->crypto.transport_params.ext;
