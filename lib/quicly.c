@@ -518,6 +518,11 @@ static int is_retry(quicly_conn_t *conn)
     return conn->retry_scid.len != UINT8_MAX;
 }
 
+static int needs_cid_auth(quicly_conn_t *conn)
+{
+    return conn->super.version > QUICLY_PROTOCOL_VERSION_DRAFT27;
+}
+
 static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
 {
     return quicly_loss_get_sentmap_expiration_time(&conn->egress.loss, conn->super.remote.transport_params.max_ack_delay);
@@ -1975,7 +1980,10 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
     quicly_transport_parameters_t params;
-    quicly_cid_t original_dcid, initial_scid, retry_scid = {};
+    struct {
+        quicly_cid_t original_dcid, initial_scid, retry_scid;
+    } cid_auth;
+    cid_auth.retry_scid.len = 0; /* suppress compiler warning */
 
     /* obtain pointer to initial CID of the peer. It is guaranteeed to exist in the first slot, as TP is received before any frame
      * that updates the CID set. */
@@ -1983,23 +1991,28 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     assert(remote_cid->sequence == 0);
 
     /* decode */
-    if ((ret = quicly_decode_transport_parameter_list(&params, &original_dcid, &initial_scid, is_retry(conn) ? &retry_scid : NULL,
+    if ((ret = quicly_decode_transport_parameter_list(&params, needs_cid_auth(conn) ? &cid_auth.original_dcid : NULL,
+                                                      needs_cid_auth(conn) ? &cid_auth.initial_scid : NULL,
+                                                      needs_cid_auth(conn) && is_retry(conn) ? &cid_auth.retry_scid : NULL,
                                                       remote_cid->stateless_reset_token, src, end)) != 0)
         goto Exit;
 
     /* validate CIDs */
-    if (!quicly_cid_is_equal(&conn->super.original_dcid, ptls_iovec_init(original_dcid.cid, original_dcid.len))) {
-        ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
-        goto Exit;
-    }
-    if (!quicly_cid_is_equal(&remote_cid->cid, ptls_iovec_init(initial_scid.cid, initial_scid.len))) {
-        ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
-        goto Exit;
-    }
-    if (is_retry(conn)) {
-        if (!quicly_cid_is_equal(&conn->retry_scid, ptls_iovec_init(retry_scid.cid, retry_scid.len))) {
+    if (needs_cid_auth(conn)) {
+        if (!quicly_cid_is_equal(&conn->super.original_dcid,
+                                 ptls_iovec_init(cid_auth.original_dcid.cid, cid_auth.original_dcid.len))) {
             ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
             goto Exit;
+        }
+        if (!quicly_cid_is_equal(&remote_cid->cid, ptls_iovec_init(cid_auth.initial_scid.cid, cid_auth.initial_scid.len))) {
+            ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+            goto Exit;
+        }
+        if (is_retry(conn)) {
+            if (!quicly_cid_is_equal(&conn->retry_scid, ptls_iovec_init(cid_auth.retry_scid.cid, cid_auth.retry_scid.len))) {
+                ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                goto Exit;
+            }
         }
     }
 
@@ -2133,7 +2146,9 @@ Exit:
 static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t *properties, ptls_raw_extension_t *slots)
 {
     quicly_conn_t *conn = (void *)((char *)properties - offsetof(quicly_conn_t, crypto.handshake_properties));
-    quicly_cid_t initial_scid;
+    struct {
+        quicly_cid_t initial_scid;
+    } cid_auth;
     int ret;
 
     if (slots[0].type == UINT16_MAX) {
@@ -2145,10 +2160,12 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     { /* decode transport_parameters extension */
         const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
-        if ((ret = quicly_decode_transport_parameter_list(&conn->super.remote.transport_params, NULL, &initial_scid, NULL, NULL,
-                                                          src, end)) != 0)
+        if ((ret = quicly_decode_transport_parameter_list(&conn->super.remote.transport_params, NULL,
+                                                          needs_cid_auth(conn) ? &cid_auth.initial_scid : NULL, NULL, NULL, src,
+                                                          end)) != 0)
             goto Exit;
-        if (!quicly_cid_is_equal(&conn->super.remote.cid_set.cids[0].cid, ptls_iovec_init(initial_scid.cid, initial_scid.len))) {
+        if (needs_cid_auth(conn) && !quicly_cid_is_equal(&conn->super.remote.cid_set.cids[0].cid,
+                                                         ptls_iovec_init(cid_auth.initial_scid.cid, cid_auth.initial_scid.len))) {
             ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
             goto Exit;
         }
