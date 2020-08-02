@@ -3014,12 +3014,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         *s->dst++ = 0;
     } else {
         s->dst = emit_cid(s->dst, &conn->super.remote.cid_set.cids[0].cid);
-        /* set the key-phase bit, as well as updating 1rtt key if necessary */
-        if (conn->egress.packet_number >= conn->application->cipher.egress.key_update_pn.next) {
-            int ret;
-            if ((ret = update_1rtt_egress_key(conn)) != 0)
-                return ret;
-        }
+        /* set the key-phase bit */
         if ((conn->application->cipher.egress.key_phase & 1) != 0)
             *s->target.first_byte_at |= QUICLY_KEY_PHASE_BIT;
     }
@@ -3994,7 +3989,16 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
     /* send encrypted frames */
     if (conn->application != NULL && (s->current.cipher = &conn->application->cipher.egress.key)->header_protection != NULL) {
+        /* setup context */
         s->current.first_byte = conn->application->one_rtt_writable ? QUICLY_QUIC_BIT : QUICLY_PACKET_TYPE_0RTT;
+        /* Update 1-RTT traffic keys if necessary. Doing it here guarantees that all 1-RTT packets being generated use the same
+         * set of keys (and reduces the amount of checks that the detached mode handlers need to employ for handling potential key
+         * updates). */
+        if (conn->egress.packet_number >= conn->application->cipher.egress.key_update_pn.next) {
+            assert(conn->application->one_rtt_writable);
+            if ((ret = update_1rtt_egress_key(conn)) != 0)
+                goto Exit;
+        }
         /* acks */
         if (conn->application->one_rtt_writable && conn->egress.send_ack_at <= conn->stash.now &&
             conn->application->super.unacked_count != 0) {
