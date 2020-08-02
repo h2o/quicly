@@ -3258,8 +3258,13 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     if (!quicly_sendstate_is_open(&stream->sendstate) && end_off == stream->sendstate.final_size) {
         assert(end_off + 1 == stream->sendstate.pending.ranges[stream->sendstate.pending.num_ranges - 1].end);
         assert(frame_type_at != NULL);
-        is_fin = 1;
-        *frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+        /* in case the frame is detached, we need to use a new packet for just carrying the fin bit */
+        if (detached) {
+            is_fin = 0;
+        } else {
+            is_fin = 1;
+            *frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+        }
     } else {
         is_fin = 0;
     }
