@@ -4033,7 +4033,7 @@ Exit:
     return ret;
 }
 
-void quicly_set_datagram_frame_payload(quicly_conn_t *conn, ptls_iovec_t payload)
+void quicly_set_datagram_frame(quicly_conn_t *conn, ptls_iovec_t payload)
 {
     conn->egress.datagram_frame_payload = payload;
 }

@@ -506,7 +506,7 @@ static void set_datagram_frame(quicly_conn_t *conn, ptls_iovec_t payload)
     payload.base = datagram_frame_payload_buf;
 
     /* set data to be sent. The buffer is being freed in `send_pending` after `quicly_send` is being called. */
-    quicly_set_datagram_frame_payload(conn, payload);
+    quicly_set_datagram_frame(conn, payload);
 }
 
 static int on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)

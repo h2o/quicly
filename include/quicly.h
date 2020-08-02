@@ -986,7 +986,7 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
  * datagram frame payload, the payload is either sent or the reference is discarded. Until then, it is the caller's responsibility
  * to retain the memory pointed to by `payload`. At the moment, DATAFRAM frames are not congestion controlled.
  */
-void quicly_set_datagram_frame_payload(quicly_conn_t *conn, ptls_iovec_t payload);
+void quicly_set_datagram_frame(quicly_conn_t *conn, ptls_iovec_t payload);
 /**
  *
  */
