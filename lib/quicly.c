@@ -2815,12 +2815,11 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
     assert(datagram_size <= conn->egress.max_udp_payload_size);
 
     if (mode != QUICLY_COMMIT_SEND_PACKET_MODE_DETACHED) {
-        conn->super.ctx->crypto_engine->encrypt_packet(conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection,
-                                                       s->target.cipher->aead,
-                                                       ptls_iovec_init(s->payload_buf.datagram, datagram_size),
-                                                       s->target.first_byte_at - s->payload_buf.datagram,
-                                                       s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number,
-                                                       mode == QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED);
+        conn->super.ctx->crypto_engine->encrypt_packet(
+            conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead,
+            ptls_iovec_init(s->payload_buf.datagram, datagram_size), s->target.first_byte_at - s->payload_buf.datagram,
+            s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number,
+            mode == QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED);
     }
 
     /* update CC, commit sentmap */
@@ -3155,7 +3154,7 @@ int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s)
 static __thread struct st_quicly_send_stream_detach_ctx_t {
     quicly_conn_t *conn;
     quicly_send_context_t *send_ctx;
-} *send_stream_detach_ctx; /* becomes NULL when detached */
+} * send_stream_detach_ctx; /* becomes NULL when detached */
 
 void quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *detached)
 {
