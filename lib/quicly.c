@@ -3121,12 +3121,12 @@ static __thread struct st_quicly_send_stream_detach_ctx_t {
     quicly_send_context_t *send_ctx;
 } *send_stream_detach_ctx; /* becomes NULL when detached */
 
-int quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *detached)
+void quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *detached)
 {
     assert(send_stream_detach_ctx != NULL);
-
     quicly_conn_t *conn = send_stream_detach_ctx->conn;
     quicly_send_context_t *s = send_stream_detach_ctx->send_ctx;
+    send_stream_detach_ctx = NULL;
 
     detached->cipher = ptls_get_cipher(conn->crypto.tls);
     detached->header_protection_secret = conn->application->cipher.egress.header_protection_secret;
@@ -3135,10 +3135,6 @@ int quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *deta
     detached->first_byte_at = s->target.first_byte_at - s->payload_buf.datagram;
     detached->payload_from = s->dst_payload_from - s->payload_buf.datagram;
     detached->packet_number = conn->egress.packet_number;
-
-    send_stream_detach_ctx = NULL;
-
-    return 0;
 }
 
 int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)

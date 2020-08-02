@@ -819,7 +819,7 @@ int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s);
  * Detaches the packet being built, so that the stream data can be incorporate by a different process.  This function can only be
  * called from the quicly_stream_callbacks_t::on_send_emit callback.
  */
-int quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *detached);
+void quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *detached);
 /**
  * Sends data of given stream.  Called by stream scheduler.  Only streams that can send some data or EOS should be specified.  It is
  * the responsibilty of the stream scheduler to maintain a list of such streams.
