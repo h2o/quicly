@@ -44,6 +44,7 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                               0, /* is_clustered */
                                               0, /* enlarge_client_hello */
+                                              0, /* omit_client_initial_padding */
                                               NULL,
                                               NULL, /* on_stream_open */
                                               &quicly_default_stream_scheduler,
@@ -71,6 +72,7 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                                     0, /* is_clustered */
                                                     0, /* enlarge_client_hello */
+                                                    0, /* omit_client_initial_padding */
                                                     NULL,
                                                     NULL, /* on_stream_open */
                                                     &quicly_default_stream_scheduler,
