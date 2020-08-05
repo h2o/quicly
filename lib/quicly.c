@@ -4167,7 +4167,8 @@ Exit:
     if (ret == 0 && s->target.first_byte_at != NULL) {
         /* last packet can be small-sized, unless it is the first flight sent from the client */
         enum en_quicly_send_packet_mode_t commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_SMALL;
-        if (quicly_is_client(conn) && (s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL)
+        if (quicly_is_client(conn) && (s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
+            !conn->super.ctx->omit_client_initial_padding)
             commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE;
         commit_send_packet(conn, s, commit_mode);
     }
@@ -5296,7 +5297,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
-    if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE) {
+    if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE && !ctx->omit_client_initial_padding) {
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
@@ -5335,7 +5336,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     (*conn)->initial->cipher.egress = egress_cipher;
     egress_cipher = (struct st_quicly_cipher_context_t){NULL};
     (*conn)->crypto.handshake_properties.collected_extensions = server_collected_extensions;
-    (*conn)->initial->largest_ingress_udp_payload_size = packet->datagram_size;
+    (*conn)->initial->largest_ingress_udp_payload_size =
+        packet->datagram_size >= QUICLY_MIN_CLIENT_INITIAL_SIZE ? packet->datagram_size : QUICLY_MIN_CLIENT_INITIAL_SIZE;
 
     QUICLY_PROBE(ACCEPT, *conn, (*conn)->stash.now,
                  QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), address_token);
@@ -5477,7 +5479,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                     quicly_set_cid(&conn->super.remote.cid_set.cids[0].cid, packet->cid.src);
             } else {
                 /* server: ignore packets that are too small */
-                if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE) {
+                if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE && !conn->super.ctx->omit_client_initial_padding) {
                     ret = QUICLY_ERROR_PACKET_IGNORED;
                     goto Exit;
                 }
