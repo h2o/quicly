@@ -1923,7 +1923,7 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
     return type == QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS;
 }
 
-static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol_version, const char *server_name,
+static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol_version, int is_client, const char *server_name,
                                         struct sockaddr *remote_addr, struct sockaddr *local_addr, ptls_iovec_t *remote_cid,
                                         const quicly_cid_plaintext_t *local_cid, ptls_handshake_properties_t *handshake_properties,
                                         uint32_t initcwnd)
@@ -1937,11 +1937,14 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         assert(ctx->receive_datagram_frame != NULL);
 
     /* create TLS context */
-    if ((tls = ptls_new(ctx->tls, server_name == NULL)) == NULL)
+    if ((tls = ptls_new(ctx->tls, !is_client)) == NULL)
         return NULL;
-    if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0) {
-        ptls_free(tls);
-        return NULL;
+    if (server_name != NULL) {
+        assert(is_client);
+        if (ptls_set_server_name(tls, server_name, strlen(server_name)) != 0) {
+            ptls_free(tls);
+            return NULL;
+        }
     }
 
     /* allocate memory and start creating QUIC context */
@@ -1958,7 +1961,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->super.local.long_header_src_cid = conn->super.local.cid_set.cids[0].cid;
     quicly_remote_cid_init_set(&conn->super.remote.cid_set, remote_cid, ctx->tls->random_bytes);
     conn->super.state = QUICLY_STATE_FIRSTFLIGHT;
-    if (server_name != NULL) {
+    if (is_client) {
         conn->super.local.bidi.next_stream_id = 0;
         conn->super.local.uni.next_stream_id = 2;
         conn->super.remote.bidi.next_stream_id = 1;
@@ -2112,8 +2115,9 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         }
     }
 
-    if ((conn = create_connection(ctx, ctx->initial_version, server_name, dest_addr, src_addr, NULL, new_cid, handshake_properties,
-                                  quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
+    if ((conn = create_connection(ctx, ctx->initial_version, 1, server_name, dest_addr, src_addr, NULL, new_cid,
+                                  handshake_properties, quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) ==
+        NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -5319,8 +5323,9 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         goto Exit;
 
     /* create connection */
-    if ((*conn = create_connection(ctx, packet->version, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
-                                   quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
+    if ((*conn =
+             create_connection(ctx, packet->version, 0, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
+                               quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
