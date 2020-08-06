@@ -5351,7 +5351,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
     (*conn)->super.stats.num_packets.received += 1;
-    (*conn)->super.stats.num_bytes.received += packet->datagram_size;
+    (*conn)->super.stats.num_bytes.received +=
+        packet->datagram_size >= QUICLY_MIN_CLIENT_INITIAL_SIZE ? packet->datagram_size : QUICLY_MIN_CLIENT_INITIAL_SIZE;
     if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if ((ret = record_receipt(*conn, &(*conn)->initial->super, pn, 0, QUICLY_EPOCH_INITIAL)) != 0)
@@ -5483,10 +5484,14 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
                     quicly_set_cid(&conn->super.remote.cid_set.cids[0].cid, packet->cid.src);
             } else {
-                /* server: ignore packets that are too small */
-                if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE && !conn->super.ctx->omit_client_initial_padding) {
-                    ret = QUICLY_ERROR_PACKET_IGNORED;
-                    goto Exit;
+                /* server: ignore packets that are too small, or pretend if it was bigger if requested */
+                if (packet->datagram_size < QUICLY_MIN_CLIENT_INITIAL_SIZE) {
+                    if (conn->super.ctx->omit_client_initial_padding) {
+                        conn->super.stats.num_bytes.received = QUICLY_MIN_CLIENT_INITIAL_SIZE - packet->datagram_size;
+                    } else {
+                        ret = QUICLY_ERROR_PACKET_IGNORED;
+                        goto Exit;
+                    }
                 }
             }
             aead.cb = aead_decrypt_fixed_key;

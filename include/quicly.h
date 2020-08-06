@@ -289,8 +289,8 @@ struct st_quicly_context_t {
      */
     unsigned expand_client_hello : 1;
     /**
-     * If set, client does not pad the initial packets it sends, and server accepts small Initial packets. When using this feature,
-     * server deployments might consider raising `pre_validation_amplification_limit` to a value greater than 3.
+     * If set, client does not pad the initial packets it sends, and server accepts small Initial packets, calculating amplification
+     * limit by pretending if the received Initial packets were as big as the allowed minimum.
      */
     unsigned omit_client_initial_padding : 1;
     /**
