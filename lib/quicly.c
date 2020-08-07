@@ -1932,7 +1932,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_conn_t *conn;
 
     /* consistency checks */
-    assert(remote_addr != NULL && remote_addr->sa_family != AF_UNSPEC);
+    assert(remote_addr == NULL || remote_addr->sa_family != AF_UNSPEC);
     if (ctx->transport_params.max_datagram_frame_size != 0)
         assert(ctx->receive_datagram_frame != NULL);
 
@@ -2121,7 +2121,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    conn->super.remote.address_validation.validated = 1;
+    conn->super.remote.address_validation.validated = dest_addr != NULL && dest_addr->sa_family != AF_UNSPEC;
     conn->super.remote.address_validation.send_probe = 1;
     if (address_token.len != 0) {
         if ((conn->token.base = malloc(address_token.len)) == NULL) {
@@ -2719,6 +2719,14 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
 {
     if (conn->super.remote.address_validation.validated)
         return UINT64_MAX;
+
+    /* [detached mode] do not retransmit ClientHello something is received from peer */
+    if (conn->super.remote.address.sa.sa_family == AF_UNSPEC) {
+        assert(quicly_is_client(conn));
+        return 0;
+    }
+
+    /* calculate the remainder of the amplification limit  */
     uint64_t budget = conn->super.stats.num_bytes.received * conn->super.ctx->pre_validation_amplification_limit;
     if (budget <= conn->super.stats.num_bytes.sent)
         return 0;
@@ -4911,7 +4919,9 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
 {
     if (QUICLY_PACKET_IS_LONG_HEADER(decoded->octets.base[0])) {
         /* long header: validate address, then consult the CID */
-        if (compare_socket_address(&conn->super.remote.address.sa, src_addr) != 0)
+        if (quicly_is_client(conn) && conn->super.remote.address.sa.sa_family == AF_UNSPEC) {
+            /* [detached mode] the client might not have known the server's address */
+        } else if (compare_socket_address(&conn->super.remote.address.sa, src_addr) != 0)
             return 0;
         if (conn->super.local.address.sa.sa_family != AF_UNSPEC &&
             compare_socket_address(&conn->super.local.address.sa, dest_addr) != 0)
@@ -5426,6 +5436,11 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             if (packet->version == 0) {
                 ret = handle_version_negotiation_packet(conn, packet);
                 goto Exit;
+            }
+            if (conn->super.remote.address.sa.sa_family == AF_UNSPEC) {
+                assert(quicly_is_client(conn));
+                set_address(&conn->super.remote.address, src_addr);
+                conn->super.remote.address_validation.validated = 1;
             }
         }
         if (packet->version != conn->super.version) {

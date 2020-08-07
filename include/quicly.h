@@ -476,6 +476,10 @@ struct _st_quicly_conn_public_t {
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
+            /**
+             * If the peer address has been validated. In addition to servers, client running in detached mode has this flag
+             * initially set to false.
+             */
             unsigned validated : 1;
             unsigned send_probe : 1;
         } address_validation;
