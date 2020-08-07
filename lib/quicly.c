@@ -5106,12 +5106,13 @@ static int handle_datagram_frame(quicly_conn_t *conn, struct st_quicly_handle_pa
     if (conn->super.ctx->transport_params.max_datagram_frame_size == 0)
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
-    /* handle the frame */
+    /* decode the frame */
     if ((ret = quicly_decode_datagram_frame(state->frame_type, &state->src, state->end, &frame)) != 0)
         return ret;
     QUICLY_PROBE(DATAGRAM_RECEIVE, conn, conn->stash.now, frame.payload.base, frame.payload.len);
-    if ((ret = conn->super.ctx->receive_datagram_frame->cb(conn->super.ctx->receive_datagram_frame, conn, frame.payload)) != 0)
-        return ret;
+
+    /* handle the frame. Applications might call quicly_close or other functions that modify the connection state. */
+    conn->super.ctx->receive_datagram_frame->cb(conn->super.ctx->receive_datagram_frame, conn, frame.payload);
 
     return 0;
 }

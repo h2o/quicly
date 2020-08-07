@@ -130,7 +130,7 @@ QUICLY_CALLBACK_TYPE(int, stream_open, quicly_stream_t *stream);
 /**
  *
  */
-QUICLY_CALLBACK_TYPE(int, receive_datagram_frame, quicly_conn_t *conn, ptls_iovec_t payload);
+QUICLY_CALLBACK_TYPE(void, receive_datagram_frame, quicly_conn_t *conn, ptls_iovec_t payload);
 /**
  * called when the connection is closed by remote peer
  */
