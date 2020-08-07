@@ -509,14 +509,12 @@ static void set_datagram_frame(quicly_conn_t *conn, ptls_iovec_t payload)
     quicly_set_datagram_frame(conn, payload);
 }
 
-static int on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
+static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
 {
     printf("DATAGRAM: %.*s\n", (int)payload.len, payload.base);
     /* send responds with a datagram frame */
     if (!quicly_is_client(conn))
         set_datagram_frame(conn, payload);
-
-    return 0;
 }
 
 static void enqueue_requests(quicly_conn_t *conn)
