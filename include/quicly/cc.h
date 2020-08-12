@@ -149,10 +149,13 @@ struct st_quicly_cc_impl_t {
 };
 
 /**
- * Initializes the congestion controller.
+ * The factory method for the modified Reno congestion controller.
  */
-void quicly_cc_reno_init(quicly_cc_t *cc, uint32_t initcwnd);
-void quicly_cc_cubic_init(quicly_cc_t *cc, uint32_t initcwnd);
+extern struct st_quicly_init_cc_t quicly_cc_reno_init;
+/**
+ * The factory method for the modified Reno congestion controller.
+ */
+extern struct st_quicly_init_cc_t quicly_cc_cubic_init;
 
 /**
  * Calculates the initial congestion window size given the maximum UDP payload size.
