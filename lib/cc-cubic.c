@@ -144,7 +144,7 @@ static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t 
 
 static const struct st_quicly_cc_impl_t cubic_impl = {CC_CUBIC, cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion};
 
-static void cubic_init(quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
     cc->impl = &cubic_impl;
