@@ -994,7 +994,7 @@ static void usage(const char *cmd)
            "  -a <alpn>                 ALPN identifier; repeat the option to set multiple\n"
            "                            candidates\n"
            "  -b <buffer-size>          specifies the size of the send / receive buffer in bytes\n"
-           "  -C <cid-key>              CID encryption key (server-only). Randomly generated\n"
+           "  -B <cid-key>              CID encryption key (server-only). Randomly generated\n"
            "                            if omitted.\n"
            "  -c certificate-file\n"
            "  -k key-file               specifies the credentials to be used for running the\n"
@@ -1068,7 +1068,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:C:c:d:k:Ee:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvx:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:B:c:d:k:Ee:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvx:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
@@ -1080,7 +1080,7 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
-        case 'C':
+        case 'B':
             cid_key = optarg;
             break;
         case 'c':
