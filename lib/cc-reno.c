@@ -80,7 +80,13 @@ static void reno_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *
     /* TODO */
 }
 
-static const struct st_quicly_cc_impl_t reno_impl = {CC_RENO_MODIFIED, reno_on_acked, reno_on_lost, reno_on_persistent_congestion};
+static void reno_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now)
+{
+    /* Unused */
+}
+
+static const struct st_quicly_cc_impl_t reno_impl = {CC_RENO_MODIFIED, reno_on_acked, reno_on_lost, reno_on_persistent_congestion,
+                                                     reno_on_sent};
 
 static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
