@@ -432,11 +432,10 @@ static void test_address_token_codec(void)
 
 static void do_test_record_receipt(size_t epoch)
 {
-    struct st_quicly_pn_space_t *space = alloc_pn_space(sizeof(*space));
+    struct st_quicly_pn_space_t *space =
+        alloc_pn_space(sizeof(*space), epoch == QUICLY_EPOCH_1RTT ? QUICLY_DEFAULT_PACKET_TOLERANCE : 1);
     uint64_t pn = 0;
     int64_t now = 12345, send_ack_at = INT64_MAX;
-
-    assert(space->packet_tolerance == 2);
 
     if (epoch == QUICLY_EPOCH_1RTT) {
         /* 2nd packet triggers an ack */

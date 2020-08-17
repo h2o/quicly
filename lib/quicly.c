@@ -1205,7 +1205,7 @@ static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
         destroy_stream(stream, 0);
 }
 
-static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
+static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz, uint32_t packet_tolerance)
 {
     struct st_quicly_pn_space_t *space;
 
@@ -1216,7 +1216,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
     space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->unacked_count = 0;
-    space->packet_tolerance = QUICLY_DEFAULT_PACKET_TOLERANCE;
+    space->packet_tolerance = packet_tolerance;
     space->ignore_order = 0;
     if (sz != sizeof(*space))
         memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
@@ -1312,7 +1312,7 @@ static int setup_cipher(quicly_conn_t *conn, size_t epoch, int is_enc, ptls_ciph
 static int setup_handshake_space_and_flow(quicly_conn_t *conn, size_t epoch)
 {
     struct st_quicly_handshake_space_t **space = epoch == QUICLY_EPOCH_INITIAL ? &conn->initial : &conn->handshake;
-    if ((*space = (void *)alloc_pn_space(sizeof(struct st_quicly_handshake_space_t))) == NULL)
+    if ((*space = (void *)alloc_pn_space(sizeof(struct st_quicly_handshake_space_t), 1)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     return create_handshake_flow(conn, epoch);
 }
@@ -1338,7 +1338,8 @@ static void free_application_space(struct st_quicly_application_space_t **space)
 
 static int setup_application_space(quicly_conn_t *conn)
 {
-    if ((conn->application = (void *)alloc_pn_space(sizeof(struct st_quicly_application_space_t))) == NULL)
+    if ((conn->application =
+             (void *)alloc_pn_space(sizeof(struct st_quicly_application_space_t), QUICLY_DEFAULT_PACKET_TOLERANCE)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     /* prohibit key-update until receiving an ACK for an 1-RTT packet */
