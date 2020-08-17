@@ -477,6 +477,22 @@ static void do_test_record_receipt(size_t epoch)
     ok(send_ack_at == now);
     now += 1;
 
+    /* reset */
+    space->unacked_count = 0;
+    send_ack_at = INT64_MAX;
+
+    /* if 1-RTT, test ignore-order */
+    if (epoch == QUICLY_EPOCH_1RTT) {
+        space->ignore_order = 1;
+        pn++; /* gap */
+        ok(record_receipt(space, pn++, 0, now, &send_ack_at) == 0);
+        ok(send_ack_at == now + QUICLY_DELAYED_ACK_TIMEOUT);
+        now += 1;
+        ok(record_receipt(space, pn++, 0, now, &send_ack_at) == 0);
+        ok(send_ack_at == now);
+        now += 1;
+    }
+
     do_free_pn_space(space);
 }
 
