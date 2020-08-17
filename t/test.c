@@ -439,15 +439,15 @@ static void do_test_record_receipt(size_t epoch)
 
     if (epoch == QUICLY_EPOCH_1RTT) {
         /* 2nd packet triggers an ack */
-        ok(record_receipt(space, pn++, 0, epoch, now, &send_ack_at) == 0);
+        ok(record_receipt(space, pn++, 0, now, &send_ack_at) == 0);
         ok(send_ack_at == now + QUICLY_DELAYED_ACK_TIMEOUT);
         now += 1;
-        ok(record_receipt(space, pn++, 0, epoch, now, &send_ack_at) == 0);
+        ok(record_receipt(space, pn++, 0, now, &send_ack_at) == 0);
         ok(send_ack_at == now);
         now += 1;
     } else {
         /* every packet triggers an ack */
-        ok(record_receipt(space, pn++, 0, epoch, now, &send_ack_at) == 0);
+        ok(record_receipt(space, pn++, 0, now, &send_ack_at) == 0);
         ok(send_ack_at == now);
         now += 1;
     }
@@ -457,23 +457,23 @@ static void do_test_record_receipt(size_t epoch)
     send_ack_at = INT64_MAX;
 
     /* ack-only packets do not elicit an ack */
-    ok(record_receipt(space, pn++, 1, epoch, now, &send_ack_at) == 0);
+    ok(record_receipt(space, pn++, 1, now, &send_ack_at) == 0);
     ok(send_ack_at == INT64_MAX);
     now += 1;
-    ok(record_receipt(space, pn++, 1, epoch, now, &send_ack_at) == 0);
+    ok(record_receipt(space, pn++, 1, now, &send_ack_at) == 0);
     ok(send_ack_at == INT64_MAX);
     now += 1;
     pn++; /* gap */
-    ok(record_receipt(space, pn++, 1, epoch, now, &send_ack_at) == 0);
+    ok(record_receipt(space, pn++, 1, now, &send_ack_at) == 0);
     ok(send_ack_at == INT64_MAX);
     now += 1;
-    ok(record_receipt(space, pn++, 1, epoch, now, &send_ack_at) == 0);
+    ok(record_receipt(space, pn++, 1, now, &send_ack_at) == 0);
     ok(send_ack_at == INT64_MAX);
     now += 1;
 
     /* gap triggers an ack */
     pn += 1; /* gap */
-    ok(record_receipt(space, pn++, 0, epoch, now, &send_ack_at) == 0);
+    ok(record_receipt(space, pn++, 0, now, &send_ack_at) == 0);
     ok(send_ack_at == now);
     now += 1;
 
