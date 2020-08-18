@@ -1360,6 +1360,23 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+#if defined(IP_DONTFRAG)
+    {
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_DONTFRAG, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IP_DONTFRAG) failed");
+            return 1;
+        }
+    }
+#elif defined(IP_PMTUDISC_DO)
+    {
+        int opt = IP_PMTUDISC_DO;
+        if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0) {
+            perror("setsockopt(IP_MTU_DISCOVER) failed");
+            return 1;
+        }
+    }
+#endif
 
     return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, host);
 }
