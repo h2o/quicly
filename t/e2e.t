@@ -173,7 +173,8 @@ subtest "stateless-reset" => sub {
     }
     # check that the stateless reset is logged
     my $events = slurp_file("$tempdir/events");
-    like $events, qr/"type":"stateless-reset-receive",/m;
+    like $events, qr/"type":"stateless-reset-receive",/m, 'got stateless reset';
+    unlike +($events =~ /"type":"stateless-reset-receive",.*?\n/ and $'), qr/"type":"packet-commit",/m, 'nothing sent after receiving stateless reset';
 };
 
 subtest "idle-timeout" => sub {
