@@ -1205,7 +1205,7 @@ static void destroy_handshake_flow(quicly_conn_t *conn, size_t epoch)
         destroy_stream(stream, 0);
 }
 
-static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
+static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz, uint32_t packet_tolerance)
 {
     struct st_quicly_pn_space_t *space;
 
@@ -1216,7 +1216,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz)
     space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->unacked_count = 0;
-    space->packet_tolerance = QUICLY_DEFAULT_PACKET_TOLERANCE;
+    space->packet_tolerance = packet_tolerance;
     space->ignore_order = 0;
     if (sz != sizeof(*space))
         memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
@@ -1254,7 +1254,7 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
     return 0;
 }
 
-static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, size_t epoch)
+static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, int64_t now, int64_t *send_ack_at)
 {
     int ret, ack_now, is_out_of_order;
 
@@ -1265,20 +1265,19 @@ static int record_receipt(quicly_conn_t *conn, struct st_quicly_pn_space_t *spac
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
-        space->largest_pn_received_at = conn->stash.now;
+        space->largest_pn_received_at = now;
 
     /* if the received packet is ack-eliciting, update / schedule transmission of ACK */
     if (!is_ack_only) {
         space->unacked_count++;
-        /* Ack after QUICLY_NUM_PACKETS_BEFORE_ACK packets or after the delayed ack timeout */
-        if (space->unacked_count >= space->packet_tolerance || epoch == QUICLY_EPOCH_INITIAL || epoch == QUICLY_EPOCH_HANDSHAKE)
+        if (space->unacked_count >= space->packet_tolerance)
             ack_now = 1;
     }
 
     if (ack_now) {
-        conn->egress.send_ack_at = conn->stash.now;
-    } else if (conn->egress.send_ack_at == INT64_MAX && space->unacked_count != 0) {
-        conn->egress.send_ack_at = conn->stash.now + QUICLY_DELAYED_ACK_TIMEOUT;
+        *send_ack_at = now;
+    } else if (*send_ack_at == INT64_MAX && space->unacked_count != 0) {
+        *send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
     ret = 0;
@@ -1311,7 +1310,7 @@ static int setup_cipher(quicly_conn_t *conn, size_t epoch, int is_enc, ptls_ciph
 static int setup_handshake_space_and_flow(quicly_conn_t *conn, size_t epoch)
 {
     struct st_quicly_handshake_space_t **space = epoch == QUICLY_EPOCH_INITIAL ? &conn->initial : &conn->handshake;
-    if ((*space = (void *)alloc_pn_space(sizeof(struct st_quicly_handshake_space_t))) == NULL)
+    if ((*space = (void *)alloc_pn_space(sizeof(struct st_quicly_handshake_space_t), 1)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     return create_handshake_flow(conn, epoch);
 }
@@ -1337,7 +1336,8 @@ static void free_application_space(struct st_quicly_application_space_t **space)
 
 static int setup_application_space(quicly_conn_t *conn)
 {
-    if ((conn->application = (void *)alloc_pn_space(sizeof(struct st_quicly_application_space_t))) == NULL)
+    if ((conn->application =
+             (void *)alloc_pn_space(sizeof(struct st_quicly_application_space_t), QUICLY_DEFAULT_PACKET_TOLERANCE)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
     /* prohibit key-update until receiving an ACK for an 1-RTT packet */
@@ -5217,7 +5217,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     (*conn)->super.stats.num_bytes.received += packet->datagram_size;
     if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
-    if ((ret = record_receipt(*conn, &(*conn)->initial->super, pn, 0, QUICLY_EPOCH_INITIAL)) != 0)
+    if ((ret = record_receipt(&(*conn)->initial->super, pn, 0, (*conn)->stash.now, &(*conn)->egress.send_ack_at)) != 0)
         goto Exit;
 
 Exit:
@@ -5440,7 +5440,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     if ((ret = handle_payload(conn, epoch, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
-        if ((ret = record_receipt(conn, *space, pn, is_ack_only, epoch)) != 0)
+        if ((ret = record_receipt(*space, pn, is_ack_only, conn->stash.now, &conn->egress.send_ack_at)) != 0)
             goto Exit;
     }
 
