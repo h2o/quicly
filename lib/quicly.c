@@ -3540,8 +3540,8 @@ Exit:
     return ret;
 }
 
-size_t quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
-                                       struct sockaddr *src_addr, ptls_iovec_t src_cid, void *payload)
+size_t quicly_send_version_negotiation(quicly_context_t *ctx, ptls_iovec_t dest_cid, ptls_iovec_t src_cid, const uint32_t *versions,
+                                       void *payload)
 {
     uint8_t *dst = payload;
 
@@ -3563,8 +3563,14 @@ size_t quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *d
         dst += src_cid.len;
     }
     /* supported_versions */
-    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION_CURRENT);
-    dst = quicly_encode32(dst, QUICLY_PROTOCOL_VERSION_DRAFT27);
+    for (const uint32_t *v = versions; *v != 0; ++v)
+        dst = quicly_encode32(dst, *v);
+    /* add a greasing version. This also covers the case where an empty list is specified by the caller to indicate rejection. */
+    uint32_t grease_version = 0;
+    if (src_cid.len >= sizeof(grease_version))
+        memcpy(&grease_version, src_cid.base, sizeof(grease_version));
+    grease_version = (grease_version & 0xf0f0f0f0) | 0x0a0a0a0a;
+    dst = quicly_encode32(dst, grease_version);
 
     return dst - (uint8_t *)payload;
 }
@@ -4137,9 +4143,8 @@ Exit:
     return ret;
 }
 
-size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, struct sockaddr *dest_addr,
-                                       ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, const char *err_desc,
-                                       void *datagram)
+size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
+                                       ptls_iovec_t src_cid, const char *err_desc, void *datagram)
 {
     struct st_quicly_cipher_context_t egress = {};
     const struct st_ptls_salt_t *salt;
@@ -4187,8 +4192,7 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_
     return datagram_len;
 }
 
-size_t quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
-                                   const void *src_cid, void *payload)
+size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, void *payload)
 {
     uint8_t *base = payload;
 
@@ -5937,3 +5941,5 @@ void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, c
     QUICLY_DEBUG_MESSAGE(conn, function, line, buf);
 #endif
 }
+
+const uint32_t quicly_supported_versions[] = {QUICLY_PROTOCOL_VERSION_CURRENT, QUICLY_PROTOCOL_VERSION_DRAFT27, 0};
