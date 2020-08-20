@@ -3540,8 +3540,8 @@ Exit:
     return ret;
 }
 
-size_t quicly_send_version_negotiation(quicly_context_t *ctx, struct sockaddr *dest_addr, ptls_iovec_t dest_cid,
-                                       struct sockaddr *src_addr, ptls_iovec_t src_cid, const uint32_t *versions, void *payload)
+size_t quicly_send_version_negotiation(quicly_context_t *ctx, ptls_iovec_t dest_cid, ptls_iovec_t src_cid, const uint32_t *versions,
+                                       void *payload)
 {
     uint8_t *dst = payload;
 
@@ -4143,9 +4143,8 @@ Exit:
     return ret;
 }
 
-size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, struct sockaddr *dest_addr,
-                                       ptls_iovec_t dest_cid, struct sockaddr *src_addr, ptls_iovec_t src_cid, const char *err_desc,
-                                       void *datagram)
+size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
+                                       ptls_iovec_t src_cid, const char *err_desc, void *datagram)
 {
     struct st_quicly_cipher_context_t egress = {};
     const struct st_ptls_salt_t *salt;
@@ -4193,8 +4192,7 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_
     return datagram_len;
 }
 
-size_t quicly_send_stateless_reset(quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
-                                   const void *src_cid, void *payload)
+size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, void *payload)
 {
     uint8_t *base = payload;
 
