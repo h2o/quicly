@@ -948,6 +948,14 @@ quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, quicly_stream_id_t strea
  */
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream, int unidirectional);
 /**
+ * This function returns a stream that is already open. Or if the given ID refers a stream that can be opened by the peer but is
+ * yet-to-be opened, the functions opens that stream and returns. Otherwise, `*stream` is set to NULL. Note that invocation of this
+ * function might open not only the stream that is referred to by the `stream_id`, but other streams too. This function can be used
+ * when implementing application protocols that send references to other streams on one stream (e.g., PRIORITY_UPDATE frame of
+ * HTTP/3).
+ */
+int quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id, quicly_stream_t **stream);
+/**
  *
  */
 void quicly_reset_stream(quicly_stream_t *stream, int err);
