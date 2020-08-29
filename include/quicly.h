@@ -93,16 +93,6 @@ typedef struct st_quicly_stream_t quicly_stream_t;
 typedef struct st_quicly_send_context_t quicly_send_context_t;
 typedef struct st_quicly_address_token_plaintext_t quicly_address_token_plaintext_t;
 
-#define QUICLY_CALLBACK_TYPE0(ret, name)                                                                                           \
-    typedef struct st_quicly_##name##_t {                                                                                          \
-        ret (*cb)(struct st_quicly_##name##_t * self);                                                                             \
-    } quicly_##name##_t
-
-#define QUICLY_CALLBACK_TYPE(ret, name, ...)                                                                                       \
-    typedef struct st_quicly_##name##_t {                                                                                          \
-        ret (*cb)(struct st_quicly_##name##_t * self, __VA_ARGS__);                                                                \
-    } quicly_##name##_t
-
 /**
  * stream scheduler
  */
@@ -146,11 +136,6 @@ QUICLY_CALLBACK_TYPE(int, save_resumption_token, quicly_conn_t *conn, ptls_iovec
  */
 QUICLY_CALLBACK_TYPE(int, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
                      quicly_address_token_plaintext_t *token);
-/**
- * called to initialize a congestion controller for a new connection.
- * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
- */
-QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int64_t now);
 /**
  * crypto offload API
  */
@@ -313,9 +298,9 @@ struct st_quicly_context_t {
      */
     quicly_crypto_engine_t *crypto_engine;
     /**
-     * initializes a congestion controller for given connection.
+     * instantiates a congestion controller
      */
-    quicly_init_cc_t *init_cc;
+    quicly_create_cc_t *create_cc;
 };
 
 /**
@@ -407,7 +392,7 @@ typedef struct st_quicly_stats_t {
     /**
      * Congestion control stats (experimental; TODO cherry-pick what can be exposed as part of a stable API).
      */
-    quicly_cc_t cc;
+    quicly_cc_t *cc;
 } quicly_stats_t;
 
 /**

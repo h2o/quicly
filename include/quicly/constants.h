@@ -107,6 +107,16 @@ extern "C" {
 #define QUICLY_ERROR_STATE_EXHAUSTION 0xff07
 #define QUICLY_ERROR_INVALID_INITIAL_VERSION 0xff08
 
+#define QUICLY_CALLBACK_TYPE0(ret, name)                                                                                           \
+    typedef struct st_quicly_##name##_t {                                                                                          \
+        ret (*cb)(struct st_quicly_##name##_t * self);                                                                             \
+    } quicly_##name##_t
+
+#define QUICLY_CALLBACK_TYPE(ret, name, ...)                                                                                       \
+    typedef struct st_quicly_##name##_t {                                                                                          \
+        ret (*cb)(struct st_quicly_##name##_t * self, __VA_ARGS__);                                                                \
+    } quicly_##name##_t
+
 typedef int64_t quicly_stream_id_t;
 
 typedef struct st_quicly_conn_t quicly_conn_t;

@@ -61,6 +61,52 @@ typedef struct st_quicly_cc_t {
      * Current congestion window.
      */
     uint32_t cwnd;
+} quicly_cc_t;
+
+struct st_quicly_cc_impl_t {
+    /**
+     * Congestion controller type.
+     */
+    quicly_cc_type_t type;
+    /**
+     *
+     */
+    void (*on_destroy)(quicly_cc_t *cc);
+    /**
+     * Called when a packet is newly acknowledged.
+     */
+    void (*cc_on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
+                        int64_t now, uint32_t max_udp_payload_size);
+    /**
+     * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
+     * used for setting the recovery window.
+     */
+    void (*cc_on_lost)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, int64_t now,
+                       uint32_t max_udp_payload_size);
+    /**
+     * Called when persistent congestion is observed.
+     */
+    void (*cc_on_persistent_congestion)(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
+    /**
+     * Called after a packet is sent.
+     */
+    void (*cc_on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
+};
+
+/**
+ * called to initialize a congestion controller for a new connection.
+ * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
+ */
+QUICLY_CALLBACK_TYPE(quicly_cc_t *, create_cc, uint32_t initcwnd, int64_t now);
+
+/**
+ * internal structure shared by Reno and Cubic CC
+ */
+struct st_quicly_cc_loss_based_t {
+    /**
+     *
+     */
+    quicly_cc_t super;
     /**
      * Current slow start threshold.
      */
@@ -107,7 +153,7 @@ typedef struct st_quicly_cc_t {
              */
             int64_t last_sent_time;
         } cubic;
-    } state;
+    };
     /**
      * Initial congestion window.
      */
@@ -128,42 +174,16 @@ typedef struct st_quicly_cc_t {
      * Total number of number of loss episodes (congestion window reductions).
      */
     uint32_t num_loss_episodes;
-} quicly_cc_t;
-
-struct st_quicly_cc_impl_t {
-    /**
-     * Congestion controller type.
-     */
-    quicly_cc_type_t type;
-    /**
-     * Called when a packet is newly acknowledged.
-     */
-    void (*cc_on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                        int64_t now, uint32_t max_udp_payload_size);
-    /**
-     * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
-     * used for setting the recovery window.
-     */
-    void (*cc_on_lost)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, int64_t now,
-                       uint32_t max_udp_payload_size);
-    /**
-     * Called when persistent congestion is observed.
-     */
-    void (*cc_on_persistent_congestion)(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
-    /**
-     * Called after a packet is sent.
-     */
-    void (*cc_on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
 };
 
 /**
  * The factory method for the modified Reno congestion controller.
  */
-extern struct st_quicly_init_cc_t quicly_cc_reno_init;
+extern quicly_create_cc_t quicly_cc_reno_create;
 /**
  * The factory method for the modified Reno congestion controller.
  */
-extern struct st_quicly_init_cc_t quicly_cc_cubic_init;
+extern quicly_create_cc_t quicly_cc_cubic_create;
 
 /**
  * Calculates the initial congestion window size given the maximum UDP payload size.
