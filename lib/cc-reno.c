@@ -96,8 +96,15 @@ static void reno_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     /* Unused */
 }
 
+static void reno_get_stats(quicly_cc_t *_cc, quicly_cc_stats_t *stats)
+{
+    struct st_quicly_cc_loss_based_t *cc = (void *)_cc;
+
+    QUICLY_CC_SET_STATS(stats, &cc->super, cc);
+}
+
 static const struct st_quicly_cc_impl_t reno_impl = {
-    CC_RENO_MODIFIED, reno_destroy, reno_on_acked, reno_on_lost, reno_on_persistent_congestion, reno_on_sent};
+    CC_RENO_MODIFIED, reno_destroy, reno_on_acked, reno_on_lost, reno_on_persistent_congestion, reno_on_sent, reno_get_stats};
 
 static quicly_cc_t *reno_create(quicly_create_cc_t *self, uint32_t initcwnd, int64_t now)
 {

@@ -48,6 +48,57 @@ typedef enum {
 } quicly_cc_type_t;
 
 /**
+ * Values to be reported by the congestion controller as part of the stats, if available.
+ */
+#define QUICLY_CC_COMMON_FIELDS                                                                                                    \
+    /**                                                                                                                            \
+     * Initial congestion window.                                                                                                  \
+     */                                                                                                                            \
+    uint32_t cwnd_initial;                                                                                                         \
+    /**                                                                                                                            \
+     * Congestion window at the end of slow start.                                                                                 \
+     */                                                                                                                            \
+    uint32_t cwnd_exiting_slow_start;                                                                                              \
+    /**                                                                                                                            \
+     * Minimum congestion window during the connection.                                                                            \
+     */                                                                                                                            \
+    uint32_t cwnd_minimum;                                                                                                         \
+    /**                                                                                                                            \
+     * Maximum congestion window during the connection.                                                                            \
+     */                                                                                                                            \
+    uint32_t cwnd_maximum;                                                                                                         \
+    /**                                                                                                                            \
+     * Total number of number of loss episodes (congestion window reductions).                                                     \
+     */                                                                                                                            \
+    uint32_t num_loss_episodes;                                                                                                    \
+    /**                                                                                                                            \
+     * Current slow start threshold.                                                                                               \
+     */                                                                                                                            \
+    uint32_t ssthresh
+
+/**
+ * The stats.
+ */
+typedef struct st_quicly_cc_stats_t {
+    quicly_cc_type_t type;
+    uint32_t cwnd;
+    QUICLY_CC_COMMON_FIELDS;
+} quicly_cc_stats_t;
+
+#define QUICLY_CC_SET_STATS_SET_ONE(dst, src, field) ((dst)->field = (src)->field)
+#define QUICLY_CC_SET_STATS(dst, cc, src)                                                                                          \
+    do {                                                                                                                           \
+        (dst)->type = (cc)->impl->type;                                                                                            \
+        (dst)->cwnd = (cc)->cwnd;                                                                                                  \
+        QUICLY_CC_SET_STATS_SET_ONE(dst, src, cwnd_initial);                                                                       \
+        QUICLY_CC_SET_STATS_SET_ONE(dst, src, cwnd_exiting_slow_start);                                                            \
+        QUICLY_CC_SET_STATS_SET_ONE(dst, src, cwnd_minimum);                                                                       \
+        QUICLY_CC_SET_STATS_SET_ONE(dst, src, cwnd_maximum);                                                                       \
+        QUICLY_CC_SET_STATS_SET_ONE(dst, src, num_loss_episodes);                                                                  \
+        QUICLY_CC_SET_STATS_SET_ONE(dst, src, ssthresh);                                                                           \
+    } while (0)
+
+/**
  * Holds pointers to concrete congestion control implementation functions.
  */
 struct st_quicly_cc_impl_t;
@@ -75,22 +126,26 @@ struct st_quicly_cc_impl_t {
     /**
      * Called when a packet is newly acknowledged.
      */
-    void (*cc_on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                        int64_t now, uint32_t max_udp_payload_size);
+    void (*on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
+                     int64_t now, uint32_t max_udp_payload_size);
     /**
      * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
      * used for setting the recovery window.
      */
-    void (*cc_on_lost)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, int64_t now,
-                       uint32_t max_udp_payload_size);
+    void (*on_lost)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, int64_t now,
+                    uint32_t max_udp_payload_size);
     /**
      * Called when persistent congestion is observed.
      */
-    void (*cc_on_persistent_congestion)(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
+    void (*on_persistent_congestion)(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
     /**
      * Called after a packet is sent.
      */
-    void (*cc_on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
+    void (*on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
+    /**
+     * Callback used for obtaining the CC stats.
+     */
+    void (*get_stats)(quicly_cc_t *cc, quicly_cc_stats_t *stats);
 };
 
 /**
@@ -108,9 +163,9 @@ struct st_quicly_cc_loss_based_t {
      */
     quicly_cc_t super;
     /**
-     * Current slow start threshold.
+     *
      */
-    uint32_t ssthresh;
+    QUICLY_CC_COMMON_FIELDS;
     /**
      * Packet number indicating end of recovery period, if in recovery.
      */
@@ -154,26 +209,6 @@ struct st_quicly_cc_loss_based_t {
             int64_t last_sent_time;
         } cubic;
     };
-    /**
-     * Initial congestion window.
-     */
-    uint32_t cwnd_initial;
-    /**
-     * Congestion window at the end of slow start.
-     */
-    uint32_t cwnd_exiting_slow_start;
-    /**
-     * Minimum congestion window during the connection.
-     */
-    uint32_t cwnd_minimum;
-    /**
-     * Maximum congestion window during the connection.
-     */
-    uint32_t cwnd_maximum;
-    /**
-     * Total number of number of loss episodes (congestion window reductions).
-     */
-    uint32_t num_loss_episodes;
 };
 
 /**

@@ -171,8 +171,15 @@ static void cubic_on_sent(quicly_cc_t *_cc, const quicly_loss_t *loss, uint32_t 
     cc->cubic.last_sent_time = now;
 }
 
+static void cubic_get_stats(quicly_cc_t *_cc, quicly_cc_stats_t *stats)
+{
+    struct st_quicly_cc_loss_based_t *cc = (void *)_cc;
+
+    QUICLY_CC_SET_STATS(stats, &cc->super, cc);
+}
+
 static const struct st_quicly_cc_impl_t cubic_impl = {
-    CC_CUBIC, cubic_destroy, cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion, cubic_on_sent};
+    CC_CUBIC, cubic_destroy, cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion, cubic_on_sent, cubic_get_stats};
 
 static quicly_cc_t *cubic_create(quicly_create_cc_t *self, uint32_t initcwnd, int64_t now)
 {
