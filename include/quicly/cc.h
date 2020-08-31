@@ -40,11 +40,11 @@ typedef enum {
     /**
      * Reno, with 0.7 beta reduction
      */
-    CC_RENO_MODIFIED,
+    QUICLY_CC_RENO_MODIFIED,
     /**
      * CUBIC (RFC 8312)
      */
-    CC_CUBIC
+    QUICLY_CC_CUBIC
 } quicly_cc_type_t;
 
 /**

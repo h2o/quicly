@@ -210,7 +210,7 @@ static void cubic_get_stats(quicly_cc_t *_cc, quicly_cc_stats_t *stats)
 {
     struct st_quicly_cc_cubic_t *cc = (void *)_cc;
 
-    QUICLY_CC_SET_STATS(stats, &cc->super, CC_CUBIC, cc);
+    QUICLY_CC_SET_STATS(stats, &cc->super, QUICLY_CC_CUBIC, cc);
 }
 
 static const struct st_quicly_cc_impl_t cubic_impl = {cubic_destroy, cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion,

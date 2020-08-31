@@ -119,7 +119,7 @@ static void reno_get_stats(quicly_cc_t *_cc, quicly_cc_stats_t *stats)
 {
     struct st_quicly_cc_reno_t *cc = (void *)_cc;
 
-    QUICLY_CC_SET_STATS(stats, &cc->super, CC_RENO_MODIFIED, cc);
+    QUICLY_CC_SET_STATS(stats, &cc->super, QUICLY_CC_RENO_MODIFIED, cc);
 }
 
 static const struct st_quicly_cc_impl_t reno_impl = {reno_destroy, reno_on_acked, reno_on_lost, reno_on_persistent_congestion,
