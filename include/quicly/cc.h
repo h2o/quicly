@@ -52,6 +52,10 @@ typedef enum {
  */
 #define QUICLY_CC_COMMON_FIELDS                                                                                                    \
     /**                                                                                                                            \
+     * type                                                                                                                        \
+     */                                                                                                                            \
+    quicly_cc_type_t type;                                                                                                         \
+    /**                                                                                                                            \
      * Initial congestion window.                                                                                                  \
      */                                                                                                                            \
     uint32_t cwnd_initial;                                                                                                         \
@@ -80,16 +84,15 @@ typedef enum {
  * The stats.
  */
 typedef struct st_quicly_cc_stats_t {
-    quicly_cc_type_t type;
     uint32_t cwnd;
     QUICLY_CC_COMMON_FIELDS;
 } quicly_cc_stats_t;
 
 #define QUICLY_CC_SET_STATS_SET_ONE(dst, src, field) ((dst)->field = (src)->field)
-#define QUICLY_CC_SET_STATS(dst, cc, src)                                                                                          \
+#define QUICLY_CC_SET_STATS(dst, cc, ty, src)                                                                                      \
     do {                                                                                                                           \
-        (dst)->type = (cc)->impl->type;                                                                                            \
         (dst)->cwnd = (cc)->cwnd;                                                                                                  \
+        (dst)->type = ty;                                                                                                          \
         QUICLY_CC_SET_STATS_SET_ONE(dst, src, cwnd_initial);                                                                       \
         QUICLY_CC_SET_STATS_SET_ONE(dst, src, cwnd_exiting_slow_start);                                                            \
         QUICLY_CC_SET_STATS_SET_ONE(dst, src, cwnd_minimum);                                                                       \
@@ -115,10 +118,6 @@ typedef struct st_quicly_cc_t {
 } quicly_cc_t;
 
 struct st_quicly_cc_impl_t {
-    /**
-     * Congestion controller type.
-     */
-    quicly_cc_type_t type;
     /**
      *
      */
