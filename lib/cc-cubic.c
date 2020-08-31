@@ -31,39 +31,74 @@ typedef double cubic_float_t;
 #define QUICLY_CUBIC_C ((cubic_float_t)0.4)
 #define QUICLY_CUBIC_BETA ((cubic_float_t)0.7)
 
+struct st_quicly_cc_cubic_t {
+    /**
+     *
+     */
+    quicly_cc_t super;
+    /**
+     *
+     */
+    QUICLY_CC_COMMON_FIELDS;
+    /**
+     * Packet number indicating end of recovery period, if in recovery.
+     */
+    uint64_t recovery_end;
+    /**
+     * Time offset from the latest congestion event until cwnd reaches W_max again.
+     */
+    double k;
+    /**
+     * Last cwnd value before the latest congestion event.
+     */
+    uint32_t w_max;
+    /**
+     * W_max value from the previous congestion event.
+     */
+    uint32_t w_last_max;
+    /**
+     * Timestamp of the latest congestion event.
+     */
+    int64_t avoidance_start;
+    /**
+     * Timestamp of the most recent send operation.
+     */
+    int64_t last_sent_time;
+};
+
 /* Calculates the time elapsed since the last congestion event (parameter t) */
-static cubic_float_t calc_cubic_t(const struct st_quicly_cc_loss_based_t *cc, int64_t now)
+static cubic_float_t calc_cubic_t(const struct st_quicly_cc_cubic_t *cc, int64_t now)
 {
-    cubic_float_t clock_delta = now - cc->cubic.avoidance_start;
+    cubic_float_t clock_delta = now - cc->avoidance_start;
     return clock_delta / 1000; /* ms -> s */
 }
 
 /* RFC 8312, Equation 1; using bytes as unit instead of MSS */
-static uint32_t calc_w_cubic(const struct st_quicly_cc_loss_based_t *cc, cubic_float_t t_sec, uint32_t max_udp_payload_size)
+static uint32_t calc_w_cubic(const struct st_quicly_cc_cubic_t *cc, cubic_float_t t_sec, uint32_t max_udp_payload_size)
 {
-    cubic_float_t tk = t_sec - cc->cubic.k;
-    return (QUICLY_CUBIC_C * (tk * tk * tk) * max_udp_payload_size) + cc->cubic.w_max;
+    cubic_float_t tk = t_sec - cc->k;
+    return (QUICLY_CUBIC_C * (tk * tk * tk) * max_udp_payload_size) + cc->w_max;
 }
 
 /* RFC 8312, Equation 2 */
 /* K depends solely on W_max, so we update both together on congestion events */
-static void update_cubic_k(struct st_quicly_cc_loss_based_t *cc, uint32_t max_udp_payload_size)
+static void update_cubic_k(struct st_quicly_cc_cubic_t *cc, uint32_t max_udp_payload_size)
 {
-    cubic_float_t w_max_mss = cc->cubic.w_max / (cubic_float_t)max_udp_payload_size;
-    cc->cubic.k = cbrt(w_max_mss * ((1 - QUICLY_CUBIC_BETA) / QUICLY_CUBIC_C));
+    cubic_float_t w_max_mss = cc->w_max / (cubic_float_t)max_udp_payload_size;
+    cc->k = cbrt(w_max_mss * ((1 - QUICLY_CUBIC_BETA) / QUICLY_CUBIC_C));
 }
 
 /* RFC 8312, Equation 4; using bytes as unit instead of MSS */
-static uint32_t calc_w_est(const struct st_quicly_cc_loss_based_t *cc, cubic_float_t t_sec, cubic_float_t rtt_sec,
+static uint32_t calc_w_est(const struct st_quicly_cc_cubic_t *cc, cubic_float_t t_sec, cubic_float_t rtt_sec,
                            uint32_t max_udp_payload_size)
 {
-    return (cc->cubic.w_max * QUICLY_CUBIC_BETA) +
+    return (cc->w_max * QUICLY_CUBIC_BETA) +
            ((3 * (1 - QUICLY_CUBIC_BETA) / (1 + QUICLY_CUBIC_BETA)) * (t_sec / rtt_sec) * max_udp_payload_size);
 }
 
 static void cubic_destroy(quicly_cc_t *_cc)
 {
-    struct st_quicly_cc_loss_based_t *cc = (void *)_cc;
+    struct st_quicly_cc_cubic_t *cc = (void *)_cc;
     free(cc);
 }
 
@@ -71,7 +106,7 @@ static void cubic_destroy(quicly_cc_t *_cc)
 static void cubic_on_acked(quicly_cc_t *_cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
                            int64_t now, uint32_t max_udp_payload_size)
 {
-    struct st_quicly_cc_loss_based_t *cc = (void *)_cc;
+    struct st_quicly_cc_cubic_t *cc = (void *)_cc;
 
     assert(inflight >= bytes);
     /* Do not increase congestion window while in recovery. */
@@ -115,7 +150,7 @@ static void cubic_on_acked(quicly_cc_t *_cc, const quicly_loss_t *loss, uint32_t
 static void cubic_on_lost(quicly_cc_t *_cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
                           int64_t now, uint32_t max_udp_payload_size)
 {
-    struct st_quicly_cc_loss_based_t *cc = (void *)_cc;
+    struct st_quicly_cc_cubic_t *cc = (void *)_cc;
 
     /* Nothing to do if loss is in recovery window. */
     if (lost_pn < cc->recovery_end)
@@ -126,16 +161,16 @@ static void cubic_on_lost(quicly_cc_t *_cc, const quicly_loss_t *loss, uint32_t 
     if (cc->cwnd_exiting_slow_start == 0)
         cc->cwnd_exiting_slow_start = cc->super.cwnd;
 
-    cc->cubic.avoidance_start = now;
-    cc->cubic.w_max = cc->super.cwnd;
+    cc->avoidance_start = now;
+    cc->w_max = cc->super.cwnd;
 
     /* RFC 8312, Section 4.6; Fast Convergence */
     /* w_last_max is initialized to zero; therefore this condition is false when exiting slow start */
-    if (cc->cubic.w_max < cc->cubic.w_last_max) {
-        cc->cubic.w_last_max = cc->cubic.w_max;
-        cc->cubic.w_max *= (1.0 + QUICLY_CUBIC_BETA) / 2.0;
+    if (cc->w_max < cc->w_last_max) {
+        cc->w_last_max = cc->w_max;
+        cc->w_max *= (1.0 + QUICLY_CUBIC_BETA) / 2.0;
     } else {
-        cc->cubic.w_last_max = cc->cubic.w_max;
+        cc->w_last_max = cc->w_max;
     }
     update_cubic_k(cc, max_udp_payload_size);
 
@@ -156,24 +191,24 @@ static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t 
 
 static void cubic_on_sent(quicly_cc_t *_cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now)
 {
-    struct st_quicly_cc_loss_based_t *cc = (void *)_cc;
+    struct st_quicly_cc_cubic_t *cc = (void *)_cc;
 
     /* Prevent extreme cwnd growth following an idle period caused by application limit.
      * This fixes the W_cubic/W_est calculations by effectively subtracting the idle period
      * The sender is coming out of quiescence if the current packet is the only one in flight.
      * (see https://github.com/torvalds/linux/commit/30927520dbae297182990bb21d08762bcc35ce1d). */
-    if (loss->sentmap.bytes_in_flight <= bytes && cc->cubic.avoidance_start != 0 && cc->cubic.last_sent_time != 0) {
-        int64_t delta = now - cc->cubic.last_sent_time;
+    if (loss->sentmap.bytes_in_flight <= bytes && cc->avoidance_start != 0 && cc->last_sent_time != 0) {
+        int64_t delta = now - cc->last_sent_time;
         if (delta > 0)
-            cc->cubic.avoidance_start += delta;
+            cc->avoidance_start += delta;
     }
 
-    cc->cubic.last_sent_time = now;
+    cc->last_sent_time = now;
 }
 
 static void cubic_get_stats(quicly_cc_t *_cc, quicly_cc_stats_t *stats)
 {
-    struct st_quicly_cc_loss_based_t *cc = (void *)_cc;
+    struct st_quicly_cc_cubic_t *cc = (void *)_cc;
 
     QUICLY_CC_SET_STATS(stats, &cc->super, cc);
 }
@@ -183,12 +218,12 @@ static const struct st_quicly_cc_impl_t cubic_impl = {
 
 static quicly_cc_t *cubic_create(quicly_create_cc_t *self, uint32_t initcwnd, int64_t now)
 {
-    struct st_quicly_cc_loss_based_t *cc;
+    struct st_quicly_cc_cubic_t *cc;
 
     if ((cc = malloc(sizeof(*cc))) == NULL)
         return NULL;
 
-    *cc = (struct st_quicly_cc_loss_based_t){
+    *cc = (struct st_quicly_cc_cubic_t){
         .super = {.impl = &cubic_impl, .cwnd = initcwnd},
         .cwnd_initial = initcwnd,
         .cwnd_minimum = UINT32_MAX,

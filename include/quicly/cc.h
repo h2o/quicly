@@ -155,63 +155,6 @@ struct st_quicly_cc_impl_t {
 QUICLY_CALLBACK_TYPE(quicly_cc_t *, create_cc, uint32_t initcwnd, int64_t now);
 
 /**
- * internal structure shared by Reno and Cubic CC
- */
-struct st_quicly_cc_loss_based_t {
-    /**
-     *
-     */
-    quicly_cc_t super;
-    /**
-     *
-     */
-    QUICLY_CC_COMMON_FIELDS;
-    /**
-     * Packet number indicating end of recovery period, if in recovery.
-     */
-    uint64_t recovery_end;
-    /**
-     * State information specific to the congestion controller implementation.
-     */
-    union {
-        /**
-         * State information for Reno congestion control.
-         */
-        struct {
-            /**
-             * Stash of acknowledged bytes, used during congestion avoidance.
-             */
-            uint32_t stash;
-        } reno;
-        /**
-         * State information for CUBIC congestion control.
-         */
-        struct {
-            /**
-             * Time offset from the latest congestion event until cwnd reaches W_max again.
-             */
-            double k;
-            /**
-             * Last cwnd value before the latest congestion event.
-             */
-            uint32_t w_max;
-            /**
-             * W_max value from the previous congestion event.
-             */
-            uint32_t w_last_max;
-            /**
-             * Timestamp of the latest congestion event.
-             */
-            int64_t avoidance_start;
-            /**
-             * Timestamp of the most recent send operation.
-             */
-            int64_t last_sent_time;
-        } cubic;
-    };
-};
-
-/**
  * The factory method for the modified Reno congestion controller.
  */
 extern quicly_create_cc_t quicly_cc_reno_create;
