@@ -1090,9 +1090,9 @@ int main(int argc, char **argv)
             break;
         case 'C':
             if (strcmp(optarg, "reno") == 0) {
-                ctx.init_cc = &quicly_cc_reno_init;
+                ctx.create_cc = &quicly_cc_reno_create;
             } else if (strcmp(optarg, "cubic") == 0) {
-                ctx.init_cc = &quicly_cc_cubic_init;
+                ctx.create_cc = &quicly_cc_cubic_create;
             } else {
                 fprintf(stderr, "unknown congestion controller: %s\n", optarg);
                 exit(1);
