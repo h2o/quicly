@@ -2784,7 +2784,8 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
-static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, uint64_t amp_window, int restrict_sending)
+static size_t calc_send_window(uint32_t cwnd, size_t bytes_in_flight, size_t min_bytes_to_send, uint64_t amp_window,
+                               int restrict_sending)
 {
     uint64_t window = 0;
     if (restrict_sending) {
@@ -2792,8 +2793,8 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, ui
         window = min_bytes_to_send;
     } else {
         /* Limit to cwnd */
-        if (conn->egress.cc.cwnd > conn->egress.loss.sentmap.bytes_in_flight)
-            window = conn->egress.cc.cwnd - conn->egress.loss.sentmap.bytes_in_flight;
+        if (cwnd > bytes_in_flight)
+            window = cwnd - bytes_in_flight;
         /* Allow at least one packet on time-threshold loss detection */
         window = window > min_bytes_to_send ? window : min_bytes_to_send;
     }
@@ -2828,7 +2829,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
     uint64_t amp_window = calc_amplification_limit_allowance(conn);
 
-    if (calc_send_window(conn, 0, amp_window, 0) > 0) {
+    if (calc_send_window(conn->egress.cc.cwnd, conn->egress.loss.sentmap.bytes_in_flight, 0, amp_window, 0) > 0) {
         if (conn->egress.pending_flows != 0)
             return 0;
         if (quicly_linklist_is_linked(&conn->egress.pending_streams.control))
@@ -4160,7 +4161,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         }
     }
 
-    s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size,
+    s->send_window = calc_send_window(conn->egress.cc.cwnd, conn->egress.loss.sentmap.bytes_in_flight,
+                                      min_packets_to_send * conn->egress.max_udp_payload_size,
                                       calc_amplification_limit_allowance(conn), restrict_sending);
     if (s->send_window == 0)
         ack_only = 1;
