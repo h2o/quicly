@@ -2672,7 +2672,7 @@ static ssize_t round_send_window(ssize_t window)
     return window;
 }
 
-static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
+static inline uint64_t calc_amp_allowance(quicly_conn_t *conn)
 {
     if (conn->super.remote.address_validation.validated)
         return UINT64_MAX;
@@ -2688,7 +2688,8 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
-static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, int restrict_sending)
+static size_t calc_send_window(uint32_t cwnd, uint64_t amp_allowance, size_t bytes_in_flight, size_t min_bytes_to_send,
+                               int restrict_sending)
 {
     uint64_t window = 0;
     if (restrict_sending) {
@@ -2696,15 +2697,14 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, in
         window = min_bytes_to_send;
     } else {
         /* Limit to cwnd */
-        if (conn->egress.cc.cwnd > conn->egress.loss.sentmap.bytes_in_flight)
-            window = conn->egress.cc.cwnd - conn->egress.loss.sentmap.bytes_in_flight;
+        if (cwnd > bytes_in_flight)
+            window = cwnd - bytes_in_flight;
         /* Allow at least one packet on time-threshold loss detection */
         window = window > min_bytes_to_send ? window : min_bytes_to_send;
     }
     /* Cap the window by the amount allowed by address validation */
-    uint64_t remain_allowance = calc_amplification_limit_allowance(conn);
-    if (remain_allowance < window)
-        window = remain_allowance;
+    if (amp_allowance < window)
+        window = amp_allowance;
 
     return window >= MIN_SEND_WINDOW ? window : 0;
 }
@@ -2728,7 +2728,9 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         return conn->egress.send_ack_at;
 
-    if (calc_send_window(conn, 0, 0) > 0) {
+    uint64_t amp_allowance = calc_amp_allowance(conn);
+
+    if (calc_send_window(conn->egress.cc.cwnd, amp_allowance, conn->egress.loss.sentmap.bytes_in_flight, 0, 0) > 0) {
         if (conn->egress.pending_flows != 0)
             return 0;
         if (quicly_linklist_is_linked(&conn->egress.pending_streams.control))
@@ -2739,7 +2741,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
     /* if something can be sent, return the earliest timeout. Otherwise return the idle timeout. */
     int64_t at = conn->idle_timeout.at;
-    if (calc_amplification_limit_allowance(conn) > 0) {
+    if (amp_allowance > 0) {
         if (conn->egress.loss.alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
             at = conn->egress.loss.alarm_at;
         if (conn->egress.send_ack_at < at)
@@ -3934,7 +3936,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         }
     }
 
-    s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size, restrict_sending);
+    s->send_window = calc_send_window(conn->egress.cc.cwnd, calc_amp_allowance(conn), conn->egress.loss.sentmap.bytes_in_flight,
+                                      min_packets_to_send * conn->egress.max_udp_payload_size, restrict_sending);
     if (s->send_window == 0)
         ack_only = 1;
 
