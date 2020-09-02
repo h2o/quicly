@@ -2688,11 +2688,11 @@ static inline uint64_t calc_amp_allowance(quicly_conn_t *conn)
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
-static size_t calc_send_window(uint32_t cwnd, uint64_t amp_allowance, size_t bytes_in_flight, size_t min_bytes_to_send,
-                               int restrict_sending)
+static inline size_t calc_send_window(uint32_t cwnd, uint64_t amp_allowance, size_t bytes_in_flight, size_t min_bytes_to_send,
+                                      int restrict_sending)
 {
     uint64_t window = 0;
-    if (restrict_sending) {
+    if (PTLS_UNLIKELY(restrict_sending)) {
         /* Send min_bytes_to_send on PTO */
         window = min_bytes_to_send;
     } else {
@@ -2703,7 +2703,7 @@ static size_t calc_send_window(uint32_t cwnd, uint64_t amp_allowance, size_t byt
         window = window > min_bytes_to_send ? window : min_bytes_to_send;
     }
     /* Cap the window by the amount allowed by address validation */
-    if (amp_allowance < window)
+    if (PTLS_UNLIKELY(amp_allowance < window))
         window = amp_allowance;
 
     return window >= MIN_SEND_WINDOW ? window : 0;
