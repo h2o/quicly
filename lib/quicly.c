@@ -319,6 +319,10 @@ struct st_quicly_conn_t {
             quicly_linklist_t control;
         } pending_streams;
         /**
+         * send state for DATA_BLOCKED frame that corresponds to the current value of `conn->egress.max_data.permitted`
+         */
+        quicly_sender_state_t data_blocked;
+        /**
          * bit vector indicating if there's any pending crypto data (the insignificant 4 bits), or other non-stream data
          */
         uint8_t pending_flows;
@@ -2613,6 +2617,21 @@ static int on_ack_handshake_done(quicly_sentmap_t *map, const quicly_sent_packet
     return 0;
 }
 
+static int on_ack_data_blocked(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
+{
+    quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
+
+    if (conn->egress.max_data.permitted == sent->data.data_blocked.offset) {
+        if (acked) {
+            conn->egress.data_blocked = QUICLY_SENDER_STATE_ACKED;
+        } else if (packet->frames_in_flight && conn->egress.data_blocked == QUICLY_SENDER_STATE_UNACKED) {
+            conn->egress.data_blocked = QUICLY_SENDER_STATE_SEND;
+        }
+    }
+
+    return 0;
+}
+
 static int on_ack_new_token(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
 {
     quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
@@ -3192,7 +3211,14 @@ static int send_stream_control_frames(quicly_stream_t *stream, quicly_send_conte
 
 int quicly_is_flow_capped(quicly_conn_t *conn)
 {
-    return !(conn->egress.max_data.sent < conn->egress.max_data.permitted);
+    if (conn->egress.max_data.sent < conn->egress.max_data.permitted)
+        return 0;
+
+    /* schedule the transmission of DATA_BLOCKED frame, if it's new information */
+    if (conn->egress.data_blocked == QUICLY_SENDER_STATE_NONE)
+        conn->egress.data_blocked = QUICLY_SENDER_STATE_SEND;
+
+    return 1;
 }
 
 int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s)
@@ -3498,6 +3524,23 @@ static int send_handshake_done(quicly_conn_t *conn, quicly_send_context_t *s)
     *s->dst++ = QUICLY_FRAME_TYPE_HANDSHAKE_DONE;
     conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
     QUICLY_PROBE(HANDSHAKE_DONE_SEND, conn, conn->stash.now);
+
+    ret = 0;
+Exit:
+    return ret;
+}
+
+static int send_data_blocked(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    quicly_sent_t *sent;
+    int ret;
+
+    uint64_t offset = conn->egress.max_data.permitted;
+    if ((ret = allocate_ack_eliciting_frame(conn, s, QUICLY_DATA_BLOCKED_FRAME_CAPACITY, &sent, on_ack_data_blocked)) != 0)
+        goto Exit;
+    sent->data.data_blocked.offset = offset;
+    s->dst = quicly_encode_data_blocked_frame(s->dst, offset);
+    conn->egress.data_blocked = QUICLY_SENDER_STATE_UNACKED;
 
     ret = 0;
 Exit:
@@ -3995,7 +4038,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
                 if ((ret = send_max_streams(conn, 0, s)) != 0)
                     goto Exit;
-                /* send connection-level flow control frame */
+                /* send connection-level flow control frames */
                 if (should_send_max_data(conn)) {
                     quicly_sent_t *sent;
                     if ((ret = allocate_ack_eliciting_frame(conn, s, QUICLY_MAX_DATA_FRAME_CAPACITY, &sent, on_ack_max_data)) != 0)
@@ -4005,6 +4048,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &sent->data.max_data.args);
                     QUICLY_PROBE(MAX_DATA_SEND, conn, conn->stash.now, new_value);
                 }
+                if (conn->egress.data_blocked == QUICLY_SENDER_STATE_SEND && (ret = send_data_blocked(conn, s)) != 0)
+                    goto Exit;
                 /* send streams_blocked frames */
                 if ((ret = send_streams_blocked(conn, 1, s)) != 0)
                     goto Exit;
@@ -4693,9 +4738,10 @@ static int handle_max_data_frame(quicly_conn_t *conn, struct st_quicly_handle_pa
 
     QUICLY_PROBE(MAX_DATA_RECEIVE, conn, conn->stash.now, frame.max_data);
 
-    if (frame.max_data < conn->egress.max_data.permitted)
+    if (frame.max_data <= conn->egress.max_data.permitted)
         return 0;
     conn->egress.max_data.permitted = frame.max_data;
+    conn->egress.data_blocked = QUICLY_SENDER_STATE_UNACKED; /* DATA_BLOCKED has not been sent for the new limit */
 
     return 0;
 }

@@ -69,6 +69,7 @@ extern "C" {
 #define QUICLY_MAX_STREAMS_FRAME_CAPACITY (1 + 8)
 #define QUICLY_PING_FRAME_CAPACITY 1
 #define QUICLY_RST_FRAME_CAPACITY (1 + 8 + 8 + 8)
+#define QUICLY_DATA_BLOCKED_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STOP_SENDING_FRAME_CAPACITY (1 + 8 + 8)
 #define QUICLY_ACK_MAX_GAPS 256
@@ -171,6 +172,8 @@ typedef struct st_quicly_path_challenge_frame_t {
 } quicly_path_challenge_frame_t;
 
 static int quicly_decode_path_challenge_frame(const uint8_t **src, const uint8_t *end, quicly_path_challenge_frame_t *frame);
+
+static uint8_t *quicly_encode_data_blocked_frame(uint8_t *dst, uint64_t offset);
 
 typedef struct st_quicly_data_blocked_frame_t {
     uint64_t offset;
@@ -552,6 +555,13 @@ inline int quicly_decode_path_challenge_frame(const uint8_t **src, const uint8_t
     return 0;
 Error:
     return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+}
+
+inline uint8_t *quicly_encode_data_blocked_frame(uint8_t *dst, uint64_t offset)
+{
+    *dst++ = QUICLY_FRAME_TYPE_DATA_BLOCKED;
+    dst = quicly_encodev(dst, offset);
+    return dst;
 }
 
 inline int quicly_decode_data_blocked_frame(const uint8_t **src, const uint8_t *end, quicly_data_blocked_frame_t *frame)
