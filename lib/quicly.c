@@ -181,6 +181,75 @@ struct st_quicly_application_space_t {
     int one_rtt_writable;
 };
 
+/**
+ * Retains state for the pacer.
+ * If `at` points to the current time or some time in the past, `window` indicates the remaining bytes that can be sent (or could
+ * be) at that time. If `at` points to a moment in the future, `window` contains the number of bytes that can be sent at that point.
+ * Until then, nothing should be sent.
+ */
+struct st_quicly_pacer_t {
+    int64_t at;
+    unsigned can_send_now : 1;
+    uint32_t window;
+};
+
+static void pacer_reset(struct st_quicly_pacer_t *pacer)
+{
+    pacer->at = -1;
+    pacer->can_send_now = 1;
+    pacer->window = UINT32_MAX;
+}
+
+static void pacer_before_send(struct st_quicly_pacer_t *pacer, uint32_t cwnd, uint32_t srtt, int64_t now, uint32_t burst_size,
+                              uint64_t agressive_ratio_permil)
+{
+    /* Do nothing if the decision has already been made */
+    if (now <= pacer->at) {
+        pacer->can_send_now = 1;
+        return;
+    }
+
+    /* Calculate the flow rate per millisecond, the speed that we want to send, multiplied by 1024. */
+    uint64_t bytes_per_ms_permil = cwnd * agressive_ratio_permil / srtt;
+
+    /* If it was not pacer restricted in the previous time slice, the budget is max(bytes_per_ms, burst). Note that the window is
+     * capped separately by CC. */
+    if (pacer->window > 0) {
+        pacer->at = now;
+        pacer->can_send_now = 1;
+        pacer->window = (uint32_t)((bytes_per_ms_permil + 512) / 1024);
+        if (pacer->window < burst_size)
+            pacer->window = burst_size;
+        return;
+    }
+
+    /* Paced; set window to the amount of data that can be sent at the earliest time slice (which might be this time slice) */
+    int64_t prev_at = pacer->at;
+    uint64_t window_permil = (now - prev_at) * bytes_per_ms_permil;
+    if (window_permil < QUICLY_MIN_CLIENT_INITIAL_SIZE * 1024) {
+        int64_t send_interval = QUICLY_MIN_CLIENT_INITIAL_SIZE * 1024 / bytes_per_ms_permil;
+        if (send_interval < 2)
+            send_interval *= 2;
+        pacer->at = prev_at + send_interval;
+        pacer->can_send_now = 0;
+        pacer->window = (uint32_t)(((pacer->at - prev_at) * bytes_per_ms_permil + 512) / 1024);
+    } else {
+        pacer->at = now;
+        pacer->can_send_now = 1;
+        uint64_t window = (window_permil + 512) / 1024;
+        pacer->window = window < UINT32_MAX ? (uint32_t)window : UINT32_MAX;
+    }
+}
+
+static void pacer_after_send(struct st_quicly_pacer_t *pacer, uint32_t bytes_consumed, uint64_t now)
+{
+    if (pacer->window > bytes_consumed) {
+        pacer->window -= bytes_consumed;
+    } else {
+        pacer->window = 0;
+    }
+}
+
 struct st_quicly_conn_t {
     struct _st_quicly_conn_public_t super;
     /**
@@ -302,6 +371,10 @@ struct st_quicly_conn_t {
          * congestion control
          */
         quicly_cc_t cc;
+        /**
+         *
+         */
+        struct st_quicly_pacer_t pacer;
         /**
          * things to be sent at the stream-level, that are not governed by the stream scheduler
          */
@@ -2688,8 +2761,8 @@ static inline uint64_t calc_amp_allowance(quicly_conn_t *conn)
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
-static inline size_t calc_send_window(uint32_t cwnd, uint64_t amp_allowance, size_t bytes_in_flight, size_t min_bytes_to_send,
-                                      int restrict_sending)
+static inline size_t calc_send_window(uint32_t cwnd, uint32_t pacer_window, uint64_t amp_allowance, size_t bytes_in_flight,
+                                      size_t min_bytes_to_send, int restrict_sending)
 {
     uint64_t window = 0;
     if (PTLS_UNLIKELY(restrict_sending)) {
@@ -2697,8 +2770,11 @@ static inline size_t calc_send_window(uint32_t cwnd, uint64_t amp_allowance, siz
         window = min_bytes_to_send;
     } else {
         /* Limit to cwnd */
-        if (cwnd > bytes_in_flight)
+        if (cwnd > bytes_in_flight) {
             window = cwnd - bytes_in_flight;
+            if (pacer_window < window)
+                window = pacer_window;
+        }
         /* Allow at least one packet on time-threshold loss detection */
         window = window > min_bytes_to_send ? window : min_bytes_to_send;
     }
@@ -2730,7 +2806,8 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
     uint64_t amp_allowance = calc_amp_allowance(conn);
 
-    if (calc_send_window(conn->egress.cc.cwnd, amp_allowance, conn->egress.loss.sentmap.bytes_in_flight, 0, 0) > 0) {
+    if (calc_send_window(conn->egress.cc.cwnd, conn->egress.pacer.can_send_now ? conn->egress.pacer.window : 0, amp_allowance,
+                         conn->egress.loss.sentmap.bytes_in_flight, 0, 0) > 0) {
         if (conn->egress.pending_flows != 0)
             return 0;
         if (quicly_linklist_is_linked(&conn->egress.pending_streams.control))
@@ -3936,7 +4013,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         }
     }
 
-    s->send_window = calc_send_window(conn->egress.cc.cwnd, calc_amp_allowance(conn), conn->egress.loss.sentmap.bytes_in_flight,
+    s->send_window = calc_send_window(conn->egress.cc.cwnd, conn->egress.pacer.window, calc_amp_allowance(conn),
+                                      conn->egress.loss.sentmap.bytes_in_flight,
                                       min_packets_to_send * conn->egress.max_udp_payload_size, restrict_sending);
     if (s->send_window == 0)
         ack_only = 1;
@@ -4083,9 +4161,16 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
                 void *buf, size_t bufsize)
 {
     quicly_send_context_t s = {{NULL, -1}, {}, datagrams, *num_datagrams, 0, {buf, (uint8_t *)buf + bufsize}};
+    uint64_t orig_bytes_inflight = 0;
     int ret;
 
     lock_now(conn, 0);
+
+    if (conn->super.ctx->use_pacing) {
+        pacer_before_send(&conn->egress.pacer, conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed, conn->stash.now,
+                          10 * conn->egress.max_udp_payload_size, 2048);
+        orig_bytes_inflight = conn->egress.loss.sentmap.bytes_in_flight;
+    }
 
     /* bail out if there's nothing is scheduled to be sent */
     if (conn->stash.now < quicly_get_first_timeout(conn)) {
@@ -4134,6 +4219,10 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
     /* emit packets */
     if ((ret = do_send(conn, &s)) != 0)
         goto Exit;
+
+    if (conn->super.ctx->use_pacing)
+        pacer_after_send(&conn->egress.pacer, (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight - orig_bytes_inflight),
+                         conn->stash.now);
 
     assert_consistency(conn, 1);
 
@@ -5419,6 +5508,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
     conn->super.stats.num_packets.received += 1;
+    if (conn->super.ctx->use_pacing)
+        pacer_reset(&conn->egress.pacer);
 
     /* state updates, that are triggered by the receipt of a packet */
     switch (epoch) {
