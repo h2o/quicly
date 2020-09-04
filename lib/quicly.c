@@ -982,6 +982,7 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_NONE;
     stream->_send_aux.reset_stream.error_code = 0;
     quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender, initial_max_stream_data_local);
+    stream->_send_aux.blocked = QUICLY_SENDER_STATE_NONE;
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
     quicly_linklist_init(&stream->_send_aux.pending_link.default_scheduler);
 
@@ -2632,6 +2633,27 @@ static int on_ack_data_blocked(quicly_sentmap_t *map, const quicly_sent_packet_t
     return 0;
 }
 
+static int on_ack_stream_data_blocked_frame(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked,
+                                            quicly_sent_t *sent)
+{
+    quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
+    quicly_stream_t *stream;
+
+    if ((stream = quicly_get_stream(conn, sent->data.stream_data_blocked.stream_id)) == NULL)
+        return 0;
+
+    if (stream->_send_aux.max_stream_data == sent->data.stream_data_blocked.offset) {
+        if (acked) {
+            stream->_send_aux.blocked = QUICLY_SENDER_STATE_ACKED;
+        } else if (packet->frames_in_flight && stream->_send_aux.blocked == QUICLY_SENDER_STATE_UNACKED) {
+            stream->_send_aux.blocked = QUICLY_SENDER_STATE_SEND;
+            sched_stream_control(stream);
+        }
+    }
+
+    return 0;
+}
+
 static int on_ack_new_token(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
 {
     quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
@@ -3206,6 +3228,19 @@ static int send_stream_control_frames(quicly_stream_t *stream, quicly_send_conte
                                                   stream->sendstate.size_inflight);
     }
 
+    /* send STREAM_DATA_BLOCKED if necessary */
+    if (stream->_send_aux.blocked == QUICLY_SENDER_STATE_SEND) {
+        quicly_sent_t *sent;
+        if ((ret = allocate_ack_eliciting_frame(stream->conn, s, QUICLY_STREAM_DATA_BLOCKED_FRAME_CAPACITY, &sent,
+                                                on_ack_stream_data_blocked_frame)) != 0)
+            return ret;
+        uint64_t offset = stream->_send_aux.max_stream_data;
+        sent->data.stream_data_blocked.stream_id = stream->stream_id;
+        sent->data.stream_data_blocked.offset = offset;
+        s->dst = quicly_encode_stream_data_blocked_frame(s->dst, stream->stream_id, offset);
+        stream->_send_aux.blocked = QUICLY_SENDER_STATE_UNACKED;
+    }
+
     return 0;
 }
 
@@ -3221,7 +3256,33 @@ int quicly_is_flow_capped(quicly_conn_t *conn)
     return 1;
 }
 
-int quicly_can_send_stream_data(quicly_conn_t *conn, quicly_send_context_t *s)
+int quicly_stream_can_send(quicly_stream_t *stream, int at_stream_level)
+{
+    /* return if there is nothing to be sent */
+    if (stream->sendstate.pending.num_ranges == 0)
+        return 0;
+
+    /* return if flow is capped neither by MAX_STREAM_DATA nor (in case we are hitting connection-level flow control) by the number
+     * of bytes we've already sent */
+    uint64_t blocked_at = at_stream_level ? stream->_send_aux.max_stream_data : stream->sendstate.size_inflight;
+    if (stream->sendstate.pending.ranges[0].start < blocked_at)
+        return 1;
+    /* we can always send EOS, if that is the only thing to be sent */
+    if (stream->sendstate.pending.ranges[0].start >= stream->sendstate.final_size) {
+        assert(stream->sendstate.pending.ranges[0].start == stream->sendstate.final_size);
+        return 1;
+    }
+
+    /* if known to be blocked at stream-level, schedule the emission of STREAM_DATA_BLOCKED frame */
+    if (at_stream_level && stream->_send_aux.blocked == QUICLY_SENDER_STATE_NONE) {
+        stream->_send_aux.blocked = QUICLY_SENDER_STATE_SEND;
+        sched_stream_control(stream);
+    }
+
+    return 0;
+}
+
+int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     return s->num_datagrams < s->max_datagrams;
 }

@@ -117,6 +117,10 @@ struct st_quicly_sent_t {
             uint64_t offset;
         } data_blocked;
         struct {
+            quicly_stream_id_t stream_id;
+            uint64_t offset;
+        } stream_data_blocked;
+        struct {
             int uni;
             quicly_maxsender_sent_t args;
         } streams_blocked;
