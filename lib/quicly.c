@@ -4602,10 +4602,10 @@ static int handle_streams_blocked_frame(quicly_conn_t *conn, struct st_quicly_ha
     return 0;
 }
 
-static int handle_max_streams_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+static int handle_max_streams_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state, int uni)
 {
     quicly_max_streams_frame_t frame;
-    int uni = state->frame_type == QUICLY_FRAME_TYPE_MAX_STREAMS_UNI, ret;
+    int ret;
 
     if ((ret = quicly_decode_max_streams_frame(&state->src, state->end, &frame)) != 0)
         return ret;
@@ -4618,6 +4618,16 @@ static int handle_max_streams_frame(quicly_conn_t *conn, struct st_quicly_handle
     open_blocked_streams(conn, uni);
 
     return 0;
+}
+
+static int handle_max_streams_bidi_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    return handle_max_streams_frame(conn, state, 0);
+}
+
+static int handle_max_streams_uni_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    return handle_max_streams_frame(conn, state, 1);
 }
 
 static int handle_path_challenge_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
@@ -5016,12 +5026,14 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         int (*cb)(quicly_conn_t *, struct st_quicly_handle_payload_state_t *); /* callback function that handles the frame */
         uint8_t permitted_epochs;  /* the epochs the frame can appear, calculated as bitwise-or of `1 << epoch` */
         uint8_t ack_eliciting;     /* boolean indicating if the frame is ack-eliciting */
+        size_t counter_offset;     /* offset of corresponding `conn->super.stats.num_frames_received.type` within quicly_conn_t */
     } frame_handlers[] = {
 #define FRAME(n, i, z, h, o, ae)                                                                                                   \
     {                                                                                                                              \
         handle_##n##_frame,                                                                                                        \
         (i << QUICLY_EPOCH_INITIAL) | (z << QUICLY_EPOCH_0RTT) | (h << QUICLY_EPOCH_HANDSHAKE) | (o << QUICLY_EPOCH_1RTT),         \
-        ae                                                                                                                         \
+        ae,                                                                                                                        \
+        offsetof(quicly_conn_t, super.stats.num_frames_received.n) \
     }
         /*   +----------------------+-------------------+---------------+
          *   |                      |  permitted epochs |               |
@@ -5046,8 +5058,8 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         FRAME( stream               ,  0 ,  1 ,  0 ,  1 ,             1 ),
         FRAME( max_data             ,  0 ,  1 ,  0 ,  1 ,             1 ), /* 16 */
         FRAME( max_stream_data      ,  0 ,  1 ,  0 ,  1 ,             1 ),
-        FRAME( max_streams          ,  0 ,  1 ,  0 ,  1 ,             1 ),
-        FRAME( max_streams          ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( max_streams_bidi     ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( max_streams_uni      ,  0 ,  1 ,  0 ,  1 ,             1 ),
         FRAME( data_blocked         ,  0 ,  1 ,  0 ,  1 ,             1 ),
         FRAME( stream_data_blocked  ,  0 ,  1 ,  0 ,  1 ,             1 ),
         FRAME( streams_blocked      ,  0 ,  1 ,  0 ,  1 ,             1 ),
@@ -5072,7 +5084,8 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         {                                                                                                                          \
             handle_##lc##_frame,                                                                                                   \
             (i << QUICLY_EPOCH_INITIAL) | (z << QUICLY_EPOCH_0RTT) | (h << QUICLY_EPOCH_HANDSHAKE) | (o << QUICLY_EPOCH_1RTT),     \
-            ae                                                                                                                     \
+            ae,                                                                                                                    \
+            offsetof(quicly_conn_t, super.stats.num_frames_received.lc) \
         },                                                                                                                         \
     }
         /*   +-------------------------------+-------------------+---------------+
@@ -5088,7 +5101,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
     /* clang-format on */
 
     struct st_quicly_handle_payload_state_t state = {_src, _src + _len, epoch};
-    size_t num_frames = 0, num_frames_ack_eliciting = 0;
+    size_t num_frames_ack_eliciting = 0;
     int ret;
 
     do {
@@ -5118,7 +5131,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
             ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
             break;
         }
-        num_frames += 1;
+        ++*(uint64_t *)((uint8_t *)conn + frame_handler->counter_offset);
         num_frames_ack_eliciting += frame_handler->ack_eliciting;
         if ((ret = frame_handler->cb(conn, &state)) != 0)
             break;

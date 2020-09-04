@@ -390,6 +390,12 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t sent;                                                                                                             \
     } num_bytes;                                                                                                                   \
+    struct {                                                                                                                       \
+        uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
+            max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
+            retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done,               \
+            ack_frequency;                                                                                                         \
+    } num_frames_sent, num_frames_received;                                                                                        \
     /**                                                                                                                            \
      * Total number of PTOs during the connections.                                                                                \
      */                                                                                                                            \
