@@ -3193,7 +3193,7 @@ static int prepare_stream_state_sender(quicly_stream_t *stream, quicly_sender_st
     return 0;
 }
 
-static int send_stream_control_frames(quicly_stream_t *stream, quicly_send_context_t *s)
+static int send_control_frames_of_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 {
     int ret;
 
@@ -3250,6 +3250,22 @@ static int send_stream_control_frames(quicly_stream_t *stream, quicly_send_conte
     }
 
     return 0;
+}
+
+static int send_stream_control_frames(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    int ret = 0;
+
+    while (s->num_datagrams != s->max_datagrams && quicly_linklist_is_linked(&conn->egress.pending_streams.control)) {
+        quicly_stream_t *stream = (void *)((char *)conn->egress.pending_streams.control.next -
+                                           offsetof(quicly_stream_t, _send_aux.pending_link.control));
+        if ((ret = send_control_frames_of_stream(stream, s)) != 0)
+            goto Exit;
+        quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
+    }
+
+Exit:
+    return ret;
 }
 
 int quicly_is_flow_capped(quicly_conn_t *conn)
@@ -4184,15 +4200,13 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 }
             }
             /* send stream-level control frames */
-            while (s->num_datagrams != s->max_datagrams && quicly_linklist_is_linked(&conn->egress.pending_streams.control)) {
-                quicly_stream_t *stream = (void *)((char *)conn->egress.pending_streams.control.next -
-                                                   offsetof(quicly_stream_t, _send_aux.pending_link.control));
-                if ((ret = send_stream_control_frames(stream, s)) != 0)
-                    goto Exit;
-                quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
-            }
+            if ((ret = send_stream_control_frames(conn, s)) != 0)
+                goto Exit;
             /* send STREAM frames */
             if ((ret = conn->super.ctx->stream_scheduler->do_send(conn->super.ctx->stream_scheduler, conn, s)) != 0)
+                goto Exit;
+            /* once more, send stream-level control frames, as the state might have changed */
+            if ((ret = send_stream_control_frames(conn, s)) != 0)
                 goto Exit;
         }
     }
@@ -4677,6 +4691,7 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, struct st_quicly_ha
     if (frame.max_stream_data < stream->_send_aux.max_stream_data)
         return 0;
     stream->_send_aux.max_stream_data = frame.max_stream_data;
+    stream->_send_aux.blocked = QUICLY_SENDER_STATE_NONE;
 
     if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE)
         resched_stream_data(stream);
