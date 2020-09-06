@@ -3268,7 +3268,7 @@ Exit:
     return ret;
 }
 
-int quicly_is_flow_capped(quicly_conn_t *conn)
+int quicly_is_blocked(quicly_conn_t *conn)
 {
     if (conn->egress.max_data.sent < conn->egress.max_data.permitted)
         return 0;

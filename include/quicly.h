@@ -827,9 +827,9 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn);
  */
 uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn);
 /**
- * returns if the connection is currently capped by connection-level flow control.
+ * returns if the connection is currently blocked by connection-level flow control.
  */
-int quicly_is_flow_capped(quicly_conn_t *conn);
+int quicly_is_blocked(quicly_conn_t *conn);
 /**
  * Returns if stream data can be sent.
  * When the connection is blocked by the connection-level flow control (see `quicly_is_flow_capped`), `at_stream_level` should be

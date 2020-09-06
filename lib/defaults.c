@@ -273,11 +273,11 @@ static int default_stream_scheduler_can_send(quicly_stream_scheduler_t *self, qu
     return quicly_linklist_is_linked(&sched->active);
 }
 
-static void link_stream(struct st_quicly_default_scheduler_state_t *sched, quicly_stream_t *stream, int conn_is_flow_capped)
+static void link_stream(struct st_quicly_default_scheduler_state_t *sched, quicly_stream_t *stream, int conn_is_blocked)
 {
     if (!quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler)) {
         quicly_linklist_t *slot = &sched->active;
-        if (conn_is_flow_capped && !quicly_stream_can_send(stream, 0))
+        if (conn_is_blocked && !quicly_stream_can_send(stream, 0))
             slot = &sched->blocked;
         quicly_linklist_insert(slot->prev, &stream->_send_aux.pending_link.default_scheduler);
     }
@@ -289,9 +289,9 @@ static void link_stream(struct st_quicly_default_scheduler_state_t *sched, quicl
 static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, quicly_conn_t *conn, quicly_send_context_t *s)
 {
     struct st_quicly_default_scheduler_state_t *sched = &((struct _st_quicly_conn_public_t *)conn)->_default_scheduler;
-    int conn_is_flow_capped = quicly_is_flow_capped(conn), ret = 0;
+    int conn_is_blocked = quicly_is_blocked(conn), ret = 0;
 
-    if (!conn_is_flow_capped)
+    if (!conn_is_blocked)
         quicly_linklist_insert_list(&sched->active, &sched->blocked);
 
     while (quicly_can_send_data((quicly_conn_t *)conn, s) && quicly_linklist_is_linked(&sched->active)) {
@@ -300,7 +300,7 @@ static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, qui
             (void *)((char *)sched->active.next - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler));
         quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
         /* relink the stream to the blocked list if necessary */
-        if (conn_is_flow_capped && !quicly_stream_can_send(stream, 0)) {
+        if (conn_is_blocked && !quicly_stream_can_send(stream, 0)) {
             quicly_linklist_insert(sched->blocked.prev, &stream->_send_aux.pending_link.default_scheduler);
             continue;
         }
@@ -310,14 +310,14 @@ static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, qui
              * adjustments to the scheduler after popping a stream */
             if (ret == QUICLY_ERROR_SENDBUF_FULL) {
                 assert(quicly_stream_can_send(stream, 1));
-                link_stream(sched, stream, conn_is_flow_capped);
+                link_stream(sched, stream, conn_is_blocked);
             }
             break;
         }
         /* reschedule */
-        conn_is_flow_capped = quicly_is_flow_capped(conn);
+        conn_is_blocked = quicly_is_blocked(conn);
         if (quicly_stream_can_send(stream, 1))
-            link_stream(sched, stream, conn_is_flow_capped);
+            link_stream(sched, stream, conn_is_blocked);
     }
 
     return ret;
@@ -332,7 +332,7 @@ static int default_stream_scheduler_update_state(quicly_stream_scheduler_t *self
 
     if (quicly_stream_can_send(stream, 1)) {
         /* activate if not */
-        link_stream(sched, stream, quicly_is_flow_capped(stream->conn));
+        link_stream(sched, stream, quicly_is_blocked(stream->conn));
     } else {
         /* disactivate if active */
         if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler))
