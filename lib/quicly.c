@@ -5192,7 +5192,7 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
         handle_##n##_frame,                                                                                                        \
         (i << QUICLY_EPOCH_INITIAL) | (z << QUICLY_EPOCH_0RTT) | (h << QUICLY_EPOCH_HANDSHAKE) | (o << QUICLY_EPOCH_1RTT),         \
         ae,                                                                                                                        \
-        offsetof(quicly_conn_t, super.stats.num_frames_received.n) \
+        offsetof(quicly_conn_t, super.stats.num_frames_received.n)                                                                 \
     }
         /*   +----------------------+-------------------+---------------+
          *   |                      |  permitted epochs |               |
