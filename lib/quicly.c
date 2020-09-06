@@ -3258,8 +3258,8 @@ static int send_stream_control_frames(quicly_conn_t *conn, quicly_send_context_t
     int ret = 0;
 
     while (s->num_datagrams != s->max_datagrams && quicly_linklist_is_linked(&conn->egress.pending_streams.control)) {
-        quicly_stream_t *stream = (void *)((char *)conn->egress.pending_streams.control.next -
-                                           offsetof(quicly_stream_t, _send_aux.pending_link.control));
+        quicly_stream_t *stream =
+            (void *)((char *)conn->egress.pending_streams.control.next - offsetof(quicly_stream_t, _send_aux.pending_link.control));
         if ((ret = send_control_frames_of_stream(stream, s)) != 0)
             goto Exit;
         quicly_linklist_unlink(&stream->_send_aux.pending_link.control);
