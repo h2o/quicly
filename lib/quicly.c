@@ -3247,6 +3247,7 @@ static int send_control_frames_of_stream(quicly_stream_t *stream, quicly_send_co
         s->dst = quicly_encode_stream_data_blocked_frame(s->dst, stream->stream_id, offset);
         stream->_send_aux.blocked = QUICLY_SENDER_STATE_UNACKED;
         ++stream->conn->super.stats.num_frames_sent.stream_data_blocked;
+        QUICLY_PROBE(STREAM_DATA_BLOCKED_SEND, stream->conn, stream->conn->stash.now, stream->stream_id, offset);
     }
 
     return 0;
@@ -3640,6 +3641,7 @@ static int send_data_blocked(quicly_conn_t *conn, quicly_send_context_t *s)
     conn->egress.data_blocked = QUICLY_SENDER_STATE_UNACKED;
 
     ++conn->super.stats.num_frames_sent.data_blocked;
+    QUICLY_PROBE(DATA_BLOCKED_SEND, conn, conn->stash.now, offset);
 
     ret = 0;
 Exit:
