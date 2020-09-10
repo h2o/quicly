@@ -2721,7 +2721,9 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
     uint64_t budget = conn->super.stats.num_bytes.received * conn->super.ctx->pre_validation_amplification_limit;
     if (budget <= conn->super.stats.num_bytes.sent)
         return 0;
-    return budget - conn->super.stats.num_bytes.sent;
+    uint64_t window = budget - conn->super.stats.num_bytes.sent;
+
+    return window >= MIN_SEND_WINDOW ? window : 0;
 }
 
 /* Helper function to compute send window based on:
