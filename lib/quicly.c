@@ -4100,11 +4100,11 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
     /* send handshake flows */
     if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, s, ack_only,
-                                   restrict_sending ||
+                                   min_packets_to_send != 0 ||
                                        (conn->super.remote.address_validation.send_probe && conn->handshake == NULL))) != 0)
         goto Exit;
     if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, s, ack_only,
-                                   restrict_sending || conn->super.remote.address_validation.send_probe)) != 0)
+                                   min_packets_to_send != 0 || conn->super.remote.address_validation.send_probe)) != 0)
         goto Exit;
 
     /* send encrypted frames */
@@ -4117,8 +4117,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 goto Exit;
         }
         if (!ack_only) {
-            /* PTO, always send PING. This is the easiest thing to do in terms of timer control. */
-            if (restrict_sending) {
+            /* PTO or loss detection timeout, always send PING. This is the easiest thing to do in terms of timer control. */
+            if (min_packets_to_send != 0) {
                 if ((ret = _do_allocate_frame(conn, s, 1, 1)) != 0)
                     goto Exit;
                 *s->dst++ = QUICLY_FRAME_TYPE_PING;
