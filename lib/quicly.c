@@ -3025,6 +3025,9 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         /* adjust send_window to either 0 byte or MIN*2 bytes, if it is between those two */
         if (s->send_window < MIN_SEND_WINDOW * 2)
             s->send_window = s->send_window < MIN_SEND_WINDOW ? 0 : MIN_SEND_WINDOW * 2;
+        /* appropriate byte counting is applied only if the first frame for a datagram is ack-eliciting; we are too lazy to adjust
+         * things when a packet is turned into ack-eliciting after an ACK frame is written into the packet image. This diversion is
+         * considered acceptable as only the first packet being built would start with a non-ack-eliciting frame (i.e. ACK). */
         if (ack_eliciting && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
