@@ -2714,18 +2714,6 @@ static int on_ack_retire_connection_id(quicly_sentmap_t *map, const quicly_sent_
     return 0;
 }
 
-static ssize_t round_send_window(ssize_t window)
-{
-    if (window < MIN_SEND_WINDOW * 2) {
-        if (window < MIN_SEND_WINDOW) {
-            return 0;
-        } else {
-            return MIN_SEND_WINDOW * 2;
-        }
-    }
-    return window;
-}
-
 static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
 {
     if (conn->super.remote.address_validation.validated)
@@ -3034,7 +3022,9 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     } else {
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
-        s->send_window = round_send_window(s->send_window);
+        /* adjust send_window to either 0 byte or MIN*2 bytes, if it is between those two */
+        if (s->send_window < MIN_SEND_WINDOW * 2)
+            s->send_window = s->send_window < MIN_SEND_WINDOW ? 0 : MIN_SEND_WINDOW * 2;
         if (ack_eliciting && s->send_window < (ssize_t)min_space)
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
