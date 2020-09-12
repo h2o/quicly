@@ -832,9 +832,9 @@ uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn);
 int quicly_is_blocked(quicly_conn_t *conn);
 /**
  * Returns if stream data can be sent.
- * When the connection is blocked by the connection-level flow control (see `quicly_is_flow_capped`), `at_stream_level` should be
- * set to false to see if any retransmissions are to be done. Otherwise, `at_steram_level` should be set to true to test the stream-
- * level flow control.
+ * When the connection is blocked by the connection-level flow control (see `quicly_is_blocked`), `at_stream_level` should be set to
+ * false to see if any retransmissions are to be done. Otherwise, `at_stream_level` should be set to true to test the stream-level
+ * flow control.
  */
 int quicly_stream_can_send(quicly_stream_t *stream, int at_stream_level);
 /**
