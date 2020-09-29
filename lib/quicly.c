@@ -2933,10 +2933,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
         quicly_sentmap_commit(&conn->egress.loss.sentmap, (uint16_t)packet_bytes_in_flight);
 
     conn->egress.cc.impl->cc_on_sent(&conn->egress.cc, &conn->egress.loss, (uint32_t)packet_bytes_in_flight, conn->stash.now);
-    QUICLY_PROBE(PACKET_COMMIT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
-                 !s->target.ack_eliciting);
-    QUICLY_PROBE(QUICTRACE_SENT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
-                 get_epoch(*s->target.first_byte_at));
+    QUICLY_PROBE(PACKET_SENT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
+                 get_epoch(*s->target.first_byte_at), !s->target.ack_eliciting);
 
     ++conn->egress.packet_number;
     ++conn->super.stats.num_packets.sent;
