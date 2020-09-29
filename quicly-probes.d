@@ -35,7 +35,7 @@ provider quicly {
     probe idle_timeout(struct st_quicly_conn_t *conn, int64_t at);
     probe stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t at);
 
-    probe crypto_decrypt(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, const void *decrypted, size_t decrypted_len);
+    probe crypto_decrypt_failure(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
     probe crypto_handshake(struct st_quicly_conn_t *conn, int64_t at, int ret);
     probe crypto_update_secret(struct st_quicly_conn_t *conn, int64_t at, int is_enc, uint8_t epoch, const char *label, const char *secret);
     probe crypto_send_key_update(struct st_quicly_conn_t *conn, int64_t at, uint64_t phase, const char *secret);
@@ -106,7 +106,7 @@ provider quicly {
                                 uint64_t max_ack_delay, int ignore_order);
 
     probe quictrace_sent(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, size_t len, uint8_t packet_type);
-    probe quictrace_recv(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
+    probe packet_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, const void *decrypted, size_t decrypted_len);
     probe quictrace_send_stream(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off,
                                 size_t len, int fin);
     probe quictrace_recv_stream(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t off, size_t len, int fin);

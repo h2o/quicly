@@ -5392,8 +5392,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
     QUICLY_PROBE(ACCEPT, *conn, (*conn)->stash.now,
                  QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), address_token);
-    QUICLY_PROBE(CRYPTO_DECRYPT, *conn, (*conn)->stash.now, pn, payload.base, payload.len);
-    QUICLY_PROBE(QUICTRACE_RECV, *conn, (*conn)->stash.now, pn);
+    QUICLY_PROBE(PACKET_RECEIVED, *conn, (*conn)->stash.now, pn, payload.base, payload.len);
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
     (*conn)->super.stats.num_packets.received += 1;
@@ -5586,12 +5585,11 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, &(*space)->next_expected_packet_number, packet, &pn,
                               &payload)) != 0) {
         ++conn->super.stats.num_packets.decryption_failed;
-        QUICLY_PROBE(CRYPTO_DECRYPT, conn, conn->stash.now, pn, NULL, 0);
+        QUICLY_PROBE(CRYPTO_DECRYPT_FAILURE, conn, conn->stash.now, pn);
         goto Exit;
     }
 
-    QUICLY_PROBE(CRYPTO_DECRYPT, conn, conn->stash.now, pn, payload.base, payload.len);
-    QUICLY_PROBE(QUICTRACE_RECV, conn, conn->stash.now, pn);
+    QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, pn, payload.base, payload.len);
 
     /* update states */
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
