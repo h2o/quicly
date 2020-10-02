@@ -402,7 +402,7 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
      */                                                                                                                            \
-    uint32_t num_ptos
+    uint64_t num_ptos
 
 typedef struct st_quicly_stats_t {
     /**
