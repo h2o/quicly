@@ -67,10 +67,6 @@
  */
 #define QUICLY_MAX_TOKEN_LEN 512
 /**
- * do not try to send ACK-eliciting frames if the available CWND is below this value
- */
-#define MIN_SEND_WINDOW 64
-/**
  * sends ACK bundled with PING, when number of gaps in the ack queue reaches or exceeds this threshold. This value should be much
  * smaller than QUICLY_MAX_RANGES.
  */
@@ -2721,9 +2717,7 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
     uint64_t budget = conn->super.stats.num_bytes.received * conn->super.ctx->pre_validation_amplification_limit;
     if (budget <= conn->super.stats.num_bytes.sent)
         return 0;
-    uint64_t window = budget - conn->super.stats.num_bytes.sent;
-
-    return window >= MIN_SEND_WINDOW ? window : 0;
+    return budget - conn->super.stats.num_bytes.sent;
 }
 
 /* Helper function to compute send window based on:
@@ -2749,7 +2743,7 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, ui
     if (amp_window < window)
         window = amp_window;
 
-    return window >= MIN_SEND_WINDOW ? window : 0;
+    return window;
 }
 
 /**
@@ -3025,13 +3019,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     } else {
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
-        /* adjust send_window to either 0 byte or MIN*2 bytes, if it is between those two */
-        if (s->send_window < MIN_SEND_WINDOW * 2)
-            s->send_window = s->send_window < MIN_SEND_WINDOW ? 0 : MIN_SEND_WINDOW * 2;
-        /* appropriate byte counting is applied only if the first frame for a datagram is ack-eliciting; we are too lazy to adjust
-         * things when a packet is turned into ack-eliciting after an ACK frame is written into the packet image. This diversion is
-         * considered acceptable as only the first packet being built would start with a non-ack-eliciting frame (i.e. ACK). */
-        if (ack_eliciting && s->send_window < (ssize_t)min_space)
+        if (ack_eliciting && s->send_window == 0)
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
             return QUICLY_ERROR_SENDBUF_FULL;
