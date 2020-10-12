@@ -4214,7 +4214,8 @@ Exit:
     if (ret == 0 && s->target.first_byte_at != NULL) {
         /* last packet can be small-sized, unless it is the first flight sent from the client */
         enum en_quicly_send_packet_mode_t commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_SMALL;
-        if (quicly_is_client(conn) && (s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL)
+        if ((s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
+            (quicly_is_client(conn) || !ack_only))
             commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE;
         commit_send_packet(conn, s, commit_mode);
     }
