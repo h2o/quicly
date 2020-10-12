@@ -4085,11 +4085,9 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
     /* send handshake flows */
     if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, s, ack_only,
-                                   min_packets_to_send != 0 ||
-                                       (conn->super.remote.address_validation.send_probe && conn->handshake == NULL))) != 0)
+                                   min_packets_to_send != 0 && (!quicly_is_client(conn) || conn->handshake == NULL))) != 0)
         goto Exit;
-    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, s, ack_only,
-                                   min_packets_to_send != 0 || conn->super.remote.address_validation.send_probe)) != 0)
+    if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, s, ack_only, min_packets_to_send != 0)) != 0)
         goto Exit;
 
     /* send encrypted frames */
