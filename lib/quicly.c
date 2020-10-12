@@ -4083,7 +4083,10 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     if (s->send_window == 0)
         ack_only = 1;
 
-    /* send handshake flows */
+    /* send handshake flows; when PTO fires...
+     *  * quicly running as a client sends either a Handshake probe (or data) if the handshake keys are available, or else an
+     *    Initial probe (or data).
+     *  * quicly running as a server sends both Initial and Handshake probes (or data) if the corresponding keys are available. */
     if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, s, ack_only,
                                    min_packets_to_send != 0 && (!quicly_is_client(conn) || conn->handshake == NULL))) != 0)
         goto Exit;
