@@ -44,7 +44,7 @@ provider quicly {
     probe crypto_receive_key_update_prepare(struct st_quicly_conn_t *conn, int64_t at, uint64_t phase, const char *secret);
 
     probe packet_sent(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, size_t len, uint8_t packet_type, int ack_only);
-    probe packet_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, const void *decrypted, size_t decrypted_len);
+    probe packet_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, const void *decrypted, size_t decrypted_len, uint8_t packet_type);
     probe packet_prepare(struct st_quicly_conn_t *conn, int64_t at, uint8_t first_octet, const char *dcid);
     probe packet_acked(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, int is_late_ack);
     probe packet_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
