@@ -557,6 +557,11 @@ static int needs_cid_auth(quicly_conn_t *conn)
     return conn->super.version > QUICLY_PROTOCOL_VERSION_DRAFT27;
 }
 
+static int recognize_delayed_ack(quicly_conn_t *conn)
+{
+    return conn->super.ctx->transport_params.min_ack_delay_usec != UINT64_MAX;
+}
+
 static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
 {
     return quicly_loss_get_sentmap_expiration_time(&conn->egress.loss, conn->super.remote.transport_params.max_ack_delay);
@@ -1677,8 +1682,11 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACK_DELAY_EXPONENT); });
     if (QUICLY_LOCAL_MAX_ACK_DELAY != QUICLY_DEFAULT_MAX_ACK_DELAY)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
-    PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY,
-            { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MAX_ACK_DELAY * 1000 /* in microseconds */); });
+    if (params->min_ack_delay_usec != UINT64_MAX) {
+        /* TODO consider the value we should advertise. */
+        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY,
+                { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MAX_ACK_DELAY * 1000 /* in microseconds */); });
+    }
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
     if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
@@ -1709,7 +1717,7 @@ static const quicly_cid_t _tp_cid_ignore;
 
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *original_dcid,
                                            quicly_cid_t *initial_scid, quicly_cid_t *retry_scid, void *stateless_reset_token,
-                                           const uint8_t *src, const uint8_t *end)
+                                           const uint8_t *src, const uint8_t *end, int recognize_delayed_ack)
 {
 /* When non-negative, tp_index contains the literal position within the list of transport parameters recognized by this function.
  * That index is being used to find duplicates using a 64-bit bitmap (found_bits). When the transport parameter is being processed,
@@ -1857,16 +1865,18 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
                 params->max_ack_delay = (uint16_t)v;
             });
-            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
-                if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
-                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
-                    goto Exit;
-                }
-                if (params->min_ack_delay_usec >= 16777216) { /* "values of 2^24 or greater are invalid" */
-                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
-                    goto Exit;
-                }
-            });
+            if (recognize_delayed_ack) {
+                DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
+                    if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+                        ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                        goto Exit;
+                    }
+                    if (params->min_ack_delay_usec >= 16777216) { /* "values of 2^24 or greater are invalid" */
+                        ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                        goto Exit;
+                    }
+                });
+            }
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -2029,7 +2039,8 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     if ((ret = quicly_decode_transport_parameter_list(&params, needs_cid_auth(conn) || is_retry(conn) ? &original_dcid : NULL,
                                                       needs_cid_auth(conn) ? &initial_scid : &tp_cid_ignore,
                                                       needs_cid_auth(conn) ? is_retry(conn) ? &retry_scid : NULL : &tp_cid_ignore,
-                                                      remote_cid->stateless_reset_token, src, end)) != 0)
+                                                      remote_cid->stateless_reset_token, src, end, recognize_delayed_ack(conn))) !=
+        0)
         goto Exit;
 
     /* validate CIDs */
@@ -2195,10 +2206,10 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     { /* decode transport_parameters extension */
         const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
-        if ((ret = quicly_decode_transport_parameter_list(&conn->super.remote.transport_params,
-                                                          needs_cid_auth(conn) ? NULL : &tp_cid_ignore,
-                                                          needs_cid_auth(conn) ? &initial_scid : &tp_cid_ignore,
-                                                          needs_cid_auth(conn) ? NULL : &tp_cid_ignore, NULL, src, end)) != 0)
+        if ((ret = quicly_decode_transport_parameter_list(
+                 &conn->super.remote.transport_params, needs_cid_auth(conn) ? NULL : &tp_cid_ignore,
+                 needs_cid_auth(conn) ? &initial_scid : &tp_cid_ignore, needs_cid_auth(conn) ? NULL : &tp_cid_ignore, NULL, src,
+                 end, recognize_delayed_ack(conn))) != 0)
             goto Exit;
         if (needs_cid_auth(conn) &&
             !quicly_cid_is_equal(&conn->super.remote.cid_set.cids[0].cid, ptls_iovec_init(initial_scid.cid, initial_scid.len))) {
