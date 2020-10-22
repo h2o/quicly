@@ -732,6 +732,16 @@ struct st_quicly_address_token_plaintext_t {
     } appdata;
 };
 
+typedef struct st_quicly_detached_send_packet_t {
+    ptls_cipher_suite_t *cipher;
+    const void *header_protection_secret;
+    const void *aead_secret;
+    const void *datagram;
+    size_t first_byte_at;
+    size_t payload_from;
+    uint64_t packet_number;
+} quicly_detached_send_packet_t;
+
 /**
  * zero-terminated list of protocol versions being supported by quicly
  */
@@ -818,6 +828,10 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats);
 /**
  *
  */
+static uint32_t quicly_get_version(quicly_conn_t *conn);
+/**
+ *
+ */
 void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed);
 /**
  *
@@ -857,6 +871,11 @@ int quicly_stream_can_send(quicly_stream_t *stream, int at_stream_level);
  * @return a boolean indicating if quicly_send_stream can be called immediately
  */
 int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s);
+/**
+ * Detaches the packet being built, so that the stream data can be incorporate by a different process.  This function can only be
+ * called from the quicly_stream_callbacks_t::on_send_emit callback.
+ */
+void quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *detached);
 /**
  * Sends data of given stream.  Called by stream scheduler.  Only streams that can send some data or EOS should be specified.  It is
  * the responsibilty of the stream scheduler to maintain a list of such streams.
@@ -1202,6 +1221,12 @@ inline struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->remote.address.sa;
+}
+
+inline uint32_t quicly_get_version(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return c->version;
 }
 
 inline void **quicly_get_data(quicly_conn_t *conn)
