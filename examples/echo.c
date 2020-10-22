@@ -138,7 +138,7 @@ static void on_receive(quicly_stream_t *stream, size_t off, const void *src, siz
 
     if (is_server()) {
         /* server: echo back to the client */
-        if (quicly_sendstate_is_open(&stream->sendstate)) {
+        if (quicly_sendstate_is_open(&stream->sendstate) && (input.len > 0)) {
             quicly_streambuf_egress_write(stream, input.base, input.len);
             /* shutdown the stream after echoing all data */
             if (quicly_recvstate_transfer_complete(&stream->recvstate))
@@ -385,7 +385,7 @@ int main(int argc, char **argv)
     if (!is_server()) {
         /* initiate a connection, and open a stream */
         int ret;
-        if ((ret = quicly_connect(&client, &ctx, host, NULL, (struct sockaddr *)&sa, &next_cid, ptls_iovec_init(NULL, 0), NULL,
+        if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)&sa, NULL, &next_cid, ptls_iovec_init(NULL, 0), NULL,
                                   NULL)) != 0) {
             fprintf(stderr, "quicly_connect failed:%d\n", ret);
             exit(1);

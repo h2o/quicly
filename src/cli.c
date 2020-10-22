@@ -395,6 +395,8 @@ static void on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *
                 reason);
     } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
         fprintf(stderr, "stateless reset\n");
+    } else if (err == QUICLY_ERROR_NO_COMPATIBLE_VERSION) {
+        fprintf(stderr, "no compatible version\n");
     } else {
         fprintf(stderr, "unexpected close:code=%d\n", err);
     }
@@ -786,10 +788,10 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
                     if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
-                        if (packet.version != QUICLY_PROTOCOL_VERSION) {
+                        if (packet.version != 0 && !quicly_is_supported_version(packet.version)) {
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
-                            size_t payload_len = quicly_send_version_negotiation(&ctx, &remote.sa, packet.cid.src, NULL,
-                                                                                 packet.cid.dest.encrypted, payload);
+                            size_t payload_len = quicly_send_version_negotiation(&ctx, packet.cid.src, packet.cid.dest.encrypted,
+                                                                                 quicly_supported_versions, payload);
                             assert(payload_len != SIZE_MAX);
                             send_one_packet(fd, &remote.sa, payload, payload_len);
                             break;
@@ -825,7 +827,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                 /* Token that looks like retry was unusable, and we require retry. There's no chance of the
                                  * handshake succeeding. Therefore, send close without aquiring state. */
                                 uint8_t payload[ctx.transport_params.max_udp_payload_size];
-                                size_t payload_len = quicly_send_close_invalid_token(&ctx, &remote.sa, packet.cid.src, NULL,
+                                size_t payload_len = quicly_send_close_invalid_token(&ctx, packet.version, packet.cid.src,
                                                                                      packet.cid.dest.encrypted, err_desc, payload);
                                 assert(payload_len != SIZE_MAX);
                                 send_one_packet(fd, &remote.sa, payload, payload_len);
@@ -838,10 +840,10 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             uint8_t new_server_cid[8], payload[ctx.transport_params.max_udp_payload_size];
                             memcpy(new_server_cid, packet.cid.dest.encrypted.base, sizeof(new_server_cid));
                             new_server_cid[0] ^= 0xff;
-                            size_t payload_len = quicly_send_retry(&ctx, address_token_aead.enc, &remote.sa, packet.cid.src, NULL,
-                                                                   ptls_iovec_init(new_server_cid, sizeof(new_server_cid)),
-                                                                   packet.cid.dest.encrypted, ptls_iovec_init(NULL, 0),
-                                                                   ptls_iovec_init(NULL, 0), NULL, payload);
+                            size_t payload_len = quicly_send_retry(
+                                &ctx, address_token_aead.enc, packet.version, &remote.sa, packet.cid.src, NULL,
+                                ptls_iovec_init(new_server_cid, sizeof(new_server_cid)), packet.cid.dest.encrypted,
+                                ptls_iovec_init(NULL, 0), ptls_iovec_init(NULL, 0), NULL, payload);
                             assert(payload_len != SIZE_MAX);
                             send_one_packet(fd, &remote.sa, payload, payload_len);
                             break;
@@ -864,8 +866,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                          * also sending a reset, then the next CID is highly likely to contain a non-authenticating CID, ... */
                         if (packet.cid.dest.plaintext.node_id == 0 && packet.cid.dest.plaintext.thread_id == 0) {
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
-                            size_t payload_len =
-                                quicly_send_stateless_reset(&ctx, &remote.sa, NULL, packet.cid.dest.encrypted.base, payload);
+                            size_t payload_len = quicly_send_stateless_reset(&ctx, packet.cid.dest.encrypted.base, payload);
                             assert(payload_len != SIZE_MAX);
                             send_one_packet(fd, &remote.sa, payload, payload_len);
                         }
@@ -1026,17 +1027,20 @@ static void usage(const char *cmd)
            "  -a <alpn>                 ALPN identifier; repeat the option to set multiple\n"
            "                            candidates\n"
            "  -b <buffer-size>          specifies the size of the send / receive buffer in bytes\n"
-           "  -C <cid-key>              CID encryption key (server-only). Randomly generated\n"
+           "  -B <cid-key>              CID encryption key (server-only). Randomly generated\n"
            "                            if omitted.\n"
            "  -c certificate-file\n"
            "  -k key-file               specifies the credentials to be used for running the\n"
            "                            server. If omitted, the command runs as a client.\n"
-           "  -K num-packets            perform key update every num-packets packets\n"
+           "  -C <algorithm>            the congestion control algorithm; either \"reno\" (default) or\n"
+           "                            \"cubic\"\n"
+           "  -d draft-number           specifies the draft version number to be used (e.g., 29)\n"
            "  -e event-log-file         file to log events\n"
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
            "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
+           "  -K num-packets            perform key update every num-packets packets\n"
            "  -l log-file               file to log traffic secrets\n"
            "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
            "  -m <bytes>                max data (in bytes; default: 16MB)\n"
@@ -1099,7 +1103,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:C:Dc:k:K:Ee:Gi:I:l:M:m:NnOp:P:Rr:S:s:u:U:Vvx:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvx:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
@@ -1111,14 +1115,21 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
-        case 'C':
+        case 'B':
             cid_key = optarg;
             break;
         case 'c':
             load_certificate_chain(ctx.tls, optarg);
             break;
-        case 'D':
-            send_datagram_frame = 1;
+        case 'C':
+            if (strcmp(optarg, "reno") == 0) {
+                ctx.init_cc = &quicly_cc_reno_init;
+            } else if (strcmp(optarg, "cubic") == 0) {
+                ctx.init_cc = &quicly_cc_cubic_init;
+            } else {
+                fprintf(stderr, "unknown congestion controller: %s\n", optarg);
+                exit(1);
+            }
             break;
         case 'G':
 #ifdef __linux__
@@ -1131,11 +1142,16 @@ int main(int argc, char **argv)
         case 'k':
             load_private_key(ctx.tls, optarg);
             break;
-        case 'K':
-            if (sscanf(optarg, "%" PRIu64, &ctx.max_packets_per_key) != 1) {
-                fprintf(stderr, "failed to parse key update interval: %s\n", optarg);
+        case 'd': {
+            uint8_t draft_ver;
+            if (sscanf(optarg, "%" SCNu8, &draft_ver) != 1) {
+                fprintf(stderr, "failed to parse draft number: %s\n", optarg);
                 exit(1);
             }
+            ctx.initial_version = 0xff000000 | draft_ver;
+        } break;
+        case 'D':
+            send_datagram_frame = 1;
             break;
         case 'E':
             ctx.expand_client_hello = 1;
@@ -1158,6 +1174,12 @@ int main(int argc, char **argv)
                 fprintf(stderr, "failed to parse idle timeout: %s\n", optarg);
                 exit(1);
             }
+        case 'K':
+            if (sscanf(optarg, "%" SCNu64, &ctx.max_packets_per_key) != 1) {
+                fprintf(stderr, "failed to parse key update interval: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'l':
             setup_log_event(ctx.tls, optarg);
             break;
@@ -1181,7 +1203,7 @@ int main(int argc, char **argv)
             hs_properties.client.negotiate_before_key_exchange = 1;
             break;
         case 'n':
-            ctx.enforce_version_negotiation = 1;
+            ctx.initial_version = 0xabababa;
             break;
         case 'O':
             suppress_output = 1;
@@ -1381,6 +1403,23 @@ int main(int argc, char **argv)
             return 1;
         }
     }
+#if defined(IP_DONTFRAG)
+    {
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_DONTFRAG, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IP_DONTFRAG) failed");
+            return 1;
+        }
+    }
+#elif defined(IP_PMTUDISC_DO)
+    {
+        int opt = IP_PMTUDISC_DO;
+        if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0) {
+            perror("setsockopt(IP_MTU_DISCOVER) failed");
+            return 1;
+        }
+    }
+#endif
 
     return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, host);
 }
