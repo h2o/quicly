@@ -227,7 +227,8 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint16_t max_ack_delay;
     /**
-     * quicly ignores the value set for quicly_context_t::transport_parameters. Set to UINT64_MAX when not specified by remote peer.
+     * Delayed-ack extension. UINT64_MAX indicates that the extension is disabled or that the peer does not support it. Any local
+     * value other than UINT64_MAX indicates that the use of the extension should be negotiated.
      */
     uint64_t min_ack_delay_usec;
     /**
@@ -942,7 +943,7 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
  */
 int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params, quicly_cid_t *original_dcid,
                                            quicly_cid_t *initial_scid, quicly_cid_t *retry_scid, void *stateless_reset_token,
-                                           const uint8_t *src, const uint8_t *end);
+                                           const uint8_t *src, const uint8_t *end, int recognize_delayed_ack);
 /**
  * Initiates a new connection.
  * @param new_cid the CID to be used for the connection. path_id is ignored.

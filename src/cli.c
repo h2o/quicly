@@ -924,7 +924,7 @@ static void load_session(void)
             src = end;
         });
         ptls_decode_open_block(src, end, 2, {
-            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, NULL, NULL, src, end)) != 0)
+            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, NULL, NULL, src, end, 0)) != 0)
                 goto Exit;
             src = end;
         });
