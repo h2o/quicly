@@ -26,24 +26,22 @@ import json
 PACKET_LABELS = ["initial", "0rtt", "handshake", "1rtt"]
 
 def handle_packet_received(events, idx):
-    source_event = events[idx]
-    qlog_event_data = {
-        "packet_type": PACKET_LABELS[source_event["packet-type"]],
-        "header": {
-            "packet_number": source_event["pn"]
-        },
-        "frames": []
-    }
-
+    frames = []
     for i in range(idx+1, len(events)):
         ev = events[i]
         if ev["type"] == "packet-prepare" or QLOG_EVENT_HANDLERS.has_key(ev["type"]):
             break
         handler = FRAME_EVENT_HANDLERS.get(ev["type"])
         if handler:
-            qlog_event_data["frames"].append(handler(ev))
+            frames.append(handler(ev))
 
-    return [source_event["time"], "transport", "packet_received", qlog_event_data]
+    return [events[idx]["time"], "transport", "packet_received", {
+        "packet_type": PACKET_LABELS[events[idx]["packet-type"]],
+        "header": {
+            "packet_number": events[idx]["pn"]
+        },
+        "frames": frames
+    }]
 
 def handle_packet_sent(events, idx):
     source_event = events[idx]
