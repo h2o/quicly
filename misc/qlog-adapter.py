@@ -44,15 +44,26 @@ def handle_packet_received(events, idx):
     }]
 
 def handle_packet_sent(events, idx):
-    source_event = events[idx]
-    qlog_event_data = {
-        "packet_type": PACKET_LABELS[source_event["packet-type"]],
+    frames = []
+    i = idx-1
+    while i > 0 and events[i]["type"] != "packet-prepare":
+        handler = FRAME_EVENT_HANDLERS.get(events[i]["type"])
+        if handler:
+            frames.append(handler(events[i]))
+        i -= 1
+
+    return [events[idx]["time"], "transport", "packet_sent", {
+        "packet_type": PACKET_LABELS[events[idx]["packet-type"]],
         "header": {
-            "packet_number": source_event["pn"]
+            "packet_number": events[idx]["pn"]
         },
-        "frames": []
+        "frames": frames
+    }]
+
+def handle_ack_send(event):
+    return {
+        "frame_type": "ack",
     }
-    return [source_event["time"], "transport", "packet_sent", qlog_event_data]
 
 def handle_quictrace_recv_ack(event):
     return {
@@ -78,6 +89,7 @@ QLOG_EVENT_HANDLERS = {
 }
 
 FRAME_EVENT_HANDLERS = {
+    "ack-send": handle_ack_send,
     "ping-receive": handle_ping_receive,
     "quictrace-recv-ack": handle_quictrace_recv_ack,
     "recv-crypto-frame": handle_recv_crypto_frame,
