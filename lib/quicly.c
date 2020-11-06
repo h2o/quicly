@@ -61,7 +61,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_SOURCE_CONNECTION_ID 15
 #define QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID 16
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE 0x20
-#define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xde1a
+#define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xff02de1a
 
 /**
  * maximum size of token that quicly accepts
@@ -1875,6 +1875,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 }
                 params->max_ack_delay = (uint16_t)v;
             });
+            /* min_ack_delay is recognized only if the support is enabled on this endpoint */
             if (recognize_delayed_ack) {
                 DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
                     if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -5247,6 +5248,10 @@ static int handle_ack_frequency_frame(quicly_conn_t *conn, struct st_quicly_hand
 {
     quicly_ack_frequency_frame_t frame;
     int ret;
+
+    /* recognize the frame only when the support has been advertised */
+    if (!recognize_delayed_ack(conn))
+        return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
     if ((ret = quicly_decode_ack_frequency_frame(&state->src, state->end, &frame)) != 0)
         return ret;
