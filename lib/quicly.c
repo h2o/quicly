@@ -1192,9 +1192,20 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
 
 static int scheduler_can_send(quicly_conn_t *conn)
 {
+    /* invoke the scheduler only when we are able to send stream data; skipping STATE_ACCEPTING is important as the application
+     * would not have setup data pointer. */
+    switch (conn->super.state) {
+    case QUICLY_STATE_FIRSTFLIGHT:
+    case QUICLY_STATE_CONNECTED:
+        break;
+    default:
+        return 0;
+    }
+
     /* scheduler would never have data to send, until application keys become available */
     if (conn->application == NULL)
         return 0;
+
     int conn_is_saturated = !(conn->egress.max_data.sent < conn->egress.max_data.permitted);
     return conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, conn_is_saturated);
 }
@@ -5463,7 +5474,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    (*conn)->super.state = QUICLY_STATE_CONNECTED;
+    (*conn)->super.state = QUICLY_STATE_ACCEPTING;
     quicly_set_cid(&(*conn)->super.original_dcid, packet->cid.dest.encrypted);
     if (address_token != NULL) {
         (*conn)->super.remote.address_validation.validated = 1;
@@ -5497,7 +5508,9 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
 Exit:
     if (*conn != NULL) {
-        if (ret != 0) {
+        if (ret == 0) {
+            (*conn)->super.state = QUICLY_STATE_CONNECTED;
+        } else {
             initiate_close(*conn, ret, offending_frame_type, "");
             ret = 0;
         }

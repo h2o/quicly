@@ -340,6 +340,11 @@ typedef enum {
      */
     QUICLY_STATE_FIRSTFLIGHT,
     /**
+     * internal state used to indicate that the connection has not been provided to the application (and therefore might not have
+     * application data being associated)
+     */
+    QUICLY_STATE_ACCEPTING,
+    /**
      * while connected
      */
     QUICLY_STATE_CONNECTED,
