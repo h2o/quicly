@@ -3875,20 +3875,20 @@ Exit:
 
 static struct st_quicly_pn_space_t *setup_send_space(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s)
 {
-    struct st_quicly_pn_space_t *pn_space = NULL;
+    struct st_quicly_pn_space_t *space = NULL;
 
     switch (epoch) {
     case QUICLY_EPOCH_INITIAL:
         if (conn->initial == NULL || (s->current.cipher = &conn->initial->cipher.egress)->aead == NULL)
             return NULL;
         s->current.first_byte = QUICLY_PACKET_TYPE_INITIAL;
-        pn_space = &conn->initial->super;
+        space = &conn->initial->super;
         break;
     case QUICLY_EPOCH_HANDSHAKE:
         if (conn->handshake == NULL || (s->current.cipher = &conn->handshake->cipher.egress)->aead == NULL)
             return NULL;
         s->current.first_byte = QUICLY_PACKET_TYPE_HANDSHAKE;
-        pn_space = &conn->handshake->super;
+        space = &conn->handshake->super;
         break;
     case QUICLY_EPOCH_0RTT:
     case QUICLY_EPOCH_1RTT:
@@ -3898,14 +3898,14 @@ static struct st_quicly_pn_space_t *setup_send_space(quicly_conn_t *conn, size_t
             return NULL;
         s->current.cipher = &conn->application->cipher.egress.key;
         s->current.first_byte = epoch == QUICLY_EPOCH_0RTT ? QUICLY_PACKET_TYPE_0RTT : QUICLY_QUIC_BIT;
-        pn_space = &conn->application->super;
+        space = &conn->application->super;
         break;
     default:
         assert(!"logic flaw");
         break;
     }
 
-    return pn_space;
+    return space;
 }
 
 static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s, int ack_only, int send_probe)
