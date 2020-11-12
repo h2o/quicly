@@ -76,7 +76,7 @@ def handle_ping_receive(event):
     }
 
 def handle_stream_receive(event):
-    label = "stream" if event["stream-id"] > 0 else "crypto"
+    label = "stream" if event["stream-id"] >= 0 else "crypto"
     return {
         "frame_type": label,
         "stream_id": event["stream-id"],
