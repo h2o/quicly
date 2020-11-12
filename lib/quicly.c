@@ -5404,6 +5404,8 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
             /* slow path */
             --state.src;
             if ((state.frame_type = quicly_decodev(&state.src, state.end)) == UINT64_MAX) {
+                state.frame_type =
+                    QUICLY_FRAME_TYPE_PADDING; /* we cannot signal the offending frame type when failing to decode the frame type */
                 ret = QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
                 break;
             }
