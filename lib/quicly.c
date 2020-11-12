@@ -4591,9 +4591,10 @@ static int handle_crypto_frame(quicly_conn_t *conn, struct st_quicly_handle_payl
     quicly_stream_t *stream;
     int ret;
 
-    if ((ret = quicly_decode_crypto_frame(&state->src, state->end, &frame)) != 0)
+    if ((ret = quicly_decode_crypto_frame(&state->src, state->end, state->epoch, &frame)) != 0)
         return ret;
-    stream = quicly_get_stream(conn, -(quicly_stream_id_t)(1 + state->epoch));
+    QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, conn->stash.now, frame.stream_id, frame.offset, frame.data.len, 0);
+    stream = quicly_get_stream(conn, frame.stream_id);
     assert(stream != NULL);
     return apply_stream_frame(stream, &frame);
 }

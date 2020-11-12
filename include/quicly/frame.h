@@ -107,7 +107,7 @@ typedef struct st_quicly_stream_frame_t {
 
 static int quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame);
 static uint8_t *quicly_encode_crypto_frame_header(uint8_t *dst, uint8_t *dst_end, uint64_t offset, size_t *data_len);
-static int quicly_decode_crypto_frame(const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame);
+static int quicly_decode_crypto_frame(const uint8_t **src, const uint8_t *end, size_t epoch, quicly_stream_frame_t *frame);
 
 static uint8_t *quicly_encode_reset_stream_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code, uint64_t final_size);
 
@@ -422,11 +422,11 @@ inline uint8_t *quicly_encode_crypto_frame_header(uint8_t *dst, uint8_t *dst_end
     return dst;
 }
 
-inline int quicly_decode_crypto_frame(const uint8_t **src, const uint8_t *end, quicly_stream_frame_t *frame)
+inline int quicly_decode_crypto_frame(const uint8_t **src, const uint8_t *end, size_t epoch, quicly_stream_frame_t *frame)
 {
     uint64_t len;
 
-    frame->stream_id = 0;
+    frame->stream_id = -(quicly_stream_id_t)(1 + epoch);
     frame->is_fin = 0;
 
     if ((frame->offset = quicly_decodev(src, end)) == UINT64_MAX)
