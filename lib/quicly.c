@@ -3910,16 +3910,16 @@ static struct st_quicly_pn_space_t *setup_send_space(quicly_conn_t *conn, size_t
 
 static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s, int ack_only, int send_probe)
 {
-    struct st_quicly_pn_space_t *ack_space;
+    struct st_quicly_pn_space_t *space;
     int ret = 0;
 
     /* setup send epoch, or return if it's impossible to send in this epoch */
-    if ((ack_space = setup_send_space(conn, epoch, s)) == NULL)
+    if ((space = setup_send_space(conn, epoch, s)) == NULL)
         return 0;
 
     /* send ACK */
-    if (ack_space != NULL && (ack_space->unacked_count != 0 || send_probe))
-        if ((ret = send_ack(conn, ack_space, s)) != 0)
+    if (space != NULL && (space->unacked_count != 0 || send_probe))
+        if ((ret = send_ack(conn, space, s)) != 0)
             goto Exit;
 
     if (!ack_only) {
