@@ -75,10 +75,11 @@ def handle_ping_receive(event):
         "frame_type": "ping",
     }
 
-
-def handle_recv_crypto_frame(event):
+def handle_stream_receive(event):
+    label = "stream" if event["stream-id"] > 0 else "crypto"
     return {
-        "frame_type": "crypto",
+        "frame_type": label,
+        "stream_id": event["stream-id"],
         "length": event["len"],
         "offset": event["off"]
     }
@@ -92,7 +93,7 @@ FRAME_EVENT_HANDLERS = {
     "ack-send": handle_ack_send,
     "ping-receive": handle_ping_receive,
     "quictrace-recv-ack": handle_quictrace_recv_ack,
-    "recv-crypto-frame": handle_recv_crypto_frame,
+    "stream-receive": handle_stream_receive,
 }
 
 def usage():
