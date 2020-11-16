@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # Copyright (c) 2020 Fastly, Toru Maesaka
 #
@@ -29,7 +29,7 @@ def handle_packet_received(events, idx):
     frames = []
     for i in range(idx+1, len(events)):
         ev = events[i]
-        if ev["type"] == "packet-prepare" or QLOG_EVENT_HANDLERS.has_key(ev["type"]):
+        if ev["type"] == "packet-prepare" or ev["type"] in QLOG_EVENT_HANDLERS:
             break
         handler = FRAME_EVENT_HANDLERS.get(ev["type"])
         if handler:
