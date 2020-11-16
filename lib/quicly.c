@@ -3170,7 +3170,6 @@ static int allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_send_context
     if ((*sent = quicly_sentmap_allocate(&conn->egress.loss.sentmap, acked)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
-    /* TODO return the remaining window that the sender can use */
     return ret;
 }
 
