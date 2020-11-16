@@ -65,6 +65,24 @@ def handle_ack_send(event):
         "frame_type": "ack",
     }
 
+def handle_new_connection_id_receive(event):
+    return {
+        "frame_type": "new_connection_id",
+        "sequence_number": event["sequence"],
+        "retire_prior_to": event["retire-prior-to"],
+        "connection_id": event["cid"],
+        "stateless_reset_token": event["stateless-reset-token"]
+    }
+
+def handle_new_connection_id_send(event):
+    return {
+        "frame_type": "new_connection_id",
+        "sequence_number": event["sequence"],
+        "retire_prior_to": event["retire-prior-to"],
+        "connection_id": event["cid"],
+        "stateless_reset_token": event["stateless-reset-token"]
+    }
+
 def handle_quictrace_recv_ack(event):
     return {
         "frame_type": "ack",
@@ -91,6 +109,8 @@ QLOG_EVENT_HANDLERS = {
 
 FRAME_EVENT_HANDLERS = {
     "ack-send": handle_ack_send,
+    "new-connection-id-receive": handle_new_connection_id_receive,
+    "new-connection-id-send": handle_new_connection_id_send,
     "ping-receive": handle_ping_receive,
     "quictrace-recv-ack": handle_quictrace_recv_ack,
     "stream-receive": handle_stream_receive,
