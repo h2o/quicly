@@ -2714,7 +2714,6 @@ static int on_ack_new_token(quicly_sentmap_t *map, const quicly_sent_packet_t *p
 {
     quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
 
-    /* TODO use `packet->bytes_in_flight != 0`, like on_ack_stream */
     if (sent->data.new_token.is_inflight) {
         --conn->egress.new_token.num_inflight;
         sent->data.new_token.is_inflight = 0;
