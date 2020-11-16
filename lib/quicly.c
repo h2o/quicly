@@ -2572,7 +2572,6 @@ static int on_ack_max_stream_data(quicly_sentmap_t *map, const quicly_sent_packe
     quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
     quicly_stream_t *stream;
 
-    /* TODO cache pointer to stream (using a generation counter?) */
     if ((stream = quicly_get_stream(conn, sent->data.stream.stream_id)) != NULL) {
         if (acked) {
             quicly_maxsender_acked(&stream->_send_aux.max_stream_data_sender, &sent->data.max_stream_data.args);
@@ -2715,7 +2714,6 @@ static int on_ack_new_token(quicly_sentmap_t *map, const quicly_sent_packet_t *p
 {
     quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
 
-    /* TODO use `packet->bytes_in_flight != 0`, like on_ack_stream */
     if (sent->data.new_token.is_inflight) {
         --conn->egress.new_token.num_inflight;
         sent->data.new_token.is_inflight = 0;
@@ -3172,7 +3170,6 @@ static int allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_send_context
     if ((*sent = quicly_sentmap_allocate(&conn->egress.loss.sentmap, acked)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
-    /* TODO return the remaining window that the sender can use */
     return ret;
 }
 
