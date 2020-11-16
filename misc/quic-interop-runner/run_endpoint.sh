@@ -26,7 +26,7 @@ if [ "$ROLE" == "client" ]; then
         echo "Requests: " $REQUESTS
         # Pull server and file names out of requests, generate file list for cli.
         for REQ in $REQUESTS; do
-            SERVER=`echo $REQ | cut -f3 -d'/'`
+            SERVER=`echo $REQ | cut -f3 -d'/' | cut -f1 -d':'`
             FILE=`echo $REQ | cut -f4 -d'/'`
             FILES=${FILES}" "${FILE}
             CLI_LIST=${CLI_LIST}" -P /"${FILE}
