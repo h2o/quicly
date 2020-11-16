@@ -102,6 +102,22 @@ def handle_stream_receive(event):
         "offset": event["off"]
     }
 
+def handle_transport_close_receive(event):
+    return {
+        "frame_type": "connection_close",
+        "offending_frame_type": event["frame-type"],
+        "error_code": event["error-code"],
+        "reason": event["reason-phrase"]
+    }
+
+def handle_transport_close_send(event):
+    return {
+        "frame_type": "connection_close",
+        "offending_frame_type": event["frame-type"],
+        "error_code": event["error-code"],
+        "reason": event["reason-phrase"]
+    }
+
 QLOG_EVENT_HANDLERS = {
     "packet-received": handle_packet_received,
     "packet-sent": handle_packet_sent
@@ -114,6 +130,8 @@ FRAME_EVENT_HANDLERS = {
     "ping-receive": handle_ping_receive,
     "quictrace-recv-ack": handle_quictrace_recv_ack,
     "stream-receive": handle_stream_receive,
+    "transport-close-receive": handle_transport_close_receive,
+    "transport-close-send": handle_transport_close_send
 }
 
 def usage():
