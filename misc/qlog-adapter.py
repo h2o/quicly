@@ -65,6 +65,16 @@ def handle_ack_send(event):
         "frame_type": "ack",
     }
 
+def handle_handshake_done_receive(event):
+    return {
+        "frame_type": "handshake_done",
+    }
+
+def handle_handshake_done_send(event):
+    return {
+        "frame_type": "handshake_done",
+    }
+
 def handle_new_connection_id_receive(event):
     return {
         "frame_type": "new_connection_id",
@@ -139,6 +149,8 @@ QLOG_EVENT_HANDLERS = {
 
 FRAME_EVENT_HANDLERS = {
     "ack-send": handle_ack_send,
+    "handshake-done-receive": handle_handshake_done_receive,
+    "handshake-done-send": handle_handshake_done_send,
     "new-connection-id-receive": handle_new_connection_id_receive,
     "new-connection-id-send": handle_new_connection_id_send,
     "new-token-receive": handle_new_token_receive,
