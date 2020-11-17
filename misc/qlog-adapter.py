@@ -83,6 +83,20 @@ def handle_new_connection_id_send(event):
         "stateless_reset_token": event["stateless-reset-token"]
     }
 
+def handle_new_token_receive(event):
+    return {
+        "frame_type": "new_token",
+        "token": event["token"],
+        "generation": event["generation"]
+    }
+
+def handle_new_token_send(event):
+    return {
+        "frame_type": "new_token",
+        "token": event["token"],
+        "generation": event["generation"]
+    }
+
 def handle_quictrace_recv_ack(event):
     return {
         "frame_type": "ack",
@@ -127,6 +141,8 @@ FRAME_EVENT_HANDLERS = {
     "ack-send": handle_ack_send,
     "new-connection-id-receive": handle_new_connection_id_receive,
     "new-connection-id-send": handle_new_connection_id_send,
+    "new-token-receive": handle_new_token_receive,
+    "new-token-send": handle_new_token_send,
     "ping-receive": handle_ping_receive,
     "quictrace-recv-ack": handle_quictrace_recv_ack,
     "stream-receive": handle_stream_receive,
