@@ -107,14 +107,20 @@ def handle_new_token_send(event):
         "generation": event["generation"]
     }
 
+def handle_ping_receive(event):
+    return {
+        "frame_type": "ping",
+    }
+
 def handle_quictrace_recv_ack(event):
     return {
         "frame_type": "ack",
     }
 
-def handle_ping_receive(event):
+def handle_stream_on_send_stop(event):
     return {
-        "frame_type": "ping",
+        "frame_type": "stop_sending",
+        "stream_id": event["stream-id"]
     }
 
 def handle_stream_receive(event):
@@ -157,6 +163,7 @@ FRAME_EVENT_HANDLERS = {
     "new-token-send": handle_new_token_send,
     "ping-receive": handle_ping_receive,
     "quictrace-recv-ack": handle_quictrace_recv_ack,
+    "stream-on-send-stop": handle_stream_on_send_stop,
     "stream-receive": handle_stream_receive,
     "transport-close-receive": handle_transport_close_receive,
     "transport-close-send": handle_transport_close_send
