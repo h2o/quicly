@@ -75,6 +75,32 @@ def handle_handshake_done_send(event):
         "frame_type": "handshake_done",
     }
 
+def handle_max_data_receive(event):
+    return {
+        "frame_type": "max_data",
+        "maximum": event["limit"]
+    }
+
+def handle_max_data_send(event):
+    return {
+        "frame_type": "max_data",
+        "maximum": event["limit"]
+    }
+
+def handle_max_stream_data_receive(event):
+    return {
+        "frame_type": "max_stream_data",
+        "stream_id": event["stream-id"],
+        "maximum": event["limit"]
+    }
+
+def handle_max_stream_data_send(event):
+    return {
+        "frame_type": "max_stream_data",
+        "stream_id": event["stream-id"],
+        "maximum": event["limit"]
+    }
+
 def handle_new_connection_id_receive(event):
     return {
         "frame_type": "new_connection_id",
@@ -157,6 +183,10 @@ FRAME_EVENT_HANDLERS = {
     "ack-send": handle_ack_send,
     "handshake-done-receive": handle_handshake_done_receive,
     "handshake-done-send": handle_handshake_done_send,
+    "max-data-receive": handle_max_data_receive,
+    "max-data-send": handle_max_data_send,
+    "max-stream-data-receive": handle_max_stream_data_receive,
+    "max-stream-data-send": handle_max_stream_data_send,
     "new-connection-id-receive": handle_new_connection_id_receive,
     "new-connection-id-send": handle_new_connection_id_send,
     "new-token-receive": handle_new_token_receive,
