@@ -87,6 +87,17 @@ def handle_max_data_send(event):
         "maximum": event["limit"]
     }
 
+def handle_max_streams_send(event):
+    if event["is-unidirectional"]:
+        stream_type = "unidirectional"
+    else:
+        stream_type = "bidirectional"
+    return {
+        "frame_type": "max_streams",
+        "stream_type": stream_type,
+        "maximum": event["limit"]
+    }
+
 def handle_max_stream_data_receive(event):
     return {
         "frame_type": "max_stream_data",
@@ -185,6 +196,7 @@ FRAME_EVENT_HANDLERS = {
     "handshake-done-send": handle_handshake_done_send,
     "max-data-receive": handle_max_data_receive,
     "max-data-send": handle_max_data_send,
+    "max-streams-send": handle_max_streams_send,
     "max-stream-data-receive": handle_max_stream_data_receive,
     "max-stream-data-send": handle_max_stream_data_send,
     "new-connection-id-receive": handle_new_connection_id_receive,
