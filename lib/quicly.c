@@ -5481,8 +5481,10 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         goto Exit;
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
     if ((ret = decrypt_packet(ingress_cipher.header_protection, aead_decrypt_fixed_key, ingress_cipher.aead, &next_expected_pn,
-                              packet, &pn, &payload)) != 0)
+                              packet, &pn, &payload)) != 0) {
+        ret = QUICLY_ERROR_DECRYPTION_FAILED;
         goto Exit;
+    }
 
     /* create connection */
     if ((*conn = create_connection(ctx, packet->version, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
