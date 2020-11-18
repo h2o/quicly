@@ -154,6 +154,28 @@ def handle_quictrace_recv_ack(event):
         "frame_type": "ack",
     }
 
+def handle_streams_blocked_receive(event):
+    if event["is-unidirectional"]:
+      stream_type = unidirectional
+    else:
+      stream_type = bidirectional
+    return {
+        "frame_type": "streams_blocked",
+        "stream_type": stream_type,
+        "limit": event["limit"]
+    }
+
+def handle_streams_blocked_send(event):
+    if event["is-unidirectional"]:
+      stream_type = unidirectional
+    else:
+      stream_type = bidirectional
+    return {
+        "frame_type": "streams_blocked",
+        "stream_type": stream_type,
+        "limit": event["limit"]
+    }
+
 def handle_stream_on_send_stop(event):
     return {
         "frame_type": "stop_sending",
@@ -205,6 +227,8 @@ FRAME_EVENT_HANDLERS = {
     "new-token-send": handle_new_token_send,
     "ping-receive": handle_ping_receive,
     "quictrace-recv-ack": handle_quictrace_recv_ack,
+    "streams-blocked-receive": handle_streams_blocked_receive,
+    "streams-blocked-send": handle_streams_blocked_send,
     "stream-on-send-stop": handle_stream_on_send_stop,
     "stream-receive": handle_stream_receive,
     "transport-close-receive": handle_transport_close_receive,
