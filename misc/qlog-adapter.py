@@ -197,6 +197,24 @@ def handle_stream_on_receive_reset(event):
         "error_code": event["err"]
     }
 
+def handle_stream_receive(event):
+    label = "stream" if event["stream-id"] >= 0 else "crypto"
+    return {
+        "frame_type": label,
+        "stream_id": event["stream-id"],
+        "length": event["len"],
+        "offset": event["off"]
+    }
+
+def handle_stream_send(event):
+    label = "stream" if event["stream-id"] >= 0 else "crypto"
+    return {
+        "frame_type": label,
+        "stream_id": event["stream-id"],
+        "length": event["len"],
+        "offset": event["off"]
+    }
+
 def handle_stream_on_send_stop(event):
     return {
         "frame_type": "stop_sending",
@@ -223,15 +241,6 @@ def handle_streams_blocked_send(event):
         "frame_type": "streams_blocked",
         "stream_type": stream_type,
         "limit": event["limit"]
-    }
-
-def handle_stream_receive(event):
-    label = "stream" if event["stream-id"] >= 0 else "crypto"
-    return {
-        "frame_type": label,
-        "stream_id": event["stream-id"],
-        "length": event["len"],
-        "offset": event["off"]
     }
 
 def handle_transport_close_receive(event):
@@ -277,6 +286,7 @@ FRAME_EVENT_HANDLERS = {
     "stream-data-blocked-receive": handle_stream_data_blocked_receive,
     "stream-data-blocked-send": handle_stream_data_blocked_send,
     "stream-on-receive-reset": handle_stream_on_receive_reset,
+    "stream-send": handle_stream_send,
     "streams-blocked-receive": handle_streams_blocked_receive,
     "streams-blocked-send": handle_streams_blocked_send,
     "stream-on-send-stop": handle_stream_on_send_stop,
