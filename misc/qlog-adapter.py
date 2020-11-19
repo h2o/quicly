@@ -186,6 +186,20 @@ def handle_streams_blocked_send(event):
         "limit": event["limit"]
     }
 
+def handle_stream_data_blocked_receive(event):
+    return {
+        "frame_type": "stream_data_blocked",
+        "stream_id": event["stream-id"],
+        "limit": event["limit"]
+    }
+
+def handle_stream_data_blocked_send(event):
+    return {
+        "frame_type": "stream_data_blocked",
+        "stream_id": event["stream-id"],
+        "limit": event["limit"]
+    }
+
 def handle_stream_on_send_stop(event):
     return {
         "frame_type": "stop_sending",
@@ -241,6 +255,8 @@ FRAME_EVENT_HANDLERS = {
     "quictrace-recv-ack": handle_quictrace_recv_ack,
     "streams-blocked-receive": handle_streams_blocked_receive,
     "streams-blocked-send": handle_streams_blocked_send,
+    "stream-data-blocked-receive": handle_stream_data_blocked_receive,
+    "stream-data-blocked-send": handle_stream_data_blocked_send,
     "stream-on-send-stop": handle_stream_on_send_stop,
     "stream-receive": handle_stream_receive,
     "transport-close-receive": handle_transport_close_receive,
