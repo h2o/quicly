@@ -35,7 +35,6 @@ provider quicly {
     probe idle_timeout(struct st_quicly_conn_t *conn, int64_t at);
     probe stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t at);
 
-    probe crypto_decrypt_failure(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
     probe crypto_handshake(struct st_quicly_conn_t *conn, int64_t at, int ret);
     probe crypto_update_secret(struct st_quicly_conn_t *conn, int64_t at, int is_enc, uint8_t epoch, const char *label, const char *secret);
     probe crypto_send_key_update(struct st_quicly_conn_t *conn, int64_t at, uint64_t phase, const char *secret);
@@ -48,6 +47,7 @@ provider quicly {
     probe packet_prepare(struct st_quicly_conn_t *conn, int64_t at, uint8_t first_octet, const char *dcid);
     probe packet_acked(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, int is_late_ack);
     probe packet_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
+    probe packet_dropped(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
 
     probe pto(struct st_quicly_conn_t *conn, int64_t at, size_t inflight, uint32_t cwnd, int8_t pto_count);
     probe cc_ack_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t largest_acked, size_t bytes_acked, uint32_t cwnd,
