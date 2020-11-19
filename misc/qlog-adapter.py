@@ -223,9 +223,9 @@ def handle_stream_on_send_stop(event):
 
 def handle_streams_blocked_receive(event):
     if event["is-unidirectional"]:
-      stream_type = unidirectional
+      stream_type = "unidirectional"
     else:
-      stream_type = bidirectional
+      stream_type = "bidirectional"
     return {
         "frame_type": "streams_blocked",
         "stream_type": stream_type,
@@ -234,9 +234,9 @@ def handle_streams_blocked_receive(event):
 
 def handle_streams_blocked_send(event):
     if event["is-unidirectional"]:
-      stream_type = unidirectional
+      stream_type = "unidirectional"
     else:
-      stream_type = bidirectional
+      stream_type = "bidirectional"
     return {
         "frame_type": "streams_blocked",
         "stream_type": stream_type,
