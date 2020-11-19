@@ -65,6 +65,16 @@ def handle_ack_send(event):
         "frame_type": "ack",
     }
 
+def handle_data_blocked_receive(event):
+    return {
+        "frame_type": "data_blocked"
+    }
+
+def handle_data_blocked_send(event):
+    return {
+        "frame_type": "data_blocked"
+    }
+
 def handle_handshake_done_receive(event):
     return {
         "frame_type": "handshake_done",
@@ -214,6 +224,8 @@ QLOG_EVENT_HANDLERS = {
 
 FRAME_EVENT_HANDLERS = {
     "ack-send": handle_ack_send,
+    "data-blocked-receive": handle_data_blocked_receive,
+    "data-blocked-send": handle_data_blocked_send,
     "handshake-done-receive": handle_handshake_done_receive,
     "handshake-done-send": handle_handshake_done_send,
     "max-data-receive": handle_max_data_receive,
