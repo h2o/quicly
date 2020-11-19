@@ -176,6 +176,33 @@ def handle_retire_connection_id_send(event):
         "sequence_number": event["sequence"]
     }
 
+def handle_stream_data_blocked_receive(event):
+    return {
+        "frame_type": "stream_data_blocked",
+        "stream_id": event["stream-id"],
+        "limit": event["limit"]
+    }
+
+def handle_stream_data_blocked_send(event):
+    return {
+        "frame_type": "stream_data_blocked",
+        "stream_id": event["stream-id"],
+        "limit": event["limit"]
+    }
+
+def handle_stream_on_receive_reset(event):
+    return {
+        "frame_type": "reset_stream",
+        "stream_id": event["stream-id"],
+        "error_code": event["err"]
+    }
+
+def handle_stream_on_send_stop(event):
+    return {
+        "frame_type": "stop_sending",
+        "stream_id": event["stream-id"]
+    }
+
 def handle_streams_blocked_receive(event):
     if event["is-unidirectional"]:
       stream_type = unidirectional
@@ -196,26 +223,6 @@ def handle_streams_blocked_send(event):
         "frame_type": "streams_blocked",
         "stream_type": stream_type,
         "limit": event["limit"]
-    }
-
-def handle_stream_data_blocked_receive(event):
-    return {
-        "frame_type": "stream_data_blocked",
-        "stream_id": event["stream-id"],
-        "limit": event["limit"]
-    }
-
-def handle_stream_data_blocked_send(event):
-    return {
-        "frame_type": "stream_data_blocked",
-        "stream_id": event["stream-id"],
-        "limit": event["limit"]
-    }
-
-def handle_stream_on_send_stop(event):
-    return {
-        "frame_type": "stop_sending",
-        "stream_id": event["stream-id"]
     }
 
 def handle_stream_receive(event):
@@ -267,10 +274,11 @@ FRAME_EVENT_HANDLERS = {
     "quictrace-recv-ack": handle_quictrace_recv_ack,
     "retire-connection-id-receive": handle_retire_connection_id_receive,
     "retire-connection-id-send": handle_retire_connection_id_send,
-    "streams-blocked-receive": handle_streams_blocked_receive,
-    "streams-blocked-send": handle_streams_blocked_send,
     "stream-data-blocked-receive": handle_stream_data_blocked_receive,
     "stream-data-blocked-send": handle_stream_data_blocked_send,
+    "stream-on-receive-reset": handle_stream_on_receive_reset,
+    "streams-blocked-receive": handle_streams_blocked_receive,
+    "streams-blocked-send": handle_streams_blocked_send,
     "stream-on-send-stop": handle_stream_on_send_stop,
     "stream-receive": handle_stream_receive,
     "transport-close-receive": handle_transport_close_receive,
