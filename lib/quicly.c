@@ -592,7 +592,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
     packet->token = ptls_iovec_init(NULL, 0);
     packet->decrypted.pn = UINT64_MAX;
 
-    /* move the cursor to the sencond byte */
+    /* move the cursor to the second byte */
     src += *off + 1;
 
     if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
