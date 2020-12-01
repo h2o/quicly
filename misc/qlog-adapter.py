@@ -27,10 +27,21 @@ PACKET_LABELS = ["initial", "0rtt", "handshake", "1rtt"]
 
 def handle_packet_received(events, idx):
     frames = []
+    acked = []
     for i in range(idx+1, len(events)):
         ev = events[i]
         if ev["type"] == "packet-prepare" or ev["type"] in QLOG_EVENT_HANDLERS:
             break
+
+        # An ACK frame can't be re-composed in an iteration. Continue buffering
+        # the ACK blocks until all the blocks are processed.
+        if ev["type"] == "quictrace-recv-ack":
+            acked.append([ev["ack-block-begin"],ev["ack-block-end"]])
+            continue
+        elif ev["type"] == "quictrace-recv-ack-delay":
+            frames.append(render_ack_frame(acked))
+            continue
+
         handler = FRAME_EVENT_HANDLERS.get(ev["type"])
         if handler:
             frames.append(handler(ev))
@@ -159,11 +170,6 @@ def handle_ping_receive(event):
         "frame_type": "ping",
     }
 
-def handle_quictrace_recv_ack(event):
-    return {
-        "frame_type": "ack",
-    }
-
 def handle_retire_connection_id_receive(event):
     return {
         "frame_type": "retire_connection_id",
@@ -259,6 +265,12 @@ def handle_transport_close_send(event):
         "reason": event["reason-phrase"]
     }
 
+def render_ack_frame(ranges):
+    return {
+        "frame_type": "ack",
+        "acked_ranges": ranges
+    }
+
 QLOG_EVENT_HANDLERS = {
     "packet-received": handle_packet_received,
     "packet-sent": handle_packet_sent
@@ -280,7 +292,6 @@ FRAME_EVENT_HANDLERS = {
     "new-token-receive": handle_new_token_receive,
     "new-token-send": handle_new_token_send,
     "ping-receive": handle_ping_receive,
-    "quictrace-recv-ack": handle_quictrace_recv_ack,
     "retire-connection-id-receive": handle_retire_connection_id_receive,
     "retire-connection-id-send": handle_retire_connection_id_send,
     "stream-data-blocked-receive": handle_stream_data_blocked_receive,
