@@ -4691,7 +4691,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         /* Ack blocks are organized in the ACK frame and consequently in the ack_block_lengths array from the largest acked down.
          * Processing acks in packet number order requires processing the ack blocks in reverse order. */
         uint64_t pn_block_max = pn_acked + frame.ack_block_lengths[gap_index] - 1;
-        QUICLY_PROBE(QUICTRACE_RECV_ACK, conn, conn->stash.now, pn_acked, pn_block_max);
+        QUICLY_PROBE(ACK_BLOCK_RECEIVED, conn, conn->stash.now, pn_acked, pn_block_max);
         while (quicly_sentmap_get(&iter)->packet_number < pn_acked)
             quicly_sentmap_skip(&iter);
         do {
@@ -4746,7 +4746,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     if ((ret = on_ack_stream_ack_cached(conn)) != 0)
         return ret;
 
-    QUICLY_PROBE(QUICTRACE_RECV_ACK_DELAY, conn, conn->stash.now, frame.ack_delay);
+    QUICLY_PROBE(ACK_DELAY_RECEIVED, conn, conn->stash.now, frame.ack_delay);
 
     /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
      * so far. So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
