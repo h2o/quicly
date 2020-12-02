@@ -38,7 +38,7 @@ def handle_packet_received(events, idx):
         if ev["type"] == "ack-block-received":
             acked.append([ev["ack-block-begin"],ev["ack-block-end"]])
             continue
-        elif ev["type"] == "quictrace-recv-ack-delay":
+        elif ev["type"] == "ack-delay-received":
             frames.append(render_ack_frame(acked))
             continue
 
