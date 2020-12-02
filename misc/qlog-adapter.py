@@ -35,7 +35,7 @@ def handle_packet_received(events, idx):
 
         # An ACK frame can't be re-composed in an iteration. Continue buffering
         # the ACK blocks until all the blocks are processed.
-        if ev["type"] == "quictrace-recv-ack":
+        if ev["type"] == "ack-block-received":
             acked.append([ev["ack-block-begin"],ev["ack-block-end"]])
             continue
         elif ev["type"] == "quictrace-recv-ack-delay":
