@@ -74,6 +74,7 @@ def handle_packet_sent(events, idx):
 def handle_ack_send(event):
     return {
         "frame_type": "ack",
+        "acked_ranges": [[event["largest-acked"]]]
     }
 
 def handle_data_blocked_receive(event):
