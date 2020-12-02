@@ -55,6 +55,7 @@ provider quicly {
     probe cc_congestion(struct st_quicly_conn_t *conn, int64_t at, uint64_t max_lost_pn, size_t inflight, uint32_t cwnd);
 
     probe ack_block_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t ack_block_begin, uint64_t ack_block_end);
+    probe ack_delay_received(struct st_quicly_conn_t *conn, int64_t at, int64_t ack_delay);
     probe ack_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t largest_acked, uint64_t ack_delay);
 
     probe ping_send(struct st_quicly_conn_t *conn, int64_t at);
@@ -113,7 +114,6 @@ provider quicly {
     probe quictrace_send_stream(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off,
                                 size_t len, int fin);
     probe quictrace_recv_stream(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t off, size_t len, int fin);
-    probe quictrace_recv_ack_delay(struct st_quicly_conn_t *conn, int64_t at, int64_t ack_delay);
     probe quictrace_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn);
     probe quictrace_cc_ack(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd, size_t inflight);
     probe quictrace_cc_lost(struct st_quicly_conn_t *conn, int64_t at, struct quicly_rtt_t *rtt, uint32_t cwnd, size_t inflight);
