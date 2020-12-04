@@ -97,13 +97,13 @@ def handle_handshake_done_send(event):
 def handle_max_data_receive(event):
     return {
         "frame_type": "max_data",
-        "maximum": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_max_data_send(event):
     return {
         "frame_type": "max_data",
-        "maximum": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_max_streams_send(event):
@@ -114,21 +114,21 @@ def handle_max_streams_send(event):
     return {
         "frame_type": "max_streams",
         "stream_type": stream_type,
-        "maximum": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_max_stream_data_receive(event):
     return {
         "frame_type": "max_stream_data",
         "stream_id": event["stream-id"],
-        "maximum": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_max_stream_data_send(event):
     return {
         "frame_type": "max_stream_data",
         "stream_id": event["stream-id"],
-        "maximum": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_new_connection_id_receive(event):
@@ -184,14 +184,14 @@ def handle_stream_data_blocked_receive(event):
     return {
         "frame_type": "stream_data_blocked",
         "stream_id": event["stream-id"],
-        "limit": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_stream_data_blocked_send(event):
     return {
         "frame_type": "stream_data_blocked",
         "stream_id": event["stream-id"],
-        "limit": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_stream_on_receive_reset(event):
@@ -233,7 +233,7 @@ def handle_streams_blocked_receive(event):
     return {
         "frame_type": "streams_blocked",
         "stream_type": stream_type,
-        "limit": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_streams_blocked_send(event):
@@ -244,7 +244,7 @@ def handle_streams_blocked_send(event):
     return {
         "frame_type": "streams_blocked",
         "stream_type": stream_type,
-        "limit": event["limit"]
+        "maximum": event["maximum"]
     }
 
 def handle_transport_close_receive(event):
