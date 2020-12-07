@@ -3570,7 +3570,7 @@ static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lo
     conn->egress.cc.impl->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_packet->cc_bytes_in_flight,
                                      lost_packet->packet_number, conn->egress.packet_number, conn->stash.now,
                                      conn->egress.max_udp_payload_size);
-    QUICLY_PROBE(PACKET_LOST, conn, conn->stash.now, lost_packet->packet_number);
+    QUICLY_PROBE(PACKET_LOST, conn, conn->stash.now, lost_packet->packet_number, lost_packet->ack_epoch);
     QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, lost_packet->packet_number + 1, conn->egress.loss.sentmap.bytes_in_flight,
                  conn->egress.cc.cwnd);
     QUICLY_PROBE(QUICTRACE_CC_LOST, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
