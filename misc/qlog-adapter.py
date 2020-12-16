@@ -25,6 +25,14 @@ import json
 
 PACKET_LABELS = ["initial", "0rtt", "handshake", "1rtt"]
 
+def handle_packet_lost(events, idx):
+    return [events[idx]["time"], "recovery", "packet_lost", {
+        "packet_type": PACKET_LABELS[events[idx]["packet-type"]],
+        "header": {
+            "packet_number": events[idx]["pn"]
+        }
+    }]
+
 def handle_packet_received(events, idx):
     frames = []
     acked = []
@@ -270,6 +278,7 @@ def render_ack_frame(ranges):
     }
 
 QLOG_EVENT_HANDLERS = {
+    "packet-lost": handle_packet_lost,
     "packet-received": handle_packet_received,
     "packet-sent": handle_packet_sent
 }
