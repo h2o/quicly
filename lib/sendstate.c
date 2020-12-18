@@ -125,7 +125,7 @@ int quicly_sendstate_acked(quicly_sendstate_t *state, quicly_sendstate_sent_t *a
         if ((ret = quicly_ranges_subtract(&state->pending, args->start, args->end)) != 0)
             return ret;
     }
-    assert(state->pending.num_ranges == 0 || state->acked.ranges[0].end <= state->pending.ranges[0].start);
+    assert(state->final_size == UINT64_MAX || state->pending.num_ranges == 0 || state->acked.ranges[0].end <= state->pending.ranges[0].start);
 
     /* calculate number of bytes that can be retired from the send buffer */
     if (prev_sent_upto != state->acked.ranges[0].end) {
