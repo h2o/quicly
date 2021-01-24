@@ -418,6 +418,15 @@ struct st_ptls_salt_t {
     } retry;
 };
 
+/**
+ * Structure that represents when it becomes possible to send data, as well as the size that can be sent at that moment. When the
+ * the window is not going to open, `at` is set to INT64_MAX.
+ */
+struct st_quicly_send_window_t {
+    int64_t at;
+    size_t size;
+};
+
 static void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
 static const quicly_stream_callbacks_t crypto_stream_callbacks = {quicly_streambuf_destroy, quicly_streambuf_egress_shift,
@@ -2784,8 +2793,8 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
-static size_t calc_send_window(uint32_t cwnd, size_t bytes_in_flight, size_t min_bytes_to_send, uint64_t amp_window,
-                               int restrict_sending)
+static struct st_quicly_send_window_t calc_send_window(uint32_t cwnd, size_t bytes_in_flight, size_t min_bytes_to_send,
+                                                       uint64_t amp_window, int restrict_sending)
 {
     uint64_t window = 0;
     if (restrict_sending) {
@@ -2802,7 +2811,7 @@ static size_t calc_send_window(uint32_t cwnd, size_t bytes_in_flight, size_t min
     if (amp_window < window)
         window = amp_window;
 
-    return window;
+    return (struct st_quicly_send_window_t){.at = window == 0 ? INT64_MAX : 0, .size = window};
 }
 
 /**
@@ -2828,18 +2837,18 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         return 0;
 
     uint64_t amp_window = calc_amplification_limit_allowance(conn);
+    int64_t at = conn->idle_timeout.at;
 
-    if (calc_send_window(conn->egress.cc.cwnd, conn->egress.loss.sentmap.bytes_in_flight, 0, amp_window, 0) > 0) {
-        if (conn->egress.pending_flows != 0)
-            return 0;
-        if (quicly_linklist_is_linked(&conn->egress.pending_streams.control))
-            return 0;
-        if (scheduler_can_send(conn))
-            return 0;
+    /* if data is pending, cap `at` to the moment when it becomes possible to send them */
+    if (conn->egress.pending_flows != 0 || quicly_linklist_is_linked(&conn->egress.pending_streams.control) ||
+        scheduler_can_send(conn)) {
+        struct st_quicly_send_window_t send_window =
+            calc_send_window(conn->egress.cc.cwnd, conn->egress.loss.sentmap.bytes_in_flight, 0, amp_window, 0);
+        if (send_window.at < at)
+            at = send_window.at;
     }
 
     /* if something can be sent, return the earliest timeout. Otherwise return the idle timeout. */
-    int64_t at = conn->idle_timeout.at;
     if (amp_window > 0) {
         if (conn->egress.loss.alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
             at = conn->egress.loss.alarm_at;
@@ -4161,11 +4170,17 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         }
     }
 
-    s->send_window = calc_send_window(conn->egress.cc.cwnd, conn->egress.loss.sentmap.bytes_in_flight,
-                                      min_packets_to_send * conn->egress.max_udp_payload_size,
-                                      calc_amplification_limit_allowance(conn), restrict_sending);
-    if (s->send_window == 0)
-        ack_only = 1;
+    { /* setup what (and how much) can be sent */
+        struct st_quicly_send_window_t window = calc_send_window(conn->egress.cc.cwnd, conn->egress.loss.sentmap.bytes_in_flight,
+                                                                 min_packets_to_send * conn->egress.max_udp_payload_size,
+                                                                 calc_amplification_limit_allowance(conn), restrict_sending);
+        if (window.at <= conn->stash.now) {
+            s->send_window = window.size;
+        } else {
+            s->send_window = 0;
+            ack_only = 1;
+        }
+    }
 
     /* send handshake flows; when PTO fires...
      *  * quicly running as a client sends either a Handshake probe (or data) if the handshake keys are available, or else an
