@@ -178,6 +178,13 @@ struct st_quicly_application_space_t {
     int one_rtt_writable;
 };
 
+struct st_quicly_pacer_t {
+    /**
+     * The moment when the egress was restricted by the pacer, or -1 if burst is permitted.
+     */
+    int64_t restricted_at;
+};
+
 struct st_quicly_conn_t {
     struct _st_quicly_conn_public_t super;
     /**
@@ -298,6 +305,10 @@ struct st_quicly_conn_t {
          * congestion control
          */
         quicly_cc_t cc;
+        /**
+         *
+         */
+        struct st_quicly_pacer_t *pacer;
         /**
          * things to be sent at the stream-level, that are not governed by the stream scheduler
          */
@@ -443,6 +454,69 @@ static const quicly_transport_parameters_t default_transport_params = {.max_udp_
                                                                        .min_ack_delay_usec = UINT64_MAX,
                                                                        .active_connection_id_limit =
                                                                            QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT};
+
+static void pacer_reset(struct st_quicly_pacer_t *pacer)
+{
+    pacer->restricted_at = -1;
+}
+
+static inline uint64_t pacer_calc_packet_interval_permil(quicly_conn_t *conn)
+{
+    /* The flow rate adopted by the pacer is 2x the flow rate that the congestion controller is using; this 2x compansates for the
+     * exponential growth during the slow start, and also masks the half-RTT quiescence period after loss is confirmed. */
+    uint64_t packet_interval_permil =
+        (conn->egress.cc.cwnd * 512) / (conn->egress.loss.rtt.smoothed * conn->egress.max_udp_payload_size);
+    if (packet_interval_permil == 0)
+        packet_interval_permil = 1;
+    return packet_interval_permil;
+}
+
+static inline int64_t pacer_can_send_at(struct st_quicly_pacer_t *pacer, uint64_t packet_interval_permil)
+{
+    /* inline + likely branch gives the compiler the hint that the calculation of packet interval can be deferred until consulting
+     * the value of `restrict_at` */
+    if (PTLS_LIKELY(pacer->restricted_at < 0))
+        return 0;
+    return pacer->restricted_at + packet_interval_permil / 1024;
+}
+
+/**
+ * Returns the number of bytes that can be sent at this moment. If an open window is returned (i.e., .at <= now), the caller must
+ * call `pacer_end_send` after sending data.
+ */
+static struct st_quicly_send_window_t pacer_begin_send(struct st_quicly_pacer_t *pacer, uint64_t packet_interval_permil,
+                                                       int64_t now, size_t mtu)
+{
+    /* Determine when it is possible to sent one packet. Return if that is a moment in future. */
+    int64_t can_send_at = pacer_can_send_at(pacer, packet_interval_permil);
+    if (now < can_send_at)
+        return (struct st_quicly_send_window_t){.at = INT64_MAX, .size = SIZE_MAX};
+
+    size_t window;
+
+    /* Burst is permitted; send max(flow_rate-per-tick, initcwnd) bytes */
+    if (pacer->restricted_at < 0) {
+        size_t initcwnd = quicly_cc_calc_initial_cwnd(mtu);
+        window = mtu * 1024 / packet_interval_permil;
+        if (window < initcwnd)
+            window = initcwnd;
+    } else {
+        /* Calculate the window by number of packets, make sure that we return some room, then convert it to bytes */
+        size_t num_packets = ((now - pacer->restricted_at) * 1024 + 512) / packet_interval_permil;
+        if (num_packets == 0)
+            num_packets = 1;
+        window = mtu * num_packets;
+    }
+
+    pacer->restricted_at = now;
+    return (struct st_quicly_send_window_t){.at = now, .size = window};
+}
+
+static void pacer_end_send(struct st_quicly_pacer_t *pacer, int restricted)
+{
+    if (!restricted)
+        pacer->restricted_at = -1;
+}
 
 static const struct st_ptls_salt_t *get_salt(uint32_t protocol_version)
 {
@@ -1515,6 +1589,9 @@ void quicly_free(quicly_conn_t *conn)
     }
     quicly_loss_dispose(&conn->egress.loss);
 
+    if (conn->egress.pacer != NULL)
+        free(conn->egress.pacer);
+
     kh_destroy(quicly_stream_t, conn->streams);
 
     assert(!quicly_linklist_is_linked(&conn->egress.pending_streams.blocked.uni));
@@ -2034,6 +2111,12 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.ack_frequency.update_at = INT64_MAX;
     conn->egress.send_ack_at = INT64_MAX;
     conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->stash.now);
+    if (conn->super.ctx->use_pacing) {
+        /* allocate memory for the pacer, and if that succeeds, use pacing */
+        conn->egress.pacer = malloc(sizeof(*conn->egress.pacer));
+        if (conn->egress.pacer != NULL)
+            pacer_reset(conn->egress.pacer);
+    }
     quicly_retire_cid_init(&conn->egress.retire_cid);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
@@ -2787,31 +2870,58 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
     return budget - conn->super.stats.num_bytes.sent;
 }
 
+struct st_calc_send_window_supp_t {
+    int64_t now;
+    size_t min_bytes_to_send;
+    int restrict_sending;
+};
+
 /* Helper function to compute send window based on:
  * * state of peer validation,
  * * current cwnd,
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
-static struct st_quicly_send_window_t calc_send_window(uint32_t cwnd, size_t bytes_in_flight, size_t min_bytes_to_send,
-                                                       uint64_t amp_window, int restrict_sending)
+static struct st_quicly_send_window_t calc_send_window(uint32_t cwnd, struct st_quicly_send_window_t *pacer, size_t bytes_in_flight,
+                                                       uint64_t amp_window, struct st_calc_send_window_supp_t *supp)
 {
-    uint64_t window = 0;
-    if (restrict_sending) {
-        /* Send min_bytes_to_send on PTO */
-        window = min_bytes_to_send;
-    } else {
-        /* Limit to cwnd */
-        if (cwnd > bytes_in_flight)
-            window = cwnd - bytes_in_flight;
-        /* Allow at least one packet on time-threshold loss detection */
-        window = window > min_bytes_to_send ? window : min_bytes_to_send;
-    }
-    /* Cap the window by the amount allowed by address validation */
-    if (amp_window < window)
-        window = amp_window;
+    struct st_quicly_send_window_t result = {.at = INT64_MAX, .size = 0};
 
-    return (struct st_quicly_send_window_t){.at = window == 0 ? INT64_MAX : 0, .size = window};
+    if (supp != NULL && supp->restrict_sending) {
+        /* PTO: send specified bytes regardless of CWND, pacer */
+        result.at = 0;
+        result.size = supp->min_bytes_to_send;
+    } else {
+        /* apply CWND (and optionally the pacer) */
+        if (cwnd > bytes_in_flight) {
+            result.at = 0;
+            result.size = cwnd - bytes_in_flight;
+            if (pacer != NULL) {
+                result.at = pacer->at;
+                if (result.size > pacer->size)
+                    result.size = pacer->size;
+            }
+        }
+        if (supp != NULL && supp->min_bytes_to_send != 0) {
+            /* time-based loss detection, send at least the specified amount of data */
+            if (result.at <= supp->now) {
+                if (result.size < supp->min_bytes_to_send)
+                    result.size = supp->min_bytes_to_send;
+            } else {
+                result.at = 0;
+                result.size = supp->min_bytes_to_send;
+            }
+        }
+    }
+
+    /* Cap the window by the amount allowed by address validation */
+    if (amp_window < result.size) {
+        result.size = amp_window;
+        if (result.size == 0)
+            result.at = INT64_MAX;
+    }
+
+    return result;
 }
 
 /**
@@ -2842,8 +2952,11 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     /* if data is pending, cap `at` to the moment when it becomes possible to send them */
     if (conn->egress.pending_flows != 0 || quicly_linklist_is_linked(&conn->egress.pending_streams.control) ||
         scheduler_can_send(conn)) {
+        struct st_quicly_send_window_t pacer_input = {.at = 0, .size = SIZE_MAX};
+        if (conn->egress.pacer != NULL)
+            pacer_input.at = pacer_can_send_at(conn->egress.pacer, pacer_calc_packet_interval_permil(conn));
         struct st_quicly_send_window_t send_window =
-            calc_send_window(conn->egress.cc.cwnd, conn->egress.loss.sentmap.bytes_in_flight, 0, amp_window, 0);
+            calc_send_window(conn->egress.cc.cwnd, &pacer_input, conn->egress.loss.sentmap.bytes_in_flight, amp_window, NULL);
         if (send_window.at < at)
             at = send_window.at;
     }
@@ -3579,6 +3692,8 @@ static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lo
     conn->egress.cc.impl->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_packet->cc_bytes_in_flight,
                                      lost_packet->packet_number, conn->egress.packet_number, conn->stash.now,
                                      conn->egress.max_udp_payload_size);
+    if (conn->egress.pacer != NULL)
+        pacer_reset(conn->egress.pacer);
     QUICLY_PROBE(PACKET_LOST, conn, conn->stash.now, lost_packet->packet_number, lost_packet->ack_epoch);
     QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, lost_packet->packet_number + 1, conn->egress.loss.sentmap.bytes_in_flight,
                  conn->egress.cc.cwnd);
@@ -4134,6 +4249,10 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     int restrict_sending = 0, ack_only = 0, ret;
     size_t min_packets_to_send = 0;
+    struct {
+        struct st_quicly_send_window_t window;
+        size_t orig_bytes_inflight; /* SIZE_MAX indicates that the pacer is not open */
+    } pacing = {{.at = 0, .size = SIZE_MAX}, SIZE_MAX};
 
     /* handle timeouts */
     if (conn->idle_timeout.at <= conn->stash.now) {
@@ -4170,10 +4289,21 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         }
     }
 
+    /* open pacer */
+    if (conn->egress.pacer != NULL) {
+        pacing.window = pacer_begin_send(conn->egress.pacer, pacer_calc_packet_interval_permil(conn), conn->stash.now,
+                                         conn->egress.max_udp_payload_size);
+        if (pacing.window.at <= conn->stash.now)
+            pacing.orig_bytes_inflight = conn->egress.loss.sentmap.bytes_in_flight;
+    }
+
     { /* setup what (and how much) can be sent */
-        struct st_quicly_send_window_t window = calc_send_window(conn->egress.cc.cwnd, conn->egress.loss.sentmap.bytes_in_flight,
-                                                                 min_packets_to_send * conn->egress.max_udp_payload_size,
-                                                                 calc_amplification_limit_allowance(conn), restrict_sending);
+        struct st_calc_send_window_supp_t supp = {.now = conn->stash.now,
+                                                  .restrict_sending = restrict_sending,
+                                                  .min_bytes_to_send = min_packets_to_send * conn->egress.max_udp_payload_size};
+        struct st_quicly_send_window_t window =
+            calc_send_window(conn->egress.cc.cwnd, &pacing.window, conn->egress.loss.sentmap.bytes_in_flight,
+                             calc_amplification_limit_allowance(conn), &supp);
         if (window.at <= conn->stash.now) {
             s->send_window = window.size;
         } else {
@@ -4335,6 +4465,10 @@ Exit:
             (quicly_is_client(conn) || !ack_only))
             commit_mode = QUICLY_COMMIT_SEND_PACKET_MODE_FULL_SIZE;
         commit_send_packet(conn, s, commit_mode);
+    }
+    if (pacing.orig_bytes_inflight != SIZE_MAX) {
+        size_t bytes_consumed = conn->egress.loss.sentmap.bytes_in_flight - pacing.orig_bytes_inflight;
+        pacer_end_send(conn->egress.pacer, pacing.window.size <= bytes_consumed);
     }
     if (ret == 0) {
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
@@ -4773,6 +4907,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         conn->egress.cc.impl->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame.largest_acknowledged,
                                           (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked), conn->stash.now,
                                           conn->egress.max_udp_payload_size);
+        if (conn->egress.pacer != NULL)
+            pacer_reset(conn->egress.pacer);
         QUICLY_PROBE(QUICTRACE_CC_ACK, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                      conn->egress.loss.sentmap.bytes_in_flight);
     }
