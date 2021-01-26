@@ -2906,8 +2906,8 @@ struct st_quicly_send_context_t {
         uint8_t *end;
     } payload_buf;
     /**
-     * Currently available window for sending (in bytes); the value becomes negative when the sender uses more window than permitted
-     * permitted. That is because the sender operates at packet-level rather than byte-level.
+     * Currently available window for sending (in bytes); the value becomes negative when the sender uses more space than permitted.
+     * That happens because the sender operates at packet-level rather than byte-level.
      */
     ssize_t send_window;
     /**
