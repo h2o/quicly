@@ -2906,7 +2906,8 @@ struct st_quicly_send_context_t {
         uint8_t *end;
     } payload_buf;
     /**
-     * the currently available window for sending (in bytes)
+     * Currently available window for sending (in bytes); the value becomes negative when the sender uses more window than permitted
+     * permitted. That is because the sender operates at packet-level rather than byte-level.
      */
     ssize_t send_window;
     /**
@@ -3078,6 +3079,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     } else {
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
+        /* note: send_window (ssize_t) can become negative; see doc-comment */
         if (ack_eliciting && s->send_window <= 0)
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
