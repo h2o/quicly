@@ -414,7 +414,7 @@ Exit:
             ptls_aead_free(*aead_ctx);
             *aead_ctx = NULL;
         }
-        if (*hp_ctx != NULL) {
+        if (hp_ctx != NULL && *hp_ctx != NULL) {
             ptls_cipher_free(*hp_ctx);
             *hp_ctx = NULL;
         }
