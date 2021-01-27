@@ -494,9 +494,9 @@ static struct st_quicly_send_window_t pacer_begin_send(struct st_quicly_pacer_t 
 
     size_t window;
 
-    /* Burst is permitted; send max(flow_rate-per-tick, initcwnd) bytes */
+    /* Burst is permitted; send max(flow_rate-per-tick, 10mtu) bytes */
     if (pacer->restricted_at < 0) {
-        size_t initcwnd = quicly_cc_calc_initial_cwnd(mtu);
+        size_t initcwnd = quicly_cc_calc_initial_cwnd(10, mtu);
         window = mtu * 1024 / packet_interval_permil;
         if (window < initcwnd)
             window = initcwnd;
@@ -2240,8 +2240,9 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
         }
     }
 
-    if ((conn = create_connection(ctx, ctx->initial_version, server_name, dest_addr, src_addr, NULL, new_cid, handshake_properties,
-                                  quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
+    if ((conn = create_connection(
+             ctx, ctx->initial_version, server_name, dest_addr, src_addr, NULL, new_cid, handshake_properties,
+             quicly_cc_calc_initial_cwnd(ctx->initcwnd_packets, ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
@@ -3029,7 +3030,8 @@ struct st_quicly_send_context_t {
         uint8_t *end;
     } payload_buf;
     /**
-     * the currently available window for sending (in bytes)
+     * Currently available window for sending (in bytes); the value becomes negative when the sender uses more space than permitted.
+     * That happens because the sender operates at packet-level rather than byte-level.
      */
     ssize_t send_window;
     /**
@@ -3201,7 +3203,8 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     } else {
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
-        if (ack_eliciting && s->send_window == 0)
+        /* note: send_window (ssize_t) can become negative; see doc-comment */
+        if (ack_eliciting && s->send_window <= 0)
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
             return QUICLY_ERROR_SENDBUF_FULL;
@@ -5638,8 +5641,9 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     }
 
     /* create connection */
-    if ((*conn = create_connection(ctx, packet->version, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
-                                   quicly_cc_calc_initial_cwnd(ctx->transport_params.max_udp_payload_size))) == NULL) {
+    if ((*conn = create_connection(
+             ctx, packet->version, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
+             quicly_cc_calc_initial_cwnd(ctx->initcwnd_packets, ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
