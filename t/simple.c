@@ -47,7 +47,9 @@ static void test_handshake(void)
     /* receive CH, send handshake upto ServerFinished */
     num_decoded = decode_packets(decoded, packets, num_packets);
     ok(num_decoded == 1);
-    ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL);
+    const quicly_cid_plaintext_t *pmaster_id = new_master_id();
+    quicly_cid_plaintext_t server_master_id_orig = *pmaster_id; /* preserve plaintext CID at connection acceptance */
+    ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, pmaster_id, NULL);
     ok(ret == 0);
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
     ok(quicly_connection_is_ready(server));
@@ -108,6 +110,14 @@ static void test_handshake(void)
     /* both endpoints have nothing to send */
     ok(quicly_get_first_timeout(server) == quic_now + quic_ctx.transport_params.max_idle_timeout);
     ok(quicly_get_first_timeout(client) == quic_now + quic_ctx.transport_params.max_idle_timeout);
+
+    /* verify server-generated CID */
+    const quicly_cid_plaintext_t *plain_cid;
+    plain_cid = quicly_get_local_plaintext_cid(server);
+    ok(plain_cid->master_id == server_master_id_orig.master_id);
+    ok(plain_cid->node_id == server_master_id_orig.node_id);
+    ok(plain_cid->thread_id == server_master_id_orig.thread_id);
+    ok(plain_cid->path_id == server_master_id_orig.path_id);
 }
 
 static void simple_http(void)
