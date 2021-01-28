@@ -2880,6 +2880,7 @@ struct st_calc_send_window_supp_t {
 /* Helper function to compute send window based on:
  * * state of peer validation,
  * * current cwnd,
+ * * pacer
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
