@@ -460,6 +460,9 @@ static void pacer_reset(struct st_quicly_pacer_t *pacer)
     pacer->restricted_at = -1;
 }
 
+/**
+ * TODO promote this function to a CC callback (but that's not necessary at this moment)
+ */
 static inline uint64_t pacer_calc_packet_interval_permil(quicly_conn_t *conn)
 {
     /* The flow rate adopted by the pacer is 2x the flow rate that the congestion controller is using; this 2x compansates for the
