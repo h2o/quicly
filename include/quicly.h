@@ -786,6 +786,10 @@ static const quicly_cid_t *quicly_get_original_dcid(quicly_conn_t *conn);
  */
 static const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn);
 /**
+ * Returns the plaintext source of CIDs provided by this host
+ */
+static const quicly_cid_plaintext_t *quicly_get_local_plaintext_cid(quicly_conn_t *conn);
+/**
  *
  */
 static const quicly_transport_parameters_t *quicly_get_remote_transport_parameters(quicly_conn_t *conn);
@@ -1177,9 +1181,7 @@ inline const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn)
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->remote.cid_set.cids[0].cid;
 }
-/**
- * Returns the plaintext source of CIDs provided by this host
- */
+
 inline const quicly_cid_plaintext_t *quicly_get_local_plaintext_cid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
