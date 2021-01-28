@@ -2884,8 +2884,9 @@ struct st_calc_send_window_supp_t {
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
-static struct st_quicly_send_window_t calc_send_window(uint32_t cwnd, struct st_quicly_send_window_t *pacer, size_t bytes_in_flight,
-                                                       uint64_t amp_window, struct st_calc_send_window_supp_t *supp)
+static struct st_quicly_send_window_t calc_send_window(uint32_t cwnd, struct st_quicly_send_window_t pacer_window,
+                                                       size_t bytes_in_flight, uint64_t amp_window,
+                                                       struct st_calc_send_window_supp_t *supp)
 {
     struct st_quicly_send_window_t result = {.at = INT64_MAX, .size = 0};
 
@@ -2898,11 +2899,9 @@ static struct st_quicly_send_window_t calc_send_window(uint32_t cwnd, struct st_
         if (cwnd > bytes_in_flight) {
             result.at = 0;
             result.size = cwnd - bytes_in_flight;
-            if (pacer != NULL) {
-                result.at = pacer->at;
-                if (result.size > pacer->size)
-                    result.size = pacer->size;
-            }
+            result.at = pacer_window.at;
+            if (result.size > pacer_window.size)
+                result.size = pacer_window.size;
         }
         if (supp != NULL && supp->min_bytes_to_send != 0) {
             /* time-based loss detection, send at least the specified amount of data */
@@ -2958,7 +2957,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         if (conn->egress.pacer != NULL)
             pacer_input.at = pacer_can_send_at(conn->egress.pacer, pacer_calc_packet_interval_permil(conn));
         struct st_quicly_send_window_t send_window =
-            calc_send_window(conn->egress.cc.cwnd, &pacer_input, conn->egress.loss.sentmap.bytes_in_flight, amp_window, NULL);
+            calc_send_window(conn->egress.cc.cwnd, pacer_input, conn->egress.loss.sentmap.bytes_in_flight, amp_window, NULL);
         if (send_window.at < at)
             at = send_window.at;
     }
@@ -4306,7 +4305,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                                                   .restrict_sending = restrict_sending,
                                                   .min_bytes_to_send = min_packets_to_send * conn->egress.max_udp_payload_size};
         struct st_quicly_send_window_t window =
-            calc_send_window(conn->egress.cc.cwnd, &pacing.window, conn->egress.loss.sentmap.bytes_in_flight,
+            calc_send_window(conn->egress.cc.cwnd, pacing.window, conn->egress.loss.sentmap.bytes_in_flight,
                              calc_amplification_limit_allowance(conn), &supp);
         if (window.at <= conn->stash.now) {
             s->send_window = window.size;
