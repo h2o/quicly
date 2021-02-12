@@ -286,10 +286,6 @@ struct st_quicly_context_t {
      */
     uint16_t pre_validation_amplification_limit;
     /**
-     * if inter-node routing is used (by utilising quicly_cid_plaintext_t::node_id)
-     */
-    unsigned is_clustered : 1;
-    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
