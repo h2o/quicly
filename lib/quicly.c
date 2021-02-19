@@ -4352,7 +4352,8 @@ void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, s
         if ((copied = malloc(datagrams[i].len)) == NULL)
             break;
         memcpy(copied, datagrams[i].base, datagrams[i].len);
-        conn->egress.datagram_frame_payloads.payloads[conn->egress.datagram_frame_payloads.count++] = ptls_iovec_init(copied, datagrams[i].len);
+        conn->egress.datagram_frame_payloads.payloads[conn->egress.datagram_frame_payloads.count++] =
+            ptls_iovec_init(copied, datagrams[i].len);
     }
 }
 
