@@ -3731,6 +3731,8 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
     if ((ret = allocate_ack_eliciting_frame(conn, s, quicly_new_token_frame_capacity(ptls_iovec_init(tokenbuf.base, tokenbuf.off)),
                                             &sent, on_ack_new_token)) != 0)
         goto Exit;
+    ++conn->egress.new_token.num_inflight;
+    sent->data.new_token.is_inflight = 1;
     sent->data.new_token.generation = conn->egress.new_token.generation;
     s->dst = quicly_encode_new_token_frame(s->dst, ptls_iovec_init(tokenbuf.base, tokenbuf.off));
     conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
