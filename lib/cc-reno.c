@@ -31,8 +31,10 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
                           int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
-    /* Do not increase congestion window while in recovery. */
-    if (largest_acked < cc->recovery_end)
+    /* Do not increase congestion window while in recovery and if number of
+     * losses in this episode is greater than the threshold. */
+    if (largest_acked < cc->recovery_end &&
+        cc->state.reno.num_lost_in_episode >= QUICLY_RENO_LOSS_THRESHOLD)
         return;
 
     /* Slow start. */
