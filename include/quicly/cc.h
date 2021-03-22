@@ -81,6 +81,10 @@ typedef struct st_quicly_cc_t {
              * Stash of acknowledged bytes, used during congestion avoidance.
              */
             uint32_t stash;
+            /**
+             * Number of losses seen in a recovery episode.
+             */
+            uint32_t num_lost_in_episode;
         } reno;
         /**
          * State information for CUBIC congestion control.

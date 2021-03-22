@@ -24,6 +24,7 @@
 
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
+#define QUICLY_RENO_LOSS_THRESHOLD 2
 
 /* TODO: Avoid increase if sender was application limited. */
 static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
@@ -56,10 +57,23 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 static void reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
                          int64_t now, uint32_t max_udp_payload_size)
 {
-    /* Nothing to do if loss is in recovery window. */
-    if (lost_pn < cc->recovery_end)
+    /* Set up state if potentially new recovery episode. */
+    if (lost_pn >= cc->recovery_end) {
+        cc->recovery_end = next_pn;
+        cc->state.reno.num_lost_in_episode = 0;
+    }
+
+    cc->state.reno.num_lost_in_episode++;
+
+    /* Nothing to do if number of losses in this recovery episode is below a
+     * threshold. Doing so builds some tolerance for loss, by only responding
+     * with a congestion action if the number of losses in a window is greater
+     * than the threshold. Similarly, there should be only one reduction in a
+     * window, so nothing to do if number of losses is greater than the
+     * threshold.
+     */
+    if (cc->state.reno.num_lost_in_episode != QUICLY_RENO_LOSS_THRESHOLD)
         return;
-    cc->recovery_end = next_pn;
 
     ++cc->num_loss_episodes;
     if (cc->cwnd_exiting_slow_start == 0)
