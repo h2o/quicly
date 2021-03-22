@@ -20,6 +20,24 @@
  * IN THE SOFTWARE.
  */
 
+/* @appdata
+{
+    "receive": ["bytes"],
+    "packet_received": ["decrypted"],
+    "stream_on_receive": ["src"],
+    "new_token_send": ["token"],
+    "new_token_receive": ["token"],
+    "new_connection_id_send": ["stateless_reset_token"],
+    "new_connection_id_receive": ["stateless_reset_token"],
+    "datagram_send": ["payload"],
+    "datagram_receive": ["payload"],
+    "crypto_update_secret": ["secret"],
+    "crypto_send_key_update": ["secret"],
+    "crypto_receive_key_update": ["secret"],
+    "crypto_receive_key_update_prepare": ["secret"]
+}
+*/
+
 /**
  * Providers of quicly. Name of the arguments are important - they are used as the names of JSON fields when the dtrace script is
  * generated.
