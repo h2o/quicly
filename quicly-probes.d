@@ -22,13 +22,8 @@
 
 /* @appdata
 {
-    "receive": ["bytes"],
     "packet_received": ["decrypted"],
     "stream_on_receive": ["src"],
-    "new_token_send": ["token"],
-    "new_token_receive": ["token"],
-    "new_connection_id_send": ["stateless_reset_token"],
-    "new_connection_id_receive": ["stateless_reset_token"],
     "datagram_send": ["payload"],
     "datagram_receive": ["payload"],
     "crypto_update_secret": ["secret"],
