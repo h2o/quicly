@@ -5558,8 +5558,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     lock_now(conn, 0);
 
     QUICLY_PROBE(RECEIVE, conn, conn->stash.now,
-                 QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), packet->octects.base[0],
-                 packet->octets.base, packet->octets.len);
+                 QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), packet->octets.base,
+                 packet->octets.len);
 
     if (is_stateless_reset(conn, packet)) {
         ret = handle_stateless_reset(conn);
