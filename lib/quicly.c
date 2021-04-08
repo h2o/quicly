@@ -5485,6 +5485,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
     if ((ret = decrypt_packet(ingress_cipher.header_protection, aead_decrypt_fixed_key, ingress_cipher.aead, &next_expected_pn,
                               packet, &pn, &payload)) != 0) {
+        dispose_cipher(&ingress_cipher);
+        dispose_cipher(&egress_cipher);
         ret = QUICLY_ERROR_DECRYPTION_FAILED;
         goto Exit;
     }
