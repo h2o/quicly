@@ -45,7 +45,6 @@ FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
 static int suppress_output = 0, send_datagram_frame = 0;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
-static void *datagram_frame_payload_buf;
 
 static void hexdump(const char *title, const uint8_t *p, size_t l)
 {
@@ -489,26 +488,38 @@ static int send_pending(int fd, quicly_conn_t *conn)
     if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0)
         send_packets(fd, &dest.sa, packets, num_packets);
 
-    if (datagram_frame_payload_buf != NULL) {
-        free(datagram_frame_payload_buf);
-        datagram_frame_payload_buf = NULL;
-    }
-
     return ret;
+}
+
+static size_t send_datagram_frame_get_length(quicly_send_datagram_frame_t *self, quicly_conn_t *conn);
+static int send_datagram_frame_flatten(quicly_send_datagram_frame_t *self, quicly_conn_t *conn, void *dst);
+
+static struct {
+    quicly_send_datagram_frame_t sender;
+    char payload[1500];
+    size_t len;
+} datagram_frame_sender = {{send_datagram_frame_get_length, send_datagram_frame_flatten}};
+
+size_t send_datagram_frame_get_length(quicly_send_datagram_frame_t *self, quicly_conn_t *conn)
+{
+    return datagram_frame_sender.len;
+}
+
+int send_datagram_frame_flatten(quicly_send_datagram_frame_t *self, quicly_conn_t *conn, void *dst)
+{
+    if (dst != NULL)
+        memcpy(dst, datagram_frame_sender.payload, datagram_frame_sender.len);
+    return 0;
 }
 
 static void set_datagram_frame(quicly_conn_t *conn, ptls_iovec_t payload)
 {
-    if (datagram_frame_payload_buf != NULL)
-        free(datagram_frame_payload_buf);
+    if (payload.len > sizeof(datagram_frame_sender.payload))
+        return;
 
-    /* replace payload.base with an allocated buffer */
-    datagram_frame_payload_buf = malloc(payload.len);
-    memcpy(datagram_frame_payload_buf, payload.base, payload.len);
-    payload.base = datagram_frame_payload_buf;
-
-    /* set data to be sent. The buffer is being freed in `send_pending` after `quicly_send` is being called. */
-    quicly_set_datagram_frame(conn, payload);
+    memcpy(datagram_frame_sender.payload, payload.base, payload.len);
+    datagram_frame_sender.len = payload.len;
+    quicly_set_datagram_frame_sender(conn, &datagram_frame_sender.sender);
 }
 
 static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)

@@ -337,9 +337,9 @@ struct st_quicly_conn_t {
          */
         quicly_retire_cid_set_t retire_cid;
         /**
-         * DATAGRAM frame payload to be sent
+         * payload of DATAGRAM frames to be sent
          */
-        ptls_iovec_t datagram_frame_payload;
+        quicly_send_datagram_frame_t *datagram_frame_sender;
     } egress;
     /**
      * crypto data
@@ -2767,13 +2767,11 @@ static int on_ack_retire_connection_id(quicly_sentmap_t *map, const quicly_sent_
 
 static int should_send_datagram_frame(quicly_conn_t *conn)
 {
-    if (conn->egress.datagram_frame_payload.base == NULL)
+    if (conn->egress.datagram_frame_sender == NULL)
         return 0;
     if (conn->application == NULL)
         return 0;
     if (conn->application->cipher.egress.key.aead == NULL)
-        return 0;
-    if (conn->super.remote.transport_params.max_datagram_frame_size < conn->egress.datagram_frame_payload.len)
         return 0;
     return 1;
 }
@@ -4201,18 +4199,33 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         /* DATAGRAM frame. Notes regarding current implementation:
          * * Not limited by CC, nor the bytes counted by CC.
          * * When given payload is too large and does not fit into a QUIC packet, a packet containing only PADDING frames is sent.
-         *   This is because we do not have a way to retract the generation of a QUIC packet.
-         * * Does not notify the application that the frame was dropped internally. */
+         *   This is because we do not have a way to retract the generation of a QUIC packet. */
         if (should_send_datagram_frame(conn)) {
-            size_t required_space = quicly_datagram_frame_capacity(conn->egress.datagram_frame_payload);
-            if ((ret = _do_allocate_frame(conn, s, required_space, 1)) != 0)
-                goto Exit;
-            if (s->dst_end - s->dst >= required_space) {
-                s->dst = quicly_encode_datagram_frame(s->dst, conn->egress.datagram_frame_payload);
-                QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, conn->egress.datagram_frame_payload.base,
-                             conn->egress.datagram_frame_payload.len);
-                conn->egress.datagram_frame_payload = ptls_iovec_init(NULL, 0);
-                ++conn->super.stats.num_frames_sent.datagram;
+            while (1) {
+                int has_more = 0;
+                size_t payload_len = conn->egress.datagram_frame_sender->get_length(conn->egress.datagram_frame_sender, conn);
+                if (payload_len != 0) {
+                    size_t required_space = payload_len + 3;
+                    if (required_space <= conn->super.remote.transport_params.max_datagram_frame_size) {
+                        if ((ret = _do_allocate_frame(conn, s, required_space, 3)) != 0)
+                            goto Exit;
+                        if (s->dst_end - s->dst >= required_space) {
+                            *s->dst++ = QUICLY_FRAME_TYPE_DATAGRAM_WITHLEN;
+                            s->dst = quicly_encodev(s->dst, payload_len);
+                            has_more =
+                                conn->egress.datagram_frame_sender->flatten(conn->egress.datagram_frame_sender, conn, s->dst);
+                            s->dst += payload_len;
+                            QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, s->dst - payload_len, payload_len);
+                            ++conn->super.stats.num_frames_sent.datagram;
+                        } else {
+                            has_more = conn->egress.datagram_frame_sender->flatten(conn->egress.datagram_frame_sender, conn, NULL);
+                        }
+                    }
+                }
+                if (!has_more) {
+                    conn->egress.datagram_frame_sender = NULL;
+                    break;
+                }
             }
         }
         if (!ack_only) {
@@ -4343,9 +4356,9 @@ Exit:
     return ret;
 }
 
-void quicly_set_datagram_frame(quicly_conn_t *conn, ptls_iovec_t payload)
+void quicly_set_datagram_frame_sender(quicly_conn_t *conn, quicly_send_datagram_frame_t *sender)
 {
-    conn->egress.datagram_frame_payload = payload;
+    conn->egress.datagram_frame_sender = sender;
 }
 
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
@@ -4403,7 +4416,6 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
     assert_consistency(conn, 1);
 
 Exit:
-    conn->egress.datagram_frame_payload = ptls_iovec_init(NULL, 0);
     if (s.num_datagrams != 0) {
         *dest = conn->super.remote.address;
         *src = conn->super.local.address;
