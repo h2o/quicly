@@ -83,12 +83,12 @@ inline int64_t quicly_pacer_can_send_at(quicly_pacer_t *pacer, uint32_t bytes_pe
 {
     /* return "now" if we have room in current msec */
     size_t burst_size = QUICLY_PACER_CALC_BURST_BYTES(mtu);
-    size_t burst_room = burst_size > bytes_per_msec ? burst_size - bytes_per_msec : 0;
-    if (pacer->bytes_sent < bytes_per_msec + burst_room)
+    size_t burst_credit = burst_size > bytes_per_msec ? burst_size - bytes_per_msec : 0;
+    if (pacer->bytes_sent < bytes_per_msec + burst_credit)
         return 0;
 
     /* calculate delay; the value is rounded down, as it is better for a pacer to be a bit aggressive than not */
-    int64_t delay = (pacer->bytes_sent - burst_room) / bytes_per_msec;
+    int64_t delay = (pacer->bytes_sent - burst_credit) / bytes_per_msec;
     assert(delay > 0);
     return pacer->at + delay;
 }
