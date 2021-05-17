@@ -104,7 +104,7 @@ static void test_medium(void)
 
 static void test_slow(void)
 {
-    const uint32_t bytes_per_msec = 500;
+    const uint32_t bytes_per_msec = 500; /* one packet every 2.4ms */
     quicly_pacer_t pacer;
     int64_t now = 1;
 
