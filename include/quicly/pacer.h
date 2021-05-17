@@ -118,9 +118,7 @@ inline uint64_t quicly_pacer_get_window(quicly_pacer_t *pacer, int64_t now, uint
     uint64_t window, delta = (now - pacer->at) * bytes_per_msec;
     if (pacer->bytes_sent > delta) {
         pacer->bytes_sent -= delta;
-        window = burst_window - pacer->bytes_sent;
-        if (window < mtu)
-            window = mtu;
+        window = burst_window > pacer->bytes_sent ? burst_window - pacer->bytes_sent : 1;
     } else {
         pacer->bytes_sent = 0;
         window = burst_window;
