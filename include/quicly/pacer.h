@@ -33,7 +33,11 @@ extern "C" {
 /**
  * Simple pacer. The design guarantees that the formula below is met for any given pacer-restricted period:
  *
- *   flow_rate * duration + 10*mtu <= bytes_sent < flow_rate * duration + 11*mtu
+ *   flow_rate * duration + burst_credit <= bytes_sent < flow_rate * duration + burst_credit + mtu
+ *
+ * where `burst_credit` is defined as:
+ *
+ *   burst_credit = 10 * mtu - flow_rate
  *
  * and that the sender never sends more than max(10*mtu, flow_rate) per every time slice.
  */
