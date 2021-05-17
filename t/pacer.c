@@ -55,7 +55,7 @@ static int64_t test_pattern(quicly_pacer_t *pacer, int64_t now, const uint32_t b
             now = send_at;
         }
         size_t window = quicly_pacer_get_window(pacer, now, bytes_per_msec, mtu);
-        ok(window == expected->avail);
+        ok((window + mtu - 1) / mtu * mtu == expected->avail);
         quicly_pacer_consume_window(pacer, expected->consume);
     }
 
@@ -112,16 +112,18 @@ static void test_slow(void)
 
     now = test_pattern(&pacer, now, bytes_per_msec,
                        (const struct pattern[]){
-                           {1, 10 * mtu, 10 * mtu},
-                           {2, 1 * mtu, 1 * mtu},  /* borrowing 700 bytes */
-                           {4, 1 * mtu, 1 * mtu},  /* borrowing 900 bytes */
-                           {6, 1 * mtu, 1 * mtu},  /* borrowing 1100 bytes */
-                           {9, 1 * mtu, 1 * mtu},  /* borrowing 800 bytes, after 3ms  */
-                           {11, 1 * mtu, 1 * mtu}, /* borrowing 1000 bytes */
-                           {14, 1 * mtu, 1 * mtu}, /* borrowing 700 bytes, after 3ms */
-                           {16, 1 * mtu, 1 * mtu}, /* borrowing 900 bytes */
-                           {18, 1 * mtu, 1 * mtu}, /* borrowing 1100 bytes */
-                           {21, 1 * mtu, 1 * mtu}, /* borrowing 800 bytes, after 3ms  */
+                           {1, 10 * mtu, 10 * mtu}, /* borrow 1199 bytes */
+                           {4, 1 * mtu, 1 * mtu},   /* borrowing 899 bytes, after 3ms */
+                           {6, 1 * mtu, 1 * mtu},   /* borrowing 1099 bytes */
+                           {9, 1 * mtu, 1 * mtu},   /* borrowing 799 bytes, after 3ms  */
+                           {11, 1 * mtu, 1 * mtu},  /* borrowing 999 bytes */
+                           {13, 1 * mtu, 1 * mtu},  /* borrowing 1199 bytes */
+                           {16, 1 * mtu, 1 * mtu},  /* borrowing 899 bytes, after 3ms */
+                           {18, 1 * mtu, 1 * mtu},  /* borrowing 1099 bytes */
+                           {21, 1 * mtu, 1 * mtu},  /* borrowing 799 bytes, after 3ms  */
+                           {23, 1 * mtu, 1 * mtu},  /* borrowing 999 bytes */
+                           {25, 1 * mtu, 1 * mtu},  /* borrowing 1199 bytes */
+                           {28, 1 * mtu, 1 * mtu},  /* borrowing 899 bytes, after 3ms */
                            {0},
                        });
 }

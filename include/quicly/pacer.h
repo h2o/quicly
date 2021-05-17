@@ -37,7 +37,7 @@ extern "C" {
  *
  * where `burst_credit` is defined as:
  *
- *   burst_credit = 10 * mtu - flow_rate
+ *   burst_credit = (9 * mtu + 1) - flow_rate
  *
  * and that the sender never sends more than max(10*mtu, flow_rate) per every time slice.
  */
@@ -52,7 +52,7 @@ typedef struct st_quicly_pacer_t {
     size_t bytes_sent;
 } quicly_pacer_t;
 
-#define QUICLY_PACER_CALC_BURST_BYTES(mtu) ((size_t)(mtu)*10)
+#define QUICLY_PACER_CALC_BURST_BYTES(mtu) ((size_t)(mtu)*9 + 1)
 
 /**
  * resets the pacer
