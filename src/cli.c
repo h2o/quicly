@@ -1013,8 +1013,9 @@ static void usage(const char *cmd)
            "  -c certificate-file\n"
            "  -k key-file               specifies the credentials to be used for running the\n"
            "                            server. If omitted, the command runs as a client.\n"
-           "  -C <algorithm>            the congestion control algorithm; either \"reno\" (default) or\n"
-           "                            \"cubic\"\n"
+           "  -C algo[:initcwnd[:p]]    specifies the congestion controller (\"reno\" (default) or \"cubic\",\n"
+           "                            initial congestion window (in number of packets, default: 10), use\n"
+           "                            of pacing.\n"
            "  -d draft-number           specifies the draft version number to be used (e.g., 29)\n"
            "  -e event-log-file         file to log events\n"
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
@@ -1038,7 +1039,6 @@ static void usage(const char *cmd)
            "  -U size                   maximum size of UDP datagarm payload\n"
            "  -V                        verify peer using the default certificates\n"
            "  -v                        verbose mode (-vv emits packet dumps as well)\n"
-           "  -w packets                initial congestion window (default: 10)\n"
            "  -W public-key-file        use raw public keys (RFC 7250). When set and running as a\n"
            "                            client, the argument specifies the public keys that the\n"
            "                            server is expected to use. When running as a server, the\n"
@@ -1089,7 +1089,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:VvW:x:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
@@ -1107,16 +1107,36 @@ int main(int argc, char **argv)
         case 'c':
             cert_file = optarg;
             break;
-        case 'C':
-            if (strcmp(optarg, "reno") == 0) {
+        case 'C': {
+            char *token, *buf = alloca(strlen(optarg) + 1);
+            strcpy(buf, optarg);
+            /* CC name */
+            token = strsep(&buf, ":");
+            if (strcmp(token, "reno") == 0) {
                 ctx.init_cc = &quicly_cc_reno_init;
-            } else if (strcmp(optarg, "cubic") == 0) {
+            } else if (strcmp(token, "cubic") == 0) {
                 ctx.init_cc = &quicly_cc_cubic_init;
             } else {
-                fprintf(stderr, "unknown congestion controller: %s\n", optarg);
+                fprintf(stderr, "unknown congestion controller: %s\n", token);
                 exit(1);
             }
-            break;
+            /* initcwnd */
+            if ((token = strsep(&buf, ":")) != NULL) {
+                if (sscanf(token, "%" SCNu32, &ctx.initcwnd_packets) != 1) {
+                    fprintf(stderr, "invalid initcwnd value: %s\n", token);
+                    exit(1);
+                }
+            }
+            /* pacing */
+            if ((token = strsep(&buf, ":")) != NULL) {
+                if (strcmp(token, "p") == 0) {
+                    ctx.use_pacing = 1;
+                } else {
+                    fprintf(stderr, "invalid pacing value: %s\n", token);
+                    exit(1);
+                }
+            }
+        } break;
         case 'G':
 #ifdef __linux__
             send_packets = send_packets_gso;
@@ -1237,12 +1257,6 @@ int main(int argc, char **argv)
             break;
         case 'v':
             ++verbosity;
-            break;
-        case 'w':
-            if (sscanf(optarg, "%" SCNu32, &ctx.initcwnd_packets) != 1) {
-                fprintf(stderr, "invalid argument passed to `-w`\n");
-                exit(1);
-            }
             break;
         case 'W':
             raw_pubkey_file = optarg;
