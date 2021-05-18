@@ -37,7 +37,7 @@ extern "C" {
  *
  * where `burst_credit` is defined as:
  *
- *   burst_credit = (9 * mtu + 1) - flow_rate
+ *   burst_credit = max((9 * mtu + 1) - flow_rate, 0)
  *
  * and that the sender never sends more than max(10*mtu, flow_rate) per every time slice.
  */
