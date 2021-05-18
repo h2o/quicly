@@ -130,9 +130,29 @@ static void test_slow(void)
                        });
 }
 
+static void test_fast(void)
+{
+    const uint32_t bytes_per_msec = 100000; /* 83.3333 packets per msec */
+    quicly_pacer_t pacer;
+    int64_t now = 1;
+
+    quicly_pacer_reset(&pacer);
+
+    now = test_pattern(&pacer, now, bytes_per_msec,
+                       (const struct pattern[]){
+                           {1, 84 * mtu, 84 * mtu}, /* borrow 800 bytes */
+                           {2, 83 * mtu, 83 * mtu},   /* borrowing 400 bytes */
+                           {3, 83 * mtu, 83 * mtu},   /* borrowing 0 bytes */
+                           {4, 84 * mtu, 84 * mtu},   /* borrowing 800 bytes */
+                           {0},
+                       });
+}
+
+
 void test_pacer(void)
 {
     subtest("calc-rate", test_calc_rate);
     subtest("medium", test_medium);
     subtest("slow", test_slow);
+    subtest("fast", test_fast);
 }
