@@ -70,6 +70,10 @@ typedef struct st_quicly_cc_t {
      */
     uint64_t recovery_end;
     /**
+     * multiplier to be applied for pacing, in 1/16 (e.g., 32 to send at twice CWND/RTT)
+     */
+    uint32_t pacer_multiplier;
+    /**
      * State information specific to the congestion controller implementation.
      */
     union {

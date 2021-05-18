@@ -23,6 +23,7 @@
 #include <math.h>
 #include "quicly/cc.h"
 #include "quicly.h"
+#include "quicly/pacer.h"
 
 #define QUICLY_MIN_CWND 2
 
@@ -77,6 +78,7 @@ static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t 
     }
 
     /* Congestion avoidance. */
+    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
     cubic_float_t t_sec = calc_cubic_t(cc, now);
     cubic_float_t rtt_sec = loss->rtt.smoothed / (cubic_float_t)1000; /* ms -> s */
 
@@ -166,6 +168,7 @@ static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwn
     cc->impl = &cubic_impl;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
+    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
 }
 
 quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};

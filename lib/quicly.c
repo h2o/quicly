@@ -2804,6 +2804,11 @@ static int on_ack_retire_connection_id(quicly_sentmap_t *map, const quicly_sent_
     return 0;
 }
 
+static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
+{
+    return quicly_pacer_calc_send_rate(conn->egress.cc.pacer_multiplier, conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed);
+}
+
 static int should_send_datagram_frame(quicly_conn_t *conn)
 {
     if (conn->egress.datagram_frame_payloads.count == 0)
@@ -2881,7 +2886,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     int64_t at = conn->idle_timeout.at, pacer_can_send_at = 0;
 
     if (conn->egress.pacer != NULL) {
-        uint32_t bytes_per_msec = quicly_pacer_calc_send_rate(conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed);
+        uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
         pacer_can_send_at = quicly_pacer_can_send_at(conn->egress.pacer, bytes_per_msec, conn->egress.max_udp_payload_size);
     }
 
@@ -4223,7 +4228,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     { /* calculate send window */
         uint64_t pacer_window = SIZE_MAX;
         if (conn->egress.pacer != NULL) {
-            uint32_t bytes_per_msec = quicly_pacer_calc_send_rate(conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed);
+            uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
             pacer_window =
                 quicly_pacer_get_window(conn->egress.pacer, conn->stash.now, bytes_per_msec, conn->egress.max_udp_payload_size);
         }
