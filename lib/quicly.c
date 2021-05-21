@@ -2148,6 +2148,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
     /* store the results */
     conn->super.remote.transport_params = params;
+    conn->egress.max_udp_payload_size = conn->super.remote.transport_params.max_udp_payload_size;
     ack_frequency_set_next_update_at(conn);
 
 Exit:
@@ -2290,17 +2291,9 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* setup ack frequency */
     ack_frequency_set_next_update_at(conn);
 
-    /* update UDP max payload size to:
-     * max(current, min(max_the_remote_sent, remote.tp.max_udp_payload_size, local.tp.max_udp_payload_size)) */
     assert(conn->initial != NULL);
-    if (conn->egress.max_udp_payload_size < conn->initial->largest_ingress_udp_payload_size) {
-        uint16_t size = conn->initial->largest_ingress_udp_payload_size;
-        if (size > conn->super.remote.transport_params.max_udp_payload_size)
-            size = conn->super.remote.transport_params.max_udp_payload_size;
-        if (size > conn->super.ctx->transport_params.max_udp_payload_size)
-            size = conn->super.ctx->transport_params.max_udp_payload_size;
-        conn->egress.max_udp_payload_size = size;
-    }
+    /* increase max_udp_payload_size to remote.tp.max_udp_payload_size */
+    conn->egress.max_udp_payload_size = conn->super.remote.transport_params.max_udp_payload_size;
 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
