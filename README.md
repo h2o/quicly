@@ -9,7 +9,6 @@ How to build
 ---
 
 ```
-% git submodule update --init --recursive
 % cmake .
 % make
 ```
