@@ -3136,7 +3136,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         if (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL) {
             s->dst = quicly_encodev(s->dst, conn->token.len);
             assert(s->dst_end - s->dst > conn->token.len);
-            memcpy(s->dst, conn->token.base, conn->token.len);
+            quicly_memcpy(s->dst, conn->token.base, conn->token.len);
             s->dst += conn->token.len;
         }
         /* payload length is filled laterwards (see commit_send_packet) */

@@ -1101,6 +1101,10 @@ int quicly_build_session_ticket_auth_data(ptls_buffer_t *auth_data, const quicly
  */
 static void quicly_byte_to_hex(char *dst, uint8_t v);
 /**
+ * A version of memcpy that can take a NULL @src to avoid UB
+ */
+static void *quicly_memcpy(void *dst, const void *src, size_t n);
+/**
  *
  */
 socklen_t quicly_get_socklen(struct sockaddr *sa);
@@ -1282,6 +1286,15 @@ inline void quicly_byte_to_hex(char *dst, uint8_t v)
 {
     dst[0] = "0123456789abcdef"[v >> 4];
     dst[1] = "0123456789abcdef"[v & 0xf];
+}
+
+inline void *quicly_memcpy(void *dst, const void *src, size_t n)
+{
+    if (src != NULL)
+        return memcpy(dst, src, n);
+    else if (n != 0)
+        assert(0 && "null pointer passed to memcpy");
+    return dst;
 }
 
 #ifdef __cplusplus
