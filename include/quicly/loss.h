@@ -71,8 +71,8 @@ typedef struct quicly_loss_conf_t {
 
 /**
  * Holds RTT variables. We use this structure differently from the specification:
- * * if the first sample has been obtained should be checked by doing: `latest != 0`
- * * smoothed and variance are avaiable even before the first RTT sample is obtained.
+ * - if the first sample has been obtained should be checked by doing: `latest != 0`
+ * - smoothed and variance are avaiable even before the first RTT sample is obtained.
  */
 typedef struct quicly_rtt_t {
     /**
