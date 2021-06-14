@@ -24,6 +24,10 @@
 
 static int on_acked_callcnt, on_acked_ackcnt;
 
+static int on_acked_fail(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
+{
+    return 1;
+}
 static int on_acked(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
 {
     ++on_acked_callcnt;
@@ -42,6 +46,26 @@ static size_t num_blocks(quicly_sentmap_t *map)
 
     return n;
 }
+
+static void test_ack_failure(void)
+{
+    quicly_sentmap_t map;
+    uint64_t at;
+    size_t i;
+    quicly_sentmap_iter_t iter;
+
+    quicly_sentmap_init(&map);
+
+    quicly_sentmap_prepare(&map, 1, 0, QUICLY_EPOCH_INITIAL);
+    quicly_sentmap_allocate(&map, on_acked_fail);
+    quicly_sentmap_commit(&map, 1);
+
+    quicly_sentmap_init_iter(&map, &iter);
+    quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_EXPIRED);
+
+    quicly_sentmap_init_iter(&map, &iter);
+}
+
 
 static void test_basic(void)
 {
@@ -194,4 +218,5 @@ void test_sentmap(void)
     subtest("basic", test_basic);
     subtest("late-ack", test_late_ack);
     subtest("pto", test_pto);
+    subtest("ack-failure", test_ack_failure);
 }

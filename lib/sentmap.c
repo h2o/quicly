@@ -159,13 +159,15 @@ int quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter, qu
         --map->num_packets;
     }
     for (next_entry(iter); iter->p->acked != quicly_sentmap__type_packet; next_entry(iter)) {
-        if (should_notify && (ret = iter->p->acked(map, &packet, event == QUICLY_SENTMAP_EVENT_ACKED, iter->p)) != 0)
-            goto Exit;
+        if (should_notify) {
+            int ack_failure = iter->p->acked(map, &packet, event == QUICLY_SENTMAP_EVENT_ACKED, iter->p);
+            if (ack_failure && ret == 0)
+                ret = ack_failure;
+        }
         if (should_discard)
             discard_entry(map, iter);
     }
 
-Exit:
     return ret;
 }
 
