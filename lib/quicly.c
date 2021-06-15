@@ -974,8 +974,12 @@ void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src,
             if (conn->crypto.handshake_properties.client.early_data_acceptance == PTLS_EARLY_DATA_REJECTED) {
                 dispose_cipher(&conn->application->cipher.egress.key);
                 conn->application->cipher.egress.key = (struct st_quicly_cipher_context_t){NULL};
-                discard_sentmap_by_epoch(
-                    conn, 1u << QUICLY_EPOCH_1RTT); /* retire all packets with ack_epoch == 3; they are all 0-RTT packets */
+                /* retire all packets with ack_epoch == 3; they are all 0-RTT packets */
+                int ret;
+                if ((ret = discard_sentmap_by_epoch(conn, 1u << QUICLY_EPOCH_1RTT)) != 0) {
+                    initiate_close(conn, ret, QUICLY_FRAME_TYPE_CRYPTO, NULL);
+                    goto Exit;
+                }
             }
         }
     }
@@ -3540,19 +3544,21 @@ UpdateState:
     return 0;
 }
 
-static inline void init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
+static inline int init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
 {
-    quicly_loss_init_sentmap_iter(&conn->egress.loss, iter, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
-                                  conn->super.state >= QUICLY_STATE_CLOSING);
+    return quicly_loss_init_sentmap_iter(&conn->egress.loss, iter, conn->stash.now,
+                                         conn->super.remote.transport_params.max_ack_delay,
+                                         conn->super.state >= QUICLY_STATE_CLOSING);
 }
 
 int discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs)
 {
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
-    int ret = 0;
+    int ret;
 
-    init_acks_iter(conn, &iter);
+    if ((ret = init_acks_iter(conn, &iter)) != 0)
+        return ret;
 
     while ((sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
         if ((ack_epochs & (1u << sent->ack_epoch)) != 0) {
@@ -3575,7 +3581,8 @@ static int mark_frames_on_pto(quicly_conn_t *conn, uint8_t ack_epoch, size_t *by
     const quicly_sent_packet_t *sent;
     int ret;
 
-    init_acks_iter(conn, &iter);
+    if ((ret = init_acks_iter(conn, &iter)) != 0)
+        return ret;
 
     while ((sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
         if (sent->ack_epoch == ack_epoch && sent->frames_in_flight) {
@@ -4813,8 +4820,9 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                  conn->egress.loss.sentmap.bytes_in_flight);
 
     /* loss-detection  */
-    quicly_loss_detect_loss(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
-                            conn->initial == NULL && conn->handshake == NULL, on_loss_detected);
+    if ((ret = quicly_loss_detect_loss(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
+                                       conn->initial == NULL && conn->handshake == NULL, on_loss_detected)) != 0)
+        return ret;
     update_loss_alarm(conn, 0);
 
     return 0;
