@@ -1024,7 +1024,8 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
      *   being opened (e.g., sending QPACK encoder/decoder stream frame for each HTTP/3 request)
      * See also: the doc-comment on `_recv_aux.max_ranges`.
      */
-    uint32_t fragments_minmax = (uint32_t)(stream->conn->super.ctx->transport_params.max_streams_uni + stream->conn->super.ctx->transport_params.max_streams_bidi);
+    uint32_t fragments_minmax = (uint32_t)(stream->conn->super.ctx->transport_params.max_streams_uni +
+                                           stream->conn->super.ctx->transport_params.max_streams_bidi);
     if (fragments_minmax < 63)
         fragments_minmax = 63;
     if ((stream->_recv_aux.max_ranges = initial_max_stream_data_local / 1024) < fragments_minmax)
