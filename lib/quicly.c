@@ -2529,8 +2529,12 @@ static int on_ack_stream_ack_one(quicly_conn_t *conn, quicly_stream_id_t stream_
         return 0;
 
     size_t bytes_to_shift;
-    if ((ret = quicly_sendstate_acked(&stream->sendstate, sent, &bytes_to_shift)) != 0)
+    if ((ret = quicly_sendstate_acked(&stream->sendstate, sent, &bytes_to_shift)) != 0) {
+        QUICLY_PROBE(STREAM_STATE_EXHAUSTION, stream->conn, stream->conn->stash.now, stream, ret,
+                     (size_t)(stream->sendstate.size_inflight - stream->sendstate.acked.ranges[0].end),
+                     stream->sendstate.acked.num_ranges + stream->sendstate.pending.num_ranges);
         return ret;
+    }
     if (bytes_to_shift != 0) {
         QUICLY_PROBE(STREAM_ON_SEND_SHIFT, stream->conn, stream->conn->stash.now, stream, bytes_to_shift);
         stream->callbacks->on_send_shift(stream, bytes_to_shift);

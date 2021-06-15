@@ -139,6 +139,8 @@ provider quicly {
     probe stream_on_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, size_t off,
                             const void *src, size_t src_len);
     probe stream_on_receive_reset(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, int err);
+    probe stream_state_exhaustion(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, int err,
+                                  size_t bytes_inflight, size_t num_ranges);
 
     probe debug_message(struct st_quicly_conn_t *conn, const char *function, int line, const char *message);
 
