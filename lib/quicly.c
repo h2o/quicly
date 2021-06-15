@@ -1020,11 +1020,16 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
 
     /* Set the number of max ranges to be capable of handling following case:
      * * every one of the two packets being sent are lost
-     * * average size of a STREAM frame found in a packet is >= ~512 bytes
+     * * average size of a STREAM frame found in a packet is >= ~512 bytes, or small STREAM frame is sent for every other stream
+     *   being opened (e.g., sending QPACK encoder/decoder stream frame for each HTTP/3 request)
      * See also: the doc-comment on `_recv_aux.max_ranges`.
      */
-    if ((stream->_recv_aux.max_ranges = initial_max_stream_data_local / 1024) < 63)
-        stream->_recv_aux.max_ranges = 63;
+    uint32_t fragments_minmax = (uint32_t)(stream->conn->super.ctx->transport_params.max_streams_uni +
+                                           stream->conn->super.ctx->transport_params.max_streams_bidi);
+    if (fragments_minmax < 63)
+        fragments_minmax = 63;
+    if ((stream->_recv_aux.max_ranges = initial_max_stream_data_local / 1024) < fragments_minmax)
+        stream->_recv_aux.max_ranges = fragments_minmax;
 }
 
 static void dispose_stream_properties(quicly_stream_t *stream)
