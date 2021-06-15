@@ -975,8 +975,9 @@ void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src,
                 dispose_cipher(&conn->application->cipher.egress.key);
                 conn->application->cipher.egress.key = (struct st_quicly_cipher_context_t){NULL};
                 /* retire all packets with ack_epoch == 3; they are all 0-RTT packets */
-                if (discard_sentmap_by_epoch(conn, 1u << QUICLY_EPOCH_1RTT) != 0) {
-                    initiate_close(conn, QUICLY_TRANSPORT_ERROR_INTERNAL, QUICLY_FRAME_TYPE_CRYPTO, NULL);
+                int ret;
+                if ((ret = discard_sentmap_by_epoch(conn, 1u << QUICLY_EPOCH_1RTT)) != 0) {
+                    initiate_close(conn, ret, QUICLY_FRAME_TYPE_CRYPTO, NULL);
                     goto Exit;
                 }
             }
