@@ -3070,7 +3070,13 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
-static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, int ack_eliciting)
+enum allocate_frame_type {
+    ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING,
+    ALLOCATE_FRAME_TYPE_ACK_ELICITING,
+    ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC,
+};
+
+static int do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, enum allocate_frame_type frame_type)
 {
     int coalescible, ret;
 
@@ -3119,7 +3125,7 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
         /* note: send_window (ssize_t) can become negative; see doc-comment */
-        if (ack_eliciting && s->send_window <= 0)
+        if (frame_type == ALLOCATE_FRAME_TYPE_ACK_ELICITING && s->send_window <= 0)
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
             return QUICLY_ERROR_SENDBUF_FULL;
@@ -3188,16 +3194,11 @@ static int _do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, siz
     }
 
 TargetReady:
-    if (ack_eliciting) {
+    if (frame_type != ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING) {
         s->target.ack_eliciting = 1;
         conn->egress.last_retransmittable_sent_at = conn->stash.now;
     }
     return 0;
-}
-
-static int allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space)
-{
-    return _do_allocate_frame(conn, s, min_space, 0);
 }
 
 static int allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, quicly_sent_t **sent,
@@ -3205,7 +3206,7 @@ static int allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_send_context
 {
     int ret;
 
-    if ((ret = _do_allocate_frame(conn, s, min_space, 1)) != 0)
+    if ((ret = do_allocate_frame(conn, s, min_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
         return ret;
     if ((*sent = quicly_sentmap_allocate(&conn->egress.loss.sentmap, acked)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
@@ -3231,7 +3232,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
     }
 
 Emit: /* emit an ACK frame */
-    if ((ret = allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY)) != 0)
+    if ((ret = do_allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY, ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING)) != 0)
         return ret;
     uint8_t *dst = s->dst;
     dst = quicly_encode_ack_frame(dst, s->dst_end, &space->ack_queue, ack_delay);
@@ -3976,7 +3977,7 @@ static int send_handshake_flow(quicly_conn_t *conn, size_t epoch, quicly_send_co
 
         /* send probe if requested */
         if (send_probe) {
-            if ((ret = _do_allocate_frame(conn, s, 1, 1)) != 0)
+            if ((ret = do_allocate_frame(conn, s, 1, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
                 goto Exit;
             *s->dst++ = QUICLY_FRAME_TYPE_PING;
             conn->egress.last_retransmittable_sent_at = conn->stash.now;
@@ -4015,7 +4016,8 @@ static int send_connection_close(quicly_conn_t *conn, size_t epoch, quicly_send_
     }
 
     /* write frame */
-    if ((ret = allocate_frame(conn, s, quicly_close_frame_capacity(error_code, offending_frame_type, reason_phrase))) != 0)
+    if ((ret = do_allocate_frame(conn, s, quicly_close_frame_capacity(error_code, offending_frame_type, reason_phrase),
+                                 ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING)) != 0)
         return ret;
     s->dst = quicly_encode_close_frame(s->dst, error_code, offending_frame_type, reason_phrase);
 
@@ -4241,7 +4243,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             for (size_t i = 0; i != conn->egress.datagram_frame_payloads.count; ++i) {
                 ptls_iovec_t *payload = conn->egress.datagram_frame_payloads.payloads + i;
                 size_t required_space = quicly_datagram_frame_capacity(*payload);
-                if ((ret = _do_allocate_frame(conn, s, required_space, 1)) != 0)
+                if ((ret = do_allocate_frame(conn, s, required_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC)) != 0)
                     goto Exit;
                 if (s->dst_end - s->dst >= required_space) {
                     s->dst = quicly_encode_datagram_frame(s->dst, *payload);
@@ -4256,7 +4258,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         if (!ack_only) {
             /* PTO or loss detection timeout, always send PING. This is the easiest thing to do in terms of timer control. */
             if (min_packets_to_send != 0) {
-                if ((ret = _do_allocate_frame(conn, s, 1, 1)) != 0)
+                if ((ret = do_allocate_frame(conn, s, 1, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
                     goto Exit;
                 *s->dst++ = QUICLY_FRAME_TYPE_PING;
                 ++conn->super.stats.num_frames_sent.ping;
@@ -4280,7 +4282,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if (conn->egress.path_challenge.head != NULL) {
                     do {
                         struct st_quicly_pending_path_challenge_t *c = conn->egress.path_challenge.head;
-                        if ((ret = allocate_frame(conn, s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY)) != 0)
+                        if ((ret = do_allocate_frame(conn, s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY,
+                                                     ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING)) != 0)
                             goto Exit;
                         s->dst = quicly_encode_path_challenge_frame(s->dst, c->is_response, c->data);
                         if (c->is_response) {
