@@ -813,6 +813,10 @@ static uint32_t quicly_num_streams(quicly_conn_t *conn);
 /**
  *
  */
+uint32_t quicly_num_streams_by_group(quicly_conn_t *conn, int uni, int locally_initiated);
+/**
+ *
+ */
 static int quicly_is_client(quicly_conn_t *conn);
 /**
  *

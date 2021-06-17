@@ -1172,6 +1172,13 @@ ptls_t *quicly_get_tls(quicly_conn_t *conn)
     return conn->crypto.tls;
 }
 
+uint32_t quicly_num_streams_by_group(quicly_conn_t *conn, int uni, int locally_initiated)
+{
+    int server_initiated = quicly_is_client(conn) != locally_initiated;
+    struct st_quicly_conn_streamgroup_state_t *state = get_streamgroup_state(conn, uni * 2 + server_initiated);
+    return state->num_streams;
+}
+
 int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
 {
     /* copy the pre-built stats fields */
