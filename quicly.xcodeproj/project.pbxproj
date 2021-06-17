@@ -646,7 +646,7 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(DERIVED_FILES_DIR)/quicly-cbp-probes.h",
+				"$(DERIVED_FILES_DIR)/quicly-tracer.h",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
