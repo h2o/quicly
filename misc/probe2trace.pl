@@ -246,11 +246,8 @@ EOT
 
 static inline void QUICLY_TRACER_@{[ uc $probe->[0] ]}($params)
 {
-    if (arg0->super.ctx->get_tracer != NULL) {
-        quicly_trace_cb tracer = arg0->super.ctx->get_tracer->cb(arg0->super.ctx->get_tracer, arg0);
-        if (tracer != NULL)
-            tracer(arg0, "{$fmt}\\n", @{[join ', ', @ap]});
-    }
+    if (arg0->super.tracer.cb != NULL)
+        arg0->super.tracer.cb(arg0->super.tracer.ctx, "{$fmt}\\n", @{[join ', ', @ap]});
 }
 EOT
             } else {
