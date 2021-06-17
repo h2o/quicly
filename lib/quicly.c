@@ -75,13 +75,23 @@
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
+#if QUICLY_USE_TRACER
+#define QUICLY_TRACER(label, conn, ...) QUICLY_TRACER_##label(conn, __VA_ARGS__)
+#else
+#define QUICLY_TRACER(...)
+#endif
+
 #if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
 #define QUICLY_PROBE(label, conn, ...)                                                                                             \
     do {                                                                                                                           \
         quicly_conn_t *_conn = (conn);                                                                                             \
         if (PTLS_UNLIKELY(QUICLY_##label##_ENABLED()) && !ptls_skip_tracing(_conn->crypto.tls))                                    \
             QUICLY_##label(_conn, __VA_ARGS__);                                                                                    \
+        QUICLY_TRACER(label, _conn,  __VA_ARGS__);                                                                                 \
     } while (0)
+#else
+#define QUICLY_PROBE(label, conn, ...) QUICLY_TRACER(label, conn, __VA_ARGS__)
+#endif
 #define QUICLY_PROBE_HEXDUMP(s, l)                                                                                                 \
     ({                                                                                                                             \
         size_t _l = (l);                                                                                                           \
@@ -92,11 +102,6 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         size_t _l = (l);                                                                                                           \
         quicly_escape_unsafe_string(alloca(_l * 4 + 1), (s), _l);                                                                  \
     })
-#else
-#define QUICLY_PROBE(label, conn, ...)
-#define QUICLY_PROBE_HEXDUMP(s, l)
-#define QUICLY_PROBE_ESCAPE_UNSAFE_STRING(s, l)
-#endif
 
 struct st_quicly_cipher_context_t {
     ptls_aead_context_t *aead;
@@ -406,6 +411,10 @@ struct st_quicly_conn_t {
         } on_ack_stream;
     } stash;
 };
+
+#if QUICLY_USE_TRACER
+#include "quicly-tracer.h"
+#endif
 
 struct st_quicly_handle_payload_state_t {
     const uint8_t *src, *const end;

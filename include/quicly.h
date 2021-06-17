@@ -160,6 +160,7 @@ QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int64_t 
  * delta must be either 1 or -1.
  */
 QUICLY_CALLBACK_TYPE(void, update_open_count, ssize_t delta);
+
 /**
  * crypto offload API
  */
@@ -190,6 +191,12 @@ typedef struct st_quicly_crypto_engine_t {
                            ptls_aead_context_t *packet_protect_ctx, ptls_iovec_t datagram, size_t first_byte_at,
                            size_t payload_from, uint64_t packet_number, int coalesced);
 } quicly_crypto_engine_t;
+
+typedef void (*quicly_trace_cb)(quicly_conn_t *conn, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/**
+ * Returns the tracer callback
+ */
+QUICLY_CALLBACK_TYPE(quicly_trace_cb, get_tracer, quicly_conn_t *conn);
 
 typedef struct st_quicly_max_stream_data_t {
     uint64_t bidi_local, bidi_remote, uni;
@@ -338,6 +345,10 @@ struct st_quicly_context_t {
      * optional refcount callback
      */
     quicly_update_open_count_t *update_open_count;
+    /**
+     * optional callback
+     */
+    quicly_get_tracer_t *get_tracer;
 };
 
 /**
