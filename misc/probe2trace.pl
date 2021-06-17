@@ -160,7 +160,7 @@ for my $probe (@probes) {
                     push @ap, "(unsigned long long)arg$i";
                 }
             } elsif ($type =~ /^int(?:([0-9]+)_t|)$/) {
-                if ($arch ne 'embedded') {
+                if ($arch ne 'embedded' && $arch ne 'tracer') {
                     push @fmt, qq!"$name":\%@{[$1 && $1 == 64 ? 'ld' : 'd']}!;
                     push @ap, "arg$i";
                 } else {
