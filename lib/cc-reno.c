@@ -21,6 +21,7 @@
  */
 #include "quicly/cc.h"
 #include "quicly.h"
+#include "quicly/pacer.h"
 
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
@@ -42,6 +43,7 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         return;
     }
     /* Congestion avoidance. */
+    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
     cc->state.reno.stash += bytes;
     if (cc->state.reno.stash < cc->cwnd)
         return;
@@ -94,6 +96,7 @@ static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd
     cc->impl = &reno_impl;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
+    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
 }
 
 quicly_init_cc_t quicly_cc_reno_init = {reno_init};
