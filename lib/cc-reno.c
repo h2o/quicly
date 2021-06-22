@@ -25,30 +25,54 @@
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
 
+/**
+ * In high-BDP mode, increase CWND so that we reach the original value ~1 second after a loss event.
+ * Mathematically speaking, the correct increase ratio is `pow(1/beta - 1,RTT)`. However, for simplicity, we approximate that to an
+ * exponential increase of `(1/beta - 1) * RTT`. The bonus of using an exponential curve is that we can increase CWND faster than
+ * ordinary Reno when there is an increase in available bandwidth, though this exponential curve would not be aggressive as post-
+ * plateau Cubic.
+ */
+static uint32_t calc_high_bdp_increase(quicly_cc_t *cc, const quicly_loss_t *loss)
+{
+    uint32_t increase = cc->state.reno.stash * (1 / QUICLY_RENO_BETA - 1) / 1000 * loss->rtt.smoothed;
+    /* don't be more agressive than slow start */
+    if (increase > cc->state.reno.stash)
+        increase = cc->state.reno.stash;
+    return increase;
+}
+
 /* TODO: Avoid increase if sender was application limited. */
 static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
                           int64_t now, uint32_t max_udp_payload_size)
 {
+    uint32_t increase;
+
     assert(inflight >= bytes);
+
     /* Do not increase congestion window while in recovery. */
     if (largest_acked < cc->recovery_end)
         return;
 
-    /* Slow start. */
     if (cc->cwnd < cc->ssthresh) {
-        cc->cwnd += bytes;
-        if (cc->cwnd_maximum < cc->cwnd)
-            cc->cwnd_maximum = cc->cwnd;
-        return;
+        /* Slow start. */
+        increase = bytes;
+    } else {
+        /* Congestion avoidance. */
+        cc->state.reno.stash += bytes;
+        /* Use high-BDP mode, or ... */
+        if (cc->state.reno.highbdp_mode && (increase = calc_high_bdp_increase(cc, loss)) >= max_udp_payload_size) {
+            cc->state.reno.stash = 0;
+        } else {
+            /* ... increase congestion window by 1 MSS per congestion window acked. */
+            if (cc->state.reno.stash < cc->cwnd)
+                return;
+            uint32_t count = cc->state.reno.stash / cc->cwnd;
+            cc->state.reno.stash -= count * cc->cwnd;
+            increase = count * max_udp_payload_size;
+        }
     }
-    /* Congestion avoidance. */
-    cc->state.reno.stash += bytes;
-    if (cc->state.reno.stash < cc->cwnd)
-        return;
-    /* Increase congestion window by 1 MSS per congestion window acked. */
-    uint32_t count = cc->state.reno.stash / cc->cwnd;
-    cc->state.reno.stash -= count * cc->cwnd;
-    cc->cwnd += count * max_udp_payload_size;
+
+    cc->cwnd += increase;
     if (cc->cwnd_maximum < cc->cwnd)
         cc->cwnd_maximum = cc->cwnd;
 }

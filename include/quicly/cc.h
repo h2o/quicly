@@ -81,6 +81,10 @@ typedef struct st_quicly_cc_t {
              * Stash of acknowledged bytes, used during congestion avoidance.
              */
             uint32_t stash;
+            /**
+             * When set, increases CWND as aggressive as Cubic during congestion avoidance.
+             */
+            uint32_t highbdp_mode : 1;
         } reno;
         /**
          * State information for CUBIC congestion control.
