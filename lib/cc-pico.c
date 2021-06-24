@@ -22,18 +22,21 @@
 #include "quicly/cc.h"
 #include "quicly.h"
 
-#define QUICLY_PICO_RECOVERY_PERIOD 1000 /* in milliseconds */
+/**
+ * Speed at which the multiplicative increase grows from BETA to 1. Unit is Hz.
+ */
+#define QUICLY_PICO_MULT_HZ 1.0
 
 static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t ssthresh, uint32_t rtt, uint32_t mtu)
 {
     /* Increase per byte acked is the sum of 1mtu/cwnd (additive part) and ... */
     double increase_per_byte = (double)mtu / cwnd;
-    /* ... multiplicative part being 1 during slow start, and the RTT-compensated rate for recovery within
-     * QUICLY_PICO_RECOVERY_PERIOD during congestion avoidance. */
+    /* ... multiplicative part being 1 during slow start, and the RTT-compensated rate for recovery within ~1/QUICLY_PICO_MULT_HZ
+     * seconds congestion avoidance. */
     if (cwnd < ssthresh) {
         increase_per_byte += 1;
     } else {
-        increase_per_byte += (1 / QUICLY_RENO_BETA - 1) / QUICLY_PICO_RECOVERY_PERIOD * rtt;
+        increase_per_byte += (1 / QUICLY_RENO_BETA - 1) * QUICLY_PICO_MULT_HZ / 1000 * rtt;
     }
 
     return (uint32_t)(mtu / increase_per_byte);
