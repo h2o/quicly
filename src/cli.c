@@ -1110,18 +1110,19 @@ int main(int argc, char **argv)
         case 'c':
             cert_file = optarg;
             break;
-        case 'C':
-            if (strcmp(optarg, "reno") == 0) {
-                ctx.init_cc = &quicly_cc_reno_init;
-            } else if (strcmp(optarg, "cubic") == 0) {
-                ctx.init_cc = &quicly_cc_cubic_init;
-            } else if (strcmp(optarg, "pico") == 0) {
-                ctx.init_cc = &quicly_cc_pico_init;
+        case 'C': {
+            static const quicly_cc_type_t *supported[] = {&quicly_cc_type_reno, &quicly_cc_type_cubic, &quicly_cc_type_pico, NULL};
+            quicly_cc_type_t **found;
+            for (found = supported; *found != NULL; found++)
+                if (strcmp((*found)->name, optarg) == 0)
+                    break;
+            if (*found != NULL) {
+                ctx.init_cc = (*found)->cc_init;
             } else {
                 fprintf(stderr, "unknown congestion controller: %s\n", optarg);
                 exit(1);
             }
-            break;
+        } break;
         case 'G':
 #ifdef __linux__
             send_packets = send_packets_gso;

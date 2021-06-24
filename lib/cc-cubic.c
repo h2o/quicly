@@ -172,6 +172,6 @@ static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwn
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
-quicly_cc_type_t quicly_cc_type_cubic = {"cubic",       cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion,
-                                         cubic_on_sent, cubic_on_switch};
+quicly_cc_type_t quicly_cc_type_cubic = {
+    "cubic", &quicly_cc_cubic_init, cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion, cubic_on_sent, cubic_on_switch};
 quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};

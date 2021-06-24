@@ -129,6 +129,10 @@ struct st_quicly_cc_type_t {
      */
     const char *name;
     /**
+     * Corresponding default init_cc.
+     */
+    struct st_quicly_init_cc_t *cc_init;
+    /**
      * Called when a packet is newly acknowledged.
      */
     void (*cc_on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,

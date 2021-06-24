@@ -102,8 +102,13 @@ static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
-quicly_cc_type_t quicly_cc_type_reno = {
-    "reno", reno_on_acked, quicly_cc_reno_on_lost, quicly_cc_reno_on_persistent_congestion, quicly_cc_reno_on_sent, reno_on_switch};
+quicly_cc_type_t quicly_cc_type_reno = {"reno",
+                                        &quicly_cc_reno_init,
+                                        reno_on_acked,
+                                        quicly_cc_reno_on_lost,
+                                        quicly_cc_reno_on_persistent_congestion,
+                                        quicly_cc_reno_on_sent,
+                                        reno_on_switch};
 quicly_init_cc_t quicly_cc_reno_init = {reno_init};
 
 uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size)
