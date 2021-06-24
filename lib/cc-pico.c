@@ -30,7 +30,7 @@ static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t ssthresh, ui
 {
     /* Increase per byte acked is the sum of 1mtu/cwnd (additive part) and ... */
     double increase_per_byte = (double)mtu / cwnd;
-    /* ... multiplicative part being 1 during slow start, or (1/beta - 1) * RTT during congestion avoidance. */
+    /* ... multiplicative part being 1 during slow start, and the RTT-compensated rate for recovery within QUICLY_PICO_RECOVERY_PERIOD during congestion avoidance. */
     if (cwnd < ssthresh) {
         increase_per_byte += 1;
     } else {
