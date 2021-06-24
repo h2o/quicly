@@ -39,31 +39,16 @@ extern "C" {
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
 
-typedef enum {
-    /**
-     * Reno, with 0.7 beta reduction
-     */
-    CC_RENO_MODIFIED,
-    /**
-     * CUBIC (RFC 8312)
-     */
-    CC_CUBIC,
-    /**
-     *
-     */
-    CC_PICO
-} quicly_cc_type_t;
-
 /**
  * Holds pointers to concrete congestion control implementation functions.
  */
-struct st_quicly_cc_impl_t;
+typedef const struct st_quicly_cc_type_t quicly_cc_type_t;
 
 typedef struct st_quicly_cc_t {
     /**
-     * Congestion controller implementation.
+     * Congestion controller type.
      */
-    const struct st_quicly_cc_impl_t *impl;
+    quicly_cc_type_t *type;
     /**
      * Current congestion window.
      */
@@ -138,11 +123,11 @@ typedef struct st_quicly_cc_t {
     uint32_t num_loss_episodes;
 } quicly_cc_t;
 
-struct st_quicly_cc_impl_t {
+struct st_quicly_cc_type_t {
     /**
-     * Congestion controller type.
+     * name (e.g., "reno")
      */
-    quicly_cc_type_t type;
+    const char *name;
     /**
      * Called when a packet is newly acknowledged.
      */
@@ -165,17 +150,13 @@ struct st_quicly_cc_impl_t {
 };
 
 /**
- * The factory method for the modified Reno congestion controller.
+ * The type objects for each CC. These can be used for testing the type of each `quicly_cc_t`.
  */
-extern struct st_quicly_init_cc_t quicly_cc_reno_init;
+extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_pico;
 /**
- * The factory method for the Cubic congestion controller.
+ * The factory methods for each CC.
  */
-extern struct st_quicly_init_cc_t quicly_cc_cubic_init;
-/**
- * The factory method for the Pico congestion controller.
- */
-extern struct st_quicly_init_cc_t quicly_cc_pico_init;
+extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_pico_init;
 
 /**
  * Calculates the initial congestion window size given the maximum UDP payload size.

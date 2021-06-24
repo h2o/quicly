@@ -70,13 +70,12 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         cc->cwnd_maximum = cc->cwnd;
 }
 
-static const struct st_quicly_cc_impl_t pico_impl = {CC_PICO, pico_on_acked, quicly_cc_reno_on_lost,
-                                                     quicly_cc_reno_on_persistent_congestion, quicly_cc_reno_on_sent};
-
 static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
     quicly_cc_reno_init.cb(&quicly_cc_reno_init, cc, initcwnd, now);
-    cc->impl = &pico_impl;
+    cc->type = &quicly_cc_type_pico;
 }
 
+quicly_cc_type_t quicly_cc_type_pico = {"pico", pico_on_acked, quicly_cc_reno_on_lost, quicly_cc_reno_on_persistent_congestion,
+                                        quicly_cc_reno_on_sent};
 quicly_init_cc_t quicly_cc_pico_init = {pico_init};

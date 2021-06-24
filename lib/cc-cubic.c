@@ -157,15 +157,13 @@ static void cubic_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     cc->state.cubic.last_sent_time = now;
 }
 
-static const struct st_quicly_cc_impl_t cubic_impl = {CC_CUBIC, cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion,
-                                                      cubic_on_sent};
-
 static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
-    cc->impl = &cubic_impl;
+    cc->type = &quicly_cc_type_cubic;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
+quicly_cc_type_t quicly_cc_type_cubic = {"cubic", cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion, cubic_on_sent};
 quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};

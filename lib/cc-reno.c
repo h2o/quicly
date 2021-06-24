@@ -82,17 +82,16 @@ void quicly_cc_reno_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t
     /* Unused */
 }
 
-static const struct st_quicly_cc_impl_t reno_impl = {CC_RENO_MODIFIED, reno_on_acked, quicly_cc_reno_on_lost,
-                                                     quicly_cc_reno_on_persistent_congestion, quicly_cc_reno_on_sent};
-
 static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
-    cc->impl = &reno_impl;
+    cc->type = &quicly_cc_type_reno;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
+quicly_cc_type_t quicly_cc_type_reno = {"reno", reno_on_acked, quicly_cc_reno_on_lost, quicly_cc_reno_on_persistent_congestion,
+                                        quicly_cc_reno_on_sent};
 quicly_init_cc_t quicly_cc_reno_init = {reno_init};
 
 uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size)
