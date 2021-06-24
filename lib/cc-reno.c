@@ -82,6 +82,18 @@ void quicly_cc_reno_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t
     /* Unused */
 }
 
+static int reno_on_switch(quicly_cc_t *cc)
+{
+    if (cc->type == &quicly_cc_type_reno) {
+        return 1; /* nothing to do */
+    } else if (cc->type == &quicly_cc_type_pico) {
+        cc->type = &quicly_cc_type_reno;
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
 static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
@@ -90,8 +102,8 @@ static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
 }
 
-quicly_cc_type_t quicly_cc_type_reno = {"reno", reno_on_acked, quicly_cc_reno_on_lost, quicly_cc_reno_on_persistent_congestion,
-                                        quicly_cc_reno_on_sent};
+quicly_cc_type_t quicly_cc_type_reno = {
+    "reno", reno_on_acked, quicly_cc_reno_on_lost, quicly_cc_reno_on_persistent_congestion, quicly_cc_reno_on_sent, reno_on_switch};
 quicly_init_cc_t quicly_cc_reno_init = {reno_init};
 
 uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size)

@@ -147,6 +147,10 @@ struct st_quicly_cc_type_t {
      * Called after a packet is sent.
      */
     void (*cc_on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
+    /**
+     * Switches the underlying algorithm of `cc` to that of `cc_switch`, returning a boolean if the operation was successful.
+     */
+    int (*cc_switch)(quicly_cc_t *cc);
 };
 
 /**
