@@ -165,7 +165,7 @@ struct st_quicly_cc_impl_t {
  */
 extern struct st_quicly_init_cc_t quicly_cc_reno_init;
 /**
- * The factory method for the modified Reno congestion controller.
+ * The factory method for the Cubic congestion controller.
  */
 extern struct st_quicly_init_cc_t quicly_cc_cubic_init;
 /**
