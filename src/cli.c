@@ -1111,13 +1111,12 @@ int main(int argc, char **argv)
             cert_file = optarg;
             break;
         case 'C': {
-            static const quicly_cc_type_t *supported[] = {&quicly_cc_type_reno, &quicly_cc_type_cubic, &quicly_cc_type_pico, NULL};
-            quicly_cc_type_t **found;
-            for (found = supported; *found != NULL; found++)
-                if (strcmp((*found)->name, optarg) == 0)
+            quicly_cc_type_t **cc;
+            for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
+                if (strcmp((*cc)->name, optarg) == 0)
                     break;
-            if (*found != NULL) {
-                ctx.init_cc = (*found)->cc_init;
+            if (*cc != NULL) {
+                ctx.init_cc = (*cc)->cc_init;
             } else {
                 fprintf(stderr, "unknown congestion controller: %s\n", optarg);
                 exit(1);

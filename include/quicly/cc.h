@@ -167,6 +167,11 @@ extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_typ
 extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_pico_init;
 
 /**
+ * A null-terminated list of all CC types.
+ */
+extern quicly_cc_type_t *quicly_cc_all_types[];
+
+/**
  * Calculates the initial congestion window size given the maximum UDP payload size.
  */
 uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size);
