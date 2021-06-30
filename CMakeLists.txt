@@ -124,6 +124,12 @@ TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 ADD_EXECUTABLE(examples-echo ${PICOTLS_OPENSSL_FILES} examples/echo.c)
 TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
 
+ADD_EXECUTABLE(examples-pipeclient ${PICOTLS_OPENSSL_FILES} examples/pipeclient.c)
+TARGET_LINK_LIBRARIES(examples-pipeclient quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+
+ADD_EXECUTABLE(examples-pipeserver ${PICOTLS_OPENSSL_FILES} examples/pipeserver.c)
+TARGET_LINK_LIBRARIES(examples-pipeserver quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+
 ADD_EXECUTABLE(udpfw t/udpfw.c)
 
 ADD_CUSTOM_TARGET(check env BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR} WITH_DTRACE=${WITH_DTRACE} prove --exec "sh -c" -v ${CMAKE_CURRENT_BINARY_DIR}/*.t t/*.t
