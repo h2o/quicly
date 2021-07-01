@@ -20,3 +20,5 @@ quicly-probes.h
 quicly-tracer.h
 test.t
 udpfw
+examples-pipeclient
+examples-pipeserver
