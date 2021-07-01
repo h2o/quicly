@@ -1,23 +1,6 @@
 /*
- * Copyright (c) 2019 Fastly, Kazuho Oku
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to
- * deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
+ * Copyright (c) 2021 Jordi Cenzano
+ * Created from ./echo.c
  */
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700 /* required for glibc to use getaddrinfo, etc. */
@@ -48,6 +31,10 @@ static quicly_context_t ctx;
  * CID seed
  */
 static quicly_cid_plaintext_t next_cid;
+/**
+ * Verbose mode
+ */
+ int is_verbose = 0;
 
 static int resolve_address(struct sockaddr *sa, socklen_t *salen, const char *host, const char *port, int family, int type,
                            int proto)
@@ -77,34 +64,43 @@ static void usage(const char *progname)
 {
     printf("Usage: %s [options] [host]\n"
            "Options:\n"
-           "  -c <file>    specifies the certificate chain file (PEM format)\n"
-           "  -k <file>    specifies the private key file (PEM format)\n"
+           "  -v Show messages from server"
            "  -p <number>  specifies the port number (default: 4433)\n"
            "  -h           prints this help\n"
            "\n"
-           "When both `-c` and `-k` is specified, runs as a server.  Otherwise, runs as a\n"
-           "client connecting to host:port.  If omitted, host defaults to 127.0.0.1.\n",
-           progname);
+           "If omitted, host defaults to 127.0.0.1.\n"
+           "\n"
+           "Example (sends live video over QUIC):\n"
+           "ffmpeg -i \"udp://localhost:5000\" -c copy -f mpegts - | %s -p 4433 localhost\n",
+           progname, progname);
     exit(0);
-}
-
-static int is_server(void)
-{
-    return ctx.tls->certificates.count != 0;
 }
 
 static int forward_stdin(quicly_conn_t *conn)
 {
     quicly_stream_t *stream0;
-    char buf[4096];
+    const size_t READ_BLOCK_SIZE = 188 * 6; // Assumed input is transport stream
+    char buf[READ_BLOCK_SIZE];
     size_t rret;
 
     if ((stream0 = quicly_get_stream(conn, 0)) == NULL || !quicly_sendstate_is_open(&stream0->sendstate))
         return 0;
 
-    while ((rret = read(0, buf, sizeof(buf))) == -1 && errno == EINTR)
+    /* Read binary from stdin */
+    while ((rret = read(STDIN_FILENO, buf, READ_BLOCK_SIZE)) == -1 && errno == EINTR)
         ;
+
+    fprintf(stderr, "Read from stdin: %zu bytes\n", rret);
+    
+    // Something wrong!
+    if (rret < 0) {
+        // Show error and close the stream
+        fprintf(stderr, "failed to read from stdin");
+        rret = 0;
+    }
+
     if (rret == 0) {
+        fprintf(stderr, "Closing\n");
         /* stdin closed, close the send-side of stream0 */
         quicly_streambuf_egress_shutdown(stream0);
         return 0;
@@ -136,46 +132,32 @@ static void on_receive(quicly_stream_t *stream, size_t off, const void *src, siz
     /* obtain contiguous bytes from the receive buffer */
     ptls_iovec_t input = quicly_streambuf_ingress_get(stream);
 
-    if (is_server()) {
-        /* server: echo back to the client */
-        if (quicly_sendstate_is_open(&stream->sendstate) && (input.len > 0)) {
-            quicly_streambuf_egress_write(stream, input.base, input.len);
-            /* shutdown the stream after echoing all data */
-            if (quicly_recvstate_transfer_complete(&stream->recvstate))
-                quicly_streambuf_egress_shutdown(stream);
-        }
-    } else {
-        /* client: print to stdout */
+    /* print to stdout any data re receive from server*/
+    if (is_verbose) {
         fwrite(input.base, 1, input.len, stdout);
         fflush(stdout);
-        /* initiate connection close after receiving all data */
-        if (quicly_recvstate_transfer_complete(&stream->recvstate))
-            quicly_close(stream->conn, 0, "");
     }
+    /* initiate connection close after receiving all data */
+    if (quicly_recvstate_transfer_complete(&stream->recvstate))
+        quicly_close(stream->conn, 0, "");
 
     /* remove used bytes from receive buffer */
     quicly_streambuf_ingress_shift(stream, input.len);
 }
 
-static void process_msg(int is_client, quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
+static void process_msg(quicly_conn_t *client, struct msghdr *msg, size_t dgram_len)
 {
-    size_t off = 0, i;
+    size_t off = 0;
 
     /* split UDP datagram into multiple QUIC packets */
     while (off < dgram_len) {
         quicly_decoded_packet_t decoded;
         if (quicly_decode_packet(&ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
             return;
-        /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
-        for (i = 0; conns[i] != NULL; ++i)
-            if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
-                break;
-        if (conns[i] != NULL) {
-            /* let the current connection handle ingress packets */
-            quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
-        } else if (!is_client) {
-            /* assume that the packet is a new connection */
-            quicly_accept(conns + i, &ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL);
+
+        if (client != NULL) {
+            if (quicly_is_destination(client, NULL, msg->msg_name, &decoded))
+                quicly_receive(client, NULL, msg->msg_name, &decoded);
         }
     }
 }
@@ -190,24 +172,19 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
     return ret;
 }
 
-static int run_loop(int fd, quicly_conn_t *client)
+static int run_loop_client(int fd, quicly_conn_t *client)
 {
-    quicly_conn_t *conns[256] = {client}; /* a null-terminated list of connections; proper app should use a hashmap or something */
-    size_t i;
-    int read_stdin = client != NULL;
+    int read_stdin = 1;
 
-    while (1) {
-
+    while (1) {      
         /* wait for sockets to become readable, or some event in the QUIC stack to fire */
         fd_set readfds;
         struct timeval tv;
         do {
             int64_t first_timeout = INT64_MAX, now = ctx.now->cb(ctx.now);
-            for (i = 0; conns[i] != NULL; ++i) {
-                int64_t conn_timeout = quicly_get_first_timeout(conns[i]);
-                if (conn_timeout < first_timeout)
-                    first_timeout = conn_timeout;
-            }
+            int64_t conn_timeout = quicly_get_first_timeout(client);
+            if (conn_timeout < first_timeout)
+                first_timeout = conn_timeout;
             if (now < first_timeout) {
                 int64_t delta = first_timeout - now;
                 if (delta > 1000 * 1000)
@@ -220,9 +197,8 @@ static int run_loop(int fd, quicly_conn_t *client)
             }
             FD_ZERO(&readfds);
             FD_SET(fd, &readfds);
-            /* we want to read input from stdin */
             if (read_stdin)
-                FD_SET(0, &readfds);
+                FD_SET(STDIN_FILENO, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, &tv) == -1 && errno == EINTR);
 
         /* read the QUIC fd */
@@ -235,10 +211,9 @@ static int run_loop(int fd, quicly_conn_t *client)
             while ((rret = recvmsg(fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
             if (rret > 0)
-                process_msg(client != NULL, conns, &msg, rret);
+                process_msg(client, &msg, rret);
         }
-
-        /* read stdin, send the input to the active stram */
+    
         if (FD_ISSET(0, &readfds)) {
             assert(client != NULL);
             if (!forward_stdin(client))
@@ -246,31 +221,25 @@ static int run_loop(int fd, quicly_conn_t *client)
         }
 
         /* send QUIC packets, if any */
-        for (i = 0; conns[i] != NULL; ++i) {
-            quicly_address_t dest, src;
-            struct iovec dgrams[10];
-            uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * ctx.transport_params.max_udp_payload_size];
-            size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
-            int ret = quicly_send(conns[i], &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
-            switch (ret) {
-            case 0: {
-                size_t j;
-                for (j = 0; j != num_dgrams; ++j) {
-                    send_one(fd, &dest.sa, &dgrams[j]);
-                }
-            } break;
-            case QUICLY_ERROR_FREE_CONNECTION:
-                /* connection has been closed, free, and exit when running as a client */
-                quicly_free(conns[i]);
-                memmove(conns + i, conns + i + 1, sizeof(conns) - sizeof(conns[0]) * (i + 1));
-                --i;
-                if (!is_server())
-                    return 0;
-                break;
-            default:
-                fprintf(stderr, "quicly_send returned %d\n", ret);
-                return 1;
+        quicly_address_t dest, src;
+        struct iovec dgrams[10];
+        uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * ctx.transport_params.max_udp_payload_size];
+        size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
+        int ret = quicly_send(client, &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
+        switch (ret) {
+        case 0: {
+            size_t j;
+            for (j = 0; j != num_dgrams; ++j) {
+                send_one(fd, &dest.sa, &dgrams[j]);
             }
+        } break;
+        case QUICLY_ERROR_FREE_CONNECTION:
+            /* connection has been closed, free, and exit when running as a client */
+            quicly_free(client);
+            return 0;
+        default:
+            fprintf(stderr, "quicly_send returned %d\n", ret);
+            return 1;
         }
     }
 
@@ -292,7 +261,6 @@ static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 
 int main(int argc, char **argv)
 {
-    ptls_openssl_sign_certificate_t sign_certificate;
     ptls_context_t tlsctx = {
         .random_bytes = ptls_openssl_random_bytes,
         .get_time = &ptls_get_time,
@@ -312,33 +280,13 @@ int main(int argc, char **argv)
     ctx.stream_open = &stream_open;
 
     /* resolve command line options and arguments */
-    while ((ch = getopt(argc, argv, "c:k:p:h")) != -1) {
+    while ((ch = getopt(argc, argv, "p:h:v")) != -1) {
         switch (ch) {
-        case 'c': /* load certificate chain */ {
-            int ret;
-            if ((ret = ptls_load_certificates(&tlsctx, optarg)) != 0) {
-                fprintf(stderr, "failed to load certificates from file %s:%d\n", optarg, ret);
-                exit(1);
-            }
-        } break;
-        case 'k': /* load private key */ {
-            FILE *fp;
-            if ((fp = fopen(optarg, "r")) == NULL) {
-                fprintf(stderr, "failed to open file:%s:%s\n", optarg, strerror(errno));
-                exit(1);
-            }
-            EVP_PKEY *pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
-            fclose(fp);
-            if (pkey == NULL) {
-                fprintf(stderr, "failed to load private key from file:%s\n", optarg);
-                exit(1);
-            }
-            ptls_openssl_init_sign_certificate(&sign_certificate, pkey);
-            EVP_PKEY_free(pkey);
-            tlsctx.sign_certificate = &sign_certificate.super;
-        } break;
         case 'p': /* port */
             port = optarg;
+            break;
+        case 'v': /* verbose */
+            is_verbose = 1;
             break;
         case 'h': /* help */
             usage(argv[0]);
@@ -348,10 +296,6 @@ int main(int argc, char **argv)
             break;
         }
     }
-    if ((tlsctx.certificates.count != 0) != (tlsctx.sign_certificate != NULL)) {
-        fprintf(stderr, "-c and -k options must be used together\n");
-        exit(1);
-    }
     argc -= optind;
     argv += optind;
     if (argc != 0)
@@ -359,41 +303,30 @@ int main(int argc, char **argv)
     if (resolve_address((struct sockaddr *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, 0) != 0)
         exit(1);
 
-    /* open socket, on the specified port (as a server), or on any port (as a client) */
+    /* open socket on any port (as a client) */
     if ((fd = socket(sa.ss_family, SOCK_DGRAM, 0)) == -1) {
         perror("socket(2) failed");
         exit(1);
     }
     // fcntl(fd, F_SETFL, O_NONBLOCK);
-    if (is_server()) {
-        int reuseaddr = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr, sizeof(reuseaddr));
-        if (bind(fd, (struct sockaddr *)&sa, salen) != 0) {
-            perror("bind(2) failed");
-            exit(1);
-        }
-    } else {
-        struct sockaddr_in local;
-        memset(&local, 0, sizeof(local));
-        if (bind(fd, (struct sockaddr *)&local, sizeof(local)) != 0) {
-            perror("bind(2) failed");
-            exit(1);
-        }
+    struct sockaddr_in local;
+    memset(&local, 0, sizeof(local));
+    if (bind(fd, (struct sockaddr *)&local, sizeof(local)) != 0) {
+        perror("bind(2) failed");
+        exit(1);
     }
 
     quicly_conn_t *client = NULL;
-    if (!is_server()) {
-        /* initiate a connection, and open a stream */
-        int ret;
-        if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)&sa, NULL, &next_cid, ptls_iovec_init(NULL, 0), NULL,
-                                  NULL)) != 0) {
-            fprintf(stderr, "quicly_connect failed:%d\n", ret);
-            exit(1);
-        }
-        quicly_stream_t *stream; /* we retain the opened stream via the on_stream_open callback */
-        quicly_open_stream(client, &stream, 0);
+    /* initiate a connection, and open a stream */
+    int ret;
+    if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)&sa, NULL, &next_cid, ptls_iovec_init(NULL, 0), NULL,
+                                NULL)) != 0) {
+        fprintf(stderr, "quicly_connect failed:%d\n", ret);
+        exit(1);
     }
+    quicly_stream_t *stream; /* we retain the opened stream via the on_stream_open callback */
+    quicly_open_stream(client, &stream, 0);
 
     /* enter the event loop with a connection object */
-    return run_loop(fd, client);
+    return run_loop_client(fd, client);
 }
