@@ -4310,6 +4310,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         free(c);
                     } while (conn->egress.path_challenge.head != NULL);
                     conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
+                    s->target.full_size = 1; /* datagrams carrying PATH_CHALLENGE / PATH_RESPONSE have to be full-sized */
                 }
                 /* send max_streams frames */
                 if ((ret = send_max_streams(conn, 1, s)) != 0)
