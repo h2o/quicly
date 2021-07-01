@@ -122,9 +122,9 @@ static void on_receive(quicly_stream_t *stream, size_t off, const void *src, siz
     quicly_streambuf_ingress_shift(stream, input.len);
 }
 
-static void process_msg(quicly_conn_t **conns, struct msghdr *msg, size_t dgram_len)
+static void process_msg(quicly_conn_t **conn, struct msghdr *msg, size_t dgram_len)
 {
-    size_t off = 0, i;
+    size_t off = 0;
 
     /* split UDP datagram into multiple QUIC packets */
     while (off < dgram_len) {
@@ -132,15 +132,15 @@ static void process_msg(quicly_conn_t **conns, struct msghdr *msg, size_t dgram_
         if (quicly_decode_packet(&ctx, &decoded, msg->msg_iov[0].iov_base, dgram_len, &off) == SIZE_MAX)
             return;
         /* find the corresponding connection (TODO handle version negotiation, rebinding, retry, etc.) */
-        for (i = 0; conns[i] != NULL; ++i)
-            if (quicly_is_destination(conns[i], NULL, msg->msg_name, &decoded))
-                break;
-        if (conns[i] != NULL) {
-            /* let the current connection handle ingress packets */
-            quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
+        if (*conn != NULL) {
+            if (quicly_is_destination(*conn, NULL, msg->msg_name, &decoded)) {
+                quicly_receive(*conn, NULL, msg->msg_name, &decoded);
+            } else {
+                fprintf(stderr, "failed to accept new incoming connection, this server only allows 1 concurrent connection\n");
+            }
         } else {
             /* assume that the packet is a new connection */
-            quicly_accept(conns + i, &ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL);
+            quicly_accept(conn, &ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL);
         }
     }
 }
@@ -157,8 +157,7 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
 
 static int run_loop_server(int fd)
 {
-    quicly_conn_t *conns[256] = {NULL}; /* a null-terminated list of connections; proper app should use a hashmap or something */
-    size_t i;
+    quicly_conn_t *conn = NULL; /* this server only accepts a single connection */
 
     while (1) {
 
@@ -167,8 +166,8 @@ static int run_loop_server(int fd)
         struct timeval tv;
         do {
             int64_t first_timeout = INT64_MAX, now = ctx.now->cb(ctx.now);
-            for (i = 0; conns[i] != NULL; ++i) {
-                int64_t conn_timeout = quicly_get_first_timeout(conns[i]);
+            if (conn != NULL) {
+                int64_t conn_timeout = quicly_get_first_timeout(conn);
                 if (conn_timeout < first_timeout)
                     first_timeout = conn_timeout;
             }
@@ -196,16 +195,16 @@ static int run_loop_server(int fd)
             while ((rret = recvmsg(fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
             if (rret > 0)
-                process_msg(conns, &msg, rret);
+                process_msg(&conn, &msg, rret);
         }
 
         /* send QUIC packets, if any */
-        for (i = 0; conns[i] != NULL; ++i) {
+        if (conn != NULL) {
             quicly_address_t dest, src;
             struct iovec dgrams[10];
             uint8_t dgrams_buf[PTLS_ELEMENTSOF(dgrams) * ctx.transport_params.max_udp_payload_size];
             size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
-            int ret = quicly_send(conns[i], &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
+            int ret = quicly_send(conn, &dest, &src, dgrams, &num_dgrams, dgrams_buf, sizeof(dgrams_buf));
             switch (ret) {
             case 0: {
                 size_t j;
@@ -215,9 +214,8 @@ static int run_loop_server(int fd)
             } break;
             case QUICLY_ERROR_FREE_CONNECTION:
                 /* connection has been closed, free */
-                quicly_free(conns[i]);
-                memmove(conns + i, conns + i + 1, sizeof(conns) - sizeof(conns[0]) * (i + 1));
-                --i;
+                quicly_free(conn);
+                conn = NULL;
                 break;
             default:
                 fprintf(stderr, "quicly_send returned %d\n", ret);
