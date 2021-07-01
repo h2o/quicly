@@ -65,9 +65,13 @@ extern "C" {
 #define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
 
 /**
+ * Version 1.
+ */
+#define QUICLY_PROTOCOL_VERSION_1 0x1
+/**
  * The current version being supported. At the moment, it is draft-29.
  */
-#define QUICLY_PROTOCOL_VERSION_CURRENT 0xff00001d
+#define QUICLY_PROTOCOL_VERSION_DRAFT29 0xff00001d
 /**
  * Draft-27 is also supported.
  */
@@ -1173,7 +1177,8 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
 inline int quicly_is_supported_version(uint32_t version)
 {
     switch (version) {
-    case QUICLY_PROTOCOL_VERSION_CURRENT:
+    case QUICLY_PROTOCOL_VERSION_1:
+    case QUICLY_PROTOCOL_VERSION_DRAFT29:
     case QUICLY_PROTOCOL_VERSION_DRAFT27:
         return 1;
     default:
