@@ -4413,6 +4413,11 @@ void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, s
     }
 }
 
+int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
+{
+    return cc->cc_switch(&conn->egress.cc);
+}
+
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize)
 {
