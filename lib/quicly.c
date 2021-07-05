@@ -588,7 +588,13 @@ static int is_retry(quicly_conn_t *conn)
 
 static int needs_cid_auth(quicly_conn_t *conn)
 {
-    return conn->super.version > QUICLY_PROTOCOL_VERSION_DRAFT27;
+    switch (conn->super.version) {
+    case QUICLY_PROTOCOL_VERSION_1:
+    case QUICLY_PROTOCOL_VERSION_DRAFT29:
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 static int recognize_delayed_ack(quicly_conn_t *conn)
