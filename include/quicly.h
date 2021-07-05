@@ -870,6 +870,10 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
 /**
  *
  */
+static uint32_t quicly_get_protocol_version(quicly_conn_t *conn);
+/**
+ *
+ */
 static void **quicly_get_data(quicly_conn_t *conn);
 /**
  *
@@ -1260,6 +1264,12 @@ inline struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->remote.address.sa;
+}
+
+inline uint32_t quicly_get_protocol_version(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return c->version;
 }
 
 inline void **quicly_get_data(quicly_conn_t *conn)
