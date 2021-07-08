@@ -357,7 +357,7 @@ struct st_quicly_conn_t {
         ptls_t *tls;
         ptls_handshake_properties_t handshake_properties;
         struct {
-            ptls_raw_extension_t ext[2];
+            ptls_raw_extension_t ext[3];
             ptls_buffer_t buf;
         } transport_params;
     } crypto;
@@ -2264,9 +2264,12 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
              NULL, NULL, conn->super.ctx->expand_client_hello ? conn->super.ctx->initial_egress_max_udp_payload_size : 0)) != 0)
         goto Exit;
     conn->crypto.transport_params.ext[0] =
-        (ptls_raw_extension_t){get_transport_parameters_extension_id(conn->super.version),
+        (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_FINAL,
                                {conn->crypto.transport_params.buf.base, conn->crypto.transport_params.buf.off}};
-    conn->crypto.transport_params.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
+    conn->crypto.transport_params.ext[1] =
+        (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_DRAFT,
+                               {conn->crypto.transport_params.buf.base, conn->crypto.transport_params.buf.off}};
+    conn->crypto.transport_params.ext[2] = (ptls_raw_extension_t){UINT16_MAX};
     conn->crypto.handshake_properties.additional_extensions = conn->crypto.transport_params.ext;
     conn->crypto.handshake_properties.collected_extensions = client_collected_extensions;
 
@@ -5077,7 +5080,6 @@ static int negotiate_using_version(quicly_conn_t *conn, uint32_t version)
     /* set selected version, update transport parameters extension ID */
     conn->super.version = version;
     QUICLY_PROBE(VERSION_SWITCH, conn, conn->stash.now, version);
-    conn->crypto.transport_params.ext[0].type = get_transport_parameters_extension_id(version);
 
     /* replace initial keys */
     if ((ret = reinstall_initial_encryption(conn, PTLS_ERROR_LIBRARY)) != 0)
