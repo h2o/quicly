@@ -3352,6 +3352,8 @@ static int send_control_frames_of_stream(quicly_stream_t *stream, quicly_send_co
             return ret;
         s->dst = quicly_encode_stop_sending_frame(s->dst, stream->stream_id, stream->_send_aux.stop_sending.error_code);
         ++stream->conn->super.stats.num_frames_sent.stop_sending;
+        QUICLY_PROBE(STOP_SENDING_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
+                     stream->_send_aux.stop_sending.error_code);
     }
 
     /* send MAX_STREAM_DATA if necessary */
@@ -3380,6 +3382,8 @@ static int send_control_frames_of_stream(quicly_stream_t *stream, quicly_send_co
         s->dst = quicly_encode_reset_stream_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
                                                   stream->sendstate.size_inflight);
         ++stream->conn->super.stats.num_frames_sent.reset_stream;
+        QUICLY_PROBE(RESET_STREAM_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
+                     stream->_send_aux.reset_stream.error_code, stream->sendstate.size_inflight);
     }
 
     /* send STREAM_DATA_BLOCKED if necessary */
@@ -4747,6 +4751,7 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
 
     if ((ret = quicly_decode_reset_stream_frame(&state->src, state->end, &frame)) != 0)
         return ret;
+    QUICLY_PROBE(RESET_STREAM_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size);
 
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
@@ -5038,6 +5043,7 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, struct st_quicly_handl
 
     if ((ret = quicly_decode_stop_sending_frame(&state->src, state->end, &frame)) != 0)
         return ret;
+    QUICLY_PROBE(STOP_SENDING_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code);
 
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
