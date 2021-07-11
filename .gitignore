@@ -11,3 +11,14 @@ cmake_install.cmake
 xcuserdata
 *.xccheckout
 tmp/
+cli
+embedded-probes.h
+examples-echo
+libquicly.a
+picotls-probes.h
+quicly-probes.h
+quicly-tracer.h
+test.t
+udpfw
+examples-pipeclient
+examples-pipeserver

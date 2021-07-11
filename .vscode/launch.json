@@ -1,0 +1,54 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "example-pipe-server",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/build/examples-pipeserver",
+            "args": ["-c", "../tmp/server.cert", "-k", "../tmp/server.key"],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "lldb"
+        },{
+            "name": "example-pipe-client",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/build/examples-pipeclient",
+            "args": [""],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": true,
+            "MIMode": "lldb"
+        },{
+            "name": "example-echo-client",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/build/examples-echo",
+            "args": [""],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": true,
+            "MIMode": "lldb"
+        },
+        {
+            "name": "cli help",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceRoot}/build/cli",
+            "args": ["-h"],
+            "stopAtEntry": false,
+            "cwd": "${fileDirname}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "lldb"
+        }
+    ]
+}
