@@ -104,6 +104,8 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         quicly_escape_unsafe_string(alloca(_l * 4 + 1), (s), _l);                                                                  \
     })
 
+# define QUICLY_MIN(x, y) ((x) < (y) ? (x) : (y))
+
 struct st_quicly_cipher_context_t {
     ptls_aead_context_t *aead;
     ptls_cipher_context_t *header_protection;
@@ -3080,11 +3082,16 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     ++conn->super.stats.num_packets.sent;
 
     if (!coalesced) {
+        uint64_t resend_size = QUICLY_MIN(conn->super.stats.num_bytes.lost_pending, datagram_size);
         conn->super.stats.num_bytes.sent += datagram_size;
         s->datagrams[s->num_datagrams++] = (struct iovec){.iov_base = s->payload_buf.datagram, .iov_len = datagram_size};
         s->payload_buf.datagram += datagram_size;
         s->target.cipher = NULL;
         s->target.first_byte_at = NULL;
+        if (resend_size > UINT64_C(0)) {
+            conn->super.stats.num_bytes.resent += resend_size;
+            conn->super.stats.num_bytes.lost_pending -= resend_size;
+        }
     }
 
     /* insert PN gap if necessary, registering the PN to the ack queue so that we'd close the connection in the event of receiving
@@ -3665,6 +3672,8 @@ static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lo
     ++conn->super.stats.num_packets.lost;
     if (is_time_threshold)
         ++conn->super.stats.num_packets.lost_time_threshold;
+    conn->super.stats.num_bytes.lost += lost_packet->cc_bytes_in_flight;
+    conn->super.stats.num_bytes.lost_pending += lost_packet->cc_bytes_in_flight;
     conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_packet->cc_bytes_in_flight,
                                      lost_packet->packet_number, conn->egress.packet_number, conn->stash.now,
                                      conn->egress.max_udp_payload_size);

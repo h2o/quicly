@@ -435,6 +435,18 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total bytes sent, at UDP datagram-level.                                                                                \
          */                                                                                                                        \
         uint64_t sent;                                                                                                             \
+        /**                                                                                                                        \
+         * Total bytes sent but lost, at UDP datagram-level.                                                                       \
+         */                                                                                                                        \
+        uint64_t lost;                                                                                                             \
+        /**                                                                                                                        \
+         * Bytes lost but pending to be resent, at UDP datagram-level.                                                             \
+         */                                                                                                                        \
+        uint64_t lost_pending;                                                                                                     \
+        /**                                                                                                                        \
+         * Total bytes resent, at UDP datagram-level.                                                                              \
+         */                                                                                                                        \
+        uint64_t resent;                                                                                                           \
     } num_bytes;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of each frame being sent / received.                                                                           \
