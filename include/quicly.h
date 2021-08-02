@@ -440,13 +440,13 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t lost;                                                                                                             \
         /**                                                                                                                        \
-         * Bytes lost but pending to be resent, at UDP datagram-level.                                                             \
+         * Total STREAM_DATA bytes sent                                                                                            \
          */                                                                                                                        \
-        uint64_t lost_pending;                                                                                                     \
+        uint64_t stream_data_sent;                                                                                                 \
         /**                                                                                                                        \
-         * Total bytes resent, at UDP datagram-level.                                                                              \
+         * Total STREAM_DATA bytes resent                                                                                          \
          */                                                                                                                        \
-        uint64_t resent;                                                                                                           \
+        uint64_t stream_data_resent;                                                                                               \
     } num_bytes;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of each frame being sent / received.                                                                           \

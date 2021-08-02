@@ -3082,16 +3082,11 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     ++conn->super.stats.num_packets.sent;
 
     if (!coalesced) {
-        uint64_t resend_size = QUICLY_MIN(conn->super.stats.num_bytes.lost_pending, datagram_size);
         conn->super.stats.num_bytes.sent += datagram_size;
         s->datagrams[s->num_datagrams++] = (struct iovec){.iov_base = s->payload_buf.datagram, .iov_len = datagram_size};
         s->payload_buf.datagram += datagram_size;
         s->target.cipher = NULL;
         s->target.first_byte_at = NULL;
-        if (resend_size > UINT64_C(0)) {
-            conn->super.stats.num_bytes.resent += resend_size;
-            conn->super.stats.num_bytes.lost_pending -= resend_size;
-        }
     }
 
     /* insert PN gap if necessary, registering the PN to the ack queue so that we'd close the connection in the event of receiving
@@ -3586,6 +3581,9 @@ UpdateState:
     } else {
         ++stream->conn->super.stats.num_frames_sent.stream;
     }
+    stream->conn->super.stats.num_bytes.stream_data_sent += end_off - off;
+    if (off < stream->sendstate.size_inflight)
+        stream->conn->super.stats.num_bytes.stream_data_resent += QUICLY_MIN(stream->sendstate.size_inflight, end_off) - off;
     QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, end_off - off, is_fin);
     QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, end_off - off, is_fin);
     /* update sendstate (and also MAX_DATA counter) */
@@ -3673,7 +3671,6 @@ static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lo
     if (is_time_threshold)
         ++conn->super.stats.num_packets.lost_time_threshold;
     conn->super.stats.num_bytes.lost += lost_packet->cc_bytes_in_flight;
-    conn->super.stats.num_bytes.lost_pending += lost_packet->cc_bytes_in_flight;
     conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_packet->cc_bytes_in_flight,
                                      lost_packet->packet_number, conn->egress.packet_number, conn->stash.now,
                                      conn->egress.max_udp_payload_size);
