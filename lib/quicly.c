@@ -104,8 +104,6 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         quicly_escape_unsafe_string(alloca(_l * 4 + 1), (s), _l);                                                                  \
     })
 
-# define QUICLY_MIN(x, y) ((x) < (y) ? (x) : (y))
-
 struct st_quicly_cipher_context_t {
     ptls_aead_context_t *aead;
     ptls_cipher_context_t *header_protection;
@@ -3583,7 +3581,8 @@ UpdateState:
     }
     stream->conn->super.stats.num_bytes.stream_data_sent += end_off - off;
     if (off < stream->sendstate.size_inflight)
-        stream->conn->super.stats.num_bytes.stream_data_resent += QUICLY_MIN(stream->sendstate.size_inflight, end_off) - off;
+        stream->conn->super.stats.num_bytes.stream_data_resent +=
+            (stream->sendstate.size_inflight < end_off ? stream->sendstate.size_inflight : end_off) - off;
     QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, end_off - off, is_fin);
     QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, end_off - off, is_fin);
     /* update sendstate (and also MAX_DATA counter) */

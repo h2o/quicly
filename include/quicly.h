@@ -440,11 +440,11 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t lost;                                                                                                             \
         /**                                                                                                                        \
-         * Total STREAM_DATA bytes sent                                                                                            \
+         * Total amount of stream-level payload being sent                                                                         \
          */                                                                                                                        \
         uint64_t stream_data_sent;                                                                                                 \
         /**                                                                                                                        \
-         * Total STREAM_DATA bytes resent                                                                                          \
+         * Total amount of stream-level payload being resent                                                                       \
          */                                                                                                                        \
         uint64_t stream_data_resent;                                                                                               \
     } num_bytes;                                                                                                                   \
