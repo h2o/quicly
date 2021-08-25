@@ -53,7 +53,7 @@ static quicly_address_t new_address(void)
  */
 struct net_packet {
     /**
-     * used by hops to maintain the linked-list of packets being queued
+     * used by nodes to maintain the linked-list of packets being queued
      */
     struct net_packet *next;
     /**
@@ -93,16 +93,15 @@ static void net_packet_destroy(struct net_packet *packet)
     free(packet);
 }
 
-struct net_hop {
-    void (*forward_)(struct net_hop *hop, struct net_packet *packet);
-    int (*is_receiver_of)(struct net_hop *hop, quicly_address_t *dest);
-    double (*next_run_at)(struct net_hop *hop);
-    void (*run)(struct net_hop *hop);
+struct net_node {
+    void (*forward_)(struct net_node *node, struct net_packet *packet);
+    double (*next_run_at)(struct net_node *node);
+    void (*run)(struct net_node *node);
 };
 
 struct net_queue {
-    struct net_hop hop;
-    struct net_hop *next_hops[10];
+    struct net_node super;
+    struct net_node *next_node;
     struct {
         struct net_packet *first, **append_at;
     } queue;
@@ -113,9 +112,9 @@ struct net_queue {
     size_t capacity;
 };
 
-static void net_queue_forward(struct net_hop *_hop, struct net_packet *packet)
+static void net_queue_forward(struct net_node *_node, struct net_packet *packet)
 {
-    struct net_queue *queue = (struct net_queue *)_hop;
+    struct net_queue *queue = (struct net_queue *)_node;
 
     /* drop the packet if the queue is full */
     if (queue->size + packet->size > queue->capacity) {
@@ -131,14 +130,9 @@ static void net_queue_forward(struct net_hop *_hop, struct net_packet *packet)
     queue->size += packet->size;
 }
 
-static int net_queue_is_receiver_of(struct net_hop *_hop, quicly_address_t *dest)
+static double net_queue_next_run_at(struct net_node *_node)
 {
-    assert(!"not implemented");
-}
-
-static double net_queue_next_run_at(struct net_hop *_hop)
-{
-    struct net_queue *queue = (struct net_queue *)_hop;
+    struct net_queue *queue = (struct net_queue *)_node;
 
     if (queue->queue.first == NULL)
         return INFINITY;
@@ -150,11 +144,11 @@ static double net_queue_next_run_at(struct net_hop *_hop)
     return emit_at;
 }
 
-static void net_queue_run(struct net_hop *_hop)
+static void net_queue_run(struct net_node *_node)
 {
-    struct net_queue *queue = (struct net_queue *)_hop;
+    struct net_queue *queue = (struct net_queue *)_node;
 
-    if (net_queue_next_run_at(&queue->hop) > now)
+    if (net_queue_next_run_at(&queue->super) > now)
         return;
 
     /* detach packet */
@@ -166,43 +160,36 @@ static void net_queue_run(struct net_hop *_hop)
     /* update next emission timer */
     queue->next_emit_at = now + (double)packet->size / queue->bytes_per_sec;
 
-    /* find the next hop and forward */
-    struct net_hop **next_hop = queue->next_hops;
-    for (; *next_hop != NULL; ++next_hop)
-        if ((*next_hop)->is_receiver_of(*next_hop, &packet->dest))
-            break;
-    assert(*next_hop != NULL);
-    (*next_hop)->forward_(*next_hop, packet);
+    /* forward to the next node */
+    queue->next_node->forward_(queue->next_node, packet);
 
     printf("shift %f %zu\n", now, queue->size);
 }
 
 static void net_queue_init(struct net_queue *queue, double prop_delay, double bytes_per_sec, double capacity_in_sec)
 {
-    queue->hop = (struct net_hop){net_queue_forward, net_queue_is_receiver_of, net_queue_next_run_at, net_queue_run};
-    memset(queue->next_hops, 0, sizeof(*queue->next_hops));
-    queue->queue.first = NULL;
-    queue->queue.append_at = &queue->queue.first;
-    queue->next_emit_at = 0;
-    queue->prop_delay = prop_delay;
-    queue->bytes_per_sec = bytes_per_sec;
-    queue->size = 0;
-    queue->capacity = (size_t)(bytes_per_sec * capacity_in_sec);
+    *queue = (struct net_queue){
+        .super = {net_queue_forward, net_queue_next_run_at, net_queue_run},
+        .queue = {.append_at = &queue->queue.first},
+        .prop_delay = prop_delay,
+        .bytes_per_sec = bytes_per_sec,
+        .capacity = (size_t)(bytes_per_sec * capacity_in_sec),
+    };
 }
 
 struct net_endpoint {
-    struct net_hop hop;
+    struct net_node super;
     quicly_address_t addr;
-    struct net_hop *egress;
+    struct net_node *egress;
     quicly_conn_t *quic;
     quicly_context_t *accept_ctx;
 };
 
 static quicly_cid_plaintext_t next_quic_cid;
 
-static void net_endpoint_forward(struct net_hop *_hop, struct net_packet *packet)
+static void net_endpoint_forward(struct net_node *_node, struct net_packet *packet)
 {
-    struct net_endpoint *endpoint = (struct net_endpoint *)_hop;
+    struct net_endpoint *endpoint = (struct net_endpoint *)_node;
 
     size_t off = 0;
     while (off != packet->size) {
@@ -228,20 +215,9 @@ static void net_endpoint_forward(struct net_hop *_hop, struct net_packet *packet
     net_packet_destroy(packet);
 }
 
-static int net_endpoint_is_receiver_of(struct net_hop *_hop, quicly_address_t *dest)
+static double net_endpoint_next_run_at(struct net_node *_node)
 {
-    struct net_endpoint *endpoint = (struct net_endpoint *)_hop;
-
-    assert(endpoint->addr.sa.sa_family == AF_INET);
-    assert(dest->sa.sa_family == AF_INET);
-
-    /* At the moment, port numbers aren't used to determine the destination */
-    return endpoint->addr.sin.sin_addr.s_addr == dest->sin.sin_addr.s_addr;
-}
-
-static double net_endpoint_next_run_at(struct net_hop *_hop)
-{
-    struct net_endpoint *endpoint = (struct net_endpoint *)_hop;
+    struct net_endpoint *endpoint = (struct net_endpoint *)_node;
 
     if (endpoint->quic == NULL)
         return INFINITY;
@@ -252,9 +228,9 @@ static double net_endpoint_next_run_at(struct net_hop *_hop)
     return at;
 }
 
-static void net_endpoint_run(struct net_hop *_hop)
+static void net_endpoint_run(struct net_node *_node)
 {
-    struct net_endpoint *endpoint = (struct net_endpoint *)_hop;
+    struct net_endpoint *endpoint = (struct net_endpoint *)_node;
     quicly_address_t dest, src;
     struct iovec datagrams[10];
     size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
@@ -276,16 +252,16 @@ static void net_endpoint_run(struct net_hop *_hop)
 static void net_endpoint_init(struct net_endpoint *endpoint)
 {
     *endpoint = (struct net_endpoint){
-        .hop = {net_endpoint_forward, net_endpoint_is_receiver_of, net_endpoint_next_run_at, net_endpoint_run},
+        .super = {net_endpoint_forward, net_endpoint_next_run_at, net_endpoint_run},
         .addr = new_address(),
     };
 }
 
-static void run_hops(struct net_hop **hops)
+static void run_nodes(struct net_node **nodes)
 {
     double next_now = INFINITY;
-    for (struct net_hop **hop = hops; *hop != NULL; ++hop) {
-        double at = (*hop)->next_run_at(*hop);
+    for (struct net_node **node = nodes; *node != NULL; ++node) {
+        double at = (*node)->next_run_at(*node);
         assert(at >= now);
         if (next_now > at)
             next_now = at;
@@ -295,9 +271,9 @@ static void run_hops(struct net_hop **hops)
         return;
 
     now = next_now;
-    for (struct net_hop **hop = hops; *hop != NULL; ++hop) {
-        if ((*hop)->next_run_at(*hop) <= now)
-            (*hop)->run(*hop);
+    for (struct net_node **node = nodes; *node != NULL; ++node) {
+        if ((*node)->next_run_at(*node) <= now)
+            (*node)->run(*node);
     }
 }
 
@@ -499,9 +475,9 @@ int main(int argc, char **argv)
     net_endpoint_init(&client);
 
     /* client uploads to server through the bottleneck queue */
-    client.egress = &bottleneck.hop;
-    bottleneck.next_hops[0] = &server.hop;
-    server.egress = &client.hop;
+    client.egress = &bottleneck.super;
+    bottleneck.next_node = &server.super;
+    server.egress = &client.super;
 
     /* start */
     server.accept_ctx = &quicctx;
@@ -514,9 +490,9 @@ int main(int argc, char **argv)
     ret = quicly_stream_sync_sendbuf(stream, 1);
     assert(ret == 0);
 
-    struct net_hop *hops[] = {&bottleneck.hop, &server.hop, &client.hop, NULL};
+    struct net_node *nodes[] = {&bottleneck.super, &server.super, &client.super, NULL};
     while (now < 1050)
-        run_hops(hops);
+        run_nodes(nodes);
 
     return 0;
 }
