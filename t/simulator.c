@@ -100,6 +100,7 @@ struct net_queue {
 
 static void net_queue_enqueue(struct net_queue *self, struct net_packet *packet)
 {
+    packet->next = NULL;
     packet->enter_at = now;
     *self->append_at = packet;
     self->append_at = &packet->next;
@@ -122,12 +123,49 @@ struct net_node {
     void (*run)(struct net_node *node);
 };
 
+struct net_delay {
+    struct net_node super;
+    struct net_node *next_node;
+    struct net_queue queue;
+    double delay;
+};
+
+static void net_delay_forward(struct net_node *_self, struct net_packet *packet)
+{
+    struct net_delay *self = (struct net_delay *)_self;
+    net_queue_enqueue(&self->queue, packet);
+}
+
+static double net_delay_next_run_at(struct net_node *_self)
+{
+    struct net_delay *self = (struct net_delay *)_self;
+    return self->queue.first != NULL ? self->queue.first->enter_at + self->delay : INFINITY;
+}
+
+static void net_delay_run(struct net_node *_self)
+{
+    struct net_delay *self = (struct net_delay *)_self;
+
+    while (self->queue.first != NULL && self->queue.first->enter_at + self->delay <= now) {
+        struct net_packet *packet = net_queue_dequeue(&self->queue);
+        self->next_node->forward_(self->next_node, packet);
+    }
+}
+
+static void net_delay_init(struct net_delay *self, double delay)
+{
+    *self = (struct net_delay){
+        .super = {net_delay_forward, net_delay_next_run_at, net_delay_run},
+        .queue = {.append_at = &self->queue.first},
+        .delay = delay,
+    };
+}
+
 struct net_bottleneck {
     struct net_node super;
     struct net_node *next_node;
     struct net_queue queue;
     double next_emit_at;
-    double prop_delay;
     double bytes_per_sec;
     size_t capacity;
 };
@@ -154,7 +192,7 @@ static double net_bottleneck_next_run_at(struct net_node *_self)
     if (self->queue.first == NULL)
         return INFINITY;
 
-    double emit_at = self->queue.first->enter_at + self->prop_delay;
+    double emit_at = self->queue.first->enter_at;
     if (emit_at < self->next_emit_at)
         emit_at = self->next_emit_at;
 
@@ -180,12 +218,11 @@ static void net_bottleneck_run(struct net_node *_self)
     printf("shift %f %zu\n", now, self->queue.size);
 }
 
-static void net_queue_init(struct net_bottleneck *self, double prop_delay, double bytes_per_sec, double capacity_in_sec)
+static void net_queue_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec)
 {
     *self = (struct net_bottleneck){
         .super = {net_bottleneck_forward, net_bottleneck_next_run_at, net_bottleneck_run},
         .queue = {.append_at = &self->queue.first},
-        .prop_delay = prop_delay,
         .bytes_per_sec = bytes_per_sec,
         .capacity = (size_t)(bytes_per_sec * capacity_in_sec),
     };
@@ -480,31 +517,34 @@ int main(int argc, char **argv)
         }
     }
 
-    struct net_bottleneck bottleneck;
-    struct net_endpoint server, client;
+    struct net_bottleneck bottleneck_node;
+    struct net_delay delay_node;
+    struct net_endpoint server_node, client_node;
 
     /* init nodes */
-    net_queue_init(&bottleneck, delay, bw, depth);
-    net_endpoint_init(&server);
-    net_endpoint_init(&client);
+    net_queue_init(&bottleneck_node, bw, depth);
+    net_delay_init(&delay_node, delay);
+    net_endpoint_init(&server_node);
+    net_endpoint_init(&client_node);
 
     /* client uploads to server through the bottleneck queue */
-    client.egress = &bottleneck.super;
-    bottleneck.next_node = &server.super;
-    server.egress = &client.super;
+    client_node.egress = &delay_node.super;
+    delay_node.next_node = &bottleneck_node.super;
+    bottleneck_node.next_node = &server_node.super;
+    server_node.egress = &client_node.super;
 
     /* start */
-    server.accept_ctx = &quicctx;
-    int ret = quicly_connect(&client.quic, &quicctx, "hello.example.com", &server.addr.sa, &client.addr.sa, NULL,
+    server_node.accept_ctx = &quicctx;
+    int ret = quicly_connect(&client_node.quic, &quicctx, "hello.example.com", &server_node.addr.sa, &client_node.addr.sa, NULL,
                              ptls_iovec_init(NULL, 0), NULL, NULL);
     assert(ret == 0);
     quicly_stream_t *stream;
-    ret = quicly_open_stream(client.quic, &stream, 1);
+    ret = quicly_open_stream(client_node.quic, &stream, 1);
     assert(ret == 0);
     ret = quicly_stream_sync_sendbuf(stream, 1);
     assert(ret == 0);
 
-    struct net_node *nodes[] = {&bottleneck.super, &server.super, &client.super, NULL};
+    struct net_node *nodes[] = {&bottleneck_node.super, &delay_node.super, &server_node.super, &client_node.super, NULL};
     while (now < 1050)
         run_nodes(nodes);
 
