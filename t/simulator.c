@@ -93,84 +93,98 @@ static void net_packet_destroy(struct net_packet *packet)
     free(packet);
 }
 
+struct net_queue {
+    struct net_packet *first, **append_at;
+    size_t size;
+};
+
+static void net_queue_enqueue(struct net_queue *self, struct net_packet *packet)
+{
+    packet->enter_at = now;
+    *self->append_at = packet;
+    self->append_at = &packet->next;
+    self->size += packet->size;
+}
+
+static struct net_packet *net_queue_dequeue(struct net_queue *self)
+{
+    struct net_packet *packet = self->first;
+    assert(packet != NULL);
+    if ((self->first = packet->next) == NULL)
+        self->append_at = &self->first;
+    self->size -= packet->size;
+    return packet;
+}
+
 struct net_node {
     void (*forward_)(struct net_node *node, struct net_packet *packet);
     double (*next_run_at)(struct net_node *node);
     void (*run)(struct net_node *node);
 };
 
-struct net_queue {
+struct net_bottleneck {
     struct net_node super;
     struct net_node *next_node;
-    struct {
-        struct net_packet *first, **append_at;
-    } queue;
+    struct net_queue queue;
     double next_emit_at;
     double prop_delay;
     double bytes_per_sec;
-    size_t size;
     size_t capacity;
 };
 
-static void net_queue_forward(struct net_node *_node, struct net_packet *packet)
+static void net_bottleneck_forward(struct net_node *_self, struct net_packet *packet)
 {
-    struct net_queue *queue = (struct net_queue *)_node;
+    struct net_bottleneck *self = (struct net_bottleneck *)_self;
 
     /* drop the packet if the queue is full */
-    if (queue->size + packet->size > queue->capacity) {
-        printf("drop %f %zu\n", now, queue->size);
+    if (self->queue.size + packet->size > self->capacity) {
+        printf("drop %f %zu\n", now, self->queue.size);
         net_packet_destroy(packet);
         return;
     }
 
-    printf("enqueue %f %zu\n", now, queue->size);
-    packet->enter_at = now;
-    *queue->queue.append_at = packet;
-    queue->queue.append_at = &packet->next;
-    queue->size += packet->size;
+    printf("enqueue %f %zu\n", now, self->queue.size);
+    net_queue_enqueue(&self->queue, packet);
 }
 
-static double net_queue_next_run_at(struct net_node *_node)
+static double net_bottleneck_next_run_at(struct net_node *_self)
 {
-    struct net_queue *queue = (struct net_queue *)_node;
+    struct net_bottleneck *self = (struct net_bottleneck *)_self;
 
-    if (queue->queue.first == NULL)
+    if (self->queue.first == NULL)
         return INFINITY;
 
-    double emit_at = queue->queue.first->enter_at + queue->prop_delay;
-    if (emit_at < queue->next_emit_at)
-        emit_at = queue->next_emit_at;
+    double emit_at = self->queue.first->enter_at + self->prop_delay;
+    if (emit_at < self->next_emit_at)
+        emit_at = self->next_emit_at;
 
     return emit_at;
 }
 
-static void net_queue_run(struct net_node *_node)
+static void net_bottleneck_run(struct net_node *_self)
 {
-    struct net_queue *queue = (struct net_queue *)_node;
+    struct net_bottleneck *self = (struct net_bottleneck *)_self;
 
-    if (net_queue_next_run_at(&queue->super) > now)
+    if (net_bottleneck_next_run_at(&self->super) > now)
         return;
 
     /* detach packet */
-    struct net_packet *packet = queue->queue.first;
-    if ((queue->queue.first = packet->next) == NULL)
-        queue->queue.append_at = &queue->queue.first;
-    queue->size -= packet->size;
+    struct net_packet *packet = net_queue_dequeue(&self->queue);
 
     /* update next emission timer */
-    queue->next_emit_at = now + (double)packet->size / queue->bytes_per_sec;
+    self->next_emit_at = now + (double)packet->size / self->bytes_per_sec;
 
     /* forward to the next node */
-    queue->next_node->forward_(queue->next_node, packet);
+    self->next_node->forward_(self->next_node, packet);
 
-    printf("shift %f %zu\n", now, queue->size);
+    printf("shift %f %zu\n", now, self->queue.size);
 }
 
-static void net_queue_init(struct net_queue *queue, double prop_delay, double bytes_per_sec, double capacity_in_sec)
+static void net_queue_init(struct net_bottleneck *self, double prop_delay, double bytes_per_sec, double capacity_in_sec)
 {
-    *queue = (struct net_queue){
-        .super = {net_queue_forward, net_queue_next_run_at, net_queue_run},
-        .queue = {.append_at = &queue->queue.first},
+    *self = (struct net_bottleneck){
+        .super = {net_bottleneck_forward, net_bottleneck_next_run_at, net_bottleneck_run},
+        .queue = {.append_at = &self->queue.first},
         .prop_delay = prop_delay,
         .bytes_per_sec = bytes_per_sec,
         .capacity = (size_t)(bytes_per_sec * capacity_in_sec),
@@ -187,65 +201,65 @@ struct net_endpoint {
 
 static quicly_cid_plaintext_t next_quic_cid;
 
-static void net_endpoint_forward(struct net_node *_node, struct net_packet *packet)
+static void net_endpoint_forward(struct net_node *_self, struct net_packet *packet)
 {
-    struct net_endpoint *endpoint = (struct net_endpoint *)_node;
+    struct net_endpoint *self = (struct net_endpoint *)_self;
 
     size_t off = 0;
     while (off != packet->size) {
         quicly_decoded_packet_t qp;
-        if (quicly_decode_packet(endpoint->quic != NULL ? quicly_get_context(endpoint->quic) : endpoint->accept_ctx, &qp,
-                                 packet->bytes, packet->size, &off) == SIZE_MAX)
+        if (quicly_decode_packet(self->quic != NULL ? quicly_get_context(self->quic) : self->accept_ctx, &qp, packet->bytes,
+                                 packet->size, &off) == SIZE_MAX)
             break;
-        if (endpoint->quic == NULL) {
-            if (endpoint->accept_ctx != NULL) {
-                if (quicly_accept(&endpoint->quic, endpoint->accept_ctx, &packet->dest.sa, &packet->src.sa, &qp, NULL,
-                                  &next_quic_cid, NULL) == 0) {
-                    assert(endpoint->quic != NULL);
+        if (self->quic == NULL) {
+            if (self->accept_ctx != NULL) {
+                if (quicly_accept(&self->quic, self->accept_ctx, &packet->dest.sa, &packet->src.sa, &qp, NULL, &next_quic_cid,
+                                  NULL) == 0) {
+                    assert(self->quic != NULL);
                     ++next_quic_cid.master_id;
                 } else {
-                    assert(endpoint->quic == NULL);
+                    assert(self->quic == NULL);
                 }
             }
         } else {
-            quicly_receive(endpoint->quic, &packet->dest.sa, &packet->src.sa, &qp);
+            quicly_receive(self->quic, &packet->dest.sa, &packet->src.sa, &qp);
         }
     }
 
     net_packet_destroy(packet);
 }
 
-static double net_endpoint_next_run_at(struct net_node *_node)
+static double net_endpoint_next_run_at(struct net_node *_self)
 {
-    struct net_endpoint *endpoint = (struct net_endpoint *)_node;
+    struct net_endpoint *self = (struct net_endpoint *)_self;
 
-    if (endpoint->quic == NULL)
+    if (self->quic == NULL)
         return INFINITY;
     /* returned value is incremented by 0.1ms to avoid the timer firing earlier than specified due to rounding error */
-    double at = quicly_get_first_timeout(endpoint->quic) / 1000. + 0.0001;
+    double at = quicly_get_first_timeout(self->quic) / 1000. + 0.0001;
     if (at < now)
         at = now;
     return at;
 }
 
-static void net_endpoint_run(struct net_node *_node)
+static void net_endpoint_run(struct net_node *_self)
 {
-    struct net_endpoint *endpoint = (struct net_endpoint *)_node;
+    struct net_endpoint *self = (struct net_endpoint *)_self;
     quicly_address_t dest, src;
     struct iovec datagrams[10];
     size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
     uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
     int ret;
 
-    if ((ret = quicly_send(endpoint->quic, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf))) == 0) {
+    if ((ret = quicly_send(self->quic, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf))) == 0) {
         for (size_t i = 0; i < num_datagrams; ++i) {
             struct net_packet *packet =
                 net_packet_create(&dest, &src, ptls_iovec_init(datagrams[i].iov_base, datagrams[i].iov_len));
-            endpoint->egress->forward_(endpoint->egress, packet);
+            self->egress->forward_(self->egress, packet);
         }
     } else if (ret == QUICLY_ERROR_FREE_CONNECTION) {
-        quicly_free(endpoint->quic);
-        endpoint->quic = NULL;
+        quicly_free(self->quic);
+        self->quic = NULL;
     }
 }
 
@@ -466,7 +480,7 @@ int main(int argc, char **argv)
         }
     }
 
-    struct net_queue bottleneck;
+    struct net_bottleneck bottleneck;
     struct net_endpoint server, client;
 
     /* init nodes */
