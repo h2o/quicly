@@ -170,18 +170,23 @@ struct net_bottleneck {
     size_t capacity;
 };
 
+static void net_bottleneck_print_stats(struct net_bottleneck *self, const char *event)
+{
+    printf("{\"bottleneck\": \"%s\", \"at\": %f, \"size\": %zu}\n", event, now, self->queue.size);
+}
+
 static void net_bottleneck_forward(struct net_node *_self, struct net_packet *packet)
 {
     struct net_bottleneck *self = (struct net_bottleneck *)_self;
 
     /* drop the packet if the queue is full */
     if (self->queue.size + packet->size > self->capacity) {
-        printf("drop %f %zu\n", now, self->queue.size);
+        net_bottleneck_print_stats(self, "drop");
         net_packet_destroy(packet);
         return;
     }
 
-    printf("enqueue %f %zu\n", now, self->queue.size);
+    net_bottleneck_print_stats(self, "enqueue");
     net_queue_enqueue(&self->queue, packet);
 }
 
@@ -215,7 +220,7 @@ static void net_bottleneck_run(struct net_node *_self)
     /* forward to the next node */
     self->next_node->forward_(self->next_node, packet);
 
-    printf("shift %f %zu\n", now, self->queue.size);
+    net_bottleneck_print_stats(self, "dequeue");
 }
 
 static void net_queue_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec)
