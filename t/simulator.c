@@ -39,7 +39,7 @@ static double now = 1000;
 
 static quicly_address_t new_address(void)
 {
-    static uint32_t next_ipaddr = 0xac100001;
+    static uint32_t next_ipaddr = 1;
     quicly_address_t addr = {};
     addr.sin.sin_family = AF_INET;
     addr.sin.sin_addr.s_addr = htonl(next_ipaddr);
@@ -47,6 +47,8 @@ static quicly_address_t new_address(void)
     ++next_ipaddr;
     return addr;
 }
+
+struct net_endpoint;
 
 /**
  * Packet
@@ -57,9 +59,13 @@ struct net_packet {
      */
     struct net_packet *next;
     /**
-     * 4-tuple
+     * source
      */
-    quicly_address_t dest, src;
+    struct net_endpoint *src;
+    /**
+     * destination
+     */
+    quicly_address_t dest;
     /**
      * used by queues to retain when the packet entered that queue
      */
@@ -74,13 +80,50 @@ struct net_packet {
     uint8_t bytes[1];
 };
 
-static struct net_packet *net_packet_create(quicly_address_t *dest, quicly_address_t *src, ptls_iovec_t vec)
+struct net_queue {
+    struct net_packet *first, **append_at;
+    size_t size;
+};
+
+struct net_node {
+    void (*forward_)(struct net_node *node, struct net_packet *packet);
+    double (*next_run_at)(struct net_node *node);
+    void (*run)(struct net_node *node);
+};
+
+struct net_delay {
+    struct net_node super;
+    struct net_node *next_node;
+    struct net_queue queue;
+    double delay;
+};
+
+struct net_bottleneck {
+    struct net_node super;
+    struct net_node *next_node;
+    struct net_queue queue;
+    double next_emit_at;
+    double bytes_per_sec;
+    size_t capacity;
+};
+
+struct net_endpoint {
+    struct net_node super;
+    quicly_address_t addr;
+    struct net_endpoint_conn {
+        quicly_conn_t *quic;
+        struct net_node *egress;
+    } conns[10];
+    quicly_context_t *accept_ctx;
+};
+
+static struct net_packet *net_packet_create(struct net_endpoint *src, quicly_address_t *dest, ptls_iovec_t vec)
 {
     struct net_packet *p = malloc(offsetof(struct net_packet, bytes) + vec.len);
 
     p->next = NULL;
+    p->src = src;
     p->dest = *dest;
-    p->src = *src;
     p->enter_at = now;
     p->size = vec.len;
     memcpy(p->bytes, vec.base, vec.len);
@@ -92,11 +135,6 @@ static void net_packet_destroy(struct net_packet *packet)
 {
     free(packet);
 }
-
-struct net_queue {
-    struct net_packet *first, **append_at;
-    size_t size;
-};
 
 static void net_queue_enqueue(struct net_queue *self, struct net_packet *packet)
 {
@@ -116,19 +154,6 @@ static struct net_packet *net_queue_dequeue(struct net_queue *self)
     self->size -= packet->size;
     return packet;
 }
-
-struct net_node {
-    void (*forward_)(struct net_node *node, struct net_packet *packet);
-    double (*next_run_at)(struct net_node *node);
-    void (*run)(struct net_node *node);
-};
-
-struct net_delay {
-    struct net_node super;
-    struct net_node *next_node;
-    struct net_queue queue;
-    double delay;
-};
 
 static void net_delay_forward(struct net_node *_self, struct net_packet *packet)
 {
@@ -161,18 +186,10 @@ static void net_delay_init(struct net_delay *self, double delay)
     };
 }
 
-struct net_bottleneck {
-    struct net_node super;
-    struct net_node *next_node;
-    struct net_queue queue;
-    double next_emit_at;
-    double bytes_per_sec;
-    size_t capacity;
-};
-
-static void net_bottleneck_print_stats(struct net_bottleneck *self, const char *event)
+static void net_bottleneck_print_stats(struct net_bottleneck *self, const char *event, struct net_packet *packet)
 {
-    printf("{\"bottleneck\": \"%s\", \"at\": %f, \"size\": %zu}\n", event, now, self->queue.size);
+    printf("{\"bottleneck\": \"%s\", \"at\": %f, \"queue-size\": %zu, \"packet-src\": %" PRIu32 ", \"packet-size\": %zu}\n", event,
+           now, self->queue.size, ntohl(packet->src->addr.sin.sin_addr.s_addr), packet->size);
 }
 
 static void net_bottleneck_forward(struct net_node *_self, struct net_packet *packet)
@@ -181,12 +198,12 @@ static void net_bottleneck_forward(struct net_node *_self, struct net_packet *pa
 
     /* drop the packet if the queue is full */
     if (self->queue.size + packet->size > self->capacity) {
-        net_bottleneck_print_stats(self, "drop");
+        net_bottleneck_print_stats(self, "drop", packet);
         net_packet_destroy(packet);
         return;
     }
 
-    net_bottleneck_print_stats(self, "enqueue");
+    net_bottleneck_print_stats(self, "enqueue", packet);
     net_queue_enqueue(&self->queue, packet);
 }
 
@@ -213,17 +230,16 @@ static void net_bottleneck_run(struct net_node *_self)
 
     /* detach packet */
     struct net_packet *packet = net_queue_dequeue(&self->queue);
+    net_bottleneck_print_stats(self, "dequeue", packet);
 
     /* update next emission timer */
     self->next_emit_at = now + (double)packet->size / self->bytes_per_sec;
 
     /* forward to the next node */
     self->next_node->forward_(self->next_node, packet);
-
-    net_bottleneck_print_stats(self, "dequeue");
 }
 
-static void net_queue_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec)
+static void net_bottleneck_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec)
 {
     *self = (struct net_bottleneck){
         .super = {net_bottleneck_forward, net_bottleneck_next_run_at, net_bottleneck_run},
@@ -233,14 +249,6 @@ static void net_queue_init(struct net_bottleneck *self, double bytes_per_sec, do
     };
 }
 
-struct net_endpoint {
-    struct net_node super;
-    quicly_address_t addr;
-    struct net_node *egress;
-    quicly_conn_t *quic;
-    quicly_context_t *accept_ctx;
-};
-
 static quicly_cid_plaintext_t next_quic_cid;
 
 static void net_endpoint_forward(struct net_node *_self, struct net_packet *packet)
@@ -249,22 +257,29 @@ static void net_endpoint_forward(struct net_node *_self, struct net_packet *pack
 
     size_t off = 0;
     while (off != packet->size) {
+        /* decode packet */
         quicly_decoded_packet_t qp;
-        if (quicly_decode_packet(self->quic != NULL ? quicly_get_context(self->quic) : self->accept_ctx, &qp, packet->bytes,
-                                 packet->size, &off) == SIZE_MAX)
+        if (quicly_decode_packet(self->conns[0].quic != NULL ? quicly_get_context(self->conns[0].quic) : self->accept_ctx, &qp,
+                                 packet->bytes, packet->size, &off) == SIZE_MAX)
             break;
-        if (self->quic == NULL) {
-            if (self->accept_ctx != NULL) {
-                if (quicly_accept(&self->quic, self->accept_ctx, &packet->dest.sa, &packet->src.sa, &qp, NULL, &next_quic_cid,
-                                  NULL) == 0) {
-                    assert(self->quic != NULL);
-                    ++next_quic_cid.master_id;
-                } else {
-                    assert(self->quic == NULL);
-                }
-            }
+        /* find the matching connection, or where new state should be created */
+        struct net_endpoint_conn *conn;
+        for (conn = self->conns; conn->quic != NULL; ++conn)
+            if (quicly_is_destination(conn->quic, &packet->dest.sa, &packet->src->addr.sa, &qp))
+                break;
+        /* let the existing connection handle the packet, or accept a new connection */
+        if (conn->quic != NULL) {
+            quicly_receive(conn->quic, &packet->dest.sa, &packet->src->addr.sa, &qp);
         } else {
-            quicly_receive(self->quic, &packet->dest.sa, &packet->src.sa, &qp);
+            assert(self->accept_ctx != NULL && "a packet for which we do not have state must be a new connection request");
+            if (quicly_accept(&conn->quic, self->accept_ctx, &packet->dest.sa, &packet->src->addr.sa, &qp, NULL, &next_quic_cid,
+                              NULL) == 0) {
+                assert(conn->quic != NULL);
+                ++next_quic_cid.master_id;
+                conn->egress = &packet->src->super;
+            } else {
+                assert(conn->quic == NULL);
+            }
         }
     }
 
@@ -274,11 +289,15 @@ static void net_endpoint_forward(struct net_node *_self, struct net_packet *pack
 static double net_endpoint_next_run_at(struct net_node *_self)
 {
     struct net_endpoint *self = (struct net_endpoint *)_self;
+    double at = INFINITY;
 
-    if (self->quic == NULL)
-        return INFINITY;
-    /* returned value is incremented by 0.1ms to avoid the timer firing earlier than specified due to rounding error */
-    double at = quicly_get_first_timeout(self->quic) / 1000. + 0.0001;
+    for (struct net_endpoint_conn *conn = self->conns; conn->quic != NULL; ++conn) {
+        /* value is incremented by 0.1ms to avoid the timer firing earlier than specified due to rounding error */
+        double conn_at = quicly_get_first_timeout(conn->quic) / 1000. + 0.0001;
+        if (conn_at < at)
+            at = conn_at;
+    }
+
     if (at < now)
         at = now;
     return at;
@@ -287,21 +306,22 @@ static double net_endpoint_next_run_at(struct net_node *_self)
 static void net_endpoint_run(struct net_node *_self)
 {
     struct net_endpoint *self = (struct net_endpoint *)_self;
-    quicly_address_t dest, src;
-    struct iovec datagrams[10];
-    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
-    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
-    int ret;
 
-    if ((ret = quicly_send(self->quic, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf))) == 0) {
-        for (size_t i = 0; i < num_datagrams; ++i) {
-            struct net_packet *packet =
-                net_packet_create(&dest, &src, ptls_iovec_init(datagrams[i].iov_base, datagrams[i].iov_len));
-            self->egress->forward_(self->egress, packet);
+    for (struct net_endpoint_conn *conn = self->conns; conn->quic != NULL; ++conn) {
+        quicly_address_t dest, src;
+        struct iovec datagrams[10];
+        size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+        uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
+        int ret;
+        if ((ret = quicly_send(conn->quic, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf))) == 0) {
+            for (size_t i = 0; i < num_datagrams; ++i) {
+                struct net_packet *packet =
+                    net_packet_create(self, &dest, ptls_iovec_init(datagrams[i].iov_base, datagrams[i].iov_len));
+                conn->egress->forward_(conn->egress, packet);
+            }
+        } else {
+            assert(ret != QUICLY_ERROR_FREE_CONNECTION);
         }
-    } else if (ret == QUICLY_ERROR_FREE_CONNECTION) {
-        quicly_free(self->quic);
-        self->quic = NULL;
     }
 }
 
@@ -386,7 +406,18 @@ static int stream_open_cb(quicly_stream_open_t *self, quicly_stream_t *stream)
     return 0;
 }
 
-FILE *quicly_trace_fp;
+static void usage(const char *cmd)
+{
+    printf("Usage: %s ...\n"
+           "\n"
+           "Options:\n"
+           "  -n <cc>             adds a sender using specified controller\n"
+           "  -b <bytes_per_sec>  bottleneck bandwidth\n"
+           "  -d <delay>          delay to be introduced between the sender and the botteneck\n"
+           "  -q <second>         maximum depth of the bottleneck queue, in seconds\n"
+           "\n",
+           cmd);
+}
 
 #define RSA_PRIVATE_KEY                                                                                                            \
     "-----BEGIN RSA PRIVATE KEY-----\n"                                                                                            \
@@ -479,20 +510,28 @@ int main(int argc, char **argv)
     quicctx.tls = &tlsctx;
     quicctx.stream_open = &stream_open;
     quicctx.transport_params.max_streams_uni = 10;
+    quicctx.transport_params.max_stream_data.uni = 128 * 1024 * 1024;
+    quicctx.transport_params.max_data = 128 * 1024 * 1824;
     quicctx.transport_params.min_ack_delay_usec = UINT64_MAX; /* disable ack-delay extension */
+
+    struct net_bottleneck bottleneck_node;
+    struct {
+        struct net_endpoint node;
+        quicly_context_t accept_ctx;
+    } server_node;
+    struct net_node *nodes[20] = {}, **node_insert_at = nodes;
+
+    net_endpoint_init(&server_node.node);
+    server_node.accept_ctx = quicctx;
+    server_node.node.accept_ctx = &server_node.accept_ctx;
+    *node_insert_at++ = &server_node.node.super;
 
     /* parse args */
     double delay = 0.1, bw = 1e6, depth = 0.1;
     int ch;
-    while ((ch = getopt(argc, argv, "b:c:d:q:h")) != -1) {
+    while ((ch = getopt(argc, argv, "n:b:d:q:h")) != -1) {
         switch (ch) {
-        case 'b':
-            if (sscanf(optarg, "%lf", &bw) != 1) {
-                fprintf(stderr, "invalid bandwidth: %s\n", optarg);
-                exit(1);
-            }
-            break;
-        case 'c': {
+        case 'n': {
             quicly_cc_type_t **cc;
             for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
                 if (strcmp((*cc)->name, optarg) == 0)
@@ -503,7 +542,29 @@ int main(int argc, char **argv)
                 fprintf(stderr, "unknown congestion controller: %s\n", optarg);
                 exit(1);
             }
+            struct net_delay *delay_node = malloc(sizeof(*delay_node));
+            net_delay_init(delay_node, delay);
+            delay_node->next_node = &bottleneck_node.super;
+            *node_insert_at++ = &delay_node->super;
+            struct net_endpoint *client_node = malloc(sizeof(*client_node));
+            net_endpoint_init(client_node);
+            int ret = quicly_connect(&client_node->conns[0].quic, &quicctx, "hello.example.com", &server_node.node.addr.sa,
+                                     &client_node->addr.sa, NULL, ptls_iovec_init(NULL, 0), NULL, NULL);
+            assert(ret == 0);
+            quicly_stream_t *stream;
+            ret = quicly_open_stream(client_node->conns[0].quic, &stream, 1);
+            assert(ret == 0);
+            ret = quicly_stream_sync_sendbuf(stream, 1);
+            assert(ret == 0);
+            client_node->conns[0].egress = &delay_node->super;
+            *node_insert_at++ = &client_node->super;
         } break;
+        case 'b':
+            if (sscanf(optarg, "%lf", &bw) != 1) {
+                fprintf(stderr, "invalid bandwidth: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'd':
             if (sscanf(optarg, "%lf", &delay) != 1) {
                 fprintf(stderr, "invalid delay value: %s\n", optarg);
@@ -517,41 +578,22 @@ int main(int argc, char **argv)
             }
             break;
         default:
-            printf("Usage: %s [-c name]\n\n", argv[0]);
+            usage(argv[0]);
             exit(0);
         }
     }
+    argc -= optind;
+    argv += optind;
 
-    struct net_bottleneck bottleneck_node;
-    struct net_delay delay_node;
-    struct net_endpoint server_node, client_node;
+    /* setup bottleneck */
+    net_bottleneck_init(&bottleneck_node, bw, depth);
+    bottleneck_node.next_node = &server_node.node.super;
+    *node_insert_at++ = &bottleneck_node.super;
 
-    /* init nodes */
-    net_queue_init(&bottleneck_node, bw, depth);
-    net_delay_init(&delay_node, delay);
-    net_endpoint_init(&server_node);
-    net_endpoint_init(&client_node);
-
-    /* client uploads to server through the bottleneck queue */
-    client_node.egress = &delay_node.super;
-    delay_node.next_node = &bottleneck_node.super;
-    bottleneck_node.next_node = &server_node.super;
-    server_node.egress = &client_node.super;
-
-    /* start */
-    server_node.accept_ctx = &quicctx;
-    int ret = quicly_connect(&client_node.quic, &quicctx, "hello.example.com", &server_node.addr.sa, &client_node.addr.sa, NULL,
-                             ptls_iovec_init(NULL, 0), NULL, NULL);
-    assert(ret == 0);
-    quicly_stream_t *stream;
-    ret = quicly_open_stream(client_node.quic, &stream, 1);
-    assert(ret == 0);
-    ret = quicly_stream_sync_sendbuf(stream, 1);
-    assert(ret == 0);
-
-    struct net_node *nodes[] = {&bottleneck_node.super, &delay_node.super, &server_node.super, &client_node.super, NULL};
     while (now < 1050)
         run_nodes(nodes);
 
     return 0;
 }
+
+FILE *quicly_trace_fp;
