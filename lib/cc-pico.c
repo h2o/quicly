@@ -44,7 +44,7 @@ static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t ssthresh, ui
 
 /* TODO: Avoid increase if sender was application limited. */
 static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                          int64_t now, uint32_t max_udp_payload_size)
+                          uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
 
