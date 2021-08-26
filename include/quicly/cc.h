@@ -66,8 +66,7 @@ typedef struct st_quicly_cc_t {
      */
     union {
         /**
-         * State information for Reno congestion control. Pico also uses this (and therefore we can switch between Reno and Pico
-         * mid-connection).
+         * State information for Reno congestion control.
          */
         struct {
             /**
@@ -75,6 +74,15 @@ typedef struct st_quicly_cc_t {
              */
             uint32_t stash;
         } reno;
+        /**
+         * State information for Pico.
+         */
+        struct {
+            /**
+             * Stash of acknowledged bytes, used during congestion avoidance.
+             */
+            uint32_t stash;
+        } pico;
         /**
          * State information for CUBIC congestion control.
          */

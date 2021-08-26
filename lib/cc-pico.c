@@ -70,26 +70,83 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         cc->cwnd_maximum = cc->cwnd;
 }
 
+static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
+                         int64_t now, uint32_t max_udp_payload_size)
+{
+    /* Nothing to do if loss is in recovery window. */
+    if (lost_pn < cc->recovery_end)
+        return;
+    cc->recovery_end = next_pn;
+
+    ++cc->num_loss_episodes;
+    if (cc->cwnd_exiting_slow_start == 0)
+        cc->cwnd_exiting_slow_start = cc->cwnd;
+
+    /* Reduce congestion window. */
+    cc->cwnd *= QUICLY_RENO_BETA;
+    if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
+        cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+    cc->ssthresh = cc->cwnd;
+
+    if (cc->cwnd_minimum > cc->cwnd)
+        cc->cwnd_minimum = cc->cwnd;
+}
+
+static void pico_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
+{
+    /* TODO */
+}
+
+static void pico_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now)
+{
+    /* Unused */
+}
+
+static void pico_init_pico_state(quicly_cc_t *cc, uint32_t stash)
+{
+    cc->state.pico.stash = stash;
+}
+
+static void pico_reset(quicly_cc_t *cc, uint32_t initcwnd)
+{
+    *cc = (quicly_cc_t){
+        .type = &quicly_cc_type_pico,
+        .cwnd = initcwnd,
+        .cwnd_initial = initcwnd,
+        .cwnd_maximum = initcwnd,
+        .cwnd_minimum = UINT32_MAX,
+        .ssthresh = UINT32_MAX,
+    };
+    pico_init_pico_state(cc, 0);
+}
+
 static int pico_on_switch(quicly_cc_t *cc)
 {
-    /* switch to reno then rewrite the type */
-    if (!quicly_cc_type_reno.cc_switch(cc))
-        return 0;
-    cc->type = &quicly_cc_type_pico;
-    return 1;
+    if (cc->type == &quicly_cc_type_pico) {
+        return 1; /* nothing to do */
+    } else if (cc->type == &quicly_cc_type_reno) {
+        cc->type = &quicly_cc_type_reno;
+        pico_init_pico_state(cc, cc->state.reno.stash);
+        return 1;
+    } else if (cc->type == &quicly_cc_type_cubic) {
+        /* When in slow start, state can be reused as-is; otherwise, restart. */
+        if (cc->cwnd_exiting_slow_start == 0) {
+            cc->type = &quicly_cc_type_reno;
+            pico_init_pico_state(cc, 0);
+        } else {
+            pico_reset(cc, cc->cwnd_initial);
+        }
+        return 1;
+    }
+
+    return 0;
 }
 
 static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
-    quicly_cc_type_reno.cc_init->cb(quicly_cc_type_reno.cc_init, cc, initcwnd, now);
-    cc->type = &quicly_cc_type_pico;
+    pico_reset(cc, initcwnd);
 }
 
-quicly_cc_type_t quicly_cc_type_pico = {"pico",
-                                        &quicly_cc_pico_init,
-                                        pico_on_acked,
-                                        quicly_cc_reno_on_lost,
-                                        quicly_cc_reno_on_persistent_congestion,
-                                        quicly_cc_reno_on_sent,
-                                        pico_on_switch};
+quicly_cc_type_t quicly_cc_type_pico = {
+    "pico", &quicly_cc_pico_init, pico_on_acked, pico_on_lost, pico_on_persistent_congestion, pico_on_sent, pico_on_switch};
 quicly_init_cc_t quicly_cc_pico_init = {pico_init};
