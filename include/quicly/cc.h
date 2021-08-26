@@ -108,6 +108,15 @@ typedef struct st_quicly_cc_t {
              */
             int64_t last_sent_time;
         } cubic;
+        /**
+         *
+         */
+        struct {
+            uint32_t stash;
+            uint32_t rtt_floor;
+            uint32_t next_drain_episode;
+            int draining;
+        } dreno;
     } state;
     /**
      * Initial congestion window.
@@ -168,11 +177,11 @@ struct st_quicly_cc_type_t {
 /**
  * The type objects for each CC. These can be used for testing the type of each `quicly_cc_t`.
  */
-extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_pico;
+extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_pico, quicly_cc_type_dreno;
 /**
  * The factory methods for each CC.
  */
-extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_pico_init;
+extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_pico_init, quicly_cc_dreno_init;
 
 /**
  * A null-terminated list of all CC types.

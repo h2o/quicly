@@ -91,6 +91,7 @@ typedef struct quicly_rtt_t {
      * Value of the latest RTT sample.
      */
     uint32_t latest;
+    uint32_t latest2;
 } quicly_rtt_t;
 
 static void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, uint32_t initial_rtt);
@@ -187,6 +188,7 @@ inline void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, u
 {
     rtt->minimum = UINT32_MAX;
     rtt->latest = 0;
+    rtt->latest2 = 0;
     rtt->smoothed = initial_rtt;
     rtt->variance = initial_rtt / 2;
 }
@@ -201,6 +203,10 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     /* update min_rtt */
     if (rtt->latest < rtt->minimum)
         rtt->minimum = rtt->latest;
+
+    rtt->latest2 = rtt->latest;
+    if (rtt->latest2 > ack_delay)
+        rtt->latest2 -= ack_delay;
 
     /* use ack_delay if it's a plausible value */
     if (rtt->latest > rtt->minimum + ack_delay)

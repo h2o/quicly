@@ -590,7 +590,7 @@ int main(int argc, char **argv)
     bottleneck_node.next_node = &server_node.node.super;
     *node_insert_at++ = &bottleneck_node.super;
 
-    while (now < 1050)
+    while (now < 1100)
         run_nodes(nodes);
 
     return 0;
