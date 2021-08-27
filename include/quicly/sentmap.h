@@ -60,6 +60,11 @@ typedef struct st_quicly_sent_packet_t {
      * number of bytes in-flight for the packet, from the context of CC (becomes zero when deemed lost, but not when PTO fires)
      */
     uint16_t cc_bytes_in_flight;
+    /**
+     * Lower 32-bits of stats.bytes.ack_received when the packet is being sent, if egress has never been application-limited for the
+     * previous round-trip. Used by the delivery rate estimator.
+     */
+    uint32_t bytes_acked_l32;
 } quicly_sent_packet_t;
 
 typedef enum en_quicly_sentmap_event_t {
@@ -221,7 +226,7 @@ static int quicly_sentmap_is_open(quicly_sentmap_t *map);
 /**
  * prepares a write
  */
-int quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_t now, uint8_t ack_epoch);
+int quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_t now, uint8_t ack_epoch, uint32_t bytes_acked_l32);
 /**
  * commits a write
  */

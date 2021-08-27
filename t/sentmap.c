@@ -56,7 +56,7 @@ static void test_basic(void)
     /* save 50 packets, with 2 frames each */
     for (at = 0; at < 10; ++at) {
         for (i = 1; i <= 5; ++i) {
-            quicly_sentmap_prepare(&map, at * 5 + i, at, QUICLY_EPOCH_INITIAL);
+            quicly_sentmap_prepare(&map, at * 5 + i, at, QUICLY_EPOCH_INITIAL, 0);
             quicly_sentmap_allocate(&map, on_acked);
             quicly_sentmap_allocate(&map, on_acked);
             quicly_sentmap_commit(&map, 1);
@@ -113,10 +113,10 @@ static void test_late_ack(void)
     quicly_sentmap_init(&map);
 
     /* commit pn 1, 2 */
-    quicly_sentmap_prepare(&map, 1, 0, QUICLY_EPOCH_INITIAL);
+    quicly_sentmap_prepare(&map, 1, 0, QUICLY_EPOCH_INITIAL, 0);
     quicly_sentmap_allocate(&map, on_acked);
     quicly_sentmap_commit(&map, 10);
-    quicly_sentmap_prepare(&map, 2, 0, QUICLY_EPOCH_INITIAL);
+    quicly_sentmap_prepare(&map, 2, 0, QUICLY_EPOCH_INITIAL, 0);
     quicly_sentmap_allocate(&map, on_acked);
     quicly_sentmap_commit(&map, 20);
     ok(map.bytes_in_flight == 30);
@@ -157,10 +157,10 @@ static void test_pto(void)
     quicly_sentmap_init(&map);
 
     /* commit pn 1, 2 */
-    quicly_sentmap_prepare(&map, 1, 0, QUICLY_EPOCH_INITIAL);
+    quicly_sentmap_prepare(&map, 1, 0, QUICLY_EPOCH_INITIAL, 0);
     quicly_sentmap_allocate(&map, on_acked);
     quicly_sentmap_commit(&map, 10);
-    quicly_sentmap_prepare(&map, 2, 0, QUICLY_EPOCH_INITIAL);
+    quicly_sentmap_prepare(&map, 2, 0, QUICLY_EPOCH_INITIAL, 0);
     quicly_sentmap_allocate(&map, on_acked);
     quicly_sentmap_commit(&map, 20);
     ok(map.bytes_in_flight == 30);
