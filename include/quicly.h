@@ -440,6 +440,10 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t lost;                                                                                                             \
         /**                                                                                                                        \
+         * Total number of bytes for which acknowledgements have been received.                                                    \
+         */                                                                                                                        \
+        uint64_t ack_received;                                                                                                     \
+        /**                                                                                                                        \
          * Total amount of stream-level payload being sent                                                                         \
          */                                                                                                                        \
         uint64_t stream_data_sent;                                                                                                 \

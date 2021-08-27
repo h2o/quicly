@@ -4847,6 +4847,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
             QUICLY_PROBE(PACKET_ACKED, conn, conn->stash.now, pn_acked, is_late_ack);
             if (sent->cc_bytes_in_flight != 0) {
                 bytes_acked += sent->cc_bytes_in_flight;
+                conn->super.stats.num_bytes.ack_received += sent->cc_bytes_in_flight;
             }
             if ((ret = quicly_sentmap_update(&conn->egress.loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED)) != 0)
                 return ret;
