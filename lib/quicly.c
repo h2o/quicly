@@ -439,84 +439,6 @@ struct st_ptls_salt_t {
     } retry;
 };
 
-/**
- * data structure that is used during one call through quicly_send()
- */
-struct st_quicly_send_context_t {
-    /**
-     * current encryption context
-     */
-    struct {
-        struct st_quicly_cipher_context_t *cipher;
-        uint8_t first_byte;
-    } current;
-    /**
-     * packet under construction
-     */
-    struct {
-        struct st_quicly_cipher_context_t *cipher;
-        /**
-         * points to the first byte of the target QUIC packet. It will not point to packet->octets.base[0] when the datagram
-         * contains multiple QUIC packet.
-         */
-        uint8_t *first_byte_at;
-        /**
-         * if the target QUIC packet contains an ack-eliciting frame
-         */
-        uint8_t ack_eliciting : 1;
-        /**
-         * if the target datagram sholud be padded to full size
-         */
-        uint8_t full_size : 1;
-    } target;
-    /**
-     * output buffer into which list of datagrams is written
-     */
-    struct iovec *datagrams;
-    /**
-     * max number of datagrams that can be stored in |packets|
-     */
-    size_t max_datagrams;
-    /**
-     * number of datagrams currently stored in |packets|
-     */
-    size_t num_datagrams;
-    /**
-     * first packet number to be used in this send event
-     */
-    uint64_t first_pn;
-    /**
-     * buffer in which packets are built
-     */
-    struct {
-        /**
-         * starting position of the current (or next) datagram
-         */
-        uint8_t *datagram;
-        /**
-         * end position of the payload buffer
-         */
-        uint8_t *end;
-    } payload_buf;
-    /**
-     * Currently available window for sending (in bytes); the value becomes negative when the sender uses more space than permitted.
-     * That happens because the sender operates at packet-level rather than byte-level.
-     */
-    ssize_t send_window;
-    /**
-     * location where next frame should be written
-     */
-    uint8_t *dst;
-    /**
-     * end of the payload area, beyond which frames cannot be written
-     */
-    uint8_t *dst_end;
-    /**
-     * address at which payload starts
-     */
-    uint8_t *dst_payload_from;
-};
-
 static void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
 static const quicly_stream_callbacks_t crypto_stream_callbacks = {quicly_streambuf_destroy, quicly_streambuf_egress_shift,
@@ -1355,31 +1277,27 @@ static int scheduler_can_send(quicly_conn_t *conn)
     return conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, conn_is_saturated);
 }
 
-/**
- * Updates the loss alarm and also the delivery rate estimator.
- * @param s  When called from `quicly_send`, points to the send context. Otherwise, set to NULL.
- */
-static void update_loss_alarm(quicly_conn_t *conn, quicly_send_context_t *s)
+static void do_update_loss_alarm(quicly_conn_t *conn, int can_send_stream_data, int is_after_send)
 {
     int has_outstanding = conn->egress.loss.sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe,
-        handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL,
-        can_send_stream_data = scheduler_can_send(conn);
+        handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
 
     quicly_loss_update_alarm(&conn->egress.loss, conn->stash.now, conn->egress.last_retransmittable_sent_at, has_outstanding,
-                             can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, s != NULL);
+                             can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
+}
 
-    /* record from when the bandwidth has been fully utilized */
-    if (s != NULL) {
-        if (conn->egress.packet_number > s->first_pn &&
-            (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
-            if (conn->egress.pn_since_fully_utilized == UINT64_MAX)
-                conn->egress.pn_since_fully_utilized = s->first_pn;
-        } else {
-            conn->egress.pn_since_fully_utilized = UINT64_MAX;
-        }
-    } else if (!can_send_stream_data) {
+/**
+ * Updates the loss alarm, and also adjusts the delivery rate estimator. From the send path, `do_update_loss_alarm` is called
+ * directly.
+ */
+static void update_loss_alarm(quicly_conn_t *conn)
+{
+    int can_send_stream_data = scheduler_can_send(conn);
+
+    do_update_loss_alarm(conn, can_send_stream_data, 0);
+
+    if (!can_send_stream_data)
         conn->egress.pn_since_fully_utilized = UINT64_MAX;
-    }
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -3046,6 +2964,84 @@ uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn)
     return conn->application->super.next_expected_packet_number;
 }
 
+/**
+ * data structure that is used during one call through quicly_send()
+ */
+struct st_quicly_send_context_t {
+    /**
+     * current encryption context
+     */
+    struct {
+        struct st_quicly_cipher_context_t *cipher;
+        uint8_t first_byte;
+    } current;
+    /**
+     * packet under construction
+     */
+    struct {
+        struct st_quicly_cipher_context_t *cipher;
+        /**
+         * points to the first byte of the target QUIC packet. It will not point to packet->octets.base[0] when the datagram
+         * contains multiple QUIC packet.
+         */
+        uint8_t *first_byte_at;
+        /**
+         * if the target QUIC packet contains an ack-eliciting frame
+         */
+        uint8_t ack_eliciting : 1;
+        /**
+         * if the target datagram sholud be padded to full size
+         */
+        uint8_t full_size : 1;
+    } target;
+    /**
+     * output buffer into which list of datagrams is written
+     */
+    struct iovec *datagrams;
+    /**
+     * max number of datagrams that can be stored in |packets|
+     */
+    size_t max_datagrams;
+    /**
+     * number of datagrams currently stored in |packets|
+     */
+    size_t num_datagrams;
+    /**
+     * first packet number to be used in this send event
+     */
+    uint64_t first_pn;
+    /**
+     * buffer in which packets are built
+     */
+    struct {
+        /**
+         * starting position of the current (or next) datagram
+         */
+        uint8_t *datagram;
+        /**
+         * end position of the payload buffer
+         */
+        uint8_t *end;
+    } payload_buf;
+    /**
+     * Currently available window for sending (in bytes); the value becomes negative when the sender uses more space than permitted.
+     * That happens because the sender operates at packet-level rather than byte-level.
+     */
+    ssize_t send_window;
+    /**
+     * location where next frame should be written
+     */
+    uint8_t *dst;
+    /**
+     * end of the payload area, beyond which frames cannot be written
+     */
+    uint8_t *dst_end;
+    /**
+     * address at which payload starts
+     */
+    uint8_t *dst_payload_from;
+};
+
 static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
 {
     size_t datagram_size, packet_bytes_in_flight;
@@ -4468,7 +4464,15 @@ Exit:
     if (ret == 0) {
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
-        update_loss_alarm(conn, s);
+        int can_send_stream_data = scheduler_can_send(conn);
+        do_update_loss_alarm(conn, can_send_stream_data, 1);
+        if (can_send_stream_data && conn->egress.packet_number > s->first_pn &&
+            (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
+            if (conn->egress.pn_since_fully_utilized == UINT64_MAX)
+                conn->egress.pn_since_fully_utilized = s->first_pn;
+        } else {
+            conn->egress.pn_since_fully_utilized = UINT64_MAX;
+        }
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
@@ -4664,7 +4668,7 @@ static int enter_close(quicly_conn_t *conn, int local_is_initiating, int wait_dr
         conn->egress.send_ack_at = wait_draining ? conn->stash.now + get_sentmap_expiration_time(conn) : 0;
     }
 
-    update_loss_alarm(conn, NULL);
+    update_loss_alarm(conn);
 
     return 0;
 }
@@ -4945,7 +4949,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     if ((ret = quicly_loss_detect_loss(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
                                        conn->initial == NULL && conn->handshake == NULL, on_loss_detected)) != 0)
         return ret;
-    update_loss_alarm(conn, NULL);
+    update_loss_alarm(conn);
 
     return 0;
 }
@@ -5427,7 +5431,7 @@ static int handle_handshake_done_frame(quicly_conn_t *conn, struct st_quicly_han
     conn->super.remote.address_validation.send_probe = 0;
     if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
         return ret;
-    update_loss_alarm(conn, NULL);
+    update_loss_alarm(conn);
     return 0;
 }
 
@@ -5922,7 +5926,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         if (conn->initial != NULL) {
             if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
                 goto Exit;
-            update_loss_alarm(conn, NULL);
+            update_loss_alarm(conn);
             conn->super.remote.address_validation.validated = 1;
         }
         break;
@@ -5945,7 +5949,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         if (quicly_is_client(conn) && conn->handshake != NULL && conn->handshake->cipher.egress.aead != NULL) {
             if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
                 goto Exit;
-            update_loss_alarm(conn, NULL);
+            update_loss_alarm(conn);
         }
         break;
     case QUICLY_EPOCH_HANDSHAKE:
@@ -5963,7 +5967,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                     goto Exit;
                 assert(conn->handshake == NULL);
                 conn->egress.pending_flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
-                update_loss_alarm(conn, NULL);
+                update_loss_alarm(conn);
             }
         }
         break;
