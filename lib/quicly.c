@@ -3350,7 +3350,7 @@ Emit: /* emit an ACK frame */
             /* store the first range, as well as preparing references to the additional slots */
             sent->data.ack.start = space->ack_queue.ranges[range_index].start;
             uint64_t length = space->ack_queue.ranges[range_index].end - space->ack_queue.ranges[range_index].start;
-            if (length < UINT8_MAX) {
+            if (length <= UINT8_MAX) {
                 sent->data.ack.ranges8.start_length = length;
                 additional = sent->data.ack.ranges8.additional;
                 additional_capacity = PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional);
