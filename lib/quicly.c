@@ -2531,7 +2531,7 @@ static int decrypt_packet(ptls_cipher_context_t *header_protection,
 }
 
 static int do_on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, uint64_t start, uint64_t start_length,
-                         struct st_quicly_sent_ack_additional_t *additional, size_t num_additional)
+                         struct st_quicly_sent_ack_additional_t *additional, size_t additional_capacity)
 {
     /* find the pn space */
     struct st_quicly_pn_space_t *space;
@@ -2555,7 +2555,7 @@ static int do_on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet
     uint64_t end = start + start_length;
     if ((ret = quicly_ranges_subtract(&space->ack_queue, start, end)) != 0)
         return ret;
-    for (size_t i = 0; i < num_additional; ++i) {
+    for (size_t i = 0; i < additional_capacity && additional[i].gap != 0; ++i) {
         start = end + additional[i].gap;
         end = start + additional[i].length;
         if ((ret = quicly_ranges_subtract(&space->ack_queue, start, end)) != 0)
@@ -2581,7 +2581,7 @@ static int on_ack_ack_ranges64(quicly_sentmap_t *map, const quicly_sent_packet_t
     /* TODO log */
 
     return acked ? do_on_ack_ack(conn, packet, sent->data.ack.start, sent->data.ack.ranges64.start_length,
-                                 sent->data.ack.ranges64.additional, sent->data.ack.ranges64.num_additional)
+                                 sent->data.ack.ranges64.additional, PTLS_ELEMENTSOF(sent->data.ack.ranges64.additional))
                  : 0;
 }
 
@@ -2592,7 +2592,7 @@ static int on_ack_ack_ranges8(quicly_sentmap_t *map, const quicly_sent_packet_t 
     /* TODO log */
 
     return acked ? do_on_ack_ack(conn, packet, sent->data.ack.start, sent->data.ack.ranges8.start_length,
-                                 sent->data.ack.ranges8.additional, sent->data.ack.ranges8.num_additional)
+                                 sent->data.ack.ranges8.additional, PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional))
                  : 0;
 }
 
@@ -3342,8 +3342,7 @@ Emit: /* emit an ACK frame */
         size_t range_index = 0;
         while (range_index < space->ack_queue.num_ranges) {
             quicly_sent_t *sent;
-            struct st_quicly_sent_ack_additional_t *additional;
-            uint8_t additional_capacity, *num_additional;
+            struct st_quicly_sent_ack_additional_t *additional, *additional_end;
             /* allocate */
             if ((sent = quicly_sentmap_allocate(&conn->egress.loss.sentmap, on_ack_ack_ranges8)) == NULL)
                 return PTLS_ERROR_NO_MEMORY;
@@ -3353,26 +3352,26 @@ Emit: /* emit an ACK frame */
             if (length <= UINT8_MAX) {
                 sent->data.ack.ranges8.start_length = length;
                 additional = sent->data.ack.ranges8.additional;
-                additional_capacity = PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional);
-                num_additional = &sent->data.ack.ranges8.num_additional;
+                additional_end = additional + PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional);
             } else {
                 sent->acked = on_ack_ack_ranges64;
                 sent->data.ack.ranges64.start_length = length;
                 additional = sent->data.ack.ranges64.additional;
-                additional_capacity = PTLS_ELEMENTSOF(sent->data.ack.ranges64.additional);
-                num_additional = &sent->data.ack.ranges64.num_additional;
+                additional_end = additional + PTLS_ELEMENTSOF(sent->data.ack.ranges64.additional);
             }
             /* store additional ranges, if possible */
-            for (++range_index, *num_additional = 0;
-                 range_index < space->ack_queue.num_ranges && *num_additional < additional_capacity;
-                 ++range_index, ++*num_additional) {
+            for (++range_index; range_index < space->ack_queue.num_ranges && additional < additional_end;
+                 ++range_index, ++additional) {
                 uint64_t gap = space->ack_queue.ranges[range_index].start - space->ack_queue.ranges[range_index - 1].end;
                 uint64_t length = space->ack_queue.ranges[range_index].end - space->ack_queue.ranges[range_index].start;
                 if (gap > UINT8_MAX || length > UINT8_MAX)
                     break;
-                additional[*num_additional].gap = gap;
-                additional[*num_additional].length = length;
+                additional->gap = gap;
+                additional->length = length;
             }
+            /* additional list is zero-terminated, if not full */
+            if (additional < additional_end)
+                additional->gap = 0;
         }
     }
 
