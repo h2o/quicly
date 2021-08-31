@@ -21,7 +21,6 @@
  */
 #include <assert.h>
 #include <inttypes.h>
-#include <math.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdarg.h>
