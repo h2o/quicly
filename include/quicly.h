@@ -464,15 +464,7 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
      */                                                                                                                            \
-    uint64_t num_ptos;                                                                                                             \
-    /**                                                                                                                            \
-     * Delivery rate. All the values are represented as second / byte.                                                             \
-     */                                                                                                                            \
-    struct {                                                                                                                       \
-        double smoothed;                                                                                                           \
-        double variance;                                                                                                           \
-        double latest;                                                                                                             \
-    } delivery_rate
+    uint64_t num_ptos
 
 typedef struct st_quicly_stats_t {
     /**
@@ -487,6 +479,14 @@ typedef struct st_quicly_stats_t {
      * Congestion control stats (experimental; TODO cherry-pick what can be exposed as part of a stable API).
      */
     quicly_cc_t cc;
+    /**
+     * Estimated delivery rate, in bytes/second.
+     */
+    struct {
+        uint64_t latest;
+        uint64_t smoothed;
+        uint64_t variance;
+    } delivery_rate;
 } quicly_stats_t;
 
 /**

@@ -75,11 +75,18 @@
  */
 #define QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK 8
 
-#ifndef QUICLY_DELIVERY_RATE_ESTIMATE_INTERVAL
+#ifndef QUICLY_DELIVERY_RATE_SAMPLE_PERIOD
 /**
- * interval between taking delivery rate estimation samples
+ * sampling period of delivery rate, in milliseconds
  */
-#define QUICLY_DELIVERY_RATE_ESTIMATE_INTERVAL 50
+#define QUICLY_DELIVERY_RATE_SAMPLE_PERIOD 50
+#endif
+
+#ifndef QUICLY_DELIVERY_RATE_SAMPLE_COUNT
+/**
+ * number of samples to retain (and to calculate average from)
+ */
+#define QUICLY_DELIVERY_RATE_SAMPLE_COUNT 10
 #endif
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
@@ -361,9 +368,16 @@ struct st_quicly_conn_t {
          *
          */
         struct {
-            int64_t at;
-            uint64_t bytes_acked;
-        } delivery_rate_sample;
+            struct st_quicly_delivery_rate_sample_t {
+                uint32_t elapsed;
+                uint32_t bytes_acked;
+            } samples[10];
+            size_t next_sample_index;
+            struct {
+                int64_t at;
+                uint64_t bytes_acked;
+            } next_sample_start;
+        } delivery_rate;
     } egress;
     /**
      * crypto data
@@ -1224,6 +1238,41 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     /* set or generate the non-pre-built stats fields here */
     stats->rtt = conn->egress.loss.rtt;
     stats->cc = conn->egress.cc;
+
+    /* delivery rate, calculate the numbers if we've got samples, otherwise set to zero */
+    if (conn->egress.delivery_rate.samples[0].elapsed != 0) {
+        { /* calculate latest */
+            struct st_quicly_delivery_rate_sample_t *latest =
+                &conn->egress.delivery_rate.samples[conn->egress.delivery_rate.next_sample_index != 0
+                                                        ? conn->egress.delivery_rate.next_sample_index - 1
+                                                        : PTLS_ELEMENTSOF(conn->egress.delivery_rate.samples) - 1];
+            stats->delivery_rate.latest = (uint64_t)latest->bytes_acked * 1000 / latest->elapsed;
+        }
+        { /* calculate average */
+            uint64_t total_acked = 0;
+            uint32_t total_elapsed = 0;
+            size_t i;
+            for (i = 0;
+                 i < PTLS_ELEMENTSOF(conn->egress.delivery_rate.samples) && conn->egress.delivery_rate.samples[i].elapsed != 0;
+                 ++i) {
+                total_acked += conn->egress.delivery_rate.samples[i].bytes_acked;
+                total_elapsed += conn->egress.delivery_rate.samples[i].elapsed;
+            }
+            stats->delivery_rate.smoothed = total_acked * 1000 / total_elapsed;
+        }
+        { /* calculate variance */
+            uint64_t sum = 0;
+            size_t i;
+            for (i = 0;
+                 i < PTLS_ELEMENTSOF(conn->egress.delivery_rate.samples) && conn->egress.delivery_rate.samples[i].elapsed != 0;
+                 ++i) {
+                uint64_t sample = conn->egress.delivery_rate.samples[i].bytes_acked * (1000 / QUICLY_DELIVERY_RATE_SAMPLE_PERIOD);
+                sum += (sample - stats->delivery_rate.smoothed) * (sample - stats->delivery_rate.smoothed);
+            }
+            stats->delivery_rate.variance = sum / i;
+        }
+    }
+
     return 0;
 }
 
@@ -1303,7 +1352,7 @@ static void setup_next_send(quicly_conn_t *conn)
     update_send_alarm(conn, can_send_stream_data, 0);
 
     if (!can_send_stream_data)
-        conn->egress.delivery_rate_sample.at = INT64_MAX;
+        conn->egress.delivery_rate.next_sample_start.at = INT64_MAX;
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -4465,12 +4514,12 @@ Exit:
         update_send_alarm(conn, can_send_stream_data, 1);
         if (can_send_stream_data &&
             (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
-            if (conn->egress.delivery_rate_sample.at == INT64_MAX) {
-                conn->egress.delivery_rate_sample.at = conn->stash.now;
-                conn->egress.delivery_rate_sample.bytes_acked = conn->super.stats.num_bytes.ack_received;
+            if (conn->egress.delivery_rate.next_sample_start.at == INT64_MAX) {
+                conn->egress.delivery_rate.next_sample_start.at = conn->stash.now;
+                conn->egress.delivery_rate.next_sample_start.bytes_acked = conn->super.stats.num_bytes.ack_received;
             }
         } else {
-            conn->egress.delivery_rate_sample.at = INT64_MAX;
+            conn->egress.delivery_rate.next_sample_start.at = INT64_MAX;
         }
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
@@ -4817,21 +4866,6 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
     return 0;
 }
 
-static void update_delivery_rate(quicly_conn_t *conn, uint64_t bytes_acked, int64_t elapsed)
-{
-    conn->super.stats.delivery_rate.latest = elapsed / (bytes_acked * 1000.);
-    if (isnan(conn->super.stats.delivery_rate.smoothed)) {
-        /* first sample */
-        conn->super.stats.delivery_rate.smoothed = conn->super.stats.delivery_rate.latest;
-        conn->super.stats.delivery_rate.variance = conn->super.stats.delivery_rate.latest / 2;
-    } else {
-        double absdiff = fabs(conn->super.stats.delivery_rate.smoothed - conn->super.stats.delivery_rate.latest);
-        conn->super.stats.delivery_rate.variance = (conn->super.stats.delivery_rate.variance * 4 + absdiff) / 5;
-        conn->super.stats.delivery_rate.smoothed =
-            (conn->super.stats.delivery_rate.smoothed * 9 + conn->super.stats.delivery_rate.latest) / 10;
-    }
-}
-
 static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     quicly_ack_frame_t frame;
@@ -4927,12 +4961,15 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     QUICLY_PROBE(ACK_DELAY_RECEIVED, conn, conn->stash.now, frame.ack_delay);
 
     /* update delivery rate estimator */
-    if (conn->egress.delivery_rate_sample.at <= conn->stash.now - QUICLY_DELIVERY_RATE_ESTIMATE_INTERVAL) {
-        int64_t elapsed = conn->stash.now - conn->egress.delivery_rate_sample.at;
-        uint64_t bytes_acked = conn->super.stats.num_bytes.ack_received - conn->egress.delivery_rate_sample.bytes_acked;
-        update_delivery_rate(conn, bytes_acked, elapsed);
-        conn->egress.delivery_rate_sample.at = conn->stash.now;
-        conn->egress.delivery_rate_sample.bytes_acked = conn->super.stats.num_bytes.ack_received;
+    if (conn->egress.delivery_rate.next_sample_start.at <= conn->stash.now - QUICLY_DELIVERY_RATE_SAMPLE_PERIOD) {
+        conn->egress.delivery_rate.samples[conn->egress.delivery_rate.next_sample_index] =
+            (struct st_quicly_delivery_rate_sample_t){
+                .elapsed = (uint32_t)(conn->stash.now - conn->egress.delivery_rate.next_sample_start.at),
+                .bytes_acked =
+                    (uint32_t)(conn->super.stats.num_bytes.ack_received - conn->egress.delivery_rate.next_sample_start.bytes_acked),
+            };
+        if (++conn->egress.delivery_rate.next_sample_index >= PTLS_ELEMENTSOF(conn->egress.delivery_rate.samples))
+            conn->egress.delivery_rate.next_sample_index = 0;
     }
 
     /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
