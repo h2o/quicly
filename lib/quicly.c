@@ -1284,7 +1284,7 @@ static int scheduler_can_send(quicly_conn_t *conn)
     return conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, conn_is_saturated);
 }
 
-static void do_update_loss_alarm(quicly_conn_t *conn, int can_send_stream_data, int is_after_send)
+static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int is_after_send)
 {
     int has_outstanding = conn->egress.loss.sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe,
         handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
@@ -1293,13 +1293,14 @@ static void do_update_loss_alarm(quicly_conn_t *conn, int can_send_stream_data, 
 }
 
 /**
- * Updates the loss alarm, and adjusts the delivery rate estimator. From the send path, `do_update_loss_alarm` is called directly.
+ * Updates the send alarm and adjusts the delivery rate estimator. This function is called from the receive path. From the sendp
+ * path, `update_send_alarm` is called directly.
  */
-static void update_loss_alarm(quicly_conn_t *conn)
+static void setup_next_send(quicly_conn_t *conn)
 {
     int can_send_stream_data = scheduler_can_send(conn);
 
-    do_update_loss_alarm(conn, can_send_stream_data, 0);
+    update_send_alarm(conn, can_send_stream_data, 0);
 
     if (!can_send_stream_data)
         conn->egress.delivery_rate_sample.at = INT64_MAX;
@@ -4461,7 +4462,7 @@ Exit:
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         int can_send_stream_data = scheduler_can_send(conn);
-        do_update_loss_alarm(conn, can_send_stream_data, 1);
+        update_send_alarm(conn, can_send_stream_data, 1);
         if (can_send_stream_data &&
             (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
             if (conn->egress.delivery_rate_sample.at == INT64_MAX) {
@@ -4665,7 +4666,7 @@ static int enter_close(quicly_conn_t *conn, int local_is_initiating, int wait_dr
         conn->egress.send_ack_at = wait_draining ? conn->stash.now + get_sentmap_expiration_time(conn) : 0;
     }
 
-    update_loss_alarm(conn);
+    setup_next_send(conn);
 
     return 0;
 }
@@ -4955,7 +4956,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     if ((ret = quicly_loss_detect_loss(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
                                        conn->initial == NULL && conn->handshake == NULL, on_loss_detected)) != 0)
         return ret;
-    update_loss_alarm(conn);
+    setup_next_send(conn);
 
     return 0;
 }
@@ -5437,7 +5438,7 @@ static int handle_handshake_done_frame(quicly_conn_t *conn, struct st_quicly_han
     conn->super.remote.address_validation.send_probe = 0;
     if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
         return ret;
-    update_loss_alarm(conn);
+    setup_next_send(conn);
     return 0;
 }
 
@@ -5932,7 +5933,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         if (conn->initial != NULL) {
             if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
                 goto Exit;
-            update_loss_alarm(conn);
+            setup_next_send(conn);
             conn->super.remote.address_validation.validated = 1;
         }
         break;
@@ -5955,7 +5956,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         if (quicly_is_client(conn) && conn->handshake != NULL && conn->handshake->cipher.egress.aead != NULL) {
             if ((ret = discard_handshake_context(conn, QUICLY_EPOCH_INITIAL)) != 0)
                 goto Exit;
-            update_loss_alarm(conn);
+            setup_next_send(conn);
         }
         break;
     case QUICLY_EPOCH_HANDSHAKE:
@@ -5973,7 +5974,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                     goto Exit;
                 assert(conn->handshake == NULL);
                 conn->egress.pending_flows |= QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT;
-                update_loss_alarm(conn);
+                setup_next_send(conn);
             }
         }
         break;
