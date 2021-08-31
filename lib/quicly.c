@@ -364,14 +364,28 @@ struct st_quicly_conn_t {
             size_t count;
         } datagram_frame_payloads;
         /**
-         *
+         * delivery rate estimator
          */
         struct {
+            /**
+             * ring buffer retaining 10 most recent samples
+             */
             struct st_quicly_delivery_rate_sample_t {
                 uint32_t elapsed;
                 uint32_t bytes_acked;
             } samples[10];
+            /**
+             * next write slot
+             */
             size_t next_sample_index;
+            /**
+             * packet number from which the estimator should be run
+             */
+            uint64_t pn_cwnd_limited_from;
+            /**
+             * When running, retains the start of the sampling period as well as the value of `stats.num_bytes.ack_received`. When
+             * not running, at is set to INT64_MAX.
+             */
             struct {
                 int64_t at;
                 uint64_t bytes_acked;
@@ -1291,6 +1305,12 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
         *consumed = conn->ingress.max_data.bytes_consumed;
 }
 
+static void stop_delivery_rate_sampling(quicly_conn_t *conn)
+{
+    conn->egress.delivery_rate.pn_cwnd_limited_from = UINT64_MAX;
+    conn->egress.delivery_rate.next_sample_start.at = INT64_MAX;
+}
+
 static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
 {
     if (!is_in_receive && !conn->idle_timeout.should_rearm_on_send)
@@ -1350,8 +1370,9 @@ static void setup_next_send(quicly_conn_t *conn)
 
     update_send_alarm(conn, can_send_stream_data, 0);
 
+    /* When the flow becomes application-limited due to receiving some information, stop collecting delivery rate samples. */
     if (!can_send_stream_data)
-        conn->egress.delivery_rate.next_sample_start.at = INT64_MAX;
+        stop_delivery_rate_sampling(conn);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -2202,6 +2223,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
 
     *ptls_get_data_ptr(tls) = conn;
 
+    stop_delivery_rate_sampling(conn);
     update_open_count(conn->super.ctx, 1);
 
     return conn;
@@ -3089,6 +3111,10 @@ struct st_quicly_send_context_t {
      * address at which payload starts
      */
     uint8_t *dst_payload_from;
+    /**
+     * first packet number to be used within the lifetime of this send context
+     */
+    uint64_t first_packet_number;
 };
 
 static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
@@ -4507,18 +4533,18 @@ Exit:
         commit_send_packet(conn, s, 0);
     }
     if (ret == 0) {
+        /* update timers, start / stop delivery rate estimator */
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         int can_send_stream_data = scheduler_can_send(conn);
         update_send_alarm(conn, can_send_stream_data, 1);
         if (can_send_stream_data &&
             (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
-            if (conn->egress.delivery_rate.next_sample_start.at == INT64_MAX) {
-                conn->egress.delivery_rate.next_sample_start.at = conn->stash.now;
-                conn->egress.delivery_rate.next_sample_start.bytes_acked = conn->super.stats.num_bytes.ack_received;
-            }
+            /* as the flow is CWND-limited, start delivery rate estimator */
+            if (conn->egress.delivery_rate.pn_cwnd_limited_from == UINT64_MAX)
+                conn->egress.delivery_rate.pn_cwnd_limited_from = s->first_packet_number;
         } else {
-            conn->egress.delivery_rate.next_sample_start.at = INT64_MAX;
+            stop_delivery_rate_sampling(conn);
         }
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
@@ -4548,7 +4574,11 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize)
 {
-    quicly_send_context_t s = {{NULL, -1}, {}, datagrams, *num_datagrams, 0, {buf, (uint8_t *)buf + bufsize}};
+    quicly_send_context_t s = {.current = {.first_byte = -1},
+                               .datagrams = datagrams,
+                               .max_datagrams = *num_datagrams,
+                               .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
+                               .first_packet_number = conn->egress.packet_number};
     int ret;
 
     lock_now(conn, 0);
@@ -4960,15 +4990,27 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     QUICLY_PROBE(ACK_DELAY_RECEIVED, conn, conn->stash.now, frame.ack_delay);
 
     /* update delivery rate estimator */
-    if (conn->egress.delivery_rate.next_sample_start.at <= conn->stash.now - QUICLY_DELIVERY_RATE_SAMPLE_PERIOD) {
-        conn->egress.delivery_rate.samples[conn->egress.delivery_rate.next_sample_index] =
-            (struct st_quicly_delivery_rate_sample_t){
-                .elapsed = (uint32_t)(conn->stash.now - conn->egress.delivery_rate.next_sample_start.at),
-                .bytes_acked =
-                    (uint32_t)(conn->super.stats.num_bytes.ack_received - conn->egress.delivery_rate.next_sample_start.bytes_acked),
-            };
-        if (++conn->egress.delivery_rate.next_sample_index >= PTLS_ELEMENTSOF(conn->egress.delivery_rate.samples))
-            conn->egress.delivery_rate.next_sample_index = 0;
+    if (conn->egress.delivery_rate.pn_cwnd_limited_from <= largest_newly_acked.pn) {
+#define START_SAMPLING()                                                                                                           \
+    do {                                                                                                                           \
+        conn->egress.delivery_rate.next_sample_start.at = conn->stash.now;                                                         \
+        conn->egress.delivery_rate.next_sample_start.bytes_acked = conn->super.stats.num_bytes.ack_received;                       \
+    } while (0)
+        if (conn->egress.delivery_rate.next_sample_start.at <= conn->stash.now - QUICLY_DELIVERY_RATE_SAMPLE_PERIOD) {
+            /* Enough time has elapsed since the start of the next sample. Record it. */
+            conn->egress.delivery_rate.samples[conn->egress.delivery_rate.next_sample_index] =
+                (struct st_quicly_delivery_rate_sample_t){
+                    .elapsed = (uint32_t)(conn->stash.now - conn->egress.delivery_rate.next_sample_start.at),
+                    .bytes_acked = (uint32_t)(conn->super.stats.num_bytes.ack_received -
+                                              conn->egress.delivery_rate.next_sample_start.bytes_acked),
+                };
+            if (++conn->egress.delivery_rate.next_sample_index >= PTLS_ELEMENTSOF(conn->egress.delivery_rate.samples))
+                conn->egress.delivery_rate.next_sample_index = 0;
+            START_SAMPLING();
+        } else if (conn->egress.delivery_rate.next_sample_start.at == INT64_MAX) {
+            START_SAMPLING();
+        }
+#undef START_SAMPLING
     }
 
     /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
