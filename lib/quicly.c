@@ -4466,7 +4466,7 @@ Exit:
             (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
             if (conn->egress.delivery_rate_sample.at == INT64_MAX) {
                 conn->egress.delivery_rate_sample.at = conn->stash.now;
-                conn->egress.delivery_rate_sample.at = conn->super.stats.num_bytes.ack_received;
+                conn->egress.delivery_rate_sample.bytes_acked = conn->super.stats.num_bytes.ack_received;
             }
         } else {
             conn->egress.delivery_rate_sample.at = INT64_MAX;
