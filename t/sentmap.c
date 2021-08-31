@@ -76,7 +76,7 @@ static void test_basic(void)
         }
     }
     ok(quicly_sentmap_get(&iter)->packet_number == UINT64_MAX);
-    ok(num_blocks(&map) == 150 / 16 + 1);
+    ok(num_blocks(&map) == 50 / 16 + 1);
 
     /* pop acks between 11 <= packet_number <= 40 */
     quicly_sentmap_init_iter(&map, &iter);
@@ -96,7 +96,7 @@ static void test_basic(void)
         ++cnt;
     }
     ok(cnt == 20);
-    ok(num_blocks(&map) == 30 / 16 + 1 + 1 + 30 / 16 + 1);
+    ok(num_blocks(&map) == 10 / 16 + 1 + 1 + 10 / 16 + 1);
 
     quicly_sentmap_dispose(&map);
 }
