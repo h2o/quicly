@@ -2530,43 +2530,70 @@ static int decrypt_packet(ptls_cipher_context_t *header_protection,
     return 0;
 }
 
-static int on_ack_ack(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
+static int do_on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, uint64_t start, uint64_t start_length,
+                         struct st_quicly_sent_ack_additional_t *additional, size_t additional_capacity)
+{
+    /* find the pn space */
+    struct st_quicly_pn_space_t *space;
+    switch (packet->ack_epoch) {
+    case QUICLY_EPOCH_INITIAL:
+        space = &conn->initial->super;
+        break;
+    case QUICLY_EPOCH_HANDSHAKE:
+        space = &conn->handshake->super;
+        break;
+    case QUICLY_EPOCH_1RTT:
+        space = &conn->application->super;
+        break;
+    default:
+        assert(!"FIXME");
+        return QUICLY_TRANSPORT_ERROR_INTERNAL;
+    }
+
+    /* subtract given ACK ranges */
+    int ret;
+    uint64_t end = start + start_length;
+    if ((ret = quicly_ranges_subtract(&space->ack_queue, start, end)) != 0)
+        return ret;
+    for (size_t i = 0; i < additional_capacity && additional[i].gap != 0; ++i) {
+        start = end + additional[i].gap;
+        end = start + additional[i].length;
+        if ((ret = quicly_ranges_subtract(&space->ack_queue, start, end)) != 0)
+            return ret;
+    }
+
+    /* make adjustments */
+    if (space->ack_queue.num_ranges == 0) {
+        space->largest_pn_received_at = INT64_MAX;
+        space->unacked_count = 0;
+    } else if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS) {
+        quicly_ranges_drop_by_range_indices(&space->ack_queue, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS,
+                                            space->ack_queue.num_ranges);
+    }
+
+    return 0;
+}
+
+static int on_ack_ack_ranges64(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
 {
     quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
 
     /* TODO log */
 
-    if (acked) {
-        /* find the pn space */
-        struct st_quicly_pn_space_t *space;
-        switch (packet->ack_epoch) {
-        case QUICLY_EPOCH_INITIAL:
-            space = &conn->initial->super;
-            break;
-        case QUICLY_EPOCH_HANDSHAKE:
-            space = &conn->handshake->super;
-            break;
-        case QUICLY_EPOCH_1RTT:
-            space = &conn->application->super;
-            break;
-        default:
-            assert(!"FIXME");
-            return QUICLY_TRANSPORT_ERROR_INTERNAL;
-        }
-        /* subtract given ACK range, then make adjustments */
-        int ret;
-        if ((ret = quicly_ranges_subtract(&space->ack_queue, sent->data.ack.range.start, sent->data.ack.range.end)) != 0)
-            return ret;
-        if (space->ack_queue.num_ranges == 0) {
-            space->largest_pn_received_at = INT64_MAX;
-            space->unacked_count = 0;
-        } else if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS) {
-            quicly_ranges_drop_by_range_indices(&space->ack_queue, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS,
-                                                space->ack_queue.num_ranges);
-        }
-    }
+    return acked ? do_on_ack_ack(conn, packet, sent->data.ack.start, sent->data.ack.ranges64.start_length,
+                                 sent->data.ack.ranges64.additional, PTLS_ELEMENTSOF(sent->data.ack.ranges64.additional))
+                 : 0;
+}
 
-    return 0;
+static int on_ack_ack_ranges8(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
+{
+    quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
+
+    /* TODO log */
+
+    return acked ? do_on_ack_ack(conn, packet, sent->data.ack.start, sent->data.ack.ranges8.start_length,
+                                 sent->data.ack.ranges8.additional, PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional))
+                 : 0;
 }
 
 static int on_ack_stream_ack_one(quicly_conn_t *conn, quicly_stream_id_t stream_id, quicly_sendstate_sent_t *sent)
@@ -3313,12 +3340,39 @@ Emit: /* emit an ACK frame */
     s->dst = dst;
 
     { /* save what's inflight */
-        size_t i;
-        for (i = 0; i != space->ack_queue.num_ranges; ++i) {
+        size_t range_index = 0;
+        while (range_index < space->ack_queue.num_ranges) {
             quicly_sent_t *sent;
-            if ((sent = quicly_sentmap_allocate(&conn->egress.loss.sentmap, on_ack_ack)) == NULL)
+            struct st_quicly_sent_ack_additional_t *additional, *additional_end;
+            /* allocate */
+            if ((sent = quicly_sentmap_allocate(&conn->egress.loss.sentmap, on_ack_ack_ranges8)) == NULL)
                 return PTLS_ERROR_NO_MEMORY;
-            sent->data.ack.range = space->ack_queue.ranges[i];
+            /* store the first range, as well as preparing references to the additional slots */
+            sent->data.ack.start = space->ack_queue.ranges[range_index].start;
+            uint64_t length = space->ack_queue.ranges[range_index].end - space->ack_queue.ranges[range_index].start;
+            if (length <= UINT8_MAX) {
+                sent->data.ack.ranges8.start_length = length;
+                additional = sent->data.ack.ranges8.additional;
+                additional_end = additional + PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional);
+            } else {
+                sent->acked = on_ack_ack_ranges64;
+                sent->data.ack.ranges64.start_length = length;
+                additional = sent->data.ack.ranges64.additional;
+                additional_end = additional + PTLS_ELEMENTSOF(sent->data.ack.ranges64.additional);
+            }
+            /* store additional ranges, if possible */
+            for (++range_index; range_index < space->ack_queue.num_ranges && additional < additional_end;
+                 ++range_index, ++additional) {
+                uint64_t gap = space->ack_queue.ranges[range_index].start - space->ack_queue.ranges[range_index - 1].end;
+                uint64_t length = space->ack_queue.ranges[range_index].end - space->ack_queue.ranges[range_index].start;
+                if (gap > UINT8_MAX || length > UINT8_MAX)
+                    break;
+                additional->gap = gap;
+                additional->length = length;
+            }
+            /* additional list is zero-terminated, if not full */
+            if (additional < additional_end)
+                additional->gap = 0;
         }
     }
 
