@@ -65,7 +65,7 @@ typedef struct st_quicly_delivery_rate_t {
      */
     quicly_range_t pn_cwnd_limited;
     /**
-     * Current sample being corrected, if any. When running, `start.at` and `start.bytes_acked` retains the values at the start of
+     * Current sample being collected, if any. When running, `start.at` and `start.bytes_acked` retains the values at the start of
      * the current sampling period. When not, `start.at` is set to INT64_MAX, and `sample` is zero-cleared.
      */
     struct {
