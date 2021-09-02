@@ -93,9 +93,6 @@ void quicly_delivery_rate_on_ack(quicly_delivery_rate_t *dr, int64_t now, uint64
             dr->current.start.at = INT64_MAX;
         }
     }
-
-#undef START_SAMPLING
-#undef ADVANCE_SLOT
 }
 
 static uint64_t to_speed(uint64_t bytes_acked, uint32_t elapsed)
