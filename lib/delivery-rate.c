@@ -31,10 +31,10 @@ static void start_sampling(quicly_delivery_rate_t *dr, int64_t now, uint64_t byt
 
 static void commit_sample(quicly_delivery_rate_t *dr)
 {
-    dr->past_samples.entries[dr->past_samples.slot] = dr->current.sample;
-    ++dr->past_samples.slot;
-    if (dr->past_samples.slot >= PTLS_ELEMENTSOF(dr->past_samples.entries))
-        dr->past_samples.slot = 0;
+    ++dr->past_samples.latest;
+    if (dr->past_samples.latest >= PTLS_ELEMENTSOF(dr->past_samples.entries))
+        dr->past_samples.latest = 0;
+    dr->past_samples.entries[dr->past_samples.latest] = dr->current.sample;
 
     dr->current.start.at = INT64_MAX;
     dr->current.sample = (struct st_quicly_delivery_rate_sample_t){};
@@ -43,6 +43,7 @@ static void commit_sample(quicly_delivery_rate_t *dr)
 void quicly_delivery_rate_init(quicly_delivery_rate_t *dr)
 {
     *dr = (quicly_delivery_rate_t){
+        .past_samples = {.latest = PTLS_ELEMENTSOF(dr->past_samples.entries) - 1},
         .pn_cwnd_limited = {.start = UINT64_MAX, .end = UINT64_MAX},
         .current = {.start = {.at = INT64_MAX}},
     };
@@ -104,9 +105,7 @@ void quicly_delivery_rate_report(quicly_delivery_rate_t *dr, uint64_t *latest, u
 {
     { /* Calculate latest, or return if there are no samples at all. `latest` being reported will be the most recent "full" sample
        * if available, or else a partial sample. */
-        const struct st_quicly_delivery_rate_sample_t *latest_sample =
-            &dr->past_samples
-                 .entries[dr->past_samples.slot != 0 ? dr->past_samples.slot - 1 : PTLS_ELEMENTSOF(dr->past_samples.entries) - 1];
+        const struct st_quicly_delivery_rate_sample_t *latest_sample = &dr->past_samples.entries[dr->past_samples.latest];
         if (latest_sample->elapsed == 0) {
             latest_sample = &dr->current.sample;
             if (latest_sample->elapsed == 0) {

@@ -54,14 +54,14 @@ struct st_quicly_delivery_rate_sample_t {
  */
 typedef struct st_quicly_delivery_rate_t {
     /**
-     * ring buffer retaining 10 most recent samples
+     * ring buffer retaining the most recent samples
      */
     struct {
         struct st_quicly_delivery_rate_sample_t entries[QUICLY_DELIVERY_RATE_SAMPLE_COUNT];
-        size_t slot;
+        size_t latest;
     } past_samples;
     /**
-     * packet number range within with the flow has been CWND-limited
+     * packet number range within which the flow has been CWND-limited
      */
     quicly_range_t pn_cwnd_limited;
     /**
