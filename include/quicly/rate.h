@@ -20,8 +20,8 @@
  * IN THE SOFTWARE.
  */
 
-#ifndef quicly_delivery_rate_h
-#define quicly_delivery_rate_h
+#ifndef quicly_rate_h
+#define quicly_rate_h
 
 #include <stdint.h>
 #include "quicly/ranges.h"

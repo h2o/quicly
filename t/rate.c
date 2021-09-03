@@ -20,7 +20,7 @@
  * IN THE SOFTWARE.
  */
 
-#include "quicly/delivery-rate.h"
+#include "quicly/rate.h"
 #include "test.h"
 
 #define CHECK_REPORT(el, es, ev)                                                                                                   \
@@ -106,7 +106,7 @@ static void test_burst(void)
     CHECK_REPORT(100000, 100000, 0);
 }
 
-void test_delivery_rate(void)
+void test_rate(void)
 {
     subtest("basic", test_basic);
     subtest("burst", test_burst);

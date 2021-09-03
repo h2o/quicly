@@ -35,7 +35,7 @@
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
 #include "quicly/cc.h"
-#include "quicly/delivery-rate.h"
+#include "quicly/rate.h"
 #if QUICLY_USE_EMBEDDED_PROBES
 #include "embedded-probes.h"
 #elif QUICLY_USE_DTRACE

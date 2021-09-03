@@ -21,7 +21,7 @@
  */
 
 #include "picotls.h"
-#include "quicly/delivery-rate.h"
+#include "quicly/rate.h"
 
 static void start_sampling(quicly_ratemeter_t *dr, int64_t now, uint64_t bytes_acked)
 {
