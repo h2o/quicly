@@ -1218,6 +1218,12 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     return 0;
 }
 
+int quicly_get_delivery_rate(quicly_conn_t *conn, quicly_rate_t *delivery_rate)
+{
+    quicly_ratemeter_report(&conn->egress.ratemeter, delivery_rate);
+    return 0;
+}
+
 quicly_stream_id_t quicly_get_ingress_max_streams(quicly_conn_t *conn, int uni)
 {
     quicly_maxsender_t *maxsender = uni ? &conn->ingress.max_streams.uni : &conn->ingress.max_streams.bidi;

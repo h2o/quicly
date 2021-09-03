@@ -887,6 +887,10 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats);
 /**
  *
  */
+int quicly_get_delivery_rate(quicly_conn_t *conn, quicly_rate_t *delivery_rate);
+/**
+ *
+ */
 void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed);
 /**
  *
