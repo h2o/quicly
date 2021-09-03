@@ -89,25 +89,25 @@ typedef struct st_quicly_rate_t {
 /**
  *
  */
-void quicly_ratemeter_init(quicly_ratemeter_t *dr);
+void quicly_ratemeter_init(quicly_ratemeter_t *meter);
 /**
  * Notifies the estimator that the flow is CWND-limited at the point of sending packets *starting* from packet number `pn`.
  */
-void quicly_ratemeter_in_cwnd_limited(quicly_ratemeter_t *dr, uint64_t pn);
+void quicly_ratemeter_in_cwnd_limited(quicly_ratemeter_t *meter, uint64_t pn);
 /**
  * Notifies that the estimator that the flow is not CWND-limited when the packet number of the next packet will be `pn`.
  */
-void quicly_ratemeter_not_cwnd_limited(quicly_ratemeter_t *dr, uint64_t pn);
+void quicly_ratemeter_not_cwnd_limited(quicly_ratemeter_t *meter, uint64_t pn);
 /**
  * Given three values, update the estimation.
  * @param bytes_acked  total number of bytes being acked from the beginning of the connection; i.e.,
  *                     `quicly_stats_t::num_bytes.ack_received`
  */
-void quicly_ratemeter_on_ack(quicly_ratemeter_t *dr, int64_t now, uint64_t bytes_acked, uint64_t pn);
+void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, int64_t now, uint64_t bytes_acked, uint64_t pn);
 /**
  * Returns the delivery rate estimate
  */
-void quicly_ratemeter_report(quicly_ratemeter_t *dr, quicly_rate_t *rate);
+void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate);
 
 #ifdef __cplusplus
 }
