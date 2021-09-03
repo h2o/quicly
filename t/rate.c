@@ -25,11 +25,11 @@
 
 #define CHECK_REPORT(el, es, ev)                                                                                                   \
     do {                                                                                                                           \
-        uint64_t latest, smoothed, variance;                                                                                       \
-        quicly_ratemeter_report(&meter, &latest, &smoothed, &variance);                                                            \
-        ok(latest == el);                                                                                                          \
-        ok(smoothed == es);                                                                                                        \
-        ok(variance == ev);                                                                                                        \
+        quicly_rate_t rate;                                                                                                        \
+        quicly_ratemeter_report(&meter, &rate);                                                                                    \
+        ok(rate.latest == el);                                                                                                     \
+        ok(rate.smoothed == es);                                                                                                   \
+        ok(rate.variance == ev);                                                                                                   \
     } while (0)
 
 static void test_basic(void)

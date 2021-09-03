@@ -39,6 +39,7 @@ extern "C" {
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
 #include "quicly/cc.h"
+#include "quicly/rate.h"
 #include "quicly/recvstate.h"
 #include "quicly/sendstate.h"
 #include "quicly/maxsender.h"
@@ -482,11 +483,7 @@ typedef struct st_quicly_stats_t {
     /**
      * Estimated delivery rate, in bytes/second.
      */
-    struct {
-        uint64_t latest;
-        uint64_t smoothed;
-        uint64_t variance;
-    } delivery_rate;
+    quicly_rate_t delivery_rate;
 } quicly_stats_t;
 
 /**

@@ -78,6 +78,15 @@ typedef struct st_quicly_ratemeter_t {
 } quicly_ratemeter_t;
 
 /**
+ * Estimated delivery rate, in bytes / second.
+ */
+typedef struct st_quicly_rate_t {
+    uint64_t latest;
+    uint64_t smoothed;
+    uint64_t variance;
+} quicly_rate_t;
+
+/**
  *
  */
 void quicly_ratemeter_init(quicly_ratemeter_t *dr);
@@ -96,9 +105,9 @@ void quicly_ratemeter_not_cwnd_limited(quicly_ratemeter_t *dr, uint64_t pn);
  */
 void quicly_ratemeter_on_ack(quicly_ratemeter_t *dr, int64_t now, uint64_t bytes_acked, uint64_t pn);
 /**
- * Returns three indicators of the delivery rate estimate
+ * Returns the delivery rate estimate
  */
-void quicly_ratemeter_report(quicly_ratemeter_t *dr, uint64_t *latest, uint64_t *smoothed, uint64_t *variance);
+void quicly_ratemeter_report(quicly_ratemeter_t *dr, quicly_rate_t *rate);
 
 #ifdef __cplusplus
 }

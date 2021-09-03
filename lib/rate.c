@@ -101,7 +101,7 @@ static uint64_t to_speed(uint64_t bytes_acked, uint32_t elapsed)
     return bytes_acked * 1000 / elapsed;
 }
 
-void quicly_ratemeter_report(quicly_ratemeter_t *dr, uint64_t *latest, uint64_t *smoothed, uint64_t *variance)
+void quicly_ratemeter_report(quicly_ratemeter_t *dr, quicly_rate_t *rate)
 {
     { /* Calculate latest, or return if there are no samples at all. `latest` being reported will be the most recent "full" sample
        * if available, or else a partial sample. */
@@ -109,11 +109,11 @@ void quicly_ratemeter_report(quicly_ratemeter_t *dr, uint64_t *latest, uint64_t 
         if (latest_sample->elapsed == 0) {
             latest_sample = &dr->current.sample;
             if (latest_sample->elapsed == 0) {
-                *latest = *smoothed = *variance = 0;
+                rate->latest = rate->smoothed = rate->variance = 0;
                 return;
             }
         }
-        *latest = to_speed(latest_sample->bytes_acked, latest_sample->elapsed);
+        rate->latest = to_speed(latest_sample->bytes_acked, latest_sample->elapsed);
     }
 
 #define FOREACH_SAMPLE(func)                                                                                                       \
@@ -136,7 +136,7 @@ void quicly_ratemeter_report(quicly_ratemeter_t *dr, uint64_t *latest, uint64_t 
             total_acked += sample->bytes_acked;
             total_elapsed += sample->elapsed;
         });
-        *smoothed = to_speed(total_acked, total_elapsed);
+        rate->smoothed = to_speed(total_acked, total_elapsed);
     }
 
     { /* calculate variance */
@@ -144,10 +144,10 @@ void quicly_ratemeter_report(quicly_ratemeter_t *dr, uint64_t *latest, uint64_t 
         size_t count = 0;
         FOREACH_SAMPLE({
             uint64_t sample_speed = to_speed(sample->bytes_acked, sample->elapsed);
-            sum += (sample_speed - *smoothed) * (sample_speed - *smoothed);
+            sum += (sample_speed - rate->smoothed) * (sample_speed - rate->smoothed);
             ++count;
         });
-        *variance = sum / count;
+        rate->variance = sum / count;
     }
 
 #undef FOREACH_SAMPLE

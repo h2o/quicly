@@ -35,7 +35,6 @@
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
 #include "quicly/cc.h"
-#include "quicly/rate.h"
 #if QUICLY_USE_EMBEDDED_PROBES
 #include "embedded-probes.h"
 #elif QUICLY_USE_DTRACE
@@ -1214,8 +1213,7 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     /* set or generate the non-pre-built stats fields here */
     stats->rtt = conn->egress.loss.rtt;
     stats->cc = conn->egress.cc;
-    quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate.latest, &stats->delivery_rate.smoothed,
-                            &stats->delivery_rate.variance);
+    quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate);
 
     return 0;
 }
