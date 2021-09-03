@@ -23,13 +23,13 @@
 #include "picotls.h"
 #include "quicly/delivery-rate.h"
 
-static void start_sampling(quicly_delivery_rate_t *dr, int64_t now, uint64_t bytes_acked)
+static void start_sampling(quicly_ratemeter_t *dr, int64_t now, uint64_t bytes_acked)
 {
     dr->current.start.at = now;
     dr->current.start.bytes_acked = bytes_acked;
 }
 
-static void commit_sample(quicly_delivery_rate_t *dr)
+static void commit_sample(quicly_ratemeter_t *dr)
 {
     ++dr->past_samples.latest;
     if (dr->past_samples.latest >= PTLS_ELEMENTSOF(dr->past_samples.entries))
@@ -37,19 +37,19 @@ static void commit_sample(quicly_delivery_rate_t *dr)
     dr->past_samples.entries[dr->past_samples.latest] = dr->current.sample;
 
     dr->current.start.at = INT64_MAX;
-    dr->current.sample = (struct st_quicly_delivery_rate_sample_t){};
+    dr->current.sample = (struct st_quicly_rate_sample_t){};
 }
 
-void quicly_delivery_rate_init(quicly_delivery_rate_t *dr)
+void quicly_ratemeter_init(quicly_ratemeter_t *dr)
 {
-    *dr = (quicly_delivery_rate_t){
+    *dr = (quicly_ratemeter_t){
         .past_samples = {.latest = PTLS_ELEMENTSOF(dr->past_samples.entries) - 1},
         .pn_cwnd_limited = {.start = UINT64_MAX, .end = UINT64_MAX},
         .current = {.start = {.at = INT64_MAX}},
     };
 }
 
-void quicly_delivery_rate_in_cwnd_limited(quicly_delivery_rate_t *dr, uint64_t pn)
+void quicly_ratemeter_in_cwnd_limited(quicly_ratemeter_t *dr, uint64_t pn)
 {
     /* bail out if already in cwnd-limited phase */
     if (dr->pn_cwnd_limited.start != UINT64_MAX && dr->pn_cwnd_limited.end == UINT64_MAX)
@@ -63,20 +63,20 @@ void quicly_delivery_rate_in_cwnd_limited(quicly_delivery_rate_t *dr, uint64_t p
     dr->pn_cwnd_limited = (quicly_range_t){.start = pn, .end = UINT64_MAX};
 }
 
-void quicly_delivery_rate_not_cwnd_limited(quicly_delivery_rate_t *dr, uint64_t pn)
+void quicly_ratemeter_not_cwnd_limited(quicly_ratemeter_t *dr, uint64_t pn)
 {
     if (dr->pn_cwnd_limited.start != UINT64_MAX && dr->pn_cwnd_limited.end == UINT64_MAX)
         dr->pn_cwnd_limited.end = pn;
 }
 
-void quicly_delivery_rate_on_ack(quicly_delivery_rate_t *dr, int64_t now, uint64_t bytes_acked, uint64_t pn)
+void quicly_ratemeter_on_ack(quicly_ratemeter_t *dr, int64_t now, uint64_t bytes_acked, uint64_t pn)
 {
     if (dr->pn_cwnd_limited.start <= pn && pn < dr->pn_cwnd_limited.end) {
         /* At the moment, the flow is CWND-limited. Either start the timer or update. */
         if (dr->current.start.at == INT64_MAX) {
             start_sampling(dr, now, bytes_acked);
         } else {
-            dr->current.sample = (struct st_quicly_delivery_rate_sample_t){
+            dr->current.sample = (struct st_quicly_rate_sample_t){
                 .elapsed = (uint32_t)(now - dr->current.start.at),
                 .bytes_acked = (uint32_t)(bytes_acked - dr->current.start.bytes_acked),
             };
@@ -101,11 +101,11 @@ static uint64_t to_speed(uint64_t bytes_acked, uint32_t elapsed)
     return bytes_acked * 1000 / elapsed;
 }
 
-void quicly_delivery_rate_report(quicly_delivery_rate_t *dr, uint64_t *latest, uint64_t *smoothed, uint64_t *variance)
+void quicly_ratemeter_report(quicly_ratemeter_t *dr, uint64_t *latest, uint64_t *smoothed, uint64_t *variance)
 {
     { /* Calculate latest, or return if there are no samples at all. `latest` being reported will be the most recent "full" sample
        * if available, or else a partial sample. */
-        const struct st_quicly_delivery_rate_sample_t *latest_sample = &dr->past_samples.entries[dr->past_samples.latest];
+        const struct st_quicly_rate_sample_t *latest_sample = &dr->past_samples.entries[dr->past_samples.latest];
         if (latest_sample->elapsed == 0) {
             latest_sample = &dr->current.sample;
             if (latest_sample->elapsed == 0) {
@@ -118,7 +118,7 @@ void quicly_delivery_rate_report(quicly_delivery_rate_t *dr, uint64_t *latest, u
 
 #define FOREACH_SAMPLE(func)                                                                                                       \
     do {                                                                                                                           \
-        const struct st_quicly_delivery_rate_sample_t *sample;                                                                     \
+        const struct st_quicly_rate_sample_t *sample;                                                                              \
         for (size_t i = 0; i < PTLS_ELEMENTSOF(dr->past_samples.entries); ++i) {                                                   \
             if ((sample = &dr->past_samples.entries[i])->elapsed != 0) {                                                           \
                 func                                                                                                               \

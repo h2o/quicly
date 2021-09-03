@@ -44,7 +44,7 @@ extern "C" {
 #define QUICLY_DELIVERY_RATE_SAMPLE_COUNT 10
 #endif
 
-struct st_quicly_delivery_rate_sample_t {
+struct st_quicly_rate_sample_t {
     uint32_t elapsed;
     uint32_t bytes_acked;
 };
@@ -52,12 +52,12 @@ struct st_quicly_delivery_rate_sample_t {
 /**
  * State used for estimating the delivery rate.
  */
-typedef struct st_quicly_delivery_rate_t {
+typedef struct st_quicly_ratemeter_t {
     /**
      * ring buffer retaining the most recent samples
      */
     struct {
-        struct st_quicly_delivery_rate_sample_t entries[QUICLY_DELIVERY_RATE_SAMPLE_COUNT];
+        struct st_quicly_rate_sample_t entries[QUICLY_DELIVERY_RATE_SAMPLE_COUNT];
         size_t latest;
     } past_samples;
     /**
@@ -73,32 +73,32 @@ typedef struct st_quicly_delivery_rate_t {
             int64_t at;
             uint64_t bytes_acked;
         } start;
-        struct st_quicly_delivery_rate_sample_t sample;
+        struct st_quicly_rate_sample_t sample;
     } current;
-} quicly_delivery_rate_t;
+} quicly_ratemeter_t;
 
 /**
  *
  */
-void quicly_delivery_rate_init(quicly_delivery_rate_t *dr);
+void quicly_ratemeter_init(quicly_ratemeter_t *dr);
 /**
  * Notifies the estimator that the flow is CWND-limited at the point of sending packets *starting* from packet number `pn`.
  */
-void quicly_delivery_rate_in_cwnd_limited(quicly_delivery_rate_t *dr, uint64_t pn);
+void quicly_ratemeter_in_cwnd_limited(quicly_ratemeter_t *dr, uint64_t pn);
 /**
  * Notifies that the estimator that the flow is not CWND-limited when the packet number of the next packet will be `pn`.
  */
-void quicly_delivery_rate_not_cwnd_limited(quicly_delivery_rate_t *dr, uint64_t pn);
+void quicly_ratemeter_not_cwnd_limited(quicly_ratemeter_t *dr, uint64_t pn);
 /**
  * Given three values, update the estimation.
  * @param bytes_acked  total number of bytes being acked from the beginning of the connection; i.e.,
  *                     `quicly_stats_t::num_bytes.ack_received`
  */
-void quicly_delivery_rate_on_ack(quicly_delivery_rate_t *dr, int64_t now, uint64_t bytes_acked, uint64_t pn);
+void quicly_ratemeter_on_ack(quicly_ratemeter_t *dr, int64_t now, uint64_t bytes_acked, uint64_t pn);
 /**
  * Returns three indicators of the delivery rate estimate
  */
-void quicly_delivery_rate_report(quicly_delivery_rate_t *dr, uint64_t *latest, uint64_t *smoothed, uint64_t *variance);
+void quicly_ratemeter_report(quicly_ratemeter_t *dr, uint64_t *latest, uint64_t *smoothed, uint64_t *variance);
 
 #ifdef __cplusplus
 }

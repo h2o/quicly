@@ -353,7 +353,7 @@ struct st_quicly_conn_t {
         /**
          * delivery rate estimator
          */
-        quicly_delivery_rate_t delivery_rate;
+        quicly_ratemeter_t ratemeter;
     } egress;
     /**
      * crypto data
@@ -1214,8 +1214,8 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     /* set or generate the non-pre-built stats fields here */
     stats->rtt = conn->egress.loss.rtt;
     stats->cc = conn->egress.cc;
-    quicly_delivery_rate_report(&conn->egress.delivery_rate, &stats->delivery_rate.latest, &stats->delivery_rate.smoothed,
-                                &stats->delivery_rate.variance);
+    quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate.latest, &stats->delivery_rate.smoothed,
+                            &stats->delivery_rate.variance);
 
     return 0;
 }
@@ -1297,7 +1297,7 @@ static void setup_next_send(quicly_conn_t *conn)
 
     /* When the flow becomes application-limited due to receiving some information, stop collecting delivery rate samples. */
     if (!can_send_stream_data)
-        quicly_delivery_rate_not_cwnd_limited(&conn->egress.delivery_rate, conn->egress.packet_number);
+        quicly_ratemeter_not_cwnd_limited(&conn->egress.ratemeter, conn->egress.packet_number);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -2131,7 +2131,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
-    quicly_delivery_rate_init(&conn->egress.delivery_rate);
+    quicly_ratemeter_init(&conn->egress.ratemeter);
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -4523,9 +4523,9 @@ Exit:
         if (can_send_stream_data &&
             (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
             /* as the flow is CWND-limited, start delivery rate estimator */
-            quicly_delivery_rate_in_cwnd_limited(&conn->egress.delivery_rate, s->first_packet_number);
+            quicly_ratemeter_in_cwnd_limited(&conn->egress.ratemeter, s->first_packet_number);
         } else {
-            quicly_delivery_rate_not_cwnd_limited(&conn->egress.delivery_rate, conn->egress.packet_number);
+            quicly_ratemeter_not_cwnd_limited(&conn->egress.ratemeter, conn->egress.packet_number);
         }
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
@@ -4970,8 +4970,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     QUICLY_PROBE(ACK_DELAY_RECEIVED, conn, conn->stash.now, frame.ack_delay);
 
-    quicly_delivery_rate_on_ack(&conn->egress.delivery_rate, conn->stash.now, conn->super.stats.num_bytes.ack_received,
-                                largest_newly_acked.pn);
+    quicly_ratemeter_on_ack(&conn->egress.ratemeter, conn->stash.now, conn->super.stats.num_bytes.ack_received,
+                            largest_newly_acked.pn);
 
     /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
      * so far. So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
