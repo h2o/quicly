@@ -110,6 +110,7 @@ struct net_bottleneck {
 struct net_endpoint {
     struct net_node super;
     quicly_address_t addr;
+    double start_at;
     struct net_endpoint_conn {
         quicly_conn_t *quic;
         struct net_node *egress;
@@ -289,15 +290,17 @@ static void net_endpoint_forward(struct net_node *_self, struct net_packet *pack
 static double net_endpoint_next_run_at(struct net_node *_self)
 {
     struct net_endpoint *self = (struct net_endpoint *)_self;
-    double at = INFINITY;
 
+    if (now < self->start_at)
+        return self->start_at;
+
+    double at = INFINITY;
     for (struct net_endpoint_conn *conn = self->conns; conn->quic != NULL; ++conn) {
         /* value is incremented by 0.1ms to avoid the timer firing earlier than specified due to rounding error */
         double conn_at = quicly_get_first_timeout(conn->quic) / 1000. + 0.0001;
         if (conn_at < at)
             at = conn_at;
     }
-
     if (at < now)
         at = now;
     return at;
@@ -306,6 +309,9 @@ static double net_endpoint_next_run_at(struct net_node *_self)
 static void net_endpoint_run(struct net_node *_self)
 {
     struct net_endpoint *self = (struct net_endpoint *)_self;
+
+    if (now < self->start_at)
+        return;
 
     for (struct net_endpoint_conn *conn = self->conns; conn->quic != NULL; ++conn) {
         quicly_address_t dest, src;
@@ -416,6 +422,7 @@ static void usage(const char *cmd)
            "  -l <seconds>        number of seconds to simulate (default: 100)\n"
            "  -d <delay>          delay to be introduced between the sender and the botteneck, in seconds (default: 0.1)\n"
            "  -q <seconds>        maximum depth of the bottleneck queue, in seconds (default: 0.1)\n"
+           "  -s <seconds>        delay until the sender is introduced to the simulation (default: 0)\n"
            "  -h                  print this help\n"
            "\n",
            cmd);
@@ -529,10 +536,10 @@ int main(int argc, char **argv)
     *node_insert_at++ = &server_node.node.super;
 
     /* parse args */
-    double delay = 0.1, bw = 1e6, depth = 0.1;
+    double delay = 0.1, bw = 1e6, depth = 0.1, start = 0;
     unsigned length = 100;
     int ch;
-    while ((ch = getopt(argc, argv, "n:b:d:l:q:h")) != -1) {
+    while ((ch = getopt(argc, argv, "n:b:d:s:l:q:h")) != -1) {
         switch (ch) {
         case 'n': {
             quicly_cc_type_t **cc;
@@ -551,6 +558,7 @@ int main(int argc, char **argv)
             *node_insert_at++ = &delay_node->super;
             struct net_endpoint *client_node = malloc(sizeof(*client_node));
             net_endpoint_init(client_node);
+            client_node->start_at = now + start;
             int ret = quicly_connect(&client_node->conns[0].quic, &quicctx, "hello.example.com", &server_node.node.addr.sa,
                                      &client_node->addr.sa, NULL, ptls_iovec_init(NULL, 0), NULL, NULL);
             assert(ret == 0);
@@ -571,6 +579,12 @@ int main(int argc, char **argv)
         case 'd':
             if (sscanf(optarg, "%lf", &delay) != 1) {
                 fprintf(stderr, "invalid delay value: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 's':
+            if (sscanf(optarg, "%lf", &start) != 1) {
+                fprintf(stderr, "invaild start: %s\n", optarg);
                 exit(1);
             }
             break;
