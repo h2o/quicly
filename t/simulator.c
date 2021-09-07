@@ -412,9 +412,11 @@ static void usage(const char *cmd)
            "\n"
            "Options:\n"
            "  -n <cc>             adds a sender using specified controller\n"
-           "  -b <bytes_per_sec>  bottleneck bandwidth\n"
-           "  -d <delay>          delay to be introduced between the sender and the botteneck\n"
-           "  -q <second>         maximum depth of the bottleneck queue, in seconds\n"
+           "  -b <bytes_per_sec>  bottleneck bandwidth (default: 1000000, i.e., 1MB/s)\n"
+           "  -l <seconds>        number of seconds to simulate (default: 100)\n"
+           "  -d <delay>          delay to be introduced between the sender and the botteneck, in seconds (default: 0.1)\n"
+           "  -q <seconds>        maximum depth of the bottleneck queue, in seconds (default: 0.1)\n"
+           "  -h                  print this help\n"
            "\n",
            cmd);
 }
@@ -528,8 +530,9 @@ int main(int argc, char **argv)
 
     /* parse args */
     double delay = 0.1, bw = 1e6, depth = 0.1;
+    unsigned length = 100;
     int ch;
-    while ((ch = getopt(argc, argv, "n:b:d:q:h")) != -1) {
+    while ((ch = getopt(argc, argv, "n:b:d:l:q:h")) != -1) {
         switch (ch) {
         case 'n': {
             quicly_cc_type_t **cc;
@@ -571,6 +574,12 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
+        case 'l':
+            if (sscanf(optarg, "%u", &length) != 1) {
+                fprintf(stderr, "invalid length: %s\n", optarg);
+                exit(1);
+            }
+            break;
         case 'q':
             if (sscanf(optarg, "%lf", &depth) != 1) {
                 fprintf(stderr, "invalid queue depth: %s\n", optarg);
@@ -590,7 +599,7 @@ int main(int argc, char **argv)
     bottleneck_node.next_node = &server_node.node.super;
     *node_insert_at++ = &bottleneck_node.super;
 
-    while (now < 1050)
+    while (now < 1000 + length)
         run_nodes(nodes);
 
     return 0;
