@@ -83,9 +83,22 @@ typedef struct st_quicly_cc_t {
              */
             uint32_t stash;
             /**
-             * Number of bytes required to be acked in order to increase CWND by 1 MTU.
+             * Number of bytes required to be acked in order to increase CWND by 1 MTU. Or when set to zero, indicates that delay-
+             * based mode is in action.
              */
             uint32_t bytes_per_mtu_increase;
+            /**
+             *
+             */
+            struct {
+                uint8_t rapid_increase_on_next_loss : 1;
+                uint32_t rtt_floor;
+                uint32_t rtt_loss;
+                union {
+                    int64_t at;
+                    uint32_t loss_episode;
+                } next_drain;
+            } delay_based;
         } pico;
         /**
          * State information for CUBIC congestion control.
