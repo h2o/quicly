@@ -173,7 +173,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     } else if (cc->cwnd < cc->ssthresh) {
         /* Slow start. */
         bytes_per_mtu_increase = max_udp_payload_size;
-    } else if (loss->rtt.latest < cc->state.pico.delay_based.rtt_loss * 0.55) {
+    } else if (loss->rtt.latest < cc->state.pico.delay_based.rtt_loss * 0.6) {
         /* During loss-based congestion avoidance, detected a dip beyond loss-based CC. Switch to delay-mode and see what
          * happens. */
         fprintf(stderr, "switching to delay-based mode\n");
