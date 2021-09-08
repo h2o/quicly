@@ -104,7 +104,7 @@ static void on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint64_t next_pn
                 cc->cwnd, cc->state.pico.delay_based.rtt_floor, loss->rtt.smoothed, beta);
         cc->state.pico.bytes_per_mtu_increase = 0;
         SET_CWND(cc->cwnd * beta, 1);
-        cc->state.pico.delay_based.rtt_floor = loss->rtt.latest;
+        cc->state.pico.delay_based.rtt_floor = loss->rtt.latest_as_reported;
     } else {
         /* Loss-based. Use Cubic-friendly values. */
         int in_delay_mode = cc->state.pico.bytes_per_mtu_increase == 0;
@@ -122,7 +122,7 @@ static void on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint64_t next_pn
         fprintf(stderr, "loss@%" PRId64 ": cwnd: %" PRIu32 ", increase: %f\n", now, cc->cwnd,
                 (double)max_udp_payload_size / cc->state.pico.bytes_per_mtu_increase);
         SET_CWND(cc->cwnd * QUICLY_RENO_BETA, 0);
-        cc->state.pico.delay_based.rtt_loss = loss->rtt.latest;
+        cc->state.pico.delay_based.rtt_loss = loss->rtt.latest_as_reported;
     }
 
 #undef SET_CWND
@@ -134,8 +134,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 {
     assert(inflight >= bytes);
 
-    if (loss->rtt.latest < cc->state.pico.delay_based.rtt_floor)
-        cc->state.pico.delay_based.rtt_floor = loss->rtt.latest;
+    if (loss->rtt.latest_as_reported < cc->state.pico.delay_based.rtt_floor)
+        cc->state.pico.delay_based.rtt_floor = loss->rtt.latest_as_reported;
 
     /* Do not increase congestion window while in recovery. */
     if (largest_acked < cc->recovery_end)
@@ -147,7 +147,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     if (cc->cwnd_exiting_slow_start != 0 && cc->state.pico.bytes_per_mtu_increase == 0) {
         /* Delay-based */
-        if (loss->rtt.latest > cc->state.pico.delay_based.rtt_loss * 0.9) {
+        if (loss->rtt.latest_as_reported > cc->state.pico.delay_based.rtt_loss * 0.9) {
             /* It is likely that there's competing loss-based traffic, hence switch to loss-based mode. */
             fprintf(stderr, "time-based fallback to loss-based mode\n");
             schedule_next_drain(cc, loss, now, 0);
@@ -163,7 +163,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             }
             /* Additive increase while the delay is smaller than `rtt_floor`. Use large value so that the bandwidth would be
              * fulfilled at an early point. */
-            if (loss->rtt.latest < cc->state.pico.delay_based.rtt_floor + DELAY_TARGET_MSEC) {
+            if (loss->rtt.latest_as_reported < cc->state.pico.delay_based.rtt_floor + DELAY_TARGET_MSEC) {
                 bytes_per_mtu_increase = cc->cwnd;
             } else {
                 cc->state.reno.stash = 0;
@@ -173,7 +173,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     } else if (cc->cwnd < cc->ssthresh) {
         /* Slow start. */
         bytes_per_mtu_increase = max_udp_payload_size;
-    } else if (loss->rtt.latest < cc->state.pico.delay_based.rtt_loss * 0.6) {
+    } else if (loss->rtt.latest_as_reported < cc->state.pico.delay_based.rtt_loss * 0.6) {
         /* During loss-based congestion avoidance, detected a dip beyond loss-based CC. Switch to delay-mode and see what
          * happens. */
         fprintf(stderr, "switching to delay-based mode\n");
