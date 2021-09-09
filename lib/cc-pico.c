@@ -86,12 +86,15 @@ static void on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint64_t next_pn
             cc->cwnd_minimum = cc->cwnd;                                                                                           \
     } while (0)
 
-    if (should_drain(cc, now, cc->state.pico.bytes_per_mtu_increase == 0)) {
+    if (should_drain(cc, now, cc->state.pico.delay_based.in_delay_mode)) {
         /* Draining. */
         schedule_next_drain(cc, loss, now, 1);
         double beta;
-        if (cc->state.pico.bytes_per_mtu_increase == 0) {
-            beta = 1 - (1 - ((double)cc->state.pico.delay_based.rtt_floor / loss->rtt.smoothed)) * 2;
+        if (cc->state.pico.delay_based.in_delay_mode) {
+            uint32_t rtt_current = loss->rtt.smoothed + loss->rtt.variance;
+            if (rtt_current < cc->state.pico.delay_based.rtt_floor + DELAY_TARGET_MSEC)
+                rtt_current = cc->state.pico.delay_based.rtt_floor + DELAY_TARGET_MSEC;
+            beta = 1 - (1 - ((double)cc->state.pico.delay_based.rtt_floor / rtt_current)) * 2;
             if (beta < QUICLY_RENO_BETA) {
                 beta = QUICLY_RENO_BETA;
             } else if (beta > 0.9) {
@@ -102,17 +105,18 @@ static void on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint64_t next_pn
         }
         fprintf(stderr, "drain@%" PRId64 ": cwnd: %" PRIu32 ", rtt_floor: %" PRIu32 ", srtt: %" PRIu32 ", beta: %f\n", now,
                 cc->cwnd, cc->state.pico.delay_based.rtt_floor, loss->rtt.smoothed, beta);
-        cc->state.pico.bytes_per_mtu_increase = 0;
+        cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, loss->rtt.smoothed, max_udp_payload_size);
         SET_CWND(cc->cwnd * beta, 1);
+        cc->state.pico.delay_based.in_delay_mode = 1;
         cc->state.pico.delay_based.rtt_floor = loss->rtt.latest_as_reported;
     } else {
         /* Loss-based. Use Cubic-friendly values. */
-        int in_delay_mode = cc->state.pico.bytes_per_mtu_increase == 0;
         cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, loss->rtt.smoothed, max_udp_payload_size);
-        if (in_delay_mode || cc->state.pico.delay_based.rapid_increase_on_next_loss) {
+        if (cc->state.pico.delay_based.in_delay_mode || cc->state.pico.delay_based.rapid_increase_on_next_loss) {
             /* Switching from delay-based to loss-based. Because it is likely that we have given up B/W due to repeated delay-based
              * reduction, we do a rapid increase, in order to regain bandwidth from the competing flow, hoping that we'd be on
              * parity well before we drain the next time. */
+            cc->state.pico.delay_based.in_delay_mode = 0;
             cc->state.pico.delay_based.rapid_increase_on_next_loss = 0;
             cc->state.pico.bytes_per_mtu_increase /= 8;
             if (cc->state.pico.bytes_per_mtu_increase < max_udp_payload_size)
@@ -145,7 +149,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     uint32_t bytes_per_mtu_increase;
 
-    if (cc->cwnd_exiting_slow_start != 0 && cc->state.pico.bytes_per_mtu_increase == 0) {
+    if (cc->state.pico.delay_based.in_delay_mode) {
         /* Delay-based */
         if (loss->rtt.latest_as_reported > cc->state.pico.delay_based.rtt_loss * 0.9) {
             /* It is likely that there's competing loss-based traffic, hence switch to loss-based mode. */
@@ -153,6 +157,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             schedule_next_drain(cc, loss, now, 0);
             cc->state.pico.bytes_per_mtu_increase =
                 calc_bytes_per_mtu_increase(cc->cwnd * QUICLY_RENO_BETA, loss->rtt.smoothed, max_udp_payload_size);
+            cc->state.pico.delay_based.in_delay_mode = 0;
             cc->state.pico.delay_based.rapid_increase_on_next_loss = 1;
             bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
         } else {
@@ -164,9 +169,15 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             /* Additive increase while the delay is smaller than `rtt_floor`. Use large value so that the bandwidth would be
              * fulfilled at an early point. */
             if (loss->rtt.latest_as_reported < cc->state.pico.delay_based.rtt_floor + DELAY_TARGET_MSEC) {
-                bytes_per_mtu_increase = cc->cwnd;
+                bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+                if (loss->rtt.latest_as_reported < cc->state.pico.delay_based.rtt_floor + 1) {
+                    /* Bottleneck queue might be empty. Therefore, increase at at which we'd reach equilibrium within 1 second. */
+                    uint32_t fast_increase = max_udp_payload_size / (loss->rtt.latest_as_reported / 1000. * (0.1 / 0.9));
+                    if (fast_increase < bytes_per_mtu_increase)
+                        bytes_per_mtu_increase = fast_increase;
+                }
             } else {
-                cc->state.reno.stash = 0;
+                cc->state.reno.stash = cc->state.reno.stash > bytes * 2 ? cc->state.reno.stash - bytes * 2 : 0;
                 bytes_per_mtu_increase = UINT32_MAX;
             }
         }
@@ -177,7 +188,9 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         /* During loss-based congestion avoidance, detected a dip beyond loss-based CC. Switch to delay-mode and see what
          * happens. */
         fprintf(stderr, "switching to delay-based mode\n");
-        cc->state.pico.bytes_per_mtu_increase = 0;
+        cc->state.pico.delay_based.in_delay_mode = 1;
+        cc->state.pico.bytes_per_mtu_increase =
+            calc_bytes_per_mtu_increase(cc->cwnd / QUICLY_RENO_BETA, cc->state.pico.delay_based.rtt_loss, max_udp_payload_size);
         cc->state.reno.stash = 0;
         bytes_per_mtu_increase = UINT32_MAX;
     } else {

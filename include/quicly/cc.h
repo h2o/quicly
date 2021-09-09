@@ -91,6 +91,7 @@ typedef struct st_quicly_cc_t {
              *
              */
             struct {
+                uint8_t in_delay_mode : 1;
                 uint8_t rapid_increase_on_next_loss : 1;
                 uint32_t rtt_floor;
                 uint32_t rtt_loss;
