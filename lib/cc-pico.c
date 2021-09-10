@@ -26,16 +26,22 @@
 
 #define DELAY_TARGET_MSEC 5
 #define DRAIN_INTERVAL_NUM_EPISODES 12
-#define DRAIN_INTERVAL_MSEC 5000
 
 static void schedule_next_drain(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now, int in_delay_mode)
 {
-    /* between 0.75x - 1.25x of DRAIN_INTERVAL_MSEC */
-    uint32_t ratio_permil = 768 + (rand() % 512);
     if (in_delay_mode) {
-        cc->state.pico.delay_based.next_drain.at = now + DRAIN_INTERVAL_MSEC * ratio_permil / 1024;
-        fprintf(stderr, "%s: delay-mode; at=%" PRId64 "\n", __FUNCTION__, cc->state.pico.delay_based.next_drain.at);
+        /* In delay mode, drain interval is set relative to RTT. The rationale is:
+         * * The amount of bandwidth being released amortized over time should be independent from RTT and relative only to the flow
+         *   rate.
+         * * Assuming that the increase ratio used after draining is relative to the RTT, drain period should also be relative to
+         *   the RTT in order to achieve fairness.
+         */
+        cc->state.pico.delay_based.next_drain.at = now + 50 * loss->rtt.smoothed;
+        fprintf(stderr, "%s: delay-mode; now=%" PRId64 ", at=%" PRId64 "\n", __FUNCTION__, now,
+                cc->state.pico.delay_based.next_drain.at);
     } else {
+        /* between 0.75x - 1.25x of DRAIN_INTERVAL_NUM_EPISODES */
+        uint32_t ratio_permil = 768 + (rand() % 512);
         cc->state.pico.delay_based.next_drain.loss_episode =
             cc->num_loss_episodes + DRAIN_INTERVAL_NUM_EPISODES * ratio_permil / 1024;
         fprintf(stderr, "%s: loss-mode; episode=%" PRIu32 "\n", __FUNCTION__, cc->state.pico.delay_based.next_drain.loss_episode);
