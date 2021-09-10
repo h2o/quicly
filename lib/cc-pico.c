@@ -78,7 +78,7 @@ static void on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint64_t next_pn
     ++cc->num_loss_episodes;
     if (cc->cwnd_exiting_slow_start == 0) {
         cc->cwnd_exiting_slow_start = cc->cwnd;
-        schedule_next_drain(cc, loss, now, 0);
+        cc->state.pico.delay_based.next_drain.loss_episode = 3;
     }
 
 #define SET_CWND(w, d)                                                                                                             \
