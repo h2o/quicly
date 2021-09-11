@@ -29,8 +29,11 @@
 
 static int64_t calc_delay_drain_interval(uint32_t rtt, uint32_t bytes_per_mtu_increase, uint32_t mtu)
 {
+    /* Calculate time required to reach the CWND prior to draining. The assumption is that it would take one RTT (recovery period)
+     * plus 0.5 seconds to recover to a CWND value that fulfills `rtt_floor`, then use the specified increase ratio to climb to the
+     * equilibrium. */
     uint64_t time_till_equilibrium =
-        (double)DELAY_TARGET_MSEC * bytes_per_mtu_increase * rtt / ((double)(rtt + DELAY_TARGET_MSEC) * mtu);
+        rtt + 500 + (double)(DELAY_TARGET_MSEC - 1) * bytes_per_mtu_increase * rtt / ((double)(rtt + DELAY_TARGET_MSEC) * mtu);
     /* As the flows converge, `time_till_equilibrium` becomes almost identical between the flows. That leads to one flow always
      * draining immediately before the other. When that happens, distribution of the bandwidth remains unfair. To mitigate the
      * problem, randomness is inserted. */
