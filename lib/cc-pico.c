@@ -101,11 +101,8 @@ static void on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint64_t next_pn
             if (rtt_current < cc->state.pico.delay_based.rtt_floor + DELAY_TARGET_MSEC)
                 rtt_current = cc->state.pico.delay_based.rtt_floor + DELAY_TARGET_MSEC;
             beta = 1 - (1 - ((double)cc->state.pico.delay_based.rtt_floor / rtt_current)) * 2;
-            if (beta < QUICLY_RENO_BETA) {
+            if (beta < QUICLY_RENO_BETA)
                 beta = QUICLY_RENO_BETA;
-            } else if (beta > 0.9) {
-                beta = 0.9;
-            }
         } else {
             beta = 0.4;
         }
