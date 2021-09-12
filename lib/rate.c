@@ -86,7 +86,7 @@ void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, int64_t now, uint64_t by
             }
         }
     } else if (meter->pn_cwnd_limited.end <= pn) {
-        /* We have exitted CWND-limited state. Save current value, if any. */
+        /* We have exited CWND-limited state. Save current value, if any. */
         if (meter->current.start.at != INT64_MAX) {
             if (meter->current.sample.elapsed != 0)
                 commit_sample(meter);
