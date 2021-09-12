@@ -24,6 +24,11 @@
 #include "quicly.h"
 
 /**
+ * CWND size is multiplied by this factor every RT, when it is likely that the bottleneck buffer is empty
+ */
+#define INCREASE_RATIO_WHEN_EMPTY 0.05
+
+/**
  * Calculates the increase ratio to be used in congestion avoidance phase.
  */
 static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_t mtu)
@@ -42,6 +47,12 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 {
     assert(inflight >= bytes);
 
+    int rtt_at_floor = 0;
+    if (loss->rtt.latest_as_reported <= cc->state.pico.rtt_floor) {
+        rtt_at_floor = 1;
+        cc->state.pico.rtt_floor = loss->rtt.latest_as_reported;
+    }
+
     /* Do not increase congestion window while in recovery. */
     if (largest_acked < cc->recovery_end)
         return;
@@ -54,6 +65,11 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         bytes_per_mtu_increase = max_udp_payload_size;
     } else {
         bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+        if (rtt_at_floor) {
+            uint32_t rapid_increase = max_udp_payload_size / INCREASE_RATIO_WHEN_EMPTY;
+            if (rapid_increase < bytes_per_mtu_increase)
+                bytes_per_mtu_increase = rapid_increase;
+        }
     }
 
     /* Bail out if we do not yet have enough bytes being acked. */
@@ -92,6 +108,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     if (cc->cwnd_minimum > cc->cwnd)
         cc->cwnd_minimum = cc->cwnd;
+
+    cc->state.pico.rtt_floor = loss->rtt.latest_as_reported;
 }
 
 static void pico_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
