@@ -98,6 +98,12 @@ struct net_delay {
     double delay;
 };
 
+struct net_random_loss {
+    struct net_node super;
+    struct net_node *next_node;
+    double loss_ratio;
+};
+
 struct net_bottleneck {
     struct net_node super;
     struct net_node *next_node;
@@ -184,6 +190,33 @@ static void net_delay_init(struct net_delay *self, double delay)
         .super = {net_delay_forward, net_delay_next_run_at, net_delay_run},
         .queue = {.append_at = &self->queue.first},
         .delay = delay,
+    };
+}
+
+static void net_random_loss_forward(struct net_node *_self, struct net_packet *packet)
+{
+    struct net_random_loss *self = (struct net_random_loss *)_self;
+
+    if (rand() % 65536 < self->loss_ratio * 65536) {
+        printf("{\"random-loss\": \"drop\", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", now,
+               ntohl(packet->src->addr.sin.sin_addr.s_addr));
+        net_packet_destroy(packet);
+        return;
+    }
+
+    self->next_node->forward_(self->next_node, packet);
+}
+
+static double net_random_loss_next_run_at(struct net_node *self)
+{
+    return INFINITY;
+}
+
+static void net_random_loss_init(struct net_random_loss *self, double loss_ratio)
+{
+    *self = (struct net_random_loss){
+        .super = {net_random_loss_forward, net_random_loss_next_run_at, NULL},
+        .loss_ratio = loss_ratio,
     };
 }
 
@@ -422,6 +455,7 @@ static void usage(const char *cmd)
            "  -l <seconds>        number of seconds to simulate (default: 100)\n"
            "  -d <delay>          delay to be introduced between the sender and the botteneck, in seconds (default: 0.1)\n"
            "  -q <seconds>        maximum depth of the bottleneck queue, in seconds (default: 0.1)\n"
+           "  -r <rate>           introduce random loss at specified probability (default: 0)\n"
            "  -s <seconds>        delay until the sender is introduced to the simulation (default: 0)\n"
            "  -h                  print this help\n"
            "\n",
@@ -524,6 +558,7 @@ int main(int argc, char **argv)
     quicctx.transport_params.min_ack_delay_usec = UINT64_MAX; /* disable ack-delay extension */
 
     struct net_bottleneck bottleneck_node;
+    struct net_random_loss random_loss_node;
     struct {
         struct net_endpoint node;
         quicly_context_t accept_ctx;
@@ -536,10 +571,10 @@ int main(int argc, char **argv)
     *node_insert_at++ = &server_node.node.super;
 
     /* parse args */
-    double delay = 0.1, bw = 1e6, depth = 0.1, start = 0;
+    double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
     unsigned length = 100;
     int ch;
-    while ((ch = getopt(argc, argv, "n:b:d:s:l:q:h")) != -1) {
+    while ((ch = getopt(argc, argv, "n:b:d:s:l:q:r:h")) != -1) {
         switch (ch) {
         case 'n': {
             quicly_cc_type_t **cc;
@@ -600,6 +635,12 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
+        case 'r':
+            if (sscanf(optarg, "%lf", &random_loss) != 1) {
+                fprintf(stderr, "invalid random loss rate: %s\n", optarg);
+                exit(1);
+            }
+            break;
         default:
             usage(argv[0]);
             exit(0);
@@ -612,6 +653,14 @@ int main(int argc, char **argv)
     net_bottleneck_init(&bottleneck_node, bw, depth);
     bottleneck_node.next_node = &server_node.node.super;
     *node_insert_at++ = &bottleneck_node.super;
+
+    /* setup random loss */
+    if (random_loss != 0) {
+        net_random_loss_init(&random_loss_node, random_loss);
+        random_loss_node.next_node = &server_node.node.super;
+        bottleneck_node.next_node = &random_loss_node.super;
+        *node_insert_at++ = &random_loss_node.super;
+    }
 
     while (now < 1000 + length)
         run_nodes(nodes);
