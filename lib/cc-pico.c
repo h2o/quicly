@@ -181,6 +181,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
                         bytes_per_mtu_increase = fast_increase;
                 }
             } else {
+                /* Undo addition of `bytes` to stash, and subtract at most `bytes` from stash to reduce the pressure to increase. */
                 cc->state.reno.stash = cc->state.reno.stash > bytes * 2 ? cc->state.reno.stash - bytes * 2 : 0;
                 bytes_per_mtu_increase = UINT32_MAX;
             }
