@@ -76,6 +76,8 @@ void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, int64_t now, uint64_t by
         if (meter->current.start.at == INT64_MAX) {
             start_sampling(meter, now, bytes_acked);
         } else {
+            /* Update current sample whenever receiving an ACK, so that the sample can be committed other than when receiving an ACK
+             * (i.e., when opening a new CWND-limited phase). */
             meter->current.sample = (struct st_quicly_rate_sample_t){
                 .elapsed = (uint32_t)(now - meter->current.start.at),
                 .bytes_acked = (uint32_t)(bytes_acked - meter->current.start.bytes_acked),
