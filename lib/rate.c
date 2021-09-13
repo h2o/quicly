@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 
+#include <math.h>
 #include "picotls.h"
 #include "quicly/rate.h"
 
@@ -111,7 +112,7 @@ void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate)
         if (latest_sample->elapsed == 0) {
             latest_sample = &meter->current.sample;
             if (latest_sample->elapsed == 0) {
-                rate->latest = rate->smoothed = rate->variance = 0;
+                rate->latest = rate->smoothed = rate->stdev = 0;
                 return;
             }
         }
@@ -141,7 +142,7 @@ void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate)
         rate->smoothed = to_speed(total_acked, total_elapsed);
     }
 
-    { /* calculate variance */
+    { /* calculate stdev */
         uint64_t sum = 0;
         size_t count = 0;
         FOREACH_SAMPLE({
@@ -149,7 +150,7 @@ void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate)
             sum += (sample_speed - rate->smoothed) * (sample_speed - rate->smoothed);
             ++count;
         });
-        rate->variance = sum / count;
+        rate->stdev = sqrt(sum / count);
     }
 
 #undef FOREACH_SAMPLE
