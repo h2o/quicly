@@ -86,6 +86,10 @@ typedef struct st_quicly_cc_t {
              * Number of bytes required to be acked in order to increase CWND by 1 MTU.
              */
             uint32_t bytes_per_mtu_increase;
+            /**
+             * CWND size to be adopted at the end of the recovery period.
+             */
+            uint32_t cwnd_post_recovery;
         } pico;
         /**
          * State information for CUBIC congestion control.
