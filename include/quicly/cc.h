@@ -87,6 +87,10 @@ typedef struct st_quicly_cc_t {
              */
             uint32_t bytes_per_mtu_increase;
             /**
+             * CWND size to be adopted at the end of the recovery period.
+             */
+            uint32_t cwnd_post_recovery;
+            /**
              * Minimum RTT observed within one congestion period.
              */
             uint32_t rtt_floor;
