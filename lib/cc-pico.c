@@ -105,7 +105,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         if (rtt_at_floor) {
             uint32_t rapid_increase = max_udp_payload_size / INCREASE_RATIO_WHEN_EMPTY;
             if (rapid_increase < bytes_per_mtu_increase)
-                bytes_per_mtu_increase = rapid_increase;
+                bytes_per_mtu_increase += rapid_increase;
         }
     }
 
