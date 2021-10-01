@@ -35,6 +35,8 @@
 #include "quicly/cc.h"
 #include "quicly/defaults.h"
 
+FILE *quicly_trace_fp;
+
 static double now = 1000;
 
 static quicly_address_t new_address(void)
@@ -457,6 +459,7 @@ static void usage(const char *cmd)
            "  -q <seconds>        maximum depth of the bottleneck queue, in seconds (default: 0.1)\n"
            "  -r <rate>           introduce random loss at specified probability (default: 0)\n"
            "  -s <seconds>        delay until the sender is introduced to the simulation (default: 0)\n"
+           "  -t                  emits trace as well\n"
            "  -h                  print this help\n"
            "\n",
            cmd);
@@ -574,7 +577,7 @@ int main(int argc, char **argv)
     double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
     unsigned length = 100;
     int ch;
-    while ((ch = getopt(argc, argv, "n:b:d:s:l:q:r:h")) != -1) {
+    while ((ch = getopt(argc, argv, "n:b:d:s:l:q:r:th")) != -1) {
         switch (ch) {
         case 'n': {
             quicly_cc_type_t **cc;
@@ -641,6 +644,9 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
+        case 't':
+            quicly_trace_fp = stdout;
+            break;
         default:
             usage(argv[0]);
             exit(0);
@@ -667,5 +673,3 @@ int main(int argc, char **argv)
 
     return 0;
 }
-
-FILE *quicly_trace_fp;
