@@ -598,7 +598,8 @@ int main(int argc, char **argv)
             net_endpoint_init(client_node);
             client_node->start_at = now + start;
             int ret = quicly_connect(&client_node->conns[0].quic, &quicctx, "hello.example.com", &server_node.node.addr.sa,
-                                     &client_node->addr.sa, NULL, ptls_iovec_init(NULL, 0), NULL, NULL);
+                                     &client_node->addr.sa, &next_quic_cid, ptls_iovec_init(NULL, 0), NULL, NULL);
+            ++next_quic_cid.master_id;
             assert(ret == 0);
             quicly_stream_t *stream;
             ret = quicly_open_stream(client_node->conns[0].quic, &stream, 1);
