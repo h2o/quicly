@@ -80,6 +80,9 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 {
     assert(inflight >= bytes);
 
+    if (loss->rtt.latest_as_reported < cc->state.pico.rtt_floor)
+        cc->state.pico.rtt_floor = loss->rtt.latest_as_reported;
+
     /* Do not increase congestion window while in recovery. */
     if (handle_recovery_period(cc, largest_acked, bytes, max_udp_payload_size))
         return;
@@ -129,6 +132,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     if (cc->cwnd_minimum > cc->cwnd)
         cc->cwnd_minimum = cc->cwnd;
+
+    cc->state.pico.rtt_floor = loss->rtt.latest_as_reported;
 }
 
 static void pico_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)

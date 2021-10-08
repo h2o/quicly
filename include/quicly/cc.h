@@ -90,6 +90,10 @@ typedef struct st_quicly_cc_t {
              * CWND size to be adopted at the end of the recovery period.
              */
             uint32_t cwnd_post_recovery;
+            /**
+             * Minimum RTT observed within one congestion period.
+             */
+            uint32_t rtt_floor;
         } pico;
         /**
          * State information for CUBIC congestion control.
