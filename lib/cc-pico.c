@@ -24,13 +24,6 @@
 #include "quicly.h"
 
 /**
- * Amount of CWND to be initially reduced upon a loss event. This parameter controls the silence period that is introduced
- * immediately after a loss event. After that, packets are paced by gradually decreasing CWND, so that CWND is reduced to beta at
- * the end of the recovery period.
- */
-#define SILENCE_PERIOD 0.1
-
-/**
  * Calculates the increase ratio to be used in congestion avoidance phase.
  */
 static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_t mtu)
@@ -43,35 +36,24 @@ static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
     return reno < cubic ? reno : cubic;
 }
 
-/**
- * Adjusts `quicly_cc_t` after CWND is reduced.
- */
-static void fixup_post_cwnd_reduction(quicly_cc_t *cc, uint32_t max_udp_payload_size)
+static void reduce_window_to(uint32_t *slot, uint32_t new_value, uint32_t max_udp_payload_size)
 {
-    if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
-        cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
-    cc->ssthresh = cc->cwnd;
-
-    if (cc->cwnd_minimum > cc->cwnd)
-        cc->cwnd_minimum = cc->cwnd;
+    *slot = new_value;
+    if (*slot < QUICLY_MIN_CWND * max_udp_payload_size)
+        *slot = QUICLY_MIN_CWND * max_udp_payload_size;
 }
 
 static int handle_recovery_period(quicly_cc_t *cc, uint64_t pn, uint32_t bytes, uint32_t max_udp_payload_size)
 {
-    if (pn < cc->recovery_end) {
-        cc->cwnd -= bytes * (1 - QUICLY_RENO_BETA / (1. - SILENCE_PERIOD));
-        if (cc->cwnd < cc->state.pico.cwnd_post_recovery)
-            cc->cwnd = cc->state.pico.cwnd_post_recovery;
-        fixup_post_cwnd_reduction(cc, max_udp_payload_size);
-        return 1;
-    } else {
-        if (cc->state.pico.cwnd_post_recovery != 0) {
-            cc->cwnd = cc->state.pico.cwnd_post_recovery;
-            fixup_post_cwnd_reduction(cc, max_udp_payload_size);
-            cc->state.pico.cwnd_post_recovery = 0;
+    if (cc->num_loss_episodes != 0 && (pn < cc->recovery_end || cc->cwnd < cc->ssthresh)) {
+        if (cc->cwnd < cc->ssthresh) {
+            cc->cwnd += bytes * cc->state.pico.recovery_mult;
+            if (cc->cwnd > cc->ssthresh)
+                cc->cwnd = cc->ssthresh;
         }
-        return 0;
+        return 1;
     }
+    return 0;
 }
 
 /* TODO: Avoid increase if sender was application limited. */
@@ -101,7 +83,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (cc->state.reno.stash < bytes_per_mtu_increase)
         return;
 
-    /* Update CWND, reducing stash relative to the amount we've adjusted the CWND */
+    /* Update CWND, reducing stash relative to the amount we've adjusted the CWND. */
     uint32_t count = cc->state.reno.stash / bytes_per_mtu_increase;
     cc->cwnd += count * max_udp_payload_size;
     cc->state.reno.stash -= count * bytes_per_mtu_increase;
@@ -122,18 +104,31 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (cc->cwnd_exiting_slow_start == 0)
         cc->cwnd_exiting_slow_start = cc->cwnd;
 
-    /* Calculate increase rate. */
+    /* Calculate CWND, ssthresh, and increase rates.
+     * - Beta is chosen so that the throughput would decrease by no more than the queue being built.
+     * - Ssthresh is set to Wmax * beta.
+     * - Silence period is the period during when the sender remains silent immediately after loss is detected. This value have to
+     *   be greater than 1 - beta, if we want to eventually reach the bottom of the queue.
+     * - After the silence period, CWND is increased by 0.5 * (1 - beta) for each byte being acked or lost, until CWND becomes no
+     *   smaller than ssthresh. Increase rate is chosen as such that the queue build up in the worst case would be no more than 1/2
+         of the queue capacity (which is represented by beta).
+     * - In order to reach ssthresh within one round-trip, silence period is calculated as 1.5 * (1 - beta). */
+    double beta = 1. * cc->state.pico.rtt_floor / loss->rtt.latest_as_reported;
+    if (beta < QUICLY_RENO_BETA)
+        beta = QUICLY_RENO_BETA;
+    cc->state.pico.recovery_mult = (1 - beta) * 0.5;
     cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, loss->rtt.smoothed, max_udp_payload_size);
-
-    /* Reduce congestion window. */
-    cc->state.pico.cwnd_post_recovery = cc->cwnd * QUICLY_RENO_BETA;
-    cc->cwnd *= 1. - SILENCE_PERIOD;
-    fixup_post_cwnd_reduction(cc, max_udp_payload_size);
+    reduce_window_to(&cc->ssthresh, cc->cwnd * beta, max_udp_payload_size);
+    double silence_period = 1.5 * (1 - beta);
+    if (silence_period > 1 - QUICLY_RENO_BETA)
+        silence_period = 1 - QUICLY_RENO_BETA;
+    reduce_window_to(&cc->cwnd, cc->cwnd * (1 - silence_period), max_udp_payload_size);
 
     if (cc->cwnd_minimum > cc->cwnd)
         cc->cwnd_minimum = cc->cwnd;
 
     cc->state.pico.rtt_floor = loss->rtt.latest_as_reported;
+    cc->state.pico.stash = 0;
 }
 
 static void pico_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)

@@ -87,9 +87,10 @@ typedef struct st_quicly_cc_t {
              */
             uint32_t bytes_per_mtu_increase;
             /**
-             * CWND size to be adopted at the end of the recovery period.
+             * During recovery period, CWND is incremented by `recovery_mult` for every byte being acked or declared lost. This
+             * controls rapid increase after the silence period, until CWND becomes as large as cwnd_post_recovery.
              */
-            uint32_t cwnd_post_recovery;
+            double recovery_mult;
             /**
              * Minimum RTT observed within one congestion period.
              */
