@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		082195082683498900E3EFCF /* cc-pico.c in Sources */ = {isa = PBXBuildFile; fileRef = 082195072683498900E3EFCF /* cc-pico.c */; };
+		082195092683498900E3EFCF /* cc-pico.c in Sources */ = {isa = PBXBuildFile; fileRef = 082195072683498900E3EFCF /* cc-pico.c */; };
+		0821950A2683498900E3EFCF /* cc-pico.c in Sources */ = {isa = PBXBuildFile; fileRef = 082195072683498900E3EFCF /* cc-pico.c */; };
+		0829878E26E03D4D0053638F /* rate.c in Sources */ = {isa = PBXBuildFile; fileRef = 0829878D26E03D4D0053638F /* rate.c */; };
+		0829878F26E03D4D0053638F /* rate.c in Sources */ = {isa = PBXBuildFile; fileRef = 0829878D26E03D4D0053638F /* rate.c */; };
+		0829879026E03D4D0053638F /* rate.c in Sources */ = {isa = PBXBuildFile; fileRef = 0829878D26E03D4D0053638F /* rate.c */; };
+		0829879226E0A9DF0053638F /* rate.c in Sources */ = {isa = PBXBuildFile; fileRef = 0829879126E0A9DF0053638F /* rate.c */; };
 		E904233D24AED0410072C5B7 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E904233C24AED0410072C5B7 /* loss.c */; };
 		E904233E24AED0410072C5B7 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E904233C24AED0410072C5B7 /* loss.c */; };
 		E904233F24AED0410072C5B7 /* loss.c in Sources */ = {isa = PBXBuildFile; fileRef = E904233C24AED0410072C5B7 /* loss.c */; };
@@ -90,6 +97,9 @@
 		E9D3CCCD21D22E7E00516202 /* streambuf.h in Headers */ = {isa = PBXBuildFile; fileRef = E9D3CCCC21D22E7E00516202 /* streambuf.h */; };
 		E9D3CCCF21D22F4300516202 /* streambuf.c in Sources */ = {isa = PBXBuildFile; fileRef = E9D3CCCE21D22F4300516202 /* streambuf.c */; };
 		E9D3CCD021D6D24000516202 /* streambuf.c in Sources */ = {isa = PBXBuildFile; fileRef = E9D3CCCE21D22F4300516202 /* streambuf.c */; };
+		E9DF012424E4BAC20002EEC7 /* cc-cubic.c in Sources */ = {isa = PBXBuildFile; fileRef = E9DF012324E4BAC20002EEC7 /* cc-cubic.c */; };
+		E9DF012524E4BAC90002EEC7 /* cc-cubic.c in Sources */ = {isa = PBXBuildFile; fileRef = E9DF012324E4BAC20002EEC7 /* cc-cubic.c */; };
+		E9DF012624E4BACA0002EEC7 /* cc-cubic.c in Sources */ = {isa = PBXBuildFile; fileRef = E9DF012324E4BAC20002EEC7 /* cc-cubic.c */; };
 		E9F6A4201F3C0B6D0083F0B2 /* ranges.c in Sources */ = {isa = PBXBuildFile; fileRef = E9F6A41F1F3C0B6D0083F0B2 /* ranges.c */; };
 		E9F6A4211F3C0B6D0083F0B2 /* ranges.c in Sources */ = {isa = PBXBuildFile; fileRef = E9F6A41F1F3C0B6D0083F0B2 /* ranges.c */; };
 		E9F6A4271F3C3B050083F0B2 /* ranges.h in Headers */ = {isa = PBXBuildFile; fileRef = E9F6A4261F3C3B050083F0B2 /* ranges.h */; };
@@ -138,6 +148,10 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		082195072683498900E3EFCF /* cc-pico.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "cc-pico.c"; sourceTree = "<group>"; };
+		0829878C26DF775B0053638F /* rate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = rate.h; sourceTree = "<group>"; };
+		0829878D26E03D4D0053638F /* rate.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = rate.c; sourceTree = "<group>"; };
+		0829879126E0A9DF0053638F /* rate.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = rate.c; sourceTree = "<group>"; };
 		E904233C24AED0410072C5B7 /* loss.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E904234024AEFB980072C5B7 /* loss.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E9056C071F56965300E2B96C /* linklist.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = linklist.h; sourceTree = "<group>"; };
@@ -200,6 +214,7 @@
 		E9CC44241EC1962700DC7D3E /* test.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = test.c; sourceTree = "<group>"; };
 		E9D3CCCC21D22E7E00516202 /* streambuf.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = streambuf.h; sourceTree = "<group>"; };
 		E9D3CCCE21D22F4300516202 /* streambuf.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = streambuf.c; sourceTree = "<group>"; };
+		E9DF012324E4BAC20002EEC7 /* cc-cubic.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "cc-cubic.c"; sourceTree = "<group>"; };
 		E9F6A41F1F3C0B6D0083F0B2 /* ranges.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = ranges.c; sourceTree = "<group>"; };
 		E9F6A4261F3C3B050083F0B2 /* ranges.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ranges.h; sourceTree = "<group>"; };
 		E9F6A4281F3C3B3F0083F0B2 /* test.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = test.h; sourceTree = "<group>"; };
@@ -319,6 +334,8 @@
 		E984481F1EA48BF400390927 /* lib */ = {
 			isa = PBXGroup;
 			children = (
+				E9DF012324E4BAC20002EEC7 /* cc-cubic.c */,
+				082195072683498900E3EFCF /* cc-pico.c */,
 				E98041C522383C62008B9745 /* cc-reno.c */,
 				E9736527246FD3AC0039AA49 /* remote_cid.c */,
 				E98042352244A5D7008B9745 /* defaults.c */,
@@ -327,6 +344,7 @@
 				E904233C24AED0410072C5B7 /* loss.c */,
 				E98448411EA490A500390927 /* quicly.c */,
 				E9F6A41F1F3C0B6D0083F0B2 /* ranges.c */,
+				0829878D26E03D4D0053638F /* rate.c */,
 				E920D21D1F43E05000799777 /* recvstate.c */,
 				E9736528246FD3AC0039AA49 /* retire_cid.c */,
 				E9F6A42D1F41375B0083F0B2 /* sendstate.c */,
@@ -405,13 +423,14 @@
 			isa = PBXGroup;
 			children = (
 				E98884C221E3F23A0060F010 /* e2e.t */,
-				E9736534246FD3DA0039AA49 /* remote_cid.c */,
 				E99F8C281F4EAEF800C26B3D /* frame.c */,
 				E9736533246FD3DA0039AA49 /* local_cid.c */,
 				E904234024AEFB980072C5B7 /* loss.c */,
 				E920D22F1F49EE0B00799777 /* lossy.c */,
 				E99B75E61F5CF96900CF503E /* maxsender.c */,
 				E9F6A4291F3C3B7B0083F0B2 /* ranges.c */,
+				0829879126E0A9DF0053638F /* rate.c */,
+				E9736534246FD3DA0039AA49 /* remote_cid.c */,
 				E9736535246FD3DA0039AA49 /* retire_cid.c */,
 				E920D22D1F4981E500799777 /* sentmap.c */,
 				E920D2241F49412900799777 /* simple.c */,
@@ -446,6 +465,7 @@
 				E93E54BA1F69B750001C50FE /* loss.h */,
 				E920D2221F4536CB00799777 /* maxsender.h */,
 				E9F6A4261F3C3B050083F0B2 /* ranges.h */,
+				0829878C26DF775B0053638F /* rate.h */,
 				E920D21B1F43DE4100799777 /* recvstate.h */,
 				E9736522246FD3890039AA49 /* retire_cid.h */,
 				E92D43EC1F41DCF5002AC767 /* sendstate.h */,
@@ -521,6 +541,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = E984481B1EA48BD400390927 /* Build configuration list for PBXNativeTarget "quicly" */;
 			buildPhases = (
+				08CEA9DF267B461700B4BB6B /* ShellScript */,
 				E98448131EA48BD400390927 /* Sources */,
 				E98448141EA48BD400390927 /* Frameworks */,
 				E98448151EA48BD400390927 /* Headers */,
@@ -627,6 +648,25 @@
 /* End PBXProject section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		08CEA9DF267B461700B4BB6B /* ShellScript */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/quicly-probes.d",
+			);
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILES_DIR)/quicly-tracer.h",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n\nexec $SRCROOT/misc/probe2trace.pl -a tracer < $SRCROOT/quicly-probes.d > $DERIVED_FILES_DIR/quicly-tracer.h\n";
+		};
 		E941428B23B0B70F002D3CE0 /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -673,12 +713,15 @@
 				E98042362244A5D7008B9745 /* defaults.c in Sources */,
 				E904233D24AED0410072C5B7 /* loss.c in Sources */,
 				E9F6A42E1F41375B0083F0B2 /* sendstate.c in Sources */,
+				082195082683498900E3EFCF /* cc-pico.c in Sources */,
 				E99F8C261F4E9EBF00C26B3D /* frame.c in Sources */,
 				E98448421EA490A500390927 /* quicly.c in Sources */,
+				E9DF012424E4BAC20002EEC7 /* cc-cubic.c in Sources */,
 				E973652A246FD3AC0039AA49 /* remote_cid.c in Sources */,
 				E920D22B1F49533800799777 /* sentmap.c in Sources */,
 				E9D3CCCF21D22F4300516202 /* streambuf.c in Sources */,
 				E973652C246FD3AC0039AA49 /* local_cid.c in Sources */,
+				0829878E26E03D4D0053638F /* rate.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -686,6 +729,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E9DF012524E4BAC90002EEC7 /* cc-cubic.c in Sources */,
 				E973652F246FD3B40039AA49 /* retire_cid.c in Sources */,
 				E95E953C22904A4C00215ACD /* picotls-probes.d in Sources */,
 				E941428F23B0B84F002D3CE0 /* ranges.c in Sources */,
@@ -694,11 +738,13 @@
 				E984483B1EA48DD300390927 /* openssl.c in Sources */,
 				E973652E246FD3B40039AA49 /* remote_cid.c in Sources */,
 				E904233E24AED0410072C5B7 /* loss.c in Sources */,
+				082195092683498900E3EFCF /* cc-pico.c in Sources */,
 				E941428D23B0B839002D3CE0 /* frame.c in Sources */,
 				E941429123B0B86D002D3CE0 /* recvstate.c in Sources */,
 				E9B43E12246943D300824E51 /* fusion.c in Sources */,
 				E941428E23B0B845002D3CE0 /* defaults.c in Sources */,
 				E941429023B0B861002D3CE0 /* streambuf.c in Sources */,
+				0829878F26E03D4D0053638F /* rate.c in Sources */,
 				E93E546A1F663851001C50FE /* pembase64.c in Sources */,
 				E98042282239531A008B9745 /* cli.c in Sources */,
 				E941429223B0B870002D3CE0 /* sendstate.c in Sources */,
@@ -724,6 +770,7 @@
 				E9736537246FD3DA0039AA49 /* remote_cid.c in Sources */,
 				E99F8C291F4EAEF800C26B3D /* frame.c in Sources */,
 				E98041C722383C7A008B9745 /* cc-reno.c in Sources */,
+				0829879026E03D4D0053638F /* rate.c in Sources */,
 				E9D31DD1232DEDB400ACD5EC /* quicly-probes.d in Sources */,
 				E9736530246FD3B50039AA49 /* local_cid.c in Sources */,
 				E920D22C1F49533800799777 /* sentmap.c in Sources */,
@@ -744,12 +791,15 @@
 				E99B75E91F5D259400CF503E /* stream-concurrency.c in Sources */,
 				E920D22E1F4981E500799777 /* sentmap.c in Sources */,
 				E9CC44261EC1963100DC7D3E /* picotest.c in Sources */,
+				0821950A2683498900E3EFCF /* cc-pico.c in Sources */,
 				E95E953D22904A4C00215ACD /* picotls-probes.d in Sources */,
 				E9CC441C1EC195DF00DC7D3E /* picotls.c in Sources */,
 				E904233F24AED0410072C5B7 /* loss.c in Sources */,
+				E9DF012624E4BACA0002EEC7 /* cc-cubic.c in Sources */,
 				E98042372244A5D7008B9745 /* defaults.c in Sources */,
 				E99F8C271F4E9F5D00C26B3D /* frame.c in Sources */,
 				E9736536246FD3DA0039AA49 /* local_cid.c in Sources */,
+				0829879226E0A9DF0053638F /* rate.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -891,6 +941,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				EXECUTABLE_PREFIX = lib;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"QUICLY_USE_TRACER=1",
+				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Debug;
@@ -899,6 +953,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				EXECUTABLE_PREFIX = lib;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"QUICLY_USE_TRACER=1",
+				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;
