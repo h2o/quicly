@@ -1585,9 +1585,8 @@ void quicly_free(quicly_conn_t *conn)
         QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
     }
 #endif
-    update_open_count(conn->super.ctx, -1);
-
     destroy_all_streams(conn, 0, 1);
+    update_open_count(conn->super.ctx, -1);
     clear_datagram_frame_payloads(conn);
 
     quicly_maxsender_dispose(&conn->ingress.max_data.sender);
