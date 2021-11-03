@@ -52,19 +52,19 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (largest_acked < cc->recovery_end)
         return;
 
-    cc->state.reno.stash += bytes;
+    cc->state.pico.stash += bytes;
 
     /* Calculate the amount of bytes required to be acked for incrementing CWND by one MTU. */
     uint32_t bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, cc->ssthresh, loss->rtt.smoothed, max_udp_payload_size);
 
     /* Bail out if we do not yet have enough bytes being acked. */
-    if (cc->state.reno.stash < bytes_per_mtu_increase)
+    if (cc->state.pico.stash < bytes_per_mtu_increase)
         return;
 
     /* Update CWND, reducing stash relative to the amount we've adjusted the CWND */
-    uint32_t count = cc->state.reno.stash / bytes_per_mtu_increase;
+    uint32_t count = cc->state.pico.stash / bytes_per_mtu_increase;
     cc->cwnd += count * max_udp_payload_size;
-    cc->state.reno.stash -= count * bytes_per_mtu_increase;
+    cc->state.pico.stash -= count * bytes_per_mtu_increase;
 
     if (cc->cwnd_maximum < cc->cwnd)
         cc->cwnd_maximum = cc->cwnd;

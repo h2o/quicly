@@ -96,6 +96,7 @@ static int reno_on_switch(quicly_cc_t *cc)
         return 1; /* nothing to do */
     } else if (cc->type == &quicly_cc_type_pico) {
         cc->type = &quicly_cc_type_reno;
+        cc->state.reno.stash = cc->state.pico.stash;
         return 1;
     } else if (cc->type == &quicly_cc_type_cubic) {
         /* When in slow start, state can be reused as-is; otherwise, restart. */
