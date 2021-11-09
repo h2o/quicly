@@ -80,6 +80,7 @@ SET(UNITTEST_SOURCE_FILES
     t/sentmap.c
     t/simple.c
     t/stream-concurrency.c
+    t/set_cc.c
     t/test.c)
 
 IF (WITH_DTRACE)
