@@ -642,6 +642,7 @@ int main(int argc, char **argv)
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("lossy", test_lossy);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
+    subtest("set_cc", test_set_cc);
 
     return done_testing();
 }
