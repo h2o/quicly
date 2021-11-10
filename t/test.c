@@ -635,7 +635,6 @@ static void test_quicly_set_cc(void)
     ok(strcmp(stats.cc.type->name, "reno") == 0);
 }
 
-
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
