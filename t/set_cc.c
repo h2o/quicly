@@ -24,78 +24,66 @@
 
 static void test_quicly_set_cc(void)
 {
-    quicly_conn_t *client, *server;
-    quicly_address_t dest, src;
-    struct iovec packets[8];
-    uint8_t packetsbuf[PTLS_ELEMENTSOF(packets) * quic_ctx.transport_params.max_udp_payload_size];
-    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(packets) * 4];
+    quicly_conn_t *conn;
     int ret;
 
-    ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+    ret = quicly_connect(&conn, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
                          NULL);
-    ok(ret == 0);
-    size_t num_packets = PTLS_ELEMENTSOF(packets);
-    ret = quicly_send(client, &dest, &src, packets, &num_packets, packetsbuf, sizeof(packetsbuf));
-    ok(ret == 0);
-
-    size_t num_decoded = decode_packets(decoded, packets, num_packets);
-    ok(num_decoded == 1);
-    ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL);
     ok(ret == 0);
 
     quicly_stats_t stats;
 
     // init CC with pico
-    quicly_set_cc(server, &quicly_cc_type_pico);
-    ret = quicly_get_stats(server, &stats);
+    quicly_set_cc(conn, &quicly_cc_type_pico);
+    ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "pico") == 0);
 
     // pico to pico
-    quicly_set_cc(server, &quicly_cc_type_pico);
-    ret = quicly_get_stats(server, &stats);
+    quicly_set_cc(conn, &quicly_cc_type_pico);
+    ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "pico") == 0);
 
     // reno to pico
-    quicly_set_cc(server, &quicly_cc_type_reno);
-    quicly_set_cc(server, &quicly_cc_type_pico);
-    ret = quicly_get_stats(server, &stats);
+    quicly_set_cc(conn, &quicly_cc_type_reno);
+    quicly_set_cc(conn, &quicly_cc_type_pico);
+    ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "pico") == 0);
 
     // cubic to pico
-    quicly_set_cc(server, &quicly_cc_type_cubic);
-    quicly_set_cc(server, &quicly_cc_type_pico);
-    ret = quicly_get_stats(server, &stats);
+    quicly_set_cc(conn, &quicly_cc_type_cubic);
+    quicly_set_cc(conn, &quicly_cc_type_pico);
+    ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "pico") == 0);
 
     // pico to reno
-    quicly_set_cc(server, &quicly_cc_type_pico);
-    quicly_set_cc(server, &quicly_cc_type_reno);
-    ret = quicly_get_stats(server, &stats);
+    quicly_set_cc(conn, &quicly_cc_type_pico);
+    quicly_set_cc(conn, &quicly_cc_type_reno);
+    ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "reno") == 0);
 
     // pico to cubic
-    quicly_set_cc(server, &quicly_cc_type_pico);
-    quicly_set_cc(server, &quicly_cc_type_cubic);
-    ret = quicly_get_stats(server, &stats);
+    quicly_set_cc(conn, &quicly_cc_type_pico);
+    quicly_set_cc(conn, &quicly_cc_type_cubic);
+    ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "cubic") == 0);
 
     // reno to cubic
-    quicly_set_cc(server, &quicly_cc_type_reno);
-    quicly_set_cc(server, &quicly_cc_type_cubic);
-    ret = quicly_get_stats(server, &stats);
+    quicly_set_cc(conn, &quicly_cc_type_reno);
+    quicly_set_cc(conn, &quicly_cc_type_cubic);
+    ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "cubic") == 0);
 
     // cubic to reno
-    quicly_set_cc(server, &quicly_cc_type_cubic);
-    quicly_set_cc(server, &quicly_cc_type_reno);
-    ret = quicly_get_stats(server, &stats);
+    quicly_set_cc(conn, &quicly_cc_type_cubic);
+    quicly_set_cc(conn, &quicly_cc_type_reno);
+    ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "reno") == 0);
 }
