@@ -3094,12 +3094,15 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, enu
         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
 
     if (mode != QUICLY_COMMIT_SEND_PACKET_MODE_COALESCED && s->target.full_size) {
-        FIXME mode != QUICLY_COMMIT_SEND_PACKET_MODE_DETACHED;
         assert(s->num_datagrams == 0 || s->datagrams[s->num_datagrams - 1].iov_len == conn->egress.max_udp_payload_size);
-        const size_t max_size = conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;
-        assert(s->dst - s->payload_buf.datagram <= max_size);
-        memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->payload_buf.datagram + max_size - s->dst);
-        s->dst = s->payload_buf.datagram + max_size;
+        size_t max_size = conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;
+        if (mode == QUICLY_COMMIT_SEND_PACKET_MODE_DETACHED) {
+            assert(s->dst == s->payload_buf.datagram + max_size);
+        } else {
+            assert(s->dst <= s->payload_buf.datagram + max_size);
+            memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->payload_buf.datagram + max_size - s->dst);
+            s->dst = s->payload_buf.datagram + max_size;
+        }
     }
 
     /* encode packet size */
@@ -3560,25 +3563,47 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
     return s->num_datagrams < s->max_datagrams;
 }
 
+/**
+ * stream for which on_send_emit has been invoked; becomes NULL when detached
+ */
 static __thread struct st_quicly_send_stream_detach_ctx_t {
-    quicly_conn_t *conn;
     quicly_send_context_t *send_ctx;
-} * send_stream_detach_ctx; /* becomes NULL when detached */
+    uint8_t *frame_type_at;
+} * send_stream_detach_ctx;
 
-void quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *detached)
+void quicly_stream_on_send_emit_detach_packet(quicly_detached_send_packet_t *detached, quicly_stream_t *stream, uint8_t *dst,
+                                              size_t len, size_t len_built)
 {
     assert(send_stream_detach_ctx != NULL);
-    quicly_conn_t *conn = send_stream_detach_ctx->conn;
+
+    quicly_conn_t *conn = stream->conn;
     quicly_send_context_t *s = send_stream_detach_ctx->send_ctx;
+
+    /* When the packet has to be padded to full size, and if the stream payload is too small, prepend PADDING frames and adjust
+     * `dst`. */
+    if (s->target.full_size) {
+        uint8_t *dst_end = s->payload_buf.datagram + conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;
+        assert(dst + len < dst_end);
+        size_t delta = dst_end - (dst + len);
+        if (delta != 0) {
+            uint8_t *frame_type_at = send_stream_detach_ctx->frame_type_at;
+            memmove(frame_type_at + delta, frame_type_at, (dst + len_built) - frame_type_at);
+            memset(frame_type_at, QUICLY_FRAME_TYPE_PADDING, delta);
+            dst += delta;
+        }
+    }
+
     send_stream_detach_ctx = NULL;
 
-    detached->cipher = ptls_get_cipher(conn->crypto.tls);
-    detached->header_protection_secret = conn->application->cipher.egress.header_protection_secret;
-    detached->aead_secret = conn->application->cipher.egress.aead_secret;
-    detached->datagram = s->payload_buf.datagram;
-    detached->first_byte_at = s->target.first_byte_at - s->payload_buf.datagram;
-    detached->payload_from = s->dst_payload_from - s->payload_buf.datagram;
-    detached->packet_number = conn->egress.packet_number;
+    *detached = (quicly_detached_send_packet_t){
+        .cipher = ptls_get_cipher(conn->crypto.tls),
+        .header_protection_secret = conn->application->cipher.egress.header_protection_secret,
+        .aead_secret = conn->application->cipher.egress.aead_secret,
+        .packet_number = conn->egress.packet_number,
+        .datagram = ptls_iovec_init(s->payload_buf.datagram, (dst + len_built) - s->payload_buf.datagram),
+        .packet_from = s->target.first_byte_at - s->payload_buf.datagram,
+        .packet_payload_from = s->dst_payload_from - s->payload_buf.datagram,
+    };
 }
 
 int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
@@ -3658,7 +3683,7 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     size_t emit_off = (size_t)(off - stream->sendstate.acked.ranges[0].end), len = capacity;
     QUICLY_PROBE(STREAM_ON_SEND_EMIT, stream->conn, stream->conn->stash.now, stream, emit_off, len);
     {
-        struct st_quicly_send_stream_detach_ctx_t detach_ctx = {stream->conn, s};
+        struct st_quicly_send_stream_detach_ctx_t detach_ctx = {s, frame_type_at};
         send_stream_detach_ctx = &detach_ctx;
         stream->callbacks->on_send_emit(stream, emit_off, s->dst, &len, &wrote_all);
         if (send_stream_detach_ctx == NULL) {
