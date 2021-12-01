@@ -5510,9 +5510,8 @@ static int handle_ack_frequency_frame(quicly_conn_t *conn, struct st_quicly_hand
     QUICLY_PROBE(ACK_FREQUENCY_RECEIVE, conn, conn->stash.now, frame.sequence, frame.packet_tolerance, frame.max_ack_delay,
                  (int)frame.ignore_order, (int)frame.ignore_ce);
 
-    /* At the moment, the only value that the remote peer would send is this value, because our TP.min_ack_delay and max_ack_delay
-     * are equal. */
-    if (frame.max_ack_delay != QUICLY_LOCAL_MAX_ACK_DELAY * 1000)
+    /* Reject Request Max Ack Delay below our TP.min_ack_delay (which is at the memoment equal to LOCAL_MAX_ACK_DELAY). */
+    if (frame.max_ack_delay < QUICLY_LOCAL_MAX_ACK_DELAY * 1000)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     if (frame.sequence >= conn->ingress.ack_frequency.next_sequence) {
