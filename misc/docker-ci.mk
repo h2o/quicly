@@ -2,6 +2,7 @@ CONTAINER_NAME=h2oserver/h2o-ci:ubuntu2004
 SRC_DIR=/quicly
 CI_MK=$(SRC_DIR)/misc/docker-ci.mk
 CMAKE_ARGS=
+CHECK_ENVS=
 DOCKER_RUN_OPTS=--privileged \
 	-v `pwd`:$(SRC_DIR) \
 	-it
