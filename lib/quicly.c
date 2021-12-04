@@ -3543,22 +3543,22 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
 
 int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 {
-    uint64_t off = stream->sendstate.pending.ranges[0].start, end_off;
+    uint64_t off = stream->sendstate.pending.ranges[0].start;
     quicly_sent_t *sent;
     uint8_t *frame_type_at;
-    size_t capacity, len;
+    size_t len;
     int ret, wrote_all, is_fin;
 
-    /* write frame type, stream_id and offset, calculate capacity */
+    /* write frame type, stream_id and offset, calculate capacity (and store that in `len`) */
     if (stream->stream_id < 0) {
         if ((ret = allocate_ack_eliciting_frame(stream->conn, s,
-                                                1 + quicly_encodev_capacity(off) + 2 /* type + len + offset + 1-byte payload */,
+                                                1 + quicly_encodev_capacity(off) + 2 /* type + offset + len + 1-byte payload */,
                                                 &sent, on_ack_stream)) != 0)
             return ret;
         frame_type_at = NULL;
         *s->dst++ = QUICLY_FRAME_TYPE_CRYPTO;
         s->dst = quicly_encodev(s->dst, off);
-        capacity = s->dst_end - s->dst;
+        len = s->dst_end - s->dst;
     } else {
         uint8_t header[18], *hp = header + 1;
         hp = quicly_encodev(hp, stream->stream_id);
@@ -3579,7 +3579,7 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
             }
             memcpy(s->dst, header, hp - header);
             s->dst += hp - header;
-            end_off = off;
+            len = 0;
             wrote_all = 1;
             is_fin = 1;
             goto UpdateState;
@@ -3589,33 +3589,32 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
         frame_type_at = s->dst;
         memcpy(s->dst, header, hp - header);
         s->dst += hp - header;
-        capacity = s->dst_end - s->dst;
+        len = s->dst_end - s->dst;
         /* cap by max_stream_data */
-        if (off + capacity > stream->_send_aux.max_stream_data)
-            capacity = stream->_send_aux.max_stream_data - off;
+        if (off + len > stream->_send_aux.max_stream_data)
+            len = stream->_send_aux.max_stream_data - off;
         /* cap by max_data */
-        if (off + capacity > stream->sendstate.size_inflight) {
-            uint64_t new_bytes = off + capacity - stream->sendstate.size_inflight;
+        if (off + len > stream->sendstate.size_inflight) {
+            uint64_t new_bytes = off + len - stream->sendstate.size_inflight;
             if (new_bytes > stream->conn->egress.max_data.permitted - stream->conn->egress.max_data.sent) {
                 size_t max_stream_data =
                     stream->sendstate.size_inflight + stream->conn->egress.max_data.permitted - stream->conn->egress.max_data.sent;
-                capacity = max_stream_data - off;
+                len = max_stream_data - off;
             }
         }
     }
-    { /* cap the capacity to the current range */
+    { /* cap len to the current range */
         uint64_t range_capacity = stream->sendstate.pending.ranges[0].end - off;
         if (!quicly_sendstate_is_open(&stream->sendstate) && off + range_capacity > stream->sendstate.final_size) {
             assert(range_capacity > 1); /* see the special case above */
             range_capacity -= 1;
         }
-        if (capacity > range_capacity)
-            capacity = range_capacity;
+        if (len > range_capacity)
+            len = range_capacity;
     }
 
-    /* write payload */
-    assert(capacity != 0);
-    len = capacity;
+    /* write payload, adjusting len to actual size */
+    assert(len != 0);
     size_t emit_off = (size_t)(off - stream->sendstate.acked.ranges[0].end);
     QUICLY_PROBE(STREAM_ON_SEND_EMIT, stream->conn, stream->conn->stash.now, stream, emit_off, len);
     stream->callbacks->on_send_emit(stream, emit_off, s->dst, &len, &wrote_all);
@@ -3624,7 +3623,6 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     } else if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE) {
         return 0;
     }
-    assert(len <= capacity);
     assert(len != 0);
 
     /* update s->dst, insert length if necessary */
@@ -3640,10 +3638,9 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
         s->dst = quicly_encodev(s->dst, len);
     }
     s->dst += len;
-    end_off = off + len;
 
     /* determine if the frame incorporates FIN */
-    if (!quicly_sendstate_is_open(&stream->sendstate) && end_off == stream->sendstate.final_size) {
+    if (!quicly_sendstate_is_open(&stream->sendstate) && off + len == stream->sendstate.final_size) {
         assert(frame_type_at != NULL);
         is_fin = 1;
         *frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
@@ -3657,19 +3654,19 @@ UpdateState:
     } else {
         ++stream->conn->super.stats.num_frames_sent.stream;
     }
-    stream->conn->super.stats.num_bytes.stream_data_sent += end_off - off;
+    stream->conn->super.stats.num_bytes.stream_data_sent += len;
     if (off < stream->sendstate.size_inflight)
         stream->conn->super.stats.num_bytes.stream_data_resent +=
-            (stream->sendstate.size_inflight < end_off ? stream->sendstate.size_inflight : end_off) - off;
-    QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, end_off - off, is_fin);
-    QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, end_off - off, is_fin);
+            (stream->sendstate.size_inflight < off + len ? stream->sendstate.size_inflight : off + len) - off;
+    QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, len, is_fin);
+    QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, len, is_fin);
     /* update sendstate (and also MAX_DATA counter) */
-    if (stream->sendstate.size_inflight < end_off) {
+    if (stream->sendstate.size_inflight < off + len) {
         if (stream->stream_id >= 0)
-            stream->conn->egress.max_data.sent += end_off - stream->sendstate.size_inflight;
-        stream->sendstate.size_inflight = end_off;
+            stream->conn->egress.max_data.sent += off + len - stream->sendstate.size_inflight;
+        stream->sendstate.size_inflight = off + len;
     }
-    if ((ret = quicly_ranges_subtract(&stream->sendstate.pending, off, end_off + is_fin)) != 0)
+    if ((ret = quicly_ranges_subtract(&stream->sendstate.pending, off, off + len + is_fin)) != 0)
         return ret;
     if (wrote_all) {
         if ((ret = quicly_ranges_subtract(&stream->sendstate.pending, stream->sendstate.size_inflight, UINT64_MAX)) != 0)
@@ -3679,7 +3676,7 @@ UpdateState:
     /* setup sentmap */
     sent->data.stream.stream_id = stream->stream_id;
     sent->data.stream.args.start = off;
-    sent->data.stream.args.end = end_off + is_fin;
+    sent->data.stream.args.end = off + len + is_fin;
 
     return 0;
 }
