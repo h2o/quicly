@@ -46,6 +46,7 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                               0, /* ack_frequency */
                                               0, /* enlarge_client_hello */
+                                              0, /* fragment_payload */
                                               NULL,
                                               NULL, /* on_stream_open */
                                               &quicly_default_stream_scheduler,
@@ -74,6 +75,7 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                                     0, /* ack_frequency */
                                                     0, /* enlarge_client_hello */
+                                                    0, /* fragment_payload */
                                                     NULL,
                                                     NULL, /* on_stream_open */
                                                     &quicly_default_stream_scheduler,

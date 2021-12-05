@@ -320,6 +320,10 @@ struct st_quicly_context_t {
      */
     unsigned expand_client_hello : 1;
     /**
+     * intentionally fragment stream payload; this is useful for testing retransmission
+     */
+    unsigned fragment_payload : 1;
+    /**
      *
      */
     quicly_cid_encryptor_t *cid_encryptor;

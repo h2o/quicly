@@ -1022,6 +1022,7 @@ static void usage(const char *cmd)
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
            "  -f fraction               increases the induced ack frequency to specified\n"
            "                            fraction of CWND (default: 0)\n"
+           "  -F                        introduce fragmentation\n"
            "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
@@ -1094,7 +1095,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:Ff:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
@@ -1155,6 +1156,9 @@ int main(int argc, char **argv)
                 exit(1);
             }
             setvbuf(quicly_trace_fp, NULL, _IONBF, 0);
+            break;
+        case 'F':
+            ctx.fragment_payload = 1;
             break;
         case 'f': {
             double fraction;

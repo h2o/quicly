@@ -3665,7 +3665,21 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     }
     assert(len != 0);
 
+    /* [fragment] trim output to cause fragmentation at the receiver */
+    if (stream->conn->super.ctx->fragment_payload) {
+        size_t new_len = len < 4 ? 1 : len / 4;
+        if (new_len < len)
+            wrote_all = 0;
+        len = new_len;
+    }
+
     adjust_stream_frame_layout(&s->dst, s->dst_end, &len, &wrote_all, &frame_type_at);
+
+    /* [fragment] append PADDING to prevent more frames from getting added to the same packet */
+    if (stream->conn->super.ctx->fragment_payload && s->dst < s->dst_end) {
+        memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->dst_end - s->dst);
+        s->dst = s->dst_end;
+    }
 
     /* determine if the frame incorporates FIN */
     if (off + len == stream->sendstate.final_size) {
