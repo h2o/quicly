@@ -3111,6 +3111,15 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
                                                    s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number,
                                                    coalesced);
 
+    /* packet drill: intentionally destroy the packet at given ratio */
+    if (conn->super.ctx->destroy_packet_ratio > 0) {
+        uint16_t rand_ratio;
+        conn->super.ctx->tls->random_bytes(&rand_ratio, sizeof(rand_ratio));
+        rand_ratio %= 1024;
+        if (rand_ratio < conn->super.ctx->destroy_packet_ratio)
+            s->dst[-1] ^= 1;
+    }
+
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
         packet_bytes_in_flight = s->dst - s->target.first_byte_at;

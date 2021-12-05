@@ -45,6 +45,7 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               QUICLY_PROTOCOL_VERSION_1,
                                               DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                               0, /* ack_frequency */
+                                              0, /* destroy_packet_ratio */
                                               0, /* enlarge_client_hello */
                                               0, /* fragment_payload */
                                               NULL,
@@ -74,6 +75,7 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     QUICLY_PROTOCOL_VERSION_1,
                                                     DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                                     0, /* ack_frequency */
+                                                    0, /* destroy_packet_ratio */
                                                     0, /* enlarge_client_hello */
                                                     0, /* fragment_payload */
                                                     NULL,

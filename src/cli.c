@@ -1052,6 +1052,8 @@ static void usage(const char *cmd)
            "  -x named-group            named group to be used (default: secp256r1)\n"
            "  -X                        max bidirectional stream count (default: 100)\n"
            "  -y cipher-suite           cipher-suite to be used (default: all)\n"
+           "  -Y ratio                  destroy the packet being sent at given ratio\n"
+           "                            (default: 0)\n"
            "  -h                        print this help\n"
            "\n",
            cmd);
@@ -1095,7 +1097,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:Ff:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:Ff:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:Y:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
@@ -1295,6 +1297,14 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
+        case 'Y': {
+            double ratio;
+            if (sscanf(optarg, "%lf", &ratio) != 1 || !(0 <= ratio && ratio <= 1)) {
+                fprintf(stderr, "failed to parse packet destroy ratio (-Y): %s\n", optarg);
+                exit(1);
+            }
+            ctx.destroy_packet_ratio = (uint16_t)(ratio * 1024);
+        } break;
         case 'y': {
             size_t i;
             for (i = 0; cipher_suites[i] != NULL; ++i)
