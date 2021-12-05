@@ -3606,7 +3606,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
         } else {
             header[0] = QUICLY_FRAME_TYPE_STREAM_BASE;
         }
-        if (!quicly_sendstate_is_open(&stream->sendstate) && off == stream->sendstate.final_size) {
+        if (off == stream->sendstate.final_size) {
+            assert(!quicly_sendstate_is_open(&stream->sendstate));
             /* special case for emitting FIN only */
             header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
             if ((ret = allocate_ack_eliciting_frame(stream->conn, s, hp - header, &sent, on_ack_stream)) != 0)
@@ -3643,7 +3644,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     }
     { /* cap len to the current range */
         uint64_t range_capacity = stream->sendstate.pending.ranges[0].end - off;
-        if (!quicly_sendstate_is_open(&stream->sendstate) && off + range_capacity > stream->sendstate.final_size) {
+        if (off + range_capacity > stream->sendstate.final_size) {
+            assert(!quicly_sendstate_is_open(&stream->sendstate));
             assert(range_capacity > 1); /* see the special case above */
             range_capacity -= 1;
         }
@@ -3666,7 +3668,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     adjust_stream_frame_layout(&s->dst, s->dst_end, &len, &wrote_all, &frame_type_at);
 
     /* determine if the frame incorporates FIN */
-    if (!quicly_sendstate_is_open(&stream->sendstate) && off + len == stream->sendstate.final_size) {
+    if (off + len == stream->sendstate.final_size) {
+        assert(!quicly_sendstate_is_open(&stream->sendstate));
         assert(frame_type_at != NULL);
         is_fin = 1;
         *frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
