@@ -3541,6 +3541,44 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
     return s->num_datagrams < s->max_datagrams;
 }
 
+/**
+ * If necessary, changes the frame representation from one without length field to one that has if necessary. Or, as an alternaive,
+ * prepends PADDING frames. Upon return, `dst` points to the end of the frame being built. `*len`, `*wrote_all`, `*frame_type_at`
+ * are also updated reflecting their values post-adjustment.
+ */
+static inline void adjust_stream_frame_layout(uint8_t **dst, uint8_t *const dst_end, size_t *len, int *wrote_all,
+                                              uint8_t **frame_type_at)
+{
+    size_t space_left = (dst_end - *dst) - *len, len_of_len = quicly_encodev_capacity(*len);
+
+    if (*frame_type_at != NULL) {
+        /* STREAM frame: insert length if space can be left for more frames. Otherwise, retain STREAM frame header omitting the
+         * lengh field, prepending PADDING if necessary. */
+        if (space_left <= len_of_len) {
+            if (space_left != 0) {
+                memmove(*frame_type_at + space_left, *frame_type_at, *dst + *len - *frame_type_at);
+                memset(*frame_type_at, QUICLY_FRAME_TYPE_PADDING, space_left);
+                *dst += space_left;
+                *frame_type_at += space_left;
+            }
+            *dst += *len;
+            return;
+        }
+        **frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
+    } else {
+        /* CRYPTO frame: adjust payload length to make space for the length field, if necessary. */
+        if (space_left < len_of_len) {
+            *len = dst_end - *dst - len_of_len;
+            *wrote_all = 0;
+        }
+    }
+
+    /* insert length before payload of `*len` bytes */
+    memmove(*dst + len_of_len, *dst, *len);
+    *dst = quicly_encodev(*dst, *len);
+    *dst += *len;
+}
+
 int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 {
     uint64_t off = stream->sendstate.pending.ranges[0].start;
@@ -3625,19 +3663,7 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     }
     assert(len != 0);
 
-    /* update s->dst, insert length if necessary */
-    if (frame_type_at == NULL || len < s->dst_end - s->dst) {
-        if (frame_type_at != NULL)
-            *frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
-        size_t len_of_len = quicly_encodev_capacity(len);
-        if (len_of_len + len > s->dst_end - s->dst) {
-            len = s->dst_end - s->dst - len_of_len;
-            wrote_all = 0;
-        }
-        memmove(s->dst + len_of_len, s->dst, len);
-        s->dst = quicly_encodev(s->dst, len);
-    }
-    s->dst += len;
+    adjust_stream_frame_layout(&s->dst, s->dst_end, &len, &wrote_all, &frame_type_at);
 
     /* determine if the frame incorporates FIN */
     if (!quicly_sendstate_is_open(&stream->sendstate) && off + len == stream->sendstate.final_size) {
