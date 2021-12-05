@@ -243,6 +243,10 @@ struct st_quicly_conn_t {
          */
         uint64_t next_pn_to_skip;
         /**
+         * RNG used to determine if packet should be destroyed
+         */
+        uint64_t destroy_packet_rng;
+        /**
          *
          */
         uint16_t max_udp_payload_size;
@@ -453,6 +457,12 @@ static const quicly_transport_parameters_t default_transport_params = {.max_udp_
                                                                        .min_ack_delay_usec = UINT64_MAX,
                                                                        .active_connection_id_limit =
                                                                            QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT};
+
+static void xorshift64(uint64_t *x)
+{
+    *x = *x ^ (*x << 7);
+    *x = *x ^ (*x >> 9);
+}
 
 static const struct st_ptls_salt_t *get_salt(uint32_t protocol_version)
 {
@@ -2115,6 +2125,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
                      &conn->super.remote.transport_params.max_ack_delay, &conn->super.remote.transport_params.ack_delay_exponent);
     conn->egress.next_pn_to_skip =
         calc_next_pn_to_skip(conn->super.ctx->tls, 0, initcwnd, conn->super.ctx->initial_egress_max_udp_payload_size);
+    conn->egress.destroy_packet_rng = conn->super.ctx->destroy_packet.seed;
     conn->egress.max_udp_payload_size = conn->super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->egress.max_streams.uni);
     init_max_streams(&conn->egress.max_streams.bidi);
@@ -3111,6 +3122,13 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
                                                    s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number,
                                                    coalesced);
 
+    /* packet drill: intentionally destroy the packet at given ratio */
+    if (conn->super.ctx->destroy_packet.ratio > 0) {
+        xorshift64(&conn->egress.destroy_packet_rng);
+        if (conn->egress.destroy_packet_rng % 1024 < conn->super.ctx->destroy_packet.ratio)
+            s->dst[-1] ^= 1;
+    }
+
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
         packet_bytes_in_flight = s->dst - s->target.first_byte_at;
@@ -3665,7 +3683,21 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     }
     assert(len != 0);
 
+    /* [fragment] trim output to cause fragmentation at the receiver */
+    if (stream->conn->super.ctx->fragment_payload) {
+        size_t new_len = len < 4 ? 1 : len / 4;
+        if (new_len < len)
+            wrote_all = 0;
+        len = new_len;
+    }
+
     adjust_stream_frame_layout(&s->dst, s->dst_end, &len, &wrote_all, &frame_type_at);
+
+    /* [fragment] append PADDING to prevent more frames from getting added to the same packet */
+    if (stream->conn->super.ctx->fragment_payload && s->dst < s->dst_end) {
+        memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->dst_end - s->dst);
+        s->dst = s->dst_end;
+    }
 
     /* determine if the frame incorporates FIN */
     if (off + len == stream->sendstate.final_size) {

@@ -28,6 +28,7 @@
 #define DEFAULT_MAX_CRYPTO_BYTES 65536
 #define DEFAULT_INITCWND_PACKETS 10
 #define DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT 3
+#define DEFAULT_DESTROY_PACKET_SEED 88172645463325252
 
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {NULL,                                                 /* tls */
@@ -45,7 +46,9 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               QUICLY_PROTOCOL_VERSION_1,
                                               DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                               0, /* ack_frequency */
+                                              {0, DEFAULT_DESTROY_PACKET_SEED}, /* destroy_packet */
                                               0, /* enlarge_client_hello */
+                                              0, /* fragment_payload */
                                               NULL,
                                               NULL, /* on_stream_open */
                                               &quicly_default_stream_scheduler,
@@ -73,7 +76,9 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     QUICLY_PROTOCOL_VERSION_1,
                                                     DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                                     0, /* ack_frequency */
+                                                    {0, DEFAULT_DESTROY_PACKET_SEED}, /* destroy_packet */
                                                     0, /* enlarge_client_hello */
+                                                    0, /* fragment_payload */
                                                     NULL,
                                                     NULL, /* on_stream_open */
                                                     &quicly_default_stream_scheduler,

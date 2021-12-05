@@ -1022,6 +1022,7 @@ static void usage(const char *cmd)
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
            "  -f fraction               increases the induced ack frequency to specified\n"
            "                            fraction of CWND (default: 0)\n"
+           "  -F                        introduce fragmentation\n"
            "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
@@ -1051,6 +1052,8 @@ static void usage(const char *cmd)
            "  -x named-group            named group to be used (default: secp256r1)\n"
            "  -X                        max bidirectional stream count (default: 100)\n"
            "  -y cipher-suite           cipher-suite to be used (default: all)\n"
+           "  -Y ratio                  destroy the packet being sent at given ratio\n"
+           "                            (default: 0)\n"
            "  -h                        print this help\n"
            "\n",
            cmd);
@@ -1094,7 +1097,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h")) != -1) {
+    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:Ff:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:Y:y:h")) != -1) {
         switch (ch) {
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
@@ -1155,6 +1158,9 @@ int main(int argc, char **argv)
                 exit(1);
             }
             setvbuf(quicly_trace_fp, NULL, _IONBF, 0);
+            break;
+        case 'F':
+            ctx.fragment_payload = 1;
             break;
         case 'f': {
             double fraction;
@@ -1291,6 +1297,14 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
+        case 'Y': {
+            double ratio;
+            if (sscanf(optarg, "%lf", &ratio) != 1 || !(0 <= ratio && ratio <= 1)) {
+                fprintf(stderr, "failed to parse packet destroy ratio (-Y): %s\n", optarg);
+                exit(1);
+            }
+            ctx.destroy_packet.ratio = (uint16_t)(ratio * 1024);
+        } break;
         case 'y': {
             size_t i;
             for (i = 0; cipher_suites[i] != NULL; ++i)

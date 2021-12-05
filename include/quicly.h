@@ -316,9 +316,20 @@ struct st_quicly_context_t {
      */
     uint16_t ack_frequency;
     /**
+     * destroy the packet being sent at given ratio (xorshift with given seed is used for each connection)
+     */
+    struct {
+        uint16_t ratio;
+        uint64_t seed;
+    } destroy_packet;
+    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
+    /**
+     * intentionally fragment stream payload; this is useful for testing retransmission
+     */
+    unsigned fragment_payload : 1;
     /**
      *
      */
