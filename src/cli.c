@@ -1303,7 +1303,7 @@ int main(int argc, char **argv)
                 fprintf(stderr, "failed to parse packet destroy ratio (-Y): %s\n", optarg);
                 exit(1);
             }
-            ctx.destroy_packet_ratio = (uint16_t)(ratio * 1024);
+            ctx.destroy_packet.ratio = (uint16_t)(ratio * 1024);
         } break;
         case 'y': {
             size_t i;

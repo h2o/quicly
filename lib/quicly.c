@@ -243,6 +243,10 @@ struct st_quicly_conn_t {
          */
         uint64_t next_pn_to_skip;
         /**
+         * RNG used to determine if packet should be destroyed
+         */
+        uint64_t destroy_packet_rng;
+        /**
          *
          */
         uint16_t max_udp_payload_size;
@@ -453,6 +457,12 @@ static const quicly_transport_parameters_t default_transport_params = {.max_udp_
                                                                        .min_ack_delay_usec = UINT64_MAX,
                                                                        .active_connection_id_limit =
                                                                            QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT};
+
+static void xorshift64(uint64_t *x)
+{
+    *x = *x ^ (*x << 7);
+    *x = *x ^ (*x >> 9);
+}
 
 static const struct st_ptls_salt_t *get_salt(uint32_t protocol_version)
 {
@@ -2115,6 +2125,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
                      &conn->super.remote.transport_params.max_ack_delay, &conn->super.remote.transport_params.ack_delay_exponent);
     conn->egress.next_pn_to_skip =
         calc_next_pn_to_skip(conn->super.ctx->tls, 0, initcwnd, conn->super.ctx->initial_egress_max_udp_payload_size);
+    conn->egress.destroy_packet_rng = conn->super.ctx->destroy_packet.seed;
     conn->egress.max_udp_payload_size = conn->super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->egress.max_streams.uni);
     init_max_streams(&conn->egress.max_streams.bidi);
@@ -3112,11 +3123,9 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
                                                    coalesced);
 
     /* packet drill: intentionally destroy the packet at given ratio */
-    if (conn->super.ctx->destroy_packet_ratio > 0) {
-        uint16_t rand_ratio;
-        conn->super.ctx->tls->random_bytes(&rand_ratio, sizeof(rand_ratio));
-        rand_ratio %= 1024;
-        if (rand_ratio < conn->super.ctx->destroy_packet_ratio)
+    if (conn->super.ctx->destroy_packet.ratio > 0) {
+        xorshift64(&conn->egress.destroy_packet_rng);
+        if (conn->egress.destroy_packet_rng % 1024 < conn->super.ctx->destroy_packet.ratio)
             s->dst[-1] ^= 1;
     }
 

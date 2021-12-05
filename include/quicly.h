@@ -316,9 +316,12 @@ struct st_quicly_context_t {
      */
     uint16_t ack_frequency;
     /**
-     * destroy the packet being sent at given ratio
+     * destroy the packet being sent at given ratio (xorshift with given seed is used for each connection)
      */
-    uint16_t destroy_packet_ratio;
+    struct {
+        uint16_t ratio;
+        uint64_t seed;
+    } destroy_packet;
     /**
      * expand client hello so that it does not fit into one datagram
      */
