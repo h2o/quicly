@@ -103,11 +103,11 @@ static void test_adjust_stream_frame_layout(void)
 #define TEST(_is_crypto, _capacity, check)                                                                                         \
     do {                                                                                                                           \
         uint8_t buf[] = {0xff, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
-        uint8_t *dst = buf + 2, *const dst_end = buf + _capacity, *frame_type_at = _is_crypto ? NULL : buf;                        \
+        uint8_t *dst = buf + 2, *const dst_end = buf + _capacity, *frame_at = buf;                                                 \
         size_t len = 5;                                                                                                            \
         int wrote_all = 1;                                                                                                         \
         buf[0] = _is_crypto ? 0x06 : 0x08;                                                                                         \
-        adjust_stream_frame_layout(&dst, dst_end, &len, &wrote_all, &frame_type_at);                                               \
+        adjust_stream_frame_layout(&dst, dst_end, &len, &wrote_all, &frame_at);                                                    \
         do {                                                                                                                       \
             check                                                                                                                  \
         } while (0);                                                                                                               \
@@ -118,21 +118,21 @@ static void test_adjust_stream_frame_layout(void)
         ok(dst == buf + 8);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_type_at == NULL);
+        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
     });
     TEST(1, 8, {
         ok(dst == buf + 8);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_type_at == NULL);
+        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
     });
     TEST(1, 7, {
         ok(dst == buf + 7);
         ok(len == 4);
         ok(!wrote_all);
-        ok(frame_type_at == NULL);
+        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x04hell", 7) == 0);
     });
 
@@ -141,21 +141,21 @@ static void test_adjust_stream_frame_layout(void)
         ok(dst == buf + 8);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_type_at == buf);
+        ok(frame_at == buf);
         ok(memcmp(buf, "\x0a\x04\x05hello", 8) == 0);
     });
     TEST(0, 8, {
         ok(dst == buf + 8);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_type_at == buf + 1);
+        ok(frame_at == buf + 1);
         ok(memcmp(buf, "\x00\x08\x04hello", 8) == 0);
     });
     TEST(0, 7, {
         ok(dst == buf + 7);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_type_at == buf);
+        ok(frame_at == buf);
         ok(memcmp(buf, "\x08\x04hello", 7) == 0);
     });
 

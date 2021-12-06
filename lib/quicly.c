@@ -3547,30 +3547,30 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
  * are also updated reflecting their values post-adjustment.
  */
 static inline void adjust_stream_frame_layout(uint8_t **dst, uint8_t *const dst_end, size_t *len, int *wrote_all,
-                                              uint8_t **frame_type_at)
+                                              uint8_t **frame_at)
 {
     size_t space_left = (dst_end - *dst) - *len, len_of_len = quicly_encodev_capacity(*len);
 
-    if (*frame_type_at != NULL) {
-        /* STREAM frame: insert length if space can be left for more frames. Otherwise, retain STREAM frame header omitting the
-         * lengh field, prepending PADDING if necessary. */
-        if (space_left <= len_of_len) {
-            if (space_left != 0) {
-                memmove(*frame_type_at + space_left, *frame_type_at, *dst + *len - *frame_type_at);
-                memset(*frame_type_at, QUICLY_FRAME_TYPE_PADDING, space_left);
-                *dst += space_left;
-                *frame_type_at += space_left;
-            }
-            *dst += *len;
-            return;
-        }
-        **frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
-    } else {
+    if (**frame_at == QUICLY_FRAME_TYPE_CRYPTO) {
         /* CRYPTO frame: adjust payload length to make space for the length field, if necessary. */
         if (space_left < len_of_len) {
             *len = dst_end - *dst - len_of_len;
             *wrote_all = 0;
         }
+    } else {
+        /* STREAM frame: insert length if space can be left for more frames. Otherwise, retain STREAM frame header omitting the
+         * lengh field, prepending PADDING if necessary. */
+        if (space_left <= len_of_len) {
+            if (space_left != 0) {
+                memmove(*frame_at + space_left, *frame_at, *dst + *len - *frame_at);
+                memset(*frame_at, QUICLY_FRAME_TYPE_PADDING, space_left);
+                *dst += space_left;
+                *frame_at += space_left;
+            }
+            *dst += *len;
+            return;
+        }
+        **frame_at |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
     }
 
     /* insert length before payload of `*len` bytes */
@@ -3583,7 +3583,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 {
     uint64_t off = stream->sendstate.pending.ranges[0].start;
     quicly_sent_t *sent;
-    uint8_t *frame_type_at;
+    uint8_t *dst; /* points to the current write position within the frame being built, while `s->dst` points to the beginning of
+                   * the frame. */
     size_t len;
     int ret, wrote_all, is_fin;
 
@@ -3593,10 +3594,10 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
                                                 1 + quicly_encodev_capacity(off) + 2 /* type + offset + len + 1-byte payload */,
                                                 &sent, on_ack_stream)) != 0)
             return ret;
-        frame_type_at = NULL;
-        *s->dst++ = QUICLY_FRAME_TYPE_CRYPTO;
-        s->dst = quicly_encodev(s->dst, off);
-        len = s->dst_end - s->dst;
+        dst = s->dst;
+        *dst++ = QUICLY_FRAME_TYPE_CRYPTO;
+        dst = quicly_encodev(dst, off);
+        len = s->dst_end - dst;
     } else {
         uint8_t header[18], *hp = header + 1;
         hp = quicly_encodev(hp, stream->stream_id);
@@ -3625,10 +3626,10 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
         }
         if ((ret = allocate_ack_eliciting_frame(stream->conn, s, hp - header + 1, &sent, on_ack_stream)) != 0)
             return ret;
-        frame_type_at = s->dst;
-        memcpy(s->dst, header, hp - header);
-        s->dst += hp - header;
-        len = s->dst_end - s->dst;
+        dst = s->dst;
+        memcpy(dst, header, hp - header);
+        dst += hp - header;
+        len = s->dst_end - dst;
         /* cap by max_stream_data */
         if (off + len > stream->_send_aux.max_stream_data)
             len = stream->_send_aux.max_stream_data - off;
@@ -3653,11 +3654,13 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
             len = range_capacity;
     }
 
-    /* write payload, adjusting len to actual size */
+    /* Write payload, adjusting len to actual size. Note that `on_send_emit` might fail (e.g., when underlying pread(2) fails), in
+     * which case the application will either close the connection immediately or reset the stream. If that happens, we return
+     * immediately without updating state. */
     assert(len != 0);
     size_t emit_off = (size_t)(off - stream->sendstate.acked.ranges[0].end);
     QUICLY_PROBE(STREAM_ON_SEND_EMIT, stream->conn, stream->conn->stash.now, stream, emit_off, len);
-    stream->callbacks->on_send_emit(stream, emit_off, s->dst, &len, &wrote_all);
+    stream->callbacks->on_send_emit(stream, emit_off, dst, &len, &wrote_all);
     if (stream->conn->super.state >= QUICLY_STATE_CLOSING) {
         return QUICLY_ERROR_IS_CLOSING;
     } else if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE) {
@@ -3665,17 +3668,20 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     }
     assert(len != 0);
 
-    adjust_stream_frame_layout(&s->dst, s->dst_end, &len, &wrote_all, &frame_type_at);
+    adjust_stream_frame_layout(&dst, s->dst_end, &len, &wrote_all, &s->dst);
 
     /* determine if the frame incorporates FIN */
     if (off + len == stream->sendstate.final_size) {
         assert(!quicly_sendstate_is_open(&stream->sendstate));
-        assert(frame_type_at != NULL);
+        assert(s->dst != NULL);
         is_fin = 1;
-        *frame_type_at |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+        *s->dst |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
     } else {
         is_fin = 0;
     }
+
+    /* update s->dst now that frame construction is complete */
+    s->dst = dst;
 
 UpdateState:
     if (stream->stream_id < 0) {
