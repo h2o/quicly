@@ -3583,8 +3583,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 {
     uint64_t off = stream->sendstate.pending.ranges[0].start;
     quicly_sent_t *sent;
-    uint8_t *dst; /* points to the current write position within the frame being built, while `s->dst` points to the beginning of
-                   * the frame. */
+    uint8_t *dst; /* this pointer points to the current write position within the frame being built, while `s->dst` points to the
+                   * beginning of the frame. */
     size_t len;
     int ret, wrote_all, is_fin;
 
