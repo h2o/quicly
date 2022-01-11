@@ -98,12 +98,12 @@ ENDIF ()
 
 ADD_CUSTOM_COMMAND(
     OUTPUT embedded-probes.h
-    COMMAND ${PROJECT_SOURCE_DIR}/misc/probe2trace.pl -a embedded < ${PROJECT_SOURCE_DIR}/quicly-probes.d > ${CMAKE_CURRENT_BINARY_DIR}/embedded-probes.h
+    COMMAND perl ${PROJECT_SOURCE_DIR}/misc/probe2trace.pl -a embedded < ${PROJECT_SOURCE_DIR}/quicly-probes.d > ${CMAKE_CURRENT_BINARY_DIR}/embedded-probes.h
     DEPENDS quicly-probes.d misc/probe2trace.pl
     VERBATIM)
 ADD_CUSTOM_COMMAND(
     OUTPUT quicly-tracer.h
-    COMMAND ${PROJECT_SOURCE_DIR}/misc/probe2trace.pl -a tracer < ${PROJECT_SOURCE_DIR}/quicly-probes.d > ${CMAKE_CURRENT_BINARY_DIR}/quicly-tracer.h
+    COMMAND perl ${PROJECT_SOURCE_DIR}/misc/probe2trace.pl -a tracer < ${PROJECT_SOURCE_DIR}/quicly-probes.d > ${CMAKE_CURRENT_BINARY_DIR}/quicly-tracer.h
     DEPENDS quicly-probes.d misc/probe2trace.pl
     VERBATIM)
 

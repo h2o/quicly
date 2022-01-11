@@ -38,6 +38,7 @@
 #include "quicly/defaults.h"
 #include "quicly/streambuf.h"
 #include "../deps/picotls/t/util.h"
+#include <signal.h>
 
 #define MAX_BURST_PACKETS 10
 
