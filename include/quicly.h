@@ -485,6 +485,10 @@ typedef struct st_quicly_stats_t {
      * Estimated delivery rate, in bytes/second.
      */
     quicly_rate_t delivery_rate;
+    /**
+     * maximum number of packets contained in the sentmap
+     */
+    size_t num_sentmap_packets_max;
 } quicly_stats_t;
 
 /**
