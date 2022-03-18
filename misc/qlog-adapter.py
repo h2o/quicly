@@ -58,7 +58,7 @@ def handle_packet_received(events, idx):
         if handler:
             frames.append(handler(ev))
 
-    return {
+    ret = {
         "time": events[idx]["time"],
         "name": "transport:packet_received",
         "data": {
@@ -70,6 +70,16 @@ def handle_packet_received(events, idx):
         }
     }
 
+    # draft-ietf-quic-qlog-quic-events A.8:
+    # ; only if packet_type === "initial" || "handshake" || "0RTT"
+    # ; Signifies length of the packet_number plus the payload
+    #
+    # packet-type == 3: 1-RTT
+    if events[idx]["packet-type"] != 3:
+        ret["length"] = events[idx]["decrypted-len"]
+
+    return ret
+
 def handle_packet_sent(events, idx):
     frames = []
     i = idx-1
@@ -79,7 +89,7 @@ def handle_packet_sent(events, idx):
             frames.append(handler(events[i]))
         i -= 1
 
-    return {
+    ret = {
         "time": events[idx]["time"],
         "name": "transport:packet_sent",
         "data": {
@@ -90,6 +100,11 @@ def handle_packet_sent(events, idx):
             "frames": frames
         }
     }
+
+    if events[idx]["packet-type"] != 3:
+        ret["length"] = events[idx]["len"]
+
+    return ret
 
 def handle_ack_send(event):
     return render_ack_frame([[event["largest-acked"]]])
