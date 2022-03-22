@@ -355,22 +355,31 @@ FRAME_EVENT_HANDLERS = {
 def usage():
     print(r"""
 Usage:
-    python qlog-adapter.py inTrace.jsonl
+    ./misc/qlog-adapter.py [inTrace.jsonl]
+
+    If the argument is omitted, inTrace will be read from stdin.
 """.strip())
 
 def load_quicly_events(infile):
     events = []
-    with open(infile, "r") as fh:
-        for line in fh:
-            events.append(json.loads(line))
+    for line in infile:
+        events.append(json.loads(line))
     return events
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) > 2:
         usage()
         sys.exit(1)
 
-    (_, infile) = sys.argv
+    if len(sys.argv) == 1:
+        infile = sys.stdin
+    else:
+        (_, fn) = sys.argv
+        try:
+            infile = open(fn, "r")
+        except OSError as e:
+            sys.exit("Failed to open %s: %s" % (fn, e.strerror))
+
     source_events = load_quicly_events(infile)
     print(json.dumps({
         "qlog_format": "NDJSON",
