@@ -73,7 +73,7 @@ def handle_packet_received(events, idx):
 def handle_packet_sent(events, idx):
     frames = []
     i = idx-1
-    while i > 0 and events[i]["type"] != "packet-prepare":
+    while i >= 0 and events[i]["type"] != "packet-prepare":
         handler = FRAME_EVENT_HANDLERS.get(events[i]["type"])
         if handler:
             frames.append(handler(events[i]))
