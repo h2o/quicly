@@ -328,7 +328,7 @@ FRAME_EVENT_HANDLERS = {
 def usage():
     print(r"""
 Usage:
-    python3 qlog-adapter.py [inTrace.jsonl]
+    ./misc/qlog-adapter.py [inTrace.jsonl]
 
     If the argument is omitted, inTrace will be read from stdin.
 """.strip())
