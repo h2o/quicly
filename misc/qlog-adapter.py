@@ -351,8 +351,7 @@ def main():
         try:
             infile = open(fn, "r")
         except OSError as e:
-            print("Failed to open %s: %s" % (fn, e.strerror))
-            sys.exit(1)
+            sys.exit("Failed to open %s: %s" % (fn, e.strerror))
 
     source_events = load_quicly_events(infile)
     print(json.dumps({
