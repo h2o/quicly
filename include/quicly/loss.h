@@ -146,6 +146,12 @@ typedef struct quicly_loss_t {
 
 typedef void (*quicly_loss_on_detect_cb)(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold);
 
+typedef enum quicly_loss_ack_received_kind_t {
+    QUICLY_LOSS_ACK_RECEIVED_KIND_NON_ACK_ELICITING = 0,
+    QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING,
+    QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING_LATE_ACK,
+} quicly_loss_ack_received_kind_t;
+
 static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
                              const uint8_t *ack_delay_exponent);
 static void quicly_loss_dispose(quicly_loss_t *r);
@@ -156,7 +162,7 @@ static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
  * called when an ACK is received
  */
 static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, size_t epoch, int64_t now, int64_t sent_at,
-                                        uint64_t ack_delay_encoded, int ack_eliciting);
+                                        uint64_t ack_delay_encoded, quicly_loss_ack_received_kind_t kind);
 /* This function updates the loss detection timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
  *  * send min_packets_to_send number of packets immmediately. min_packets_to_send should never be 0.
@@ -315,7 +321,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 }
 
 inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, size_t epoch, int64_t now, int64_t sent_at,
-                                        uint64_t ack_delay_encoded, int ack_eliciting)
+                                        uint64_t ack_delay_encoded, quicly_loss_ack_received_kind_t kind)
 {
     /* Reset PTO count if anything is newly acked, and if sender is not speculatively probing at a tail */
     if (largest_newly_acked != UINT64_MAX && r->pto_count > 0)
@@ -327,7 +333,7 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     r->largest_acked_packet_plus1[epoch] = largest_newly_acked + 1;
 
     /* If ack does not acknowledge any ack-eliciting packet, skip RTT sample */
-    if (!ack_eliciting)
+    if (kind == QUICLY_LOSS_ACK_RECEIVED_KIND_NON_ACK_ELICITING)
         return;
 
     /* Decode ack delay */
@@ -337,6 +343,11 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     if (ack_delay_millisecs > *r->max_ack_delay)
         ack_delay_millisecs = *r->max_ack_delay;
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
+
+    /* Adjust loss detection thresholds when receiving a late ack. */
+    if (kind == QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING_LATE_ACK) {
+        /* FIXME */
+    }
 }
 
 inline int quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, int is_1rtt_only,

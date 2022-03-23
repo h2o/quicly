@@ -4900,7 +4900,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         int64_t sent_at;
     } largest_newly_acked = {UINT64_MAX, INT64_MAX};
     size_t bytes_acked = 0;
-    int includes_ack_eliciting = 0, ret;
+    int includes_ack_eliciting = 0, includes_late_ack = 0, ret;
 
     if ((ret = quicly_decode_ack_frame(&state->src, state->end, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
         return ret;
@@ -4951,6 +4951,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                 includes_ack_eliciting = 1;
                 if (sent->cc_bytes_in_flight == 0) {
                     is_late_ack = 1;
+                    includes_late_ack = 1;
                     ++conn->super.stats.num_packets.late_acked;
                 }
             }
@@ -4991,7 +4992,10 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
      * so far. So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
     quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.pn, state->epoch, conn->stash.now,
-                                largest_newly_acked.sent_at, frame.ack_delay, includes_ack_eliciting);
+                                largest_newly_acked.sent_at, frame.ack_delay,
+                                includes_ack_eliciting ? includes_late_ack ? QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING_LATE_ACK
+                                                                           : QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING
+                                                       : QUICLY_LOSS_ACK_RECEIVED_KIND_NON_ACK_ELICITING);
 
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
