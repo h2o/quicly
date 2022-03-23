@@ -358,9 +358,15 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
         ack_delay_millisecs = *r->max_ack_delay;
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
 
-    /* Adjust loss detection thresholds when receiving a late ack. */
+    /* Adjust loss detection thresholds when receiving a late ack. The strategy is, for each ACK carrying a late ack, first disable
+     * packet-based detection, then double the time-based threshold until it reaches 1 RTT. */
     if (kind == QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING_LATE_ACK) {
-        /* FIXME */
+        if (r->loss_thresholds.use_packet_based) {
+            r->loss_thresholds.use_packet_based = 0;
+        } else {
+            if ((r->loss_thresholds.time_based_percentile *= 2) > 1024)
+                r->loss_thresholds.time_based_percentile = 1024;
+        }
     }
 }
 
