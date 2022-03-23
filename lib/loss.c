@@ -58,7 +58,7 @@ int quicly_loss_detect_loss(quicly_loss_t *loss, int64_t now, uint32_t max_ack_d
 
 #define CHECK_TIME_THRESHOLD(sent) ((sent)->sent_at <= now - delay_until_lost)
 #define CHECK_PACKET_THRESHOLD(sent)                                                                                               \
-    (loss->loss_thresholds.use_packet_based &&                                                                                     \
+    (loss->thresholds.use_packet_based &&                                                                                          \
      (int64_t)(sent)->packet_number <= largest_acked_signed - QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD)
 
     loss->loss_time = INT64_MAX;
