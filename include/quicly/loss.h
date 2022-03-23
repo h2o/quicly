@@ -111,6 +111,19 @@ typedef struct quicly_loss_t {
      */
     const uint8_t *ack_delay_exponent;
     /**
+     * Controls loss thresholds.
+     */
+    struct {
+        /**
+         * boolean
+         */
+        uint8_t use_packet_based;
+        /**
+         * time threshold percentile, relative to RTT (i.e., 1024 is one RTT)
+         */
+        uint16_t time_based_percentile;
+    } loss_thresholds;
+    /**
      * The number of consecutive PTOs (PTOs that have fired without receiving an ack).
      */
     int8_t pto_count;
@@ -236,6 +249,7 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
                          .max_ack_delay = max_ack_delay,
                          .ack_delay_exponent = ack_delay_exponent,
                          .pto_count = 0,
+                         .loss_thresholds = {.use_packet_based = 1, .time_based_percentile = 1024 / 8 /* start from 1/8 RTT */},
                          .time_of_last_packet_sent = 0,
                          .largest_acked_packet_plus1 = {0},
                          .total_bytes_sent = 0,
