@@ -97,6 +97,17 @@ static void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, u
 static void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay);
 static uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto);
 
+typedef struct quicly_loss_thresholds_t {
+    /**
+     * boolean
+     */
+    uint8_t use_packet_based;
+    /**
+     * time threshold percentile, relative to RTT (i.e., 1024 is one RTT)
+     */
+    uint16_t time_based_percentile;
+} quicly_loss_thresholds_t;
+
 typedef struct quicly_loss_t {
     /**
      * configuration
@@ -113,16 +124,7 @@ typedef struct quicly_loss_t {
     /**
      * Controls loss thresholds.
      */
-    struct {
-        /**
-         * boolean
-         */
-        uint8_t use_packet_based;
-        /**
-         * time threshold percentile, relative to RTT (i.e., 1024 is one RTT)
-         */
-        uint16_t time_based_percentile;
-    } loss_thresholds;
+    quicly_loss_thresholds_t thresholds;
     /**
      * The number of consecutive PTOs (PTOs that have fired without receiving an ack).
      */
@@ -249,7 +251,7 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
                          .max_ack_delay = max_ack_delay,
                          .ack_delay_exponent = ack_delay_exponent,
                          .pto_count = 0,
-                         .loss_thresholds = {.use_packet_based = 1, .time_based_percentile = 1024 / 8 /* start from 1/8 RTT */},
+                         .thresholds = {.use_packet_based = 1, .time_based_percentile = 1024 / 8 /* start from 1/8 RTT */},
                          .time_of_last_packet_sent = 0,
                          .largest_acked_packet_plus1 = {0},
                          .total_bytes_sent = 0,
@@ -361,11 +363,11 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     /* Adjust loss detection thresholds when receiving a late ack. The strategy is, for each ACK carrying a late ack, first disable
      * packet-based detection, then double the time-based threshold until it reaches 1 RTT. */
     if (kind == QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING_LATE_ACK) {
-        if (r->loss_thresholds.use_packet_based) {
-            r->loss_thresholds.use_packet_based = 0;
+        if (r->thresholds.use_packet_based) {
+            r->thresholds.use_packet_based = 0;
         } else {
-            if ((r->loss_thresholds.time_based_percentile *= 2) > 1024)
-                r->loss_thresholds.time_based_percentile = 1024;
+            if ((r->thresholds.time_based_percentile *= 2) > 1024)
+                r->thresholds.time_based_percentile = 1024;
         }
     }
 }

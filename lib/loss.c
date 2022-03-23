@@ -49,7 +49,7 @@ int quicly_loss_detect_loss(quicly_loss_t *loss, int64_t now, uint32_t max_ack_d
      * detection. if no timer is required, loss_time is set to INT64_MAX. */
 
     const uint32_t delay_until_lost = ((loss->rtt.latest > loss->rtt.smoothed ? loss->rtt.latest : loss->rtt.smoothed) *
-                                           (1024 + loss->loss_thresholds.time_based_percentile) +
+                                           (1024 + loss->thresholds.time_based_percentile) +
                                        1023) /
                                       1024;
     quicly_sentmap_iter_t iter;
