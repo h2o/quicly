@@ -466,7 +466,11 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
      */                                                                                                                            \
-    uint64_t num_ptos
+    uint64_t num_ptos;                                                                                                             \
+    /**                                                                                                                            \
+     * Time spent during handshake. UINT64_MAX if still in handshake.                                                              \
+     */                                                                                                                            \
+    uint64_t handshake_msec
 
 typedef struct st_quicly_stats_t {
     /**
