@@ -3088,6 +3088,12 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         /* length is always 2 bytes, see _do_prepare_packet */
         length |= 0x4000;
         quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE - 2, length);
+        switch (*s->target.first_byte_at & QUICLY_PACKET_TYPE_BITMASK) {
+        case QUICLY_PACKET_TYPE_INITIAL:
+        case QUICLY_PACKET_TYPE_HANDSHAKE:
+            conn->super.stats.num_packets.initial_handshake_sent++;
+            break;
+        }
     } else {
         if (conn->egress.packet_number >= conn->application->cipher.egress.key_update_pn.next) {
             int ret;

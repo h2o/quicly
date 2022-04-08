@@ -427,6 +427,10 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total number of packets for which acknowledgements were received after being marked lost.                               \
          */                                                                                                                        \
         uint64_t late_acked;                                                                                                       \
+        /**                                                                                                                        \
+         * Total number of Initial and Handshake packets sent.                                                                     \
+         */                                                                                                                        \
+        uint64_t initial_handshake_sent;                                                                                           \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
