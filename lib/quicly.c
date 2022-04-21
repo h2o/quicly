@@ -4350,9 +4350,15 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     /* handle timeouts */
     if (conn->idle_timeout.at <= conn->stash.now) {
         QUICLY_PROBE(IDLE_TIMEOUT, conn, conn->stash.now);
-        conn->super.state = QUICLY_STATE_DRAINING;
-        destroy_all_streams(conn, 0, 0);
-        return QUICLY_ERROR_FREE_CONNECTION;
+        goto CloseNow;
+    }
+    /* handle handshake timeouts */
+    if ((conn->initial != NULL || conn->handshake != NULL) &&
+        conn->created_at + (uint64_t)conn->super.ctx->handshake_timeout_rtt_multiplier * conn->egress.loss.rtt.smoothed <=
+            conn->stash.now) {
+        QUICLY_PROBE(HANDSHAKE_TIMEOUT, conn, conn->stash.now);
+        conn->super.stats.num_handshake_timeouts++;
+        goto CloseNow;
     }
     if (conn->egress.loss.alarm_at <= conn->stash.now) {
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
@@ -4563,6 +4569,11 @@ Exit:
             update_idle_timeout(conn, 0);
     }
     return ret;
+
+CloseNow:
+    conn->super.state = QUICLY_STATE_DRAINING;
+    destroy_all_streams(conn, 0, 0);
+    return QUICLY_ERROR_FREE_CONNECTION;
 }
 
 void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, size_t num_datagrams)
