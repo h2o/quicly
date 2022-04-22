@@ -29,6 +29,7 @@
 #define DEFAULT_INITCWND_PACKETS 10
 #define DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT 3
 #define DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER 400
+#define DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS 1000
 
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {NULL,                                                 /* tls */
@@ -47,6 +48,7 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                               0, /* ack_frequency */
                                               DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
+                                              DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                               0, /* enlarge_client_hello */
                                               NULL,
                                               NULL, /* on_stream_open */
@@ -76,6 +78,7 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
                                                     0, /* ack_frequency */
                                                     DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
+                                                    DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                                     0, /* enlarge_client_hello */
                                                     NULL,
                                                     NULL, /* on_stream_open */

@@ -316,6 +316,11 @@ struct st_quicly_context_t {
      */
     uint32_t handshake_timeout_rtt_multiplier;
     /**
+     * if the number of Initial/Handshake packets sent during the handshake phase exceeds this limit, treat it as an error and close
+     * the connection.
+     */
+    uint64_t max_initial_handshake_packets;
+    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
@@ -482,7 +487,11 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * number of timeouts occurred during handshake due to no progress being made (see `handshake_timeout_rtt_multiplier`)         \
      */                                                                                                                            \
-    uint64_t num_handshake_timeouts
+    uint64_t num_handshake_timeouts;                                                                                               \
+    /**                                                                                                                            \
+     * Total number of events where `initial_handshake_sent` exceeds limit.                                                        \
+     */                                                                                                                            \
+    uint64_t num_initial_handshake_exceeded
 
 typedef struct st_quicly_stats_t {
     /**
