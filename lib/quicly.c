@@ -4623,7 +4623,8 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
 
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
         quicly_sentmap_iter_t iter;
-        init_acks_iter(conn, &iter);
+        if ((ret = init_acks_iter(conn, &iter)) != 0)
+            goto Exit;
         /* check if the connection can be closed now (after 3 pto) */
         if (conn->super.state == QUICLY_STATE_DRAINING ||
             conn->super.stats.num_frames_sent.transport_close + conn->super.stats.num_frames_sent.application_close != 0) {
@@ -4950,7 +4951,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         break;
     }
 
-    init_acks_iter(conn, &iter);
+    if ((ret = init_acks_iter(conn, &iter)) != 0)
+        return ret;
 
     /* TODO log PNs being ACKed too late */
 
