@@ -4360,7 +4360,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         conn->super.stats.num_handshake_timeouts++;
         goto CloseNow;
     }
-    if (conn->super.stats.num_packets.initial_handshake_sent >= conn->super.ctx->max_initial_handshake_packets) {
+    if (conn->super.stats.num_packets.initial_handshake_sent > conn->super.ctx->max_initial_handshake_packets) {
         QUICLY_PROBE(INITIAL_HANDSHAKE_PACKET_EXCEED, conn, conn->stash.now, conn->super.stats.num_packets.initial_handshake_sent);
         conn->super.stats.num_initial_handshake_exceeded++;
         goto CloseNow;
