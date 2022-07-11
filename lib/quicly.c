@@ -1213,7 +1213,7 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     stats->rtt = conn->egress.loss.rtt;
     stats->cc = conn->egress.cc;
     quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate);
-    stats->num_sentmap_packets_max = conn->egress.loss.sentmap.num_packets_max;
+    stats->num_sentmap_packets_largest = conn->egress.loss.sentmap.num_packets_largest;
 
     return 0;
 }
