@@ -312,7 +312,8 @@ struct st_quicly_context_t {
      */
     uint16_t ack_frequency;
     /**
-     * if the handshake does not complete within this value * RTT, close connection
+     * If the handshake does not complete within this value * RTT, close connection.
+     * When RTT is not observed, timeout is calculated relative to initial RTT (333ms by default).
      */
     uint32_t handshake_timeout_rtt_multiplier;
     /**
