@@ -482,9 +482,9 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_ptos;                                                                                                             \
     /**                                                                                                                            \
-     * Time spent during handshake. UINT64_MAX if still in handshake.                                                              \
+     * Time took until handshake is confirmed. UINT64_MAX if handshake is not confirmed yet.                                       \
      */                                                                                                                            \
-    uint64_t handshake_msec;                                                                                                       \
+    uint64_t handshake_confirmed_msec;                                                                                             \
     /**                                                                                                                            \
      * number of timeouts occurred during handshake due to no progress being made (see `handshake_timeout_rtt_multiplier`)         \
      */                                                                                                                            \

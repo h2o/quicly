@@ -1480,7 +1480,7 @@ static int discard_handshake_context(quicly_conn_t *conn, size_t epoch)
     destroy_handshake_flow(conn, epoch);
     if (epoch == QUICLY_EPOCH_HANDSHAKE) {
         assert(conn->stash.now != 0);
-        conn->super.stats.handshake_msec = conn->stash.now - conn->created_at;
+        conn->super.stats.handshake_confirmed_msec = conn->stash.now - conn->created_at;
     }
     free_handshake_space(epoch == QUICLY_EPOCH_INITIAL ? &conn->initial : &conn->handshake);
 
@@ -2094,7 +2094,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->super.ctx = ctx;
     lock_now(conn, 0);
     conn->created_at = conn->stash.now;
-    conn->super.stats.handshake_msec = UINT64_MAX;
+    conn->super.stats.handshake_confirmed_msec = UINT64_MAX;
     set_address(&conn->super.local.address, local_addr);
     set_address(&conn->super.remote.address, remote_addr);
     quicly_local_cid_init_set(&conn->super.local.cid_set, ctx->cid_encryptor, local_cid);
