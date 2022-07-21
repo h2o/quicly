@@ -88,7 +88,7 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         quicly_conn_t *_conn = (conn);                                                                                             \
         if (PTLS_UNLIKELY(QUICLY_##label##_ENABLED()) && !ptls_skip_tracing(_conn->crypto.tls))                                    \
             QUICLY_##label(_conn, __VA_ARGS__);                                                                                    \
-        QUICLY_TRACER(label, _conn,  __VA_ARGS__);                                                                                 \
+        QUICLY_TRACER(label, _conn, __VA_ARGS__);                                                                                  \
     } while (0)
 #else
 #define QUICLY_PROBE(label, conn, ...) QUICLY_TRACER(label, conn, __VA_ARGS__)
@@ -3111,11 +3111,10 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     datagram_size = s->dst - s->payload_buf.datagram;
     assert(datagram_size <= conn->egress.max_udp_payload_size);
 
-    conn->super.ctx->crypto_engine->encrypt_packet(conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection,
-                                                   s->target.cipher->aead, ptls_iovec_init(s->payload_buf.datagram, datagram_size),
-                                                   s->target.first_byte_at - s->payload_buf.datagram,
-                                                   s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number,
-                                                   coalesced);
+    conn->super.ctx->crypto_engine->encrypt_packet(
+        conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead,
+        ptls_iovec_init(s->payload_buf.datagram, datagram_size), s->target.first_byte_at - s->payload_buf.datagram,
+        s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number, coalesced);
 
     /* update CC, commit sentmap */
     if (s->target.ack_eliciting) {
