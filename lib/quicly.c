@@ -93,11 +93,7 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 #else
 #define QUICLY_PROBE(label, conn, ...) QUICLY_TRACER(label, conn, __VA_ARGS__)
 #endif
-#define QUICLY_PROBE_HEXDUMP(s, l)                                                                                                 \
-    ({                                                                                                                             \
-        size_t _l = (l);                                                                                                           \
-        ptls_hexdump(alloca(_l * 2 + 1), (s), _l);                                                                                 \
-    })
+#define QUICLY_PROBE_HEXDUMP(s, l) PTLS_HEXDUMP((s), (l))
 #define QUICLY_PROBE_ESCAPE_UNSAFE_STRING(s, l)                                                                                    \
     ({                                                                                                                             \
         size_t _l = (l);                                                                                                           \
@@ -1600,9 +1596,7 @@ void quicly_free(quicly_conn_t *conn)
     lock_now(conn, 0);
 
     QUICLY_PROBE(FREE, conn, conn->stash.now);
-    QUICLY_LOG_CONN(free, conn, {
-        PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
-    });
+    QUICLY_LOG_CONN(free, conn, { PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now); });
 
 #if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
     if (QUICLY_CONN_STATS_ENABLED()) {
@@ -2708,6 +2702,12 @@ static int on_ack_stream(quicly_sentmap_t *map, const quicly_sent_packet_t *pack
 
         QUICLY_PROBE(STREAM_ACKED, conn, conn->stash.now, sent->data.stream.stream_id, sent->data.stream.args.start,
                      sent->data.stream.args.end - sent->data.stream.args.start);
+        QUICLY_LOG_CONN(stream_acked, conn, {
+            PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+            PTLSLOG_ELEMENT_SIGNED(stream_id, sent->data.stream.stream_id);
+            PTLSLOG_ELEMENT_UNSIGNED(off, sent->data.stream.args.start);
+            PTLSLOG_ELEMENT_UNSIGNED(len, sent->data.stream.args.end - sent->data.stream.args.start);
+        });
 
         if (packet->frames_in_flight && conn->stash.on_ack_stream.active_acked_cache.stream_id == sent->data.stream.stream_id &&
             conn->stash.on_ack_stream.active_acked_cache.args.end == sent->data.stream.args.start) {
@@ -2731,6 +2731,12 @@ static int on_ack_stream(quicly_sentmap_t *map, const quicly_sent_packet_t *pack
 
         QUICLY_PROBE(STREAM_LOST, conn, conn->stash.now, sent->data.stream.stream_id, sent->data.stream.args.start,
                      sent->data.stream.args.end - sent->data.stream.args.start);
+        QUICLY_LOG_CONN(stream_lost, conn, {
+            PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+            PTLSLOG_ELEMENT_SIGNED(stream_id, sent->data.stream.stream_id);
+            PTLSLOG_ELEMENT_UNSIGNED(off, sent->data.stream.args.start);
+            PTLSLOG_ELEMENT_UNSIGNED(len, sent->data.stream.args.end - sent->data.stream.args.start);
+        });
 
         quicly_stream_t *stream;
         if ((stream = quicly_get_stream(conn, sent->data.stream.stream_id)) == NULL)
@@ -2898,6 +2904,10 @@ static int on_ack_new_token(quicly_sentmap_t *map, const quicly_sent_packet_t *p
     }
     if (acked) {
         QUICLY_PROBE(NEW_TOKEN_ACKED, conn, conn->stash.now, sent->data.new_token.generation);
+        QUICLY_LOG_CONN(new_token_acked, conn, {
+            PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+            PTLSLOG_ELEMENT_UNSIGNED(generation, sent->data.new_token.generation);
+        });
         if (conn->egress.new_token.max_acked < sent->data.new_token.generation)
             conn->egress.new_token.max_acked = sent->data.new_token.generation;
     }
@@ -3296,6 +3306,12 @@ static int do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size
 
     QUICLY_PROBE(PACKET_PREPARE, conn, conn->stash.now, s->current.first_byte,
                  QUICLY_PROBE_HEXDUMP(conn->super.remote.cid_set.cids[0].cid.cid, conn->super.remote.cid_set.cids[0].cid.len));
+    QUICLY_LOG_CONN(packet_prepare, conn, {
+        PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+        PTLSLOG_ELEMENT_UNSIGNED(first_octet, s->current.first_byte);
+        PTLSLOG_ELEMENT_SAFESTR(
+            dcid, PTLS_HEXDUMP(conn->super.remote.cid_set.cids[0].cid.cid, conn->super.remote.cid_set.cids[0].cid.len));
+    });
 
     /* emit header */
     s->target.first_byte_at = s->dst;
