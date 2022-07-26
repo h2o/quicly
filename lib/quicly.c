@@ -981,6 +981,10 @@ void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src,
                                                    &conn->crypto.handshake_properties);
         quicly_streambuf_ingress_shift(stream, input.len);
         QUICLY_PROBE(CRYPTO_HANDSHAKE, conn, conn->stash.now, handshake_result);
+        QUICLY_LOG_CONN(crypto_handshake, conn, {
+            PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
+            PTLSLOG_ELEMENT_SIGNED(ret, handshake_result);
+        });
         switch (handshake_result) {
         case 0:
         case PTLS_ERROR_IN_PROGRESS:
@@ -1130,6 +1134,11 @@ static void destroy_stream(quicly_stream_t *stream, int err)
     quicly_conn_t *conn = stream->conn;
 
     QUICLY_PROBE(STREAM_ON_DESTROY, conn, conn->stash.now, stream, err);
+    QUICLY_LOG_CONN(stream_on_destroy, conn, {
+        PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+        PTLSLOG_ELEMENT_PTR(stream, stream);
+        PTLSLOG_ELEMENT_SIGNED(err, err);
+    });
 
     if (stream->callbacks != NULL)
         stream->callbacks->on_destroy(stream, err);
@@ -1547,6 +1556,11 @@ static int update_1rtt_egress_key(quicly_conn_t *conn)
 
     QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE, conn, conn->stash.now, space->cipher.egress.key_phase,
                  QUICLY_PROBE_HEXDUMP(space->cipher.egress.secret, cipher->hash->digest_size));
+    QUICLY_LOG_CONN(crypto_send_key_update, conn, {
+        PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+        PTLSLOG_ELEMENT_UNSIGNED(phase, space->cipher.egress.key_phase);
+        // TODO: handle secret
+    });
 
     return 0;
 }
@@ -1562,6 +1576,11 @@ static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key
 
     QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, conn->stash.now, space->cipher.ingress.key_phase.decrypted,
                  QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, ptls_get_cipher(conn->crypto.tls)->hash->digest_size));
+    QUICLY_LOG_CONN(crypto_receive_key_update, conn, {
+        PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+        PTLSLOG_ELEMENT_UNSIGNED(phase, space->cipher.ingress.key_phase.decrypted);
+        // TODO: handle secret
+    });
 
     if (space->cipher.egress.key_phase < space->cipher.ingress.key_phase.decrypted) {
         return update_1rtt_egress_key(conn);
@@ -1581,12 +1600,16 @@ void quicly_free(quicly_conn_t *conn)
     lock_now(conn, 0);
 
     QUICLY_PROBE(FREE, conn, conn->stash.now);
+    QUICLY_LOG_CONN(free, conn, {
+        PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+    });
 
 #if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
     if (QUICLY_CONN_STATS_ENABLED()) {
         quicly_stats_t stats;
         quicly_get_stats(conn, &stats);
         QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
+        // TODO: emit stats
     }
 #endif
     destroy_all_streams(conn, 0, 1);
@@ -1696,6 +1719,12 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
     int ret;
 
     QUICLY_PROBE(STREAM_RECEIVE, stream->conn, stream->conn->stash.now, stream, frame->offset, frame->data.len);
+    QUICLY_LOG_CONN(stream_receive, stream->conn, {
+        PTLSLOG_ELEMENT_UNSIGNED(time, stream->conn->stash.now);
+        PTLSLOG_ELEMENT_PTR(stream, stream);
+        PTLSLOG_ELEMENT_UNSIGNED(off, frame->offset);
+        PTLSLOG_ELEMENT_UNSIGNED(len, frame->data.len);
+    });
 
     if (quicly_recvstate_transfer_complete(&stream->recvstate))
         return 0;
@@ -1731,6 +1760,13 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
         uint64_t buf_offset = frame->offset + frame->data.len - apply_len - stream->recvstate.data_off;
         const void *apply_src = frame->data.base + frame->data.len - apply_len;
         QUICLY_PROBE(STREAM_ON_RECEIVE, stream->conn, stream->conn->stash.now, stream, (size_t)buf_offset, apply_src, apply_len);
+        QUICLY_LOG_CONN(stream_on_receive, stream->conn, {
+            PTLSLOG_ELEMENT_UNSIGNED(time, stream->conn->stash.now);
+            PTLSLOG_ELEMENT_PTR(stream, stream);
+            PTLSLOG_ELEMENT_UNSIGNED(off, buf_offset);
+            // TODO: handle src
+            PTLSLOG_ELEMENT_UNSIGNED(src_len, apply_len);
+        });
         stream->callbacks->on_receive(stream, (size_t)buf_offset, apply_src, apply_len);
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
             return QUICLY_ERROR_IS_CLOSING;
@@ -2278,6 +2314,10 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     conn->super.original_dcid = *server_cid;
 
     QUICLY_PROBE(CONNECT, conn, conn->stash.now, conn->super.version);
+    QUICLY_LOG_CONN(connect, conn, {
+        PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+        PTLSLOG_ELEMENT_UNSIGNED(version, conn->super.version);
+    });
 
     if ((ret = setup_handshake_space_and_flow(conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
@@ -2445,6 +2485,11 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
         ++space->cipher.ingress.key_phase.prepared;
         QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, conn->stash.now, space->cipher.ingress.key_phase.prepared,
                      QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
+        QUICLY_LOG_CONN(crypto_receive_key_update_prepare, conn, {
+            PTLSLOG_ELEMENT_UNSIGNED(time, conn->stash.now);
+            PTLSLOG_ELEMENT_UNSIGNED(phase, space->cipher.ingress.key_phase.prepared);
+            // TODO: hande secret
+        });
     }
     }
 
@@ -2627,6 +2672,11 @@ static int on_ack_stream_ack_one(quicly_conn_t *conn, quicly_stream_id_t stream_
     if (bytes_to_shift != 0) {
         QUICLY_PROBE(STREAM_ON_SEND_SHIFT, stream->conn, stream->conn->stash.now, stream, bytes_to_shift);
         stream->callbacks->on_send_shift(stream, bytes_to_shift);
+        QUICLY_LOG_CONN(stream_on_send_shift, stream->conn, {
+            PTLSLOG_ELEMENT_UNSIGNED(time, stream->conn->stash.now);
+            PTLSLOG_ELEMENT_PTR(stream, stream);
+            PTLSLOG_ELEMENT_UNSIGNED(delta, bytes_to_shift);
+        });
     }
     if (stream_is_destroyable(stream)) {
         destroy_stream(stream, 0);
@@ -3129,6 +3179,13 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     conn->egress.cc.type->cc_on_sent(&conn->egress.cc, &conn->egress.loss, (uint32_t)packet_bytes_in_flight, conn->stash.now);
     QUICLY_PROBE(PACKET_SENT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  get_epoch(*s->target.first_byte_at), !s->target.ack_eliciting);
+    QUICLY_LOG_CONN(packet_sent, conn, {
+        PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
+        PTLSLOG_ELEMENT_UNSIGNED(pn, conn->egress.packet_number);
+        PTLSLOG_ELEMENT_UNSIGNED(len, s->dst - s->target.first_byte_at);
+        PTLSLOG_ELEMENT_UNSIGNED(type, get_epoch(*s->target.first_byte_at));
+        PTLSLOG_ELEMENT_SIGNED(ack_only, !s->target.ack_eliciting);
+    });
 
     ++conn->egress.packet_number;
     ++conn->super.stats.num_packets.sent;
