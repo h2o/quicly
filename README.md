@@ -1,7 +1,7 @@
 quicly [![CI](https://github.com/h2o/quicly/actions/workflows/ci.yml/badge.svg)](https://github.com/h2o/quicly/actions/workflows/ci.yml)
 ===
 
-Quicly is a IETF [QUIC](https://quicwg.github.io/) Protocol implementation, written from the ground up to be used within the H2O HTTP server.
+Quicly is an IETF [QUIC](https://quicwg.github.io/) protocol implementation, written from the ground up to be used within the H2O HTTP server.
 
 The software is licensed under the MIT License.
 
