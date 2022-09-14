@@ -5329,7 +5329,7 @@ static int handle_max_data_frame(quicly_conn_t *conn, struct st_quicly_handle_pa
     if (frame.max_data <= conn->egress.max_data.permitted)
         return 0;
     conn->egress.max_data.permitted = frame.max_data;
-    conn->egress.data_blocked = QUICLY_SENDER_STATE_UNACKED; /* DATA_BLOCKED has not been sent for the new limit */
+    conn->egress.data_blocked = QUICLY_SENDER_STATE_NONE; /* DATA_BLOCKED has not been sent for the new limit */
 
     return 0;
 }
