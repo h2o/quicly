@@ -3751,6 +3751,7 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 
     if (detached) {
         /* Detached: current frame is going to be the last frame, and FIN is to be sent separately, using a non-detached frame. */
+        dst += len;
         is_fin = 0;
     } else {
         /* Not detached: adjust frame layout then adjust FIN. */
