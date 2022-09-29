@@ -3195,7 +3195,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         PTLSLOG_ELEMENT_UNSIGNED(pn, conn->egress.packet_number);
         PTLSLOG_ELEMENT_UNSIGNED(len, s->dst - s->target.first_byte_at);
         PTLSLOG_ELEMENT_UNSIGNED(packet_type, get_epoch(*s->target.first_byte_at));
-        PTLSLOG_ELEMENT_SIGNED(ack_only, !s->target.ack_eliciting);
+        PTLSLOG_ELEMENT_BOOL(ack_only, !s->target.ack_eliciting);
     });
 
     ++conn->egress.packet_number;
@@ -3810,7 +3810,7 @@ UpdateState:
         PTLSLOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
         PTLSLOG_ELEMENT_UNSIGNED(off, off);
         PTLSLOG_ELEMENT_UNSIGNED(len, len);
-        PTLSLOG_ELEMENT_SIGNED(is_fin, is_fin);
+        PTLSLOG_ELEMENT_BOOL(is_fin, is_fin);
     });
 
     QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, len, is_fin);
@@ -3950,7 +3950,7 @@ static int send_max_streams(quicly_conn_t *conn, int uni, quicly_send_context_t 
     QUICLY_LOG_CONN(max_streams_send, conn, {
         PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
         PTLSLOG_ELEMENT_UNSIGNED(maximum, new_count);
-        PTLSLOG_ELEMENT_SIGNED(is_unidirectional, uni);
+        PTLSLOG_ELEMENT_BOOL(is_unidirectional, uni);
     });
 
     return 0;
@@ -3984,7 +3984,7 @@ static int send_streams_blocked(quicly_conn_t *conn, int uni, quicly_send_contex
     QUICLY_LOG_CONN(streams_blocked_send, conn, {
         PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
         PTLSLOG_ELEMENT_UNSIGNED(maximum, max_streams->count);
-        PTLSLOG_ELEMENT_SIGNED(is_unidirectional, uni);
+        PTLSLOG_ELEMENT_BOOL(is_unidirectional, uni);
     });
 
     return 0;
@@ -4433,7 +4433,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
                  QUICLY_PROBE_HEXDUMP(secret, cipher->hash->digest_size));
     QUICLY_LOG_CONN(crypto_update_secret, conn, {
         PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
-        PTLSLOG_ELEMENT_SIGNED(is_enc, is_enc);
+        PTLSLOG_ELEMENT_BOOL(is_enc, is_enc);
         PTLSLOG_ELEMENT_UNSIGNED(epoch, epoch);
         PTLSLOG_ELEMENT_SAFESTR(label, log_label);
     });
@@ -5221,7 +5221,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
             QUICLY_LOG_CONN(packet_acked, conn, {
                 PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
                 PTLSLOG_ELEMENT_UNSIGNED(pn, pn_acked);
-                PTLSLOG_ELEMENT_SIGNED(is_late_ack, is_late_ack);
+                PTLSLOG_ELEMENT_BOOL(is_late_ack, is_late_ack);
             });
             if (sent->cc_bytes_in_flight != 0) {
                 bytes_acked += sent->cc_bytes_in_flight;
@@ -5391,7 +5391,7 @@ static int handle_streams_blocked_frame(quicly_conn_t *conn, struct st_quicly_ha
     QUICLY_LOG_CONN(streams_blocked_receive, conn, {
         PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
         PTLSLOG_ELEMENT_UNSIGNED(maximum, frame.count);
-        PTLSLOG_ELEMENT_SIGNED(is_unidirectional, uni);
+        PTLSLOG_ELEMENT_BOOL(is_unidirectional, uni);
     });
 
     if (should_send_max_streams(conn, uni)) {
@@ -5415,7 +5415,7 @@ static int handle_max_streams_frame(quicly_conn_t *conn, struct st_quicly_handle
     QUICLY_LOG_CONN(max_streams_receive, conn, {
         PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
         PTLSLOG_ELEMENT_UNSIGNED(maximum, frame.count);
-        PTLSLOG_ELEMENT_SIGNED(is_unidirectional, uni);
+        PTLSLOG_ELEMENT_BOOL(is_unidirectional, uni);
     });
 
     if ((ret = update_max_streams(uni ? &conn->egress.max_streams.uni : &conn->egress.max_streams.bidi, frame.count)) != 0)
