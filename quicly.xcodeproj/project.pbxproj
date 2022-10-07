@@ -925,7 +925,7 @@
 					"QUICLY_USE_EMBEDDED_PROBES=1",
 					"QUICLY_HAVE_FUSION=1",
 				);
-				OTHER_CFLAGS = "-march=native";
+				OTHER_CFLAGS = "$(inherited)";
 				OTHER_LDFLAGS = (
 					"-L/usr/local/opt/openssl@1.1/lib",
 					"-lcrypto",
@@ -942,7 +942,7 @@
 					"QUICLY_USE_EMBEDDED_PROBES=1",
 					"QUICLY_HAVE_FUSION=1",
 				);
-				OTHER_CFLAGS = "-march=native";
+				OTHER_CFLAGS = "$(inherited)";
 				OTHER_LDFLAGS = (
 					"-L/usr/local/opt/openssl@1.1/lib",
 					"-lcrypto",
@@ -1026,6 +1026,13 @@
 				MACOSX_DEPLOYMENT_TARGET = 10.12;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CFLAGS = (
+					"-march=native",
+					"-maes",
+					"-mpclmul",
+					"-mvaes",
+					"-mvpclmulqdq",
+				);
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -1078,6 +1085,13 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 10.12;
 				MTL_ENABLE_DEBUG_INFO = NO;
+				OTHER_CFLAGS = (
+					"-march=native",
+					"-maes",
+					"-mpclmul",
+					"-mvaes",
+					"-mvpclmulqdq",
+				);
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -1114,7 +1128,7 @@
 					"QUICLY_USE_EMBEDDED_PROBES=1",
 					"QUICLY_HAVE_FUSION=1",
 				);
-				OTHER_CFLAGS = "-march=native";
+				OTHER_CFLAGS = "$(inherited)";
 				OTHER_LDFLAGS = (
 					"-L/usr/local/opt/openssl@1.1/lib",
 					"-lcrypto",
@@ -1131,7 +1145,7 @@
 					"QUICLY_USE_EMBEDDED_PROBES=1",
 					"QUICLY_HAVE_FUSION=1",
 				);
-				OTHER_CFLAGS = "-march=native";
+				OTHER_CFLAGS = "$(inherited)";
 				OTHER_LDFLAGS = (
 					"-L/usr/local/opt/openssl@1.1/lib",
 					"-lcrypto",
