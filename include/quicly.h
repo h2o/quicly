@@ -1248,10 +1248,10 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
 
 #define QUICLY_LOG_CONN(_type, _conn, _block)                                                                                      \
     do {                                                                                                                           \
-        quicly_conn_t *__conn = (_conn);                                                                                           \
-        if (!ptls_skip_tracing(__conn->crypto.tls))                                                                                \
+        quicly_conn_t *_c = (_conn);                                                                                               \
+        if (!ptls_skip_tracing(_c->crypto.tls))                                                                                    \
             QUICLY_LOG(_type, {                                                                                                    \
-                PTLS_LOG_ELEMENT_PTR(conn, __conn);                                                                                \
+                PTLS_LOG_ELEMENT_PTR(conn, _c);                                                                                    \
                 do {                                                                                                               \
                     _block                                                                                                         \
                 } while (0);                                                                                                       \
