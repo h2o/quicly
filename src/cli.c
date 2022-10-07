@@ -1075,7 +1075,7 @@ static void setup_ptlslog(const char *fn)
         fprintf(stderr, "failed to open file:%s:%s\n", fn, strerror(errno));
         exit(1);
     }
-    ptlslog_add_fd(fd);
+    ptls_log_add_fd(fd);
 }
 
 int main(int argc, char **argv)

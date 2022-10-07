@@ -1244,14 +1244,14 @@ void quicly_stream_noop_on_receive_reset(quicly_stream_t *stream, int err);
 
 extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
 
-#define QUICLY_LOG(type, block) PTLSLOG(quicly, type, block)
+#define QUICLY_LOG(type, block) PTLS_LOG(quicly, type, block)
 
 #define QUICLY_LOG_CONN(_type, _conn, _block)                                                                                      \
     do {                                                                                                                           \
         quicly_conn_t *__conn = (_conn);                                                                                           \
         if (!ptls_skip_tracing(__conn->crypto.tls))                                                                                \
             QUICLY_LOG(_type, {                                                                                                    \
-                PTLSLOG_ELEMENT_PTR(conn, __conn);                                                                                 \
+                PTLS_LOG_ELEMENT_PTR(conn, __conn);                                                                                \
                 do {                                                                                                               \
                     _block                                                                                                         \
                 } while (0);                                                                                                       \
