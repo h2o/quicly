@@ -185,6 +185,7 @@
 		0829878C26DF775B0053638F /* rate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = rate.h; sourceTree = "<group>"; };
 		0829878D26E03D4D0053638F /* rate.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = rate.c; sourceTree = "<group>"; };
 		0829879126E0A9DF0053638F /* rate.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = rate.c; sourceTree = "<group>"; };
+		085125F728EFC0480074C124 /* cplusplus.t */ = {isa = PBXFileReference; lastKnownFileType = text; path = cplusplus.t; sourceTree = "<group>"; xcLanguageSpecificationIdentifier = xcode.lang.perl; };
 		E904233C24AED0410072C5B7 /* loss.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E904234024AEFB980072C5B7 /* loss.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = loss.c; sourceTree = "<group>"; };
 		E9056C071F56965300E2B96C /* linklist.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = linklist.h; sourceTree = "<group>"; };
@@ -463,6 +464,7 @@
 		E9CC44121EC1926000DC7D3E /* t */ = {
 			isa = PBXGroup;
 			children = (
+				085125F728EFC0480074C124 /* cplusplus.t */,
 				E98884C221E3F23A0060F010 /* e2e.t */,
 				E99F8C281F4EAEF800C26B3D /* frame.c */,
 				E9736533246FD3DA0039AA49 /* local_cid.c */,
