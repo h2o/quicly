@@ -37,13 +37,30 @@ subtest "hello" => sub {
     my $guard = spawn_server();
     my $resp = `$cli -e $tempdir/events -p /12 127.0.0.1 $port 2> /dev/null`;
     is $resp, "hello world\n";
+
     subtest "events" => sub {
         my $events = slurp_file("$tempdir/events");
         complex $events, sub {
             $_ =~ /"type":"transport_close_send",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)",.*?"type":"([^\"]*)"/s
                 and $1 eq 'packet_sent' and $2 eq 'send' and $3 eq 'free';
         };
+
+        # check that the events are compatible with qlog-adapter
+        subtest "qlog-adapter" => sub {
+            plan skip_all => "python3 not found"
+                unless system("which python3 > /dev/null 2>&1") == 0;
+            my $qlog = `misc/qlog-adapter.py < $tempdir/events`;
+            is $?, 0, "qlog-adapter can transform raw event logs";
+            diag("qlog:\n$qlog") if $ENV{TEST_DEBUG};
+            my @events = map { decode_json($_) } split /\n/, $qlog;
+            cmp_ok scalar(@events), ">=", 2, "it has at least two events";
+
+            # https://github.com/quicwg/qlog/blob/main/draft-ietf-quic-qlog-main-schema.md#the-high-level-qlog-schema-top-level
+            ok $events[0]->{qlog_version}, "it has qlog_version";
+            # TODO: validate the events according to the qlog schema
+        };
     };
+
     # check if the client receives extra connection IDs
     subtest "initial-ncid" => sub {
         my $events = slurp_file("$tempdir/events");
