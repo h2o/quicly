@@ -35,9 +35,7 @@
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
 #include "quicly/cc.h"
-#if QUICLY_USE_EMBEDDED_PROBES
-#include "embedded-probes.h"
-#elif QUICLY_USE_DTRACE
+#if QUICLY_USE_DTRACE
 #include "quicly-probes.h"
 #endif
 #include "quicly/retire_cid.h"
@@ -82,7 +80,7 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 #define QUICLY_TRACER(...)
 #endif
 
-#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
+#if QUICLY_USE_DTRACE
 #define QUICLY_PROBE(label, conn, ...)                                                                                             \
     do {                                                                                                                           \
         quicly_conn_t *_conn = (conn);                                                                                             \
@@ -1593,7 +1591,7 @@ void quicly_free(quicly_conn_t *conn)
     QUICLY_PROBE(FREE, conn, conn->stash.now);
     QUICLY_LOG_CONN(free, conn, {});
 
-#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
+#if QUICLY_USE_DTRACE
     if (QUICLY_CONN_STATS_ENABLED()) {
         quicly_stats_t stats;
         quicly_get_stats(conn, &stats);
@@ -6777,7 +6775,7 @@ const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {
 
 void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
 {
-#if QUICLY_USE_EMBEDDED_PROBES || QUICLY_USE_DTRACE
+#if QUICLY_USE_DTRACE
     char buf[1024];
     va_list args;
 
