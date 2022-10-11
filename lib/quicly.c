@@ -5114,7 +5114,7 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
     QUICLY_PROBE(RESET_STREAM_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size);
     QUICLY_LOG_CONN(reset_stream_receive, conn, {
         PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
-        PTLSLOG_ELEMENT_UNSIGNED(stream_id, frame.stream_id);
+        PTLSLOG_ELEMENT_SIGNED(stream_id, (quicly_stream_id_t)frame.stream_id);
         PTLSLOG_ELEMENT_UNSIGNED(app_error_code, frame.app_error_code);
         PTLSLOG_ELEMENT_UNSIGNED(final_size, frame.final_size);
     });
@@ -5309,7 +5309,7 @@ static int handle_max_stream_data_frame(quicly_conn_t *conn, struct st_quicly_ha
     QUICLY_PROBE(MAX_STREAM_DATA_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.max_stream_data);
     QUICLY_LOG_CONN(max_stream_data_receive, conn, {
         PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
-        PTLSLOG_ELEMENT_UNSIGNED(stream_id, frame.stream_id);
+        PTLSLOG_ELEMENT_SIGNED(stream_id, (quicly_stream_id_t)frame.stream_id);
         PTLSLOG_ELEMENT_UNSIGNED(max_stream_data, frame.max_stream_data);
     });
 
@@ -5479,7 +5479,7 @@ static int handle_stop_sending_frame(quicly_conn_t *conn, struct st_quicly_handl
     QUICLY_PROBE(STOP_SENDING_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code);
     QUICLY_LOG_CONN(stop_sending_receive, conn, {
         PTLSLOG_ELEMENT_SIGNED(time, conn->stash.now);
-        PTLSLOG_ELEMENT_UNSIGNED(stream_id, frame.stream_id);
+        PTLSLOG_ELEMENT_SIGNED(stream_id, (quicly_stream_id_t)frame.stream_id);
         PTLSLOG_ELEMENT_UNSIGNED(error_code, frame.app_error_code);
     });
 
