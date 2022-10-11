@@ -1552,7 +1552,10 @@ static int update_1rtt_egress_key(quicly_conn_t *conn)
 
     QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE, conn, conn->stash.now, space->cipher.egress.key_phase,
                  QUICLY_PROBE_HEXDUMP(space->cipher.egress.secret, cipher->hash->digest_size));
-    QUICLY_LOG_CONN(crypto_send_key_update, conn, { PTLS_LOG_ELEMENT_UNSIGNED(phase, space->cipher.egress.key_phase); });
+    QUICLY_LOG_CONN(crypto_send_key_update, conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(phase, space->cipher.egress.key_phase);
+        PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(secret, space->cipher.egress.secret, cipher->hash->digest_size);
+    });
 
     return 0;
 }
@@ -1568,8 +1571,11 @@ static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key
 
     QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE, conn, conn->stash.now, space->cipher.ingress.key_phase.decrypted,
                  QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, ptls_get_cipher(conn->crypto.tls)->hash->digest_size));
-    QUICLY_LOG_CONN(crypto_receive_key_update, conn,
-                    { PTLS_LOG_ELEMENT_UNSIGNED(phase, space->cipher.ingress.key_phase.decrypted); });
+    QUICLY_LOG_CONN(crypto_receive_key_update, conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(phase, space->cipher.ingress.key_phase.decrypted);
+        PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(secret, space->cipher.ingress.secret,
+                                         ptls_get_cipher(conn->crypto.tls)->hash->digest_size);
+    });
 
     if (space->cipher.egress.key_phase < space->cipher.ingress.key_phase.decrypted) {
         return update_1rtt_egress_key(conn);
@@ -1749,7 +1755,7 @@ static int apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *fr
         QUICLY_LOG_CONN(stream_on_receive, stream->conn, {
             PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
             PTLS_LOG_ELEMENT_UNSIGNED(off, buf_offset);
-            PTLS_LOG_ELEMENT_UNSIGNED(src_len, apply_len);
+            PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(src, apply_src, apply_len);
         });
         stream->callbacks->on_receive(stream, (size_t)buf_offset, apply_src, apply_len);
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
@@ -2466,8 +2472,10 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
         ++space->cipher.ingress.key_phase.prepared;
         QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, conn->stash.now, space->cipher.ingress.key_phase.prepared,
                      QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
-        QUICLY_LOG_CONN(crypto_receive_key_update_prepare, conn,
-                        { PTLS_LOG_ELEMENT_UNSIGNED(phase, space->cipher.ingress.key_phase.prepared); });
+        QUICLY_LOG_CONN(crypto_receive_key_update_prepare, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(phase, space->cipher.ingress.key_phase.prepared);
+            PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(secret, space->cipher.ingress.secret, cipher->hash->digest_size);
+        });
     }
     }
 
@@ -4388,6 +4396,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         PTLS_LOG_ELEMENT_BOOL(is_enc, is_enc);
         PTLS_LOG_ELEMENT_UNSIGNED(epoch, epoch);
         PTLS_LOG_ELEMENT_SAFESTR(label, log_label);
+        PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(secret, secret, cipher->hash->digest_size);
     });
 
     if (tlsctx->log_event != NULL) {
@@ -4569,7 +4578,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if (s->dst_end - s->dst >= required_space) {
                     s->dst = quicly_encode_datagram_frame(s->dst, *payload);
                     QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, payload->base, payload->len);
-                    QUICLY_LOG_CONN(datagram_send, conn, { PTLS_LOG_ELEMENT_UNSIGNED(payload_len, payload->len); });
+                    QUICLY_LOG_CONN(datagram_send, conn,
+                                    { PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(payload, payload->base, payload->len); });
                 } else {
                     /* FIXME: At the moment, we add a padding because we do not have a way to reclaim allocated space, and because
                      * it is forbidden to send an empty QUIC packet. */
@@ -6035,7 +6045,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     QUICLY_PROBE(PACKET_RECEIVED, *conn, (*conn)->stash.now, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, *conn, {
         PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
-        PTLS_LOG_ELEMENT_UNSIGNED(decrypted_len, payload.len);
+        PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(decrypted, payload.base, payload.len);
         PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
     });
 

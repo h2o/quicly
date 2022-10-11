@@ -1156,6 +1156,7 @@ int main(int argc, char **argv)
                 exit(1);
             }
             ptls_log_add_fd(fd);
+            ptls_log.include_appdata = 1;
         } break;
         case 'f': {
             double fraction;
