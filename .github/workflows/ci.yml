@@ -57,9 +57,9 @@ jobs:
       env:
         OPENSSL: ${{ matrix.openssl }}
       run: |
-        brew install perl libfaketime ${OPENSSL}
+        brew install perl ${OPENSSL}
         perl -v
-        curl -sSfL https://cpanmin.us | perl - -v --cpanfile cpanfile
+        curl -sSfL https://cpanmin.us | perl - -v --installdeps .
     - name: Build
       env:
         OPENSSL: ${{ matrix.openssl }}
