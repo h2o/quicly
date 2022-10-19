@@ -333,6 +333,13 @@ subtest "raw-certificates-ec" => sub {
 
 done_testing;
 
+sub check_udp_port {
+    my ($proto, $addr, $port) = @_;
+
+    # netstat(1) might not be available and not portable anyway, so use lsof(1) instead.
+    return `lsof '-i$proto\@$addr:$port'` ne "";
+}
+
 sub spawn_server {
     my @cmd;
     if (grep(/^-W$/, @_)) {
@@ -347,7 +354,7 @@ sub spawn_server {
         exec @cmd;
         die "failed to exec $cmd[0]:$?";
     }
-    while (`netstat -na` !~ /^udp.*\s127\.0\.0\.1[\.:]$port\s/m) {
+    while (!check_udp_port("udp", "127.0.0.1", $port)) {
         if (waitpid($pid, WNOHANG) == $pid) {
             die "failed to launch server";
         }
