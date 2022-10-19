@@ -337,7 +337,7 @@ sub check_udp_port {
     my ($proto, $addr, $port) = @_;
 
     # netstat(1) might not be available and not portable anyway, so use lsof(1) instead.
-    return `lsof '-i$proto\@$addr:$port'` ne "";
+    return `lsof '-i$proto\@$addr:$port' 2>/dev/null` ne "";
 }
 
 sub spawn_server {
