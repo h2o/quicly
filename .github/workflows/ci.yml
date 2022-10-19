@@ -67,6 +67,6 @@ jobs:
         set -xe
         mkdir -p build
         cd build
-        cmake .. -DOPENSSL_ROOT_DIR="$(brew --prefix ${OPENSSL})"
+        cmake .. -DOPENSSL_ROOT_DIR="$(brew --prefix ${OPENSSL})" -DCMAKE_C_COMPILER="$(brew --prefix llvm@14)/bin/clang"
         make all VERBOSE=1
         make check
