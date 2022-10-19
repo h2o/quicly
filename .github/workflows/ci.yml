@@ -3,7 +3,7 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  build:
+  docker:
     name: "${{ matrix.name }}"
     runs-on: [ubuntu-20.04]
 
@@ -15,9 +15,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: default
+          - name: "Linux / OpenSSL 1.1.1"
             command: make -f misc/docker-ci.mk
-          - name: asan
+          - name: "Linux / OpenSSL 3.0"
+            command: make -f misc/docker-ci.mk CONTAINER_NAME=h2oserver/h2o-ci:ubuntu2204
+          - name: "Linux / ASan"
             command: make -f misc/docker-ci.mk CMAKE_ARGS='-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS=-fsanitize=address -DCMAKE_CXX_FLAGS=-fsanitize=address' CHECK_ENVS='ASAN_OPTIONS=detect_leaks=0'
 
     timeout-minutes: 10
