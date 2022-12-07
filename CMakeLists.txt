@@ -46,6 +46,7 @@ INCLUDE_DIRECTORIES(
     ${CMAKE_CURRENT_BINARY_DIR})
 
 SET(PICOTLS_OPENSSL_FILES
+    deps/picotls/lib/hpke.c
     deps/picotls/lib/openssl.c
     deps/picotls/lib/pembase64.c
     deps/picotls/lib/picotls.c)
