@@ -1023,9 +1023,12 @@ void crypto_stream_receive(quicly_stream_t *stream, size_t off, const void *src,
     if (quicly_streambuf_ingress_receive(stream, off, src, len) != 0)
         return;
 
-    /* When async operation is in progress, input must be buffered and be provided to TLS after the async operation is complete. */
-    if (conn->crypto.async_in_progress)
+    /* While the server generates the handshake signature asynchronously, clients would not send additional messages. They cannot
+     * generate Finished. They would not send Certificate / CertificateVerify before authenticating the server identity. */
+    if (conn->crypto.async_in_progress) {
+        initiate_close(conn, PTLS_ALERT_UNEXPECTED_MESSAGE, QUICLY_FRAME_TYPE_CRYPTO, NULL);
         return;
+    }
 
     /* feed the input into TLS, send result */
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
