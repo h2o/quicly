@@ -91,6 +91,7 @@ static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .get_time = &ptls_get_time,
                                 .key_exchanges = key_exchanges,
                                 .cipher_suites = cipher_suites,
+                                .ech.client = {ptls_openssl_hpke_cipher_suites, ptls_openssl_hpke_kems},
                                 .require_dhe_on_psk = 1,
                                 .save_ticket = &save_session_ticket,
                                 .on_client_hello = &on_client_hello};
@@ -608,6 +609,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         if (conn != NULL) {
             ret = send_pending(fd, conn);
             if (ret != 0) {
+                ech_save_retry_configs();
                 quicly_free(conn);
                 conn = NULL;
                 if (ret == QUICLY_ERROR_FREE_CONNECTION) {
@@ -1073,7 +1075,7 @@ int main(int argc, char **argv)
     struct sockaddr_storage sa;
     socklen_t salen;
     unsigned udpbufsize = 0;
-    int ch, fd;
+    int ch, opt_index, fd;
 
     reqs = malloc(sizeof(*reqs));
     memset(reqs, 0, sizeof(*reqs));
@@ -1094,8 +1096,20 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h")) != -1) {
+    static const struct option longopts[] = {
+        {"ech-key", required_argument, NULL, 0}, {"ech-configs", required_argument, NULL, 0}, {NULL}};
+    while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
+                             &opt_index)) != -1) {
         switch (ch) {
+        case 0: /* longopts */
+            if (strcmp(longopts[opt_index].name, "ech-key") == 0) {
+                ech_setup_key(&tlsctx, optarg);
+            } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
+                ech_setup_configs(optarg);
+            } else {
+                assert(!"unexpected longname");
+            }
+            break;
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
             negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init(optarg, strlen(optarg));
@@ -1401,6 +1415,8 @@ int main(int argc, char **argv)
         hs_properties.client.negotiated_protocols.count = negotiated_protocols.count;
         if (session_file != NULL)
             load_session();
+        hs_properties.client.ech.configs = ech.config_list;
+        hs_properties.client.ech.retry_configs = &ech.retry.configs;
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");
