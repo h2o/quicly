@@ -560,7 +560,7 @@ struct _st_quicly_conn_public_t {
          */
         quicly_address_t address;
         /**
-         * the SCID used in long header packets. Equiavalent to local_cid[seq=0]. Retaining the value separately is the easiest way
+         * the SCID used in long header packets. Equivalent to local_cid[seq=0]. Retaining the value separately is the easiest way
          * of staying away from the complexity caused by remote peer sending RCID frames before the handshake concludes.
          */
         quicly_cid_t long_header_src_cid;
