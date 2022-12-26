@@ -271,7 +271,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
                                      int is_after_send)
 {
     if (!has_outstanding) {
-        /* Do not set alarm if there's no data oustanding */
+        /* Do not set alarm if there's no data outstanding */
         r->alarm_at = INT64_MAX;
         r->loss_time = INT64_MAX;
         return;
