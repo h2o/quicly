@@ -3674,7 +3674,7 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
 }
 
 /**
- * If necessary, changes the frame representation from one without length field to one that has if necessary. Or, as an alternaive,
+ * If necessary, changes the frame representation from one without length field to one that has if necessary. Or, as an alternative,
  * prepends PADDING frames. Upon return, `dst` points to the end of the frame being built. `*len`, `*wrote_all`, `*frame_type_at`
  * are also updated reflecting their values post-adjustment.
  */
