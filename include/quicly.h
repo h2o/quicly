@@ -1018,7 +1018,7 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
  * Builds UDP datagrams to be sent for given connection.
  * @param [out] dest              destination address
  * @param [out] src               source address
- * @param [out] datagrams         vector of iovecs pointing to the payloads of UDP datagrams. Each iovec represens a single UDP
+ * @param [out] datagrams         vector of iovecs pointing to the payloads of UDP datagrams. Each iovec represents a single UDP
  *                                datagram.
  * @param [in,out] num_datagrams  Upon entry, the application provides the number of entries that the `packets` vector can contain.
  *                                Upon return, contains the number of packet vectors emitted by `quicly_send`.
