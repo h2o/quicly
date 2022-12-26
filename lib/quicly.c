@@ -1473,7 +1473,7 @@ static int setup_cipher(quicly_conn_t *conn, size_t epoch, int is_enc, ptls_ciph
                         ptls_aead_context_t **aead_ctx, ptls_aead_algorithm_t *aead, ptls_hash_algorithm_t *hash,
                         const void *secret)
 {
-    /* quicly_accept builds cipher before instantitating a connection. In such case, we use the default crypto engine */
+    /* quicly_accept builds cipher before instantiating a connection. In such case, we use the default crypto engine */
     quicly_crypto_engine_t *engine = conn != NULL ? conn->super.ctx->crypto_engine : &quicly_default_crypto_engine;
 
     return engine->setup_cipher(engine, conn, epoch, is_enc, hp_ctx, aead_ctx, aead, hash, secret);
