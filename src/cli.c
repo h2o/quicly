@@ -1047,7 +1047,7 @@ static void usage(const char *cmd)
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
            "  -u size                   initial size of UDP datagram payload\n"
-           "  -U size                   maximum size of UDP datagarm payload\n"
+           "  -U size                   maximum size of UDP datagram payload\n"
            "  -V                        verify peer using the default certificates\n"
            "  -v                        verbose mode (-vv emits packet dumps as well)\n"
            "  -w packets                initial congestion window (default: 10)\n"
