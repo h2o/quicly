@@ -180,7 +180,7 @@ static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
                                         uint64_t ack_delay_encoded, quicly_loss_ack_received_kind_t kind);
 /* This function updates the loss detection timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
- *  * send min_packets_to_send number of packets immmediately. min_packets_to_send should never be 0.
+ *  * send min_packets_to_send number of packets immediately. min_packets_to_send should never be 0.
  *  * if restrict_sending is true, limit sending to min_packets_to_send, otherwise as limited by congestion/flow control
  * and then call quicly_loss_update_alarm and update the alarm
  */
