@@ -2254,7 +2254,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     quicly_transport_parameters_t params;
     quicly_cid_t original_dcid, initial_scid, retry_scid = {};
 
-    /* obtain pointer to initial CID of the peer. It is guaranteeed to exist in the first slot, as TP is received before any frame
+    /* obtain pointer to initial CID of the peer. It is guaranteed to exist in the first slot, as TP is received before any frame
      * that updates the CID set. */
     quicly_remote_cid_t *remote_cid = &conn->super.remote.cid_set.cids[0];
     assert(remote_cid->sequence == 0);
