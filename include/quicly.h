@@ -988,7 +988,7 @@ int quicly_stream_can_send(quicly_stream_t *stream, int at_stream_level);
 int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s);
 /**
  * Sends data of given stream.  Called by stream scheduler.  Only streams that can send some data or EOS should be specified.  It is
- * the responsibilty of the stream scheduler to maintain a list of such streams.
+ * the responsibility of the stream scheduler to maintain a list of such streams.
  */
 int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s);
 /**
