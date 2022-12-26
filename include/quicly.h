@@ -958,7 +958,7 @@ static quicly_tracer_t *quicly_get_tracer(quicly_conn_t *conn);
 void quicly_free(quicly_conn_t *conn);
 /**
  * closes the connection.  `err` is the application error code using the coalesced scheme (see QUICLY_ERROR_* macros), or zero (no
- * error; indicating idle close).  An application should continue calling quicly_recieve and quicly_send, until they return
+ * error; indicating idle close).  An application should continue calling quicly_receive and quicly_send, until they return
  * QUICLY_ERROR_FREE_CONNECTION.  At this point, it is should call quicly_free.
  */
 int quicly_close(quicly_conn_t *conn, int err, const char *reason_phrase);
