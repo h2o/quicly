@@ -3106,7 +3106,7 @@ struct st_quicly_send_context_t {
          */
         uint8_t ack_eliciting : 1;
         /**
-         * if the target datagram sholud be padded to full size
+         * if the target datagram should be padded to full size
          */
         uint8_t full_size : 1;
     } target;
