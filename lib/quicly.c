@@ -3691,7 +3691,7 @@ static inline void adjust_stream_frame_layout(uint8_t **dst, uint8_t *const dst_
         }
     } else {
         /* STREAM frame: insert length if space can be left for more frames. Otherwise, retain STREAM frame header omitting the
-         * lengh field, prepending PADDING if necessary. */
+         * length field, prepending PADDING if necessary. */
         if (space_left <= len_of_len) {
             if (space_left != 0) {
                 memmove(*frame_at + space_left, *frame_at, *dst + *len - *frame_at);
