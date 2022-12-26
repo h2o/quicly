@@ -2098,7 +2098,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
         });
     }
 
-    /* check consistency between the transpart parameters */
+    /* check consistency between the transport parameters */
     if (params->min_ack_delay_usec != UINT64_MAX) {
         if (params->min_ack_delay_usec > params->max_ack_delay * 1000) {
             ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
