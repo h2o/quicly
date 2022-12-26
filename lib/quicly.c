@@ -3537,7 +3537,7 @@ static int send_control_frames_of_stream(quicly_stream_t *stream, quicly_send_co
 {
     int ret;
 
-    /* send STOP_SENDING if necessray */
+    /* send STOP_SENDING if necessary */
     if (stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_SEND) {
         /* FIXME also send an empty STREAM frame */
         if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.stop_sending.sender_state, s,
