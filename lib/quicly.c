@@ -3433,7 +3433,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
     /* calc ack_delay */
     if (space->largest_pn_received_at < conn->stash.now) {
         /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_LOCAL_ACK_DELAY_EXPONENT is 10. It's considered a
-         * non-issue because our time measurement is at millisecond granurality anyways. */
+         * non-issue because our time measurement is at millisecond granularity anyways. */
         ack_delay = ((conn->stash.now - space->largest_pn_received_at) * 1000) >> QUICLY_LOCAL_ACK_DELAY_EXPONENT;
     } else {
         ack_delay = 0;
