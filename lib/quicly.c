@@ -6612,7 +6612,7 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
                 port = ntohs(plaintext->remote.sin6.sin6_port);
                 break;
             default:
-                assert(!"unspported address type");
+                assert(!"unsupported address type");
                 break;
             }
         });
