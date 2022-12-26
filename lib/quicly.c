@@ -3028,7 +3028,7 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, ui
 }
 
 /**
- * Checks if the server is waiting for ClientFinished. When that is the case, the loss timer is disactivated, to avoid repeatedly
+ * Checks if the server is waiting for ClientFinished. When that is the case, the loss timer is deactivated, to avoid repeatedly
  * sending 1-RTT packets while the client spends time verifying the certificate chain at the same time buffering 1-RTT packets.
  */
 static int is_point5rtt_with_no_handshake_data_to_send(quicly_conn_t *conn)

@@ -341,7 +341,7 @@ static int default_stream_scheduler_update_state(quicly_stream_scheduler_t *self
         /* activate if not */
         link_stream(sched, stream, quicly_is_blocked(stream->conn));
     } else {
-        /* disactivate if active */
+        /* deactivate if active */
         if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler))
             quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
     }
