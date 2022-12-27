@@ -362,7 +362,7 @@ static void tiny_stream_window(void)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(client, server);
 
-    /* server should have recieved ACK to the RESET_STREAM it has sent */
+    /* server should have received ACK to the RESET_STREAM it has sent */
     ok(server_streambuf->is_detached);
     ok(quicly_num_streams(server) == 0);
 

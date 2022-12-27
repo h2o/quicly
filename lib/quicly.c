@@ -1473,7 +1473,7 @@ static int setup_cipher(quicly_conn_t *conn, size_t epoch, int is_enc, ptls_ciph
                         ptls_aead_context_t **aead_ctx, ptls_aead_algorithm_t *aead, ptls_hash_algorithm_t *hash,
                         const void *secret)
 {
-    /* quicly_accept builds cipher before instantitating a connection. In such case, we use the default crypto engine */
+    /* quicly_accept builds cipher before instantiating a connection. In such case, we use the default crypto engine */
     quicly_crypto_engine_t *engine = conn != NULL ? conn->super.ctx->crypto_engine : &quicly_default_crypto_engine;
 
     return engine->setup_cipher(engine, conn, epoch, is_enc, hp_ctx, aead_ctx, aead, hash, secret);
@@ -2098,7 +2098,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
         });
     }
 
-    /* check consistency between the transpart parameters */
+    /* check consistency between the transport parameters */
     if (params->min_ack_delay_usec != UINT64_MAX) {
         if (params->min_ack_delay_usec > params->max_ack_delay * 1000) {
             ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
@@ -2254,7 +2254,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     quicly_transport_parameters_t params;
     quicly_cid_t original_dcid, initial_scid, retry_scid = {};
 
-    /* obtain pointer to initial CID of the peer. It is guaranteeed to exist in the first slot, as TP is received before any frame
+    /* obtain pointer to initial CID of the peer. It is guaranteed to exist in the first slot, as TP is received before any frame
      * that updates the CID set. */
     quicly_remote_cid_t *remote_cid = &conn->super.remote.cid_set.cids[0];
     assert(remote_cid->sequence == 0);
@@ -3028,7 +3028,7 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, ui
 }
 
 /**
- * Checks if the server is waiting for ClientFinished. When that is the case, the loss timer is disactivated, to avoid repeatedly
+ * Checks if the server is waiting for ClientFinished. When that is the case, the loss timer is deactivated, to avoid repeatedly
  * sending 1-RTT packets while the client spends time verifying the certificate chain at the same time buffering 1-RTT packets.
  */
 static int is_point5rtt_with_no_handshake_data_to_send(quicly_conn_t *conn)
@@ -3106,7 +3106,7 @@ struct st_quicly_send_context_t {
          */
         uint8_t ack_eliciting : 1;
         /**
-         * if the target datagram sholud be padded to full size
+         * if the target datagram should be padded to full size
          */
         uint8_t full_size : 1;
     } target;
@@ -3433,7 +3433,7 @@ static int send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t *space, qui
     /* calc ack_delay */
     if (space->largest_pn_received_at < conn->stash.now) {
         /* We underreport ack_delay up to 1 milliseconds assuming that QUICLY_LOCAL_ACK_DELAY_EXPONENT is 10. It's considered a
-         * non-issue because our time measurement is at millisecond granurality anyways. */
+         * non-issue because our time measurement is at millisecond granularity anyways. */
         ack_delay = ((conn->stash.now - space->largest_pn_received_at) * 1000) >> QUICLY_LOCAL_ACK_DELAY_EXPONENT;
     } else {
         ack_delay = 0;
@@ -3537,7 +3537,7 @@ static int send_control_frames_of_stream(quicly_stream_t *stream, quicly_send_co
 {
     int ret;
 
-    /* send STOP_SENDING if necessray */
+    /* send STOP_SENDING if necessary */
     if (stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_SEND) {
         /* FIXME also send an empty STREAM frame */
         if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.stop_sending.sender_state, s,
@@ -3674,7 +3674,7 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
 }
 
 /**
- * If necessary, changes the frame representation from one without length field to one that has if necessary. Or, as an alternaive,
+ * If necessary, changes the frame representation from one without length field to one that has if necessary. Or, as an alternative,
  * prepends PADDING frames. Upon return, `dst` points to the end of the frame being built. `*len`, `*wrote_all`, `*frame_type_at`
  * are also updated reflecting their values post-adjustment.
  */
@@ -3691,7 +3691,7 @@ static inline void adjust_stream_frame_layout(uint8_t **dst, uint8_t *const dst_
         }
     } else {
         /* STREAM frame: insert length if space can be left for more frames. Otherwise, retain STREAM frame header omitting the
-         * lengh field, prepending PADDING if necessary. */
+         * length field, prepending PADDING if necessary. */
         if (space_left <= len_of_len) {
             if (space_left != 0) {
                 memmove(*frame_at + space_left, *frame_at, *dst + *len - *frame_at);
@@ -6612,7 +6612,7 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
                 port = ntohs(plaintext->remote.sin6.sin6_port);
                 break;
             default:
-                assert(!"unspported address type");
+                assert(!"unsupported address type");
                 break;
             }
         });
