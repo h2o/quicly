@@ -48,7 +48,6 @@
 
 #define MAX_BURST_PACKETS 10
 
-FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
 static int suppress_output = 0, send_datagram_frame = 0;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
