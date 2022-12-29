@@ -1,6 +1,6 @@
 [submodule "deps/picotls"]
 	path = deps/picotls
-	url = https://github.com/h2o/picotls.git
+	url = https://github.com/twingate/picotls.git
 [submodule "deps/klib"]
 	path = deps/klib
 	url = https://github.com/attractivechaos/klib.git

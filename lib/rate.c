@@ -38,7 +38,7 @@ static void commit_sample(quicly_ratemeter_t *meter)
     meter->past_samples.entries[meter->past_samples.latest] = meter->current.sample;
 
     meter->current.start.at = INT64_MAX;
-    meter->current.sample = (struct st_quicly_rate_sample_t){};
+    memset(&meter->current.sample, 0, sizeof(meter->current.sample));
 }
 
 void quicly_ratemeter_init(quicly_ratemeter_t *meter)

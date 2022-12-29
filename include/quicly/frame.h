@@ -33,6 +33,8 @@ extern "C" {
 #include "quicly/constants.h"
 #include "quicly/ranges.h"
 
+#include "compat.h"
+
 #define QUICLY_FRAME_TYPE_PADDING 0
 #define QUICLY_FRAME_TYPE_PING 1
 #define QUICLY_FRAME_TYPE_ACK 2
@@ -367,13 +369,13 @@ inline size_t quicly_encodev_capacity(uint64_t v)
 inline unsigned quicly_clz32(uint32_t v)
 {
     PTLS_BUILD_ASSERT(sizeof(unsigned) == 4);
-    return v != 0 ? __builtin_clz(v) : 32;
+    return v != 0 ? clz(v) : 32;
 }
 
 inline unsigned quicly_clz64(uint64_t v)
 {
     PTLS_BUILD_ASSERT(sizeof(long long) == 8);
-    return v != 0 ? __builtin_clzll(v) : 64;
+    return v != 0 ? clzll(v) : 64;
 }
 
 inline quicly_error_t quicly_decode_stream_frame(uint8_t type_flags, const uint8_t **src, const uint8_t *end,

@@ -35,8 +35,6 @@
 #include "quicly/cc.h"
 #include "quicly/defaults.h"
 
-FILE *quicly_trace_fp;
-
 static double now = 1000;
 
 static quicly_address_t new_address(void)

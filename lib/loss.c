@@ -21,8 +21,25 @@
  */
 #include "quicly/loss.h"
 
-quicly_error_t quicly_loss_init_sentmap_iter(quicly_loss_t *loss, quicly_sentmap_iter_t *iter, int64_t now, uint32_t max_ack_delay,
-                                             int is_closing)
+void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
+                      const uint8_t *ack_delay_exponent)
+{
+    *r = (quicly_loss_t){.conf = conf,
+                         .max_ack_delay = max_ack_delay,
+                         .ack_delay_exponent = ack_delay_exponent,
+                         .thresholds = {.use_packet_based = 1, .time_based_percentile = 1024 / 8 /* start from 1/8 RTT */},
+                         .pto_count = 0,
+                         .time_of_last_packet_sent = 0,
+                         .largest_acked_packet_plus1 = {0},
+                         .total_bytes_sent = 0,
+                         .loss_time = INT64_MAX,
+                         .alarm_at = INT64_MAX};
+    quicly_rtt_init(&r->rtt, conf, initial_rtt);
+    quicly_sentmap_init(&r->sentmap);
+}
+
+int quicly_loss_init_sentmap_iter(quicly_loss_t *loss, quicly_sentmap_iter_t *iter, int64_t now, uint32_t max_ack_delay,
+                                  int is_closing)
 {
     quicly_sentmap_init_iter(&loss->sentmap, iter);
 
@@ -118,3 +135,4 @@ quicly_error_t quicly_loss_detect_loss(quicly_loss_t *loss, int64_t now, uint32_
 
     return 0;
 }
+

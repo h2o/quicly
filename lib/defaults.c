@@ -19,7 +19,9 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#ifndef _WINDOWS
 #include <sys/time.h>
+#endif
 #include "quicly/defaults.h"
 
 #define DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE 1280
