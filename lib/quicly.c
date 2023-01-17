@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <arpa/inet.h>
 #include "khash.h"
 #include "quicly.h"
 #include "quicly/defaults.h"
@@ -559,6 +560,7 @@ static inline uint8_t get_epoch(uint8_t first_byte)
         return QUICLY_EPOCH_0RTT;
     default:
         assert(!"FIXME");
+        abort();
     }
 }
 
@@ -2145,6 +2147,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
                                         const quicly_cid_plaintext_t *local_cid, ptls_handshake_properties_t *handshake_properties,
                                         uint32_t initcwnd)
 {
+
     ptls_t *tls = NULL;
     quicly_conn_t *conn;
 
@@ -2154,7 +2157,16 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         assert(ctx->receive_datagram_frame != NULL);
 
     /* create TLS context */
-    if ((tls = ptls_new(ctx->tls, server_name == NULL)) == NULL)
+#if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+    assert(server_name == 0);
+    tls = ptls_client_new(ctx->tls);
+#elif !defined(QUICLY_CLIENT) && defined(QUICLY_SERVER)
+    assert(server_name != 0);
+    tls = ptls_server_new(ctx->tls);
+#else
+    tls = ptls_new(ctx->tls, server_name == NULL);
+#endif
+    if (tls == NULL)
         return NULL;
     if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0) {
         ptls_free(tls);
@@ -4449,7 +4461,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(secret, secret, cipher->hash->digest_size);
     });
 
-    if (tlsctx->log_event != NULL) {
+    if (PTLS_LOG_IS_ACTIVE(ptls_log) && tlsctx->log_event != NULL) {
         char hexbuf[PTLS_MAX_DIGEST_SIZE * 2 + 1];
         ptls_hexdump(hexbuf, secret, cipher->hash->digest_size);
         tlsctx->log_event->cb(tlsctx->log_event, tls, log_label, "%s", hexbuf);
@@ -4499,7 +4511,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
     } break;
     default:
         assert(!"logic flaw");
-        break;
+        abort();
     }
 
 #undef SELECT_CIPHER_CONTEXT
@@ -6613,7 +6625,7 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
                 break;
             default:
                 assert(!"unsupported address type");
-                break;
+                abort();
             }
         });
         ptls_buffer_push16(buf, port);

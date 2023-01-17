@@ -911,7 +911,9 @@ uint32_t quicly_num_streams_by_group(quicly_conn_t *conn, int uni, int locally_i
 /**
  *
  */
+#if !defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
 static int quicly_is_client(quicly_conn_t *conn);
+#endif
 /**
  *
  */
@@ -1260,7 +1262,7 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
 
 #define QUICLY_LOG_CONN(_type, _conn, _block)                                                                                      \
     do {                                                                                                                           \
-        if (!ptls_log.is_active)                                                                                                   \
+        if (!PTLS_LOG_IS_ACTIVE(ptls_log))                                                                                         \
             break;                                                                                                                 \
         quicly_conn_t *_c = (_conn);                                                                                               \
         if (ptls_skip_tracing(_c->crypto.tls))                                                                                     \
@@ -1332,8 +1334,14 @@ inline const quicly_transport_parameters_t *quicly_get_remote_transport_paramete
 
 inline int quicly_is_client(quicly_conn_t *conn)
 {
+#if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+    return 1;
+#elif !defined(QUICLY_CLIENT) && defined(QUICLY_SERVER)
+    return 0;
+#else
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return (c->local.bidi.next_stream_id & 1) == 0;
+#endif
 }
 
 inline quicly_stream_id_t quicly_get_local_next_stream_id(quicly_conn_t *conn, int uni)

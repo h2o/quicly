@@ -7,6 +7,11 @@ INCLUDE(CMakePushCheckState)
 INCLUDE(CheckCSourceCompiles)
 INCLUDE(deps/picotls/cmake/dtrace-utils.cmake)
 
+if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  # on Darwin, try and pick up openssl from homebrew
+  set(CMAKE_PREFIX_PATH /usr/local/opt/openssl@1.1 /usr/local/opt/openssl)
+endif()
+
 FIND_PACKAGE(OpenSSL REQUIRED)
 IF (OPENSSL_FOUND AND (OPENSSL_VERSION VERSION_LESS "1.0.2"))
     MESSAGE(FATAL "OpenSSL 1.0.2 or above is missing")
