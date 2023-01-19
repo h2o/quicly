@@ -51,7 +51,7 @@ static void ech_save_retry_configs(void)
 
     FILE *fp;
     if ((fp = fopen(ech.retry.fn, "wt")) == NULL) {
-        // fprintf(stderr, "failed to write to ECH config file:%s:%d\n", ech.retry.fn, errno);
+        fprintf(stderr, "failed to write to ECH config file:%s:%d\n", ech.retry.fn, errno);
         exit(1);
     }
     fwrite(ech.retry.configs.base, 1, ech.retry.configs.len, fp);
@@ -95,7 +95,7 @@ static void enqueue_requests(quicly_conn_t *conn)
             sprintf(destfile, "%s.downloaded", strrchr(reqs[i].path, '/') + 1);
             stream_data->outfp = fopen(destfile, "w");
             if (stream_data->outfp == NULL) {
-                // fprintf(stderr, "failed to open destination file:%s:%d\n", reqs[i].path, errno);
+                fprintf(stderr, "failed to open destination file:%s:%d\n", reqs[i].path, errno);
                 exit(1);
             }
         }
@@ -118,7 +118,7 @@ static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *pa
         while ((ret = (int)sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
             ;
         // if (ret == -1)
-        //     perror("sendmsg failed");
+            puts("sendmsg failed");
     }
 }
 
@@ -153,7 +153,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
     memset(&local, 0, sizeof(local));
     local.sin_family = AF_INET;
     if (bind(fd, (void *)&local, sizeof(local)) != 0) {
-        // perror("bind(2) failed");
+        puts("bind(2) failed");
         return 1;
     }
     ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params);
@@ -232,7 +232,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                 if (ret == QUICLY_ERROR_FREE_CONNECTION) {
                     return 0;
                 } else {
-                    // fprintf(stderr, "quicly_send returned %d\n", ret);
+                    fprintf(stderr, "quicly_send returned %d\n", ret);
                     return 1;
                 }
             }
@@ -252,7 +252,7 @@ static inline int resolve_address(struct sockaddr *sa, socklen_t *salen, const c
     hints.ai_protocol = proto;
     hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV | AI_PASSIVE;
     if ((err = getaddrinfo(host, port, &hints, &res)) != 0 || res == NULL) {
-        // fprintf(stderr, "failed to resolve address:%s:%s:%d\n", host, port, err);
+        fprintf(stderr, "failed to resolve address:%s:%s:%d\n", host, port, err);
         return -1;
     }
 
@@ -275,7 +275,7 @@ int quic_transaction(void)
         exit(1);
 
     if ((fd = socket(sa.ss_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
-        // perror("socket(2) failed");
+        puts("socket(2) failed");
         return 1;
     }
     fcntl(fd, F_SETFL, O_NONBLOCK);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause
 //
-// Copyright (c) 2016-2020, NetApp, Inc.
+// Copyright (c) 2023, NetApp, Inc.
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -29,7 +29,6 @@
 
 #include "quic.h"
 
-
 SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
@@ -39,10 +38,10 @@ static SerialDebugOutput serial;
 
 static const int led = D7;
 
-
 // don't use entropy from cloud
-void random_seed_from_cloud(unsigned int seed) {}
-
+void random_seed_from_cloud(unsigned int seed)
+{
+}
 
 static ApplicationWatchdog wd(60000, System.reset);
 
@@ -50,7 +49,6 @@ extern "C" void ping(void)
 {
     wd.checkin();
 }
-
 
 void button_action()
 {
@@ -62,17 +60,20 @@ void button_action()
     waitUntil(WiFi.ready);
     digitalWrite(led, HIGH);
 
-    DEBUG("Particle Device OS: %lu.%lu.%lu",
-           (System.versionNumber() & 0xff000000) >> 24,
-           (System.versionNumber() & 0x00ff0000) >> 16,
-           (System.versionNumber() & 0x0000ff00) >> 8);
+    DEBUG("Particle Device OS: %lu.%lu.%lu", (System.versionNumber() & 0xff000000) >> 24,
+         (System.versionNumber() & 0x00ff0000) >> 16, (System.versionNumber() & 0x0000ff00) >> 8);
+
+    // char msg[64];
+    // const float voltage = analogRead(BATT) * 0.0011224;
+    // const size_t msg_len = snprintf(
+    //     msg, sizeof(msg), "Hello from Particle! Voltage is %f.", voltage);
+    // warpcore_transaction(msg, msg_len);
 
     quic_transaction();
 
     WiFi.off();
     digitalWrite(led, LOW);
 }
-
 
 void setup()
 {
@@ -84,7 +85,6 @@ void setup()
     pinMode(led, OUTPUT);
     button_action();
 }
-
 
 void loop()
 {
