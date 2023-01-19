@@ -2143,7 +2143,7 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
 static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol_version, const char *server_name,
                                         struct sockaddr *remote_addr, struct sockaddr *local_addr, ptls_iovec_t *remote_cid,
                                         const quicly_cid_plaintext_t *local_cid, ptls_handshake_properties_t *handshake_properties,
-                                        uint32_t initcwnd)
+                                        void *appdata, uint32_t initcwnd)
 {
     ptls_t *tls = NULL;
     quicly_conn_t *conn;
@@ -2168,6 +2168,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     }
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
+    conn->super.data = appdata;
     lock_now(conn, 0);
     conn->created_at = conn->stash.now;
     conn->super.stats.handshake_confirmed_msec = UINT64_MAX;
@@ -2311,7 +2312,8 @@ Exit:
 
 int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *dest_addr,
                    struct sockaddr *src_addr, const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
-                   ptls_handshake_properties_t *handshake_properties, const quicly_transport_parameters_t *resumed_transport_params)
+                   ptls_handshake_properties_t *handshake_properties, const quicly_transport_parameters_t *resumed_transport_params,
+                   void *appdata)
 {
     const struct st_ptls_salt_t *salt;
     quicly_conn_t *conn = NULL;
@@ -2335,7 +2337,7 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
     }
 
     if ((conn = create_connection(
-             ctx, ctx->initial_version, server_name, dest_addr, src_addr, NULL, new_cid, handshake_properties,
+             ctx, ctx->initial_version, server_name, dest_addr, src_addr, NULL, new_cid, handshake_properties, appdata,
              quicly_cc_calc_initial_cwnd(ctx->initcwnd_packets, ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
@@ -6020,7 +6022,7 @@ static int validate_retry_tag(quicly_decoded_packet_t *packet, quicly_cid_t *odc
 
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
-                  const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties)
+                  const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties, void *appdata)
 {
     const struct st_ptls_salt_t *salt;
     struct {
@@ -6063,7 +6065,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
     /* create connection */
     if ((*conn = create_connection(
-             ctx, packet->version, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties,
+             ctx, packet->version, NULL, src_addr, dest_addr, &packet->cid.src, new_cid, handshake_properties, appdata,
              quicly_cc_calc_initial_cwnd(ctx->initcwnd_packets, ctx->transport_params.max_udp_payload_size))) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;

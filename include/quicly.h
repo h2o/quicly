@@ -1075,11 +1075,12 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
 /**
  * Initiates a new connection.
  * @param new_cid the CID to be used for the connection. path_id is ignored.
+ * @param appdata initial value to be set to `*quicly_get_data(conn)`
  */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *dest_addr,
                    struct sockaddr *src_addr, const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
                    ptls_handshake_properties_t *handshake_properties,
-                   const quicly_transport_parameters_t *resumed_transport_params);
+                   const quicly_transport_parameters_t *resumed_transport_params, void *appdata);
 /**
  * accepts a new connection
  * @param new_cid        The CID to be used for the connection. When an error is being returned, the application can reuse the CID
@@ -1087,11 +1088,12 @@ int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *serv
  * @param address_token  An validated address validation token, if any.  Applications MUST validate the address validation token
  *                       before calling this function, dropping the ones that failed to validate.  When a token is supplied,
  *                       `quicly_accept` will consult the values being supplied assuming that the remote peer's address has been
- * validated.
+ *                       validated.
+ * @param appdata        initial value to be set to `*quicly_get_data(conn)`
  */
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
-                  const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties);
+                  const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties, void *appdata);
 /**
  *
  */
