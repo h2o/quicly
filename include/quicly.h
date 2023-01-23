@@ -1260,6 +1260,7 @@ void quicly_stream_noop_on_receive_reset(quicly_stream_t *stream, int err);
 
 extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
 
+#ifndef NO_LOG
 #define QUICLY_LOG_CONN(_type, _conn, _block)                                                                                      \
     do {                                                                                                                           \
         if (!PTLS_LOG_IS_ACTIVE(ptls_log))                                                                                         \
@@ -1275,6 +1276,9 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
             } while (0);                                                                                                           \
         });                                                                                                                        \
     } while (0)
+#else
+#define QUICLY_LOG_CONN(...)
+#endif
 
 /* inline definitions */
 

@@ -4094,18 +4094,29 @@ Exit:
 
 static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
 {
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_address_token_plaintext_t *tmp_token __attribute__((__cleanup__(ptls_cleanup_free))) =
+        calloc(1, sizeof(quicly_address_token_plaintext_t));
+    if (tmp_token == NULL)
+        return SIZE_MAX;
+#define token (*tmp_token)
+#else
     quicly_address_token_plaintext_t token;
+#endif
     ptls_buffer_t tokenbuf;
-    uint8_t tokenbuf_small[128];
     quicly_sent_t *sent;
     int ret;
 
+#ifdef PTLS_MINIMIZE_STACK
+    ptls_buffer_init(&tokenbuf, "", 0);
+#else
+    uint8_t tokenbuf_small[128];
     ptls_buffer_init(&tokenbuf, tokenbuf_small, sizeof(tokenbuf_small));
+#endif
 
     /* build token */
-    token =
-        (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION, conn->super.ctx->now->cb(conn->super.ctx->now)};
-    token.remote = conn->super.remote.address;
+    token.type = QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION;
+    token.issued_at = conn->super.ctx->now->cb(conn->super.ctx->now);
     /* TODO fill token.resumption */
 
     /* encrypt */
@@ -4134,6 +4145,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
 Exit:
     ptls_buffer_dispose(&tokenbuf);
     return ret;
+#undef token
 }
 
 size_t quicly_send_version_negotiation(quicly_context_t *ctx, ptls_iovec_t dest_cid, ptls_iovec_t src_cid, const uint32_t *versions,
@@ -4196,8 +4208,8 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
                          ptls_iovec_t odcid, ptls_iovec_t token_prefix, ptls_iovec_t appdata,
                          ptls_aead_context_t **retry_aead_cache, uint8_t *datagram)
 {
-#ifdef MINIMIZE_STACK
-    quicly_address_token_plaintext_t *tmp_token __attribute__((__cleanup__(free))) =
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_address_token_plaintext_t *tmp_token __attribute__((__cleanup__(ptls_cleanup_free))) =
         calloc(1, sizeof(quicly_address_token_plaintext_t));
     if (tmp_token == NULL)
         return SIZE_MAX;
@@ -4827,11 +4839,25 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize)
 {
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_send_context_t *tmp_s __attribute__((__cleanup__(ptls_cleanup_free))) = calloc(1, sizeof(quicly_send_context_t));
+    if (tmp_s == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+
+#define s (*tmp_s)
+    s.current.first_byte = -1;
+    s.datagrams = datagrams;
+    s.max_datagrams = *num_datagrams;
+    s.payload_buf.datagram = buf;
+    s.payload_buf.end = (uint8_t *)buf + bufsize;
+    s.first_packet_number = conn->egress.packet_number;
+#else
     quicly_send_context_t s = {.current = {.first_byte = -1},
                                .datagrams = datagrams,
                                .max_datagrams = *num_datagrams,
                                .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
                                .first_packet_number = conn->egress.packet_number};
+#endif
     int ret;
 
     lock_now(conn, 0);
@@ -4896,6 +4922,7 @@ Exit:
     *num_datagrams = s.num_datagrams;
     unlock_now(conn);
     return ret;
+#undef s
 }
 
 size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
@@ -5165,8 +5192,8 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
 
 static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
-#ifdef MINIMIZE_STACK
-    quicly_ack_frame_t *tmp_frame __attribute__((__cleanup__(free))) = malloc(sizeof(quicly_ack_frame_t));
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_ack_frame_t *tmp_frame __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(sizeof(quicly_ack_frame_t));
     if (tmp_frame == NULL)
         return PTLS_ERROR_NO_MEMORY;
 #define frame (*tmp_frame)
@@ -5704,7 +5731,14 @@ int handle_close(quicly_conn_t *conn, int err, uint64_t frame_type, ptls_iovec_t
 
 static int handle_transport_close_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_transport_close_frame_t *tmp_frame __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(sizeof(quicly_transport_close_frame_t));
+    if (tmp_frame == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#define frame (*tmp_frame)
+#else
     quicly_transport_close_frame_t frame;
+#endif
     int ret;
 
     if ((ret = quicly_decode_transport_close_frame(&state->src, state->end, &frame)) != 0)
@@ -5718,6 +5752,7 @@ static int handle_transport_close_frame(quicly_conn_t *conn, struct st_quicly_ha
         PTLS_LOG_ELEMENT_UNSAFESTR(reason_phrase, (const char *)frame.reason_phrase.base, frame.reason_phrase.len);
     });
     return handle_close(conn, QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(frame.error_code), frame.frame_type, frame.reason_phrase);
+#undef frame
 }
 
 static int handle_application_close_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
@@ -6041,7 +6076,13 @@ static int handle_stateless_reset(quicly_conn_t *conn)
 static int validate_retry_tag(quicly_decoded_packet_t *packet, quicly_cid_t *odcid, ptls_aead_context_t *retry_aead)
 {
     size_t pseudo_packet_len = 1 + odcid->len + packet->encrypted_off;
+#ifdef PTLS_MINIMIZE_STACK
+    uint8_t *pseudo_packet __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(pseudo_packet_len);
+    if (pseudo_packet == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#else
     uint8_t pseudo_packet[pseudo_packet_len];
+#endif
     pseudo_packet[0] = odcid->len;
     memcpy(pseudo_packet + 1, odcid->cid, odcid->len);
     memcpy(pseudo_packet + 1 + odcid->len, packet->octets.base, packet->encrypted_off);
@@ -6683,8 +6724,8 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
                                  size_t len, size_t prefix_len, const char **err_desc)
 {
     const uint8_t *const token = _token;
-#ifdef MINIMIZE_STACK
-    uint8_t *ptbuf __attribute__((__cleanup__(free))) = malloc(QUICLY_MIN_CLIENT_INITIAL_SIZE);
+#ifdef PTLS_MINIMIZE_STACK
+    uint8_t *ptbuf __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(QUICLY_MIN_CLIENT_INITIAL_SIZE);
     if (ptbuf == NULL)
         return PTLS_ERROR_NO_MEMORY;
 #else
@@ -6699,7 +6740,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         *err_desc = "token too small";
         return PTLS_ALERT_DECODE_ERROR;
     }
-    if (prefix_len + 1 + aead->algo->iv_size + sizeof(ptbuf) + aead->algo->tag_size < len) {
+    if (prefix_len + 1 + aead->algo->iv_size + QUICLY_MIN_CLIENT_INITIAL_SIZE + aead->algo->tag_size < len) {
         *err_desc = "token too large";
         return PTLS_ALERT_DECODE_ERROR;
     }

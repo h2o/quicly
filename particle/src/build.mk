@@ -49,14 +49,15 @@ CSRC+=\
 
 CSRC+=../src/cli.c
 CPPSRC+=$(USRSRC)/main.cpp
-
+# -Wshadow
 EXTRA_CFLAGS+=-Wno-undef -Wno-pointer-to-int-cast -Werror
-EXTRA_CFLAGS+=-fstack-usage -Wstack-usage=500 -Wno-error=stack-usage=
-# EXTRA_CFLAGS+=-DMINIMIZE_STACK
+EXTRA_CFLAGS+=-Wall -Wextra -Wdouble-promotion -Wformat=2 -Wformat-truncation -Wno-sign-compare -Wno-missing-field-initializers
+EXTRA_CFLAGS+=-fstack-usage -Wstack-usage=300 -Wno-error=stack-usage=
+EXTRA_CFLAGS+=-DPTLS_MINIMIZE_STACK
+EXTRA_CFLAGS+=-DNO_LOG -Wno-unused-but-set-variable
 EXTRA_CFLAGS+=-DAVOID_64BIT
-EXTRA_CFLAGS+=-DQUICLY_USE_TRACER
+# EXTRA_CFLAGS+=-DQUICLY_USE_TRACER
 # EXTRA_CFLAGS+=-finstrument-functions -finstrument-functions-exclude-file-list=deps/micro-ecc,deps/cifra
 # EXTRA_CFLAGS+=-DNDEBUG
 EXTRA_CFLAGS+=-DQUICLY_CLIENT -DPICOTLS_CLIENT
 EXTRA_CFLAGS+=-DFULL_FAT_ASSERT
-

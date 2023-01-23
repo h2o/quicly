@@ -181,8 +181,8 @@ static const quicly_stream_callbacks_t client_stream_callbacks = {
 
 static void dump_stats(FILE *fp, quicly_conn_t *conn)
 {
-#ifdef MINIMIZE_STACK
-    quicly_stats_t *tmp_stats __attribute__((__cleanup__(free))) = malloc(sizeof(quicly_stats_t));
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_stats_t *tmp_stats __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(sizeof(quicly_stats_t));
     if (tmp_stats == NULL)
         return;
 #define stats (*tmp_stats)
@@ -554,18 +554,18 @@ static int send_pending(int fd, quicly_conn_t *conn)
 {
     quicly_address_t dest, src;
     struct iovec packets[MAX_BURST_PACKETS];
-#ifdef MINIMIZE_STACK
-    uint8_t *buf __attribute__((__cleanup__(free))) =
-        malloc(MAX_BURST_PACKETS * quicly_get_context(conn)->transport_params.max_udp_payload_size);
+    const size_t buf_size = MAX_BURST_PACKETS * quicly_get_context(conn)->transport_params.max_udp_payload_size;
+#ifdef PTLS_MINIMIZE_STACK
+    uint8_t *buf __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(buf_size);
     if (buf == NULL)
         return PTLS_ERROR_NO_MEMORY;
 #else
-    uint8_t buf[MAX_BURST_PACKETS * quicly_get_context(conn)->transport_params.max_udp_payload_size];
+    uint8_t buf[buf_size];
 #endif
     size_t num_packets = MAX_BURST_PACKETS;
     int ret;
 
-    if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0)
+    if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, buf_size)) == 0 && num_packets != 0)
         send_packets(fd, &dest.sa, packets, num_packets);
 
     return ret;
@@ -655,7 +655,12 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
+#ifdef PTLS_MINIMIZE_STACK
+                uint8_t *buf __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(ctx.transport_params.max_udp_payload_size);
+                assert(buf);
+#else
                 uint8_t buf[ctx.transport_params.max_udp_payload_size];
+#endif
                 struct msghdr mess;
                 struct sockaddr sa;
                 struct iovec vec;
@@ -663,7 +668,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                 mess.msg_name = &sa;
                 mess.msg_namelen = sizeof(sa);
                 vec.iov_base = buf;
-                vec.iov_len = sizeof(buf);
+                vec.iov_len = ctx.transport_params.max_udp_payload_size;
                 mess.msg_iov = &vec;
                 mess.msg_iovlen = 1;
                 ssize_t rret;
