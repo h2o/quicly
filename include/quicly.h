@@ -1332,17 +1332,18 @@ inline const quicly_transport_parameters_t *quicly_get_remote_transport_paramete
     return &c->remote.transport_params;
 }
 
+#if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+#define quicly_is_client(x) (1)
+#elif !defined(QUICLY_CLIENT) && defined(QUICLY_SERVER)
+#define quicly_is_client(x) (0)
+#else
 inline int quicly_is_client(quicly_conn_t *conn)
 {
-#if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
-    return 1;
-#elif !defined(QUICLY_CLIENT) && defined(QUICLY_SERVER)
-    return 0;
-#else
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return (c->local.bidi.next_stream_id & 1) == 0;
-#endif
 }
+#endif
+
 
 inline quicly_stream_id_t quicly_get_local_next_stream_id(quicly_conn_t *conn, int uni)
 {

@@ -20,6 +20,11 @@
  * IN THE SOFTWARE.
  */
 #include <sys/time.h>
+
+#ifdef PARTICLE
+#include <timer_hal.h>
+#endif
+
 #include "quicly/defaults.h"
 
 #define DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE 1280
@@ -364,6 +369,9 @@ void quicly_default_free_stream(quicly_stream_t *stream)
 
 static int64_t default_now(quicly_now_t *self)
 {
+#if defined(PARTICLE)
+    return HAL_Timer_Get_Milli_Seconds();
+#else
     struct timeval tv;
     gettimeofday(&tv, NULL);
     int64_t tv_now = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
@@ -373,6 +381,7 @@ static int64_t default_now(quicly_now_t *self)
     if (now < tv_now)
         now = tv_now;
     return now;
+#endif
 }
 
 quicly_now_t quicly_default_now = {default_now};

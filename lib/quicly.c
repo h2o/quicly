@@ -40,7 +40,9 @@
 #include "quicly-probes.h"
 #endif
 #include "quicly/retire_cid.h"
-
+#if PARTICLE
+#include <logging.h>
+#endif
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_FINAL 0x39
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_DRAFT 0xffa5
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
@@ -775,7 +777,7 @@ static int on_invalid_ack(quicly_sentmap_t *map, const quicly_sent_packet_t *pac
     return 0;
 }
 
-static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn, uint32_t cwnd, uint64_t mtu)
+static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn, uint32_t cwnd, uint32_t mtu)
 {
     static __thread struct {
         uint32_t values[8];
@@ -2147,7 +2149,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
                                         const quicly_cid_plaintext_t *local_cid, ptls_handshake_properties_t *handshake_properties,
                                         uint32_t initcwnd)
 {
-
     ptls_t *tls = NULL;
     quicly_conn_t *conn;
 
@@ -2158,10 +2159,10 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
 
     /* create TLS context */
 #if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
-    assert(server_name == 0);
+    assert(server_name != 0);
     tls = ptls_client_new(ctx->tls);
 #elif !defined(QUICLY_CLIENT) && defined(QUICLY_SERVER)
-    assert(server_name != 0);
+    assert(server_name == 0);
     tls = ptls_server_new(ctx->tls);
 #else
     tls = ptls_new(ctx->tls, server_name == NULL);
@@ -4195,14 +4196,23 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
                          ptls_iovec_t odcid, ptls_iovec_t token_prefix, ptls_iovec_t appdata,
                          ptls_aead_context_t **retry_aead_cache, uint8_t *datagram)
 {
+#ifdef MINIMIZE_STACK
+    quicly_address_token_plaintext_t *tmp_token __attribute__((__cleanup__(free))) =
+        calloc(1, sizeof(quicly_address_token_plaintext_t));
+    if (tmp_token == NULL)
+        return SIZE_MAX;
+#define token (*tmp_token)
+#else
     quicly_address_token_plaintext_t token;
+#endif
     ptls_buffer_t buf;
     int ret;
 
     assert(!(src_cid.len == odcid.len && memcmp(src_cid.base, odcid.base, src_cid.len) == 0));
 
     /* build token as plaintext */
-    token = (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RETRY, ctx->now->cb(ctx->now)};
+    token.type = QUICLY_ADDRESS_TOKEN_TYPE_RETRY;
+    token.issued_at = ctx->now->cb(ctx->now);
     set_address(&token.remote, dest_addr);
     set_address(&token.local, src_addr);
 
@@ -4259,6 +4269,7 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
 
 Exit:
     return ret == 0 ? buf.off : SIZE_MAX;
+#undef token
 }
 
 static struct st_quicly_pn_space_t *setup_send_space(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s)
@@ -5154,7 +5165,14 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
 
 static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
+#ifdef MINIMIZE_STACK
+    quicly_ack_frame_t *tmp_frame __attribute__((__cleanup__(free))) = malloc(sizeof(quicly_ack_frame_t));
+    if (tmp_frame == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#define frame (*tmp_frame)
+#else
     quicly_ack_frame_t frame;
+#endif
     quicly_sentmap_iter_t iter;
     struct {
         uint64_t pn;
@@ -5295,6 +5313,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     setup_next_send(conn);
 
     return 0;
+#undef frame
 }
 
 static int handle_max_stream_data_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
@@ -6664,7 +6683,13 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
                                  size_t len, size_t prefix_len, const char **err_desc)
 {
     const uint8_t *const token = _token;
+#ifdef MINIMIZE_STACK
+    uint8_t *ptbuf __attribute__((__cleanup__(free))) = malloc(QUICLY_MIN_CLIENT_INITIAL_SIZE);
+    if (ptbuf == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#else
     uint8_t ptbuf[QUICLY_MIN_CLIENT_INITIAL_SIZE];
+#endif
     size_t ptlen;
 
     *err_desc = NULL;

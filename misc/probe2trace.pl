@@ -74,6 +74,17 @@ struct quicly_cc_t {
 
 EOT
 } elsif ($arch eq 'darwin') {
+} elsif ($arch eq 'particle') {
+    print << 'EOT';
+#ifndef particle_probes_h
+#define particle_probes_h
+
+#include <logging.h>
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+
+EOT
 } elsif ($arch eq 'embedded') {
     print << 'EOT';
 #ifndef embedded_probes_h
@@ -131,12 +142,21 @@ for my $probe (@probes) {
             my @fields;
             push @fields, map {["rtt.$_" => '%u']} qw(minimum smoothed variance);
             push @fields, map {["cc.$_" => '%u']} qw(cwnd ssthresh cwnd_initial cwnd_exiting_slow_start cwnd_minimum cwnd_maximum num_loss_episodes);
-            push @fields, map {["num_packets.$_" => $arch eq 'embedded' ? '%" PRIu64 "' : '%llu']} qw(sent ack_received lost lost_time_threshold late_acked received decryption_failed);
-            push @fields, map {["num_bytes.$_" => $arch eq 'embedded' ? '%" PRIu64 "' : '%llu']} qw(sent received);
-            for my $container (qw(num_frames_sent num_frames_received)) {
-                push @fields, map{["$container.$_" => $arch eq 'embedded' ? '%" PRIu64 "' : '%llu']} qw(padding ping ack reset_stream stop_sending crypto new_token stream max_data max_stream_data max_streams_bidi max_streams_uni data_blocked stream_data_blocked streams_blocked new_connection_id retire_connection_id path_challenge path_response transport_close application_close handshake_done ack_frequency);
+            if ($arch eq 'particle') {
+                push @fields, map {["num_packets.$_" => '%u']} qw(sent ack_received lost lost_time_threshold late_acked received decryption_failed);
+                push @fields, map {["num_bytes.$_" => '%u']} qw(sent received);
+                for my $container (qw(num_frames_sent num_frames_received)) {
+                    push @fields, map{["$container.$_" => '%u']} qw(padding ping ack reset_stream stop_sending crypto new_token stream max_data max_stream_data max_streams_bidi max_streams_uni data_blocked stream_data_blocked streams_blocked new_connection_id retire_connection_id path_challenge path_response transport_close application_close handshake_done ack_frequency);
+                }
+                push @fields, ["num_ptos" => '%u'];
+            } else {
+                push @fields, map {["num_packets.$_" => $arch eq 'embedded' ? '%" PRIu64 "' : '%llu']} qw(sent ack_received lost lost_time_threshold late_acked received decryption_failed);
+                push @fields, map {["num_bytes.$_" => $arch eq 'embedded' ? '%" PRIu64 "' : '%llu']} qw(sent received);
+                for my $container (qw(num_frames_sent num_frames_received)) {
+                    push @fields, map{["$container.$_" => $arch eq 'embedded' ? '%" PRIu64 "' : '%llu']} qw(padding ping ack reset_stream stop_sending crypto new_token stream max_data max_stream_data max_streams_bidi max_streams_uni data_blocked stream_data_blocked streams_blocked new_connection_id retire_connection_id path_challenge path_response transport_close application_close handshake_done ack_frequency);
+                }
+                push @fields, ["num_ptos" => $arch eq 'embedded' ? '%" PRIu64 "' : '%llu'];
             }
-            push @fields, ["num_ptos" => $arch eq 'embedded' ? '%" PRIu64 "' : '%llu'];
             # generate @fmt, @ap
             push @fmt, map {my $n = $_->[0]; $n =~ tr/./_/; sprintf '"%s":%s', $n, $_->[1]} @fields;
             if ($arch eq 'linux') {
@@ -164,12 +184,18 @@ for my $probe (@probes) {
                 } elsif ($arch eq 'darwin') {
                     push @fmt, qq!"$name":\%lu!;
                     push @ap, "(uint64_t)arg$i";
+                } elsif ($arch eq 'particle') {
+                    push @fmt, qq!"$name":\%u!;
+                    push @ap, "(uint32_t)arg$i";
                 } else {
                     push @fmt, qq!"$name":\%llu!;
                     push @ap, "(unsigned long long)arg$i";
                 }
             } elsif ($type =~ /^int(?:([0-9]+)_t|)$/) {
-                if ($arch ne 'embedded' && $arch ne 'tracer') {
+                if ($arch eq 'particle') {
+                    push @fmt, qq!"$name":\%@{[$1 && $1 == 64 ? 'd' : 'd']}!;
+                    push @ap, "(uint32_t)arg$i";
+                } elsif ($arch ne 'embedded' && $arch ne 'tracer') {
                     push @fmt, qq!"$name":\%@{[$1 && $1 == 64 ? 'ld' : 'd']}!;
                     push @ap, "arg$i";
                 } else {
@@ -187,8 +213,13 @@ for my $probe (@probes) {
                 }
             } elsif ($type =~ /\s+\*$/) {
                 # emit the address for other pointers
-                push @fmt, qq!"$name":"0x%llx"!;
-                push @ap, "(unsigned long long)arg$i";
+                if ($arch eq 'particle') {
+                    push @fmt, qq!"$name":"0x%x"!;
+                    push @ap, "arg$i";
+                } else {
+                    push @fmt, qq!"$name":"0x%llx"!;
+                    push @ap, "(unsigned long long)arg$i";
+                }
             } else {
                 die "can't handle type: $type";
             }
@@ -248,6 +279,14 @@ static void QUICLY_@{[ uc $probe->[0] ]}($params)
     fprintf(quicly_trace_fp, "{$fmt}\\n", @{[join ', ', @ap]});
 }
 EOT
+        } elsif ($arch eq 'particle') {
+            print << "EOT";
+
+static void QUICLY_TRACER_@{[ uc $probe->[0] ]}($params)
+{
+    LOG_PRINTF(INFO, "%s {$fmt}\\n", __func__, @{[join ', ', @ap]});
+}
+EOT
         } else {
             # callback probes, the ones not specified are no-op
             if ($tracer_probes{uc $probe->[0]}) {
@@ -272,6 +311,12 @@ EOT
 if ($arch eq 'embedded' || $arch eq 'tracer') {
 print << 'EOT';
 
+#endif
+EOT
+} elsif ($arch eq 'particle') {
+print << 'EOT';
+
+#pragma GCC diagnostic pop
 #endif
 EOT
 }

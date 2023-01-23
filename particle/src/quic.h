@@ -4,7 +4,7 @@
 extern "C" {
 #endif
 
-extern int quic_transaction(void);
+extern int quic_transaction(const char *host, const char *port, const char *req);
 
 #ifdef __cplusplus
 }

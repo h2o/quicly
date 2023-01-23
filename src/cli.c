@@ -24,9 +24,11 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#ifndef PARTICLE
 #include <getopt.h>
 #include <netinet/udp.h>
 #include <fcntl.h>
+#endif
 #include <netdb.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -39,7 +41,20 @@
 #include "quicly/streambuf.h"
 #include "../deps/picotls/t/util.h"
 
+#if PARTICLE
+#include <logging.h>
+#include <timer_hal.h>
+#include <rng_hal.h>
+
+#define perror(x) LOG_PRINTF(INFO, x)
+#define fprintf(x, ...) LOG_PRINTF(INFO, __VA_ARGS__)
+#define fputs(x, y) LOG_PRINTF(INFO, x)
+#define fputc(x, y) LOG_PRINTF(INFO, "%c", x)
+
+#define MAX_BURST_PACKETS 2 // FIXME: assert fails w/1
+#else
 #define MAX_BURST_PACKETS 10
+#endif
 
 FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
@@ -76,7 +91,9 @@ static struct {
 } address_token_aead;
 static ptls_save_ticket_t save_session_ticket = {save_session_ticket_cb};
 static ptls_on_client_hello_t on_client_hello = {on_client_hello_cb};
+#if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
 static int enforce_retry;
+#endif
 
 #if QUICLY_HAVE_FUSION
 static const ptls_cipher_suite_t fusion_aes128gcmsha256 = {PTLS_CIPHER_SUITE_AES_128_GCM_SHA256, &ptls_fusion_aes128gcm,
@@ -87,6 +104,38 @@ static const ptls_cipher_suite_t fusion_aes128gcmsha256 = {PTLS_CIPHER_SUITE_AES
 
 static ptls_key_exchange_algorithm_t *key_exchanges[128];
 static ptls_cipher_suite_t *cipher_suites[128];
+
+#ifdef PARTICLE
+
+static uint64_t get_time(ptls_get_time_t *self)
+{
+    return HAL_Timer_Get_Milli_Seconds();
+}
+
+static void random_bytes(void *buf, size_t len)
+{
+    // FIXME: HAL_RNG_GetRandomNumber can be slow - use a PRNG
+    while (len >= sizeof(uint32_t)) {
+        *((uint32_t *)buf) = HAL_RNG_GetRandomNumber();
+        buf += sizeof(uint32_t);
+        len -= sizeof(uint32_t);
+    }
+    while (len > 0) {
+        *((uint8_t *)buf) = HAL_RNG_GetRandomNumber();
+        buf += sizeof(uint8_t);
+        len -= sizeof(uint8_t);
+    }
+}
+
+static ptls_context_t tlsctx = {.random_bytes = random_bytes,
+                                .get_time = &(ptls_get_time_t){get_time},
+                                .key_exchanges = key_exchanges,
+                                .cipher_suites = cipher_suites,
+                                // .ech.client = {ptls_openssl_hpke_cipher_suites, ptls_openssl_hpke_kems},
+                                .require_dhe_on_psk = 1,
+                                .save_ticket = &save_session_ticket,
+                                .on_client_hello = &on_client_hello};
+#else
 static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .get_time = &ptls_get_time,
                                 .key_exchanges = key_exchanges,
@@ -95,6 +144,7 @@ static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .require_dhe_on_psk = 1,
                                 .save_ticket = &save_session_ticket,
                                 .on_client_hello = &on_client_hello};
+#endif
 static struct {
     ptls_iovec_t list[16];
     size_t count;
@@ -115,25 +165,30 @@ struct st_stream_data_t {
 
 static void on_stop_sending(quicly_stream_t *stream, int err);
 static void on_receive_reset(quicly_stream_t *stream, int err);
-static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
-static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
-static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streambuf_destroy,
-                                                                  quicly_streambuf_egress_shift,
-                                                                  quicly_streambuf_egress_emit,
-                                                                  on_stop_sending,
-                                                                  server_on_receive,
-                                                                  on_receive_reset},
-                                       client_stream_callbacks = {quicly_streambuf_destroy,
-                                                                  quicly_streambuf_egress_shift,
-                                                                  quicly_streambuf_egress_emit,
-                                                                  on_stop_sending,
-                                                                  client_on_receive,
-                                                                  on_receive_reset};
+#if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
+static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+static const quicly_stream_callbacks_t server_stream_callbacks = {
+    quicly_streambuf_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_stop_sending, server_on_receive,
+    on_receive_reset};
+#endif
+#if defined(QUICLY_CLIENT) || !defined(QUICLY_SERVER)
+static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+static const quicly_stream_callbacks_t client_stream_callbacks = {
+    quicly_streambuf_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_stop_sending, client_on_receive,
+    on_receive_reset};
+#endif
 
 static void dump_stats(FILE *fp, quicly_conn_t *conn)
 {
+#ifdef MINIMIZE_STACK
+    quicly_stats_t *tmp_stats __attribute__((__cleanup__(free))) = malloc(sizeof(quicly_stats_t));
+    if (tmp_stats == NULL)
+        return;
+#define stats (*tmp_stats)
+#else
     quicly_stats_t stats;
+#endif
 
     quicly_get_stats(conn, &stats);
     fprintf(fp,
@@ -143,6 +198,7 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             stats.num_packets.received, stats.num_packets.decryption_failed, stats.num_packets.sent, stats.num_packets.lost,
             stats.num_packets.ack_received, stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent,
             stats.rtt.smoothed);
+#undef stats
 }
 
 static int validate_path(const char *path)
@@ -155,6 +211,7 @@ static int validate_path(const char *path)
     return 1;
 }
 
+#if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
 static int parse_request(ptls_iovec_t input, char **path, int *is_http1)
 {
     size_t off = 0, path_start;
@@ -178,12 +235,14 @@ EndOfPath:
     input.base[off] = '\0';
     return 1;
 }
+#endif
 
 static void send_str(quicly_stream_t *stream, const char *s)
 {
     quicly_streambuf_egress_write(stream, s, strlen(s));
 }
 
+#if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
 static void send_header(quicly_stream_t *stream, int is_http1, int status, const char *mime_type)
 {
     char buf[256];
@@ -288,6 +347,7 @@ static int send_sized_text(quicly_stream_t *stream, const char *path, int is_htt
     quicly_streambuf_egress_write_vec(stream, &vec);
     return 1;
 }
+#endif
 
 static void on_stop_sending(quicly_stream_t *stream, int err)
 {
@@ -301,6 +361,7 @@ static void on_receive_reset(quicly_stream_t *stream, int err)
     fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
 }
 
+#if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     char *path;
@@ -338,6 +399,7 @@ Sent:
     quicly_streambuf_egress_shutdown(stream);
     quicly_streambuf_ingress_shift(stream, len);
 }
+#endif
 
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
@@ -378,7 +440,15 @@ static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 
     if ((ret = quicly_streambuf_create(stream, sizeof(struct st_stream_data_t))) != 0)
         return ret;
+#if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+    assert(ctx.tls->certificates.count == 0);
+    stream->callbacks = &client_stream_callbacks;
+#elif !defined(QUICLY_CLIENT) && defined(QUICLY_SERVER)
+    assert(ctx.tls->certificates.count != 0);
+    stream->callbacks = &server_stream_callbacks;
+#else
     stream->callbacks = ctx.tls->certificates.count != 0 ? &server_stream_callbacks : &client_stream_callbacks;
+#endif
     return 0;
 }
 
@@ -472,17 +542,26 @@ static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packet
 
 static void (*send_packets)(int, struct sockaddr *, struct iovec *, size_t) = send_packets_default;
 
+#if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
 static void send_one_packet(int fd, struct sockaddr *dest, const void *payload, size_t payload_len)
 {
     struct iovec vec = {.iov_base = (void *)payload, .iov_len = payload_len};
     send_packets(fd, dest, &vec, 1);
 }
+#endif
 
 static int send_pending(int fd, quicly_conn_t *conn)
 {
     quicly_address_t dest, src;
     struct iovec packets[MAX_BURST_PACKETS];
+#ifdef MINIMIZE_STACK
+    uint8_t *buf __attribute__((__cleanup__(free))) =
+        malloc(MAX_BURST_PACKETS * quicly_get_context(conn)->transport_params.max_udp_payload_size);
+    if (buf == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#else
     uint8_t buf[MAX_BURST_PACKETS * quicly_get_context(conn)->transport_params.max_udp_payload_size];
+#endif
     size_t num_packets = MAX_BURST_PACKETS;
     int ret;
 
@@ -504,9 +583,11 @@ static void enqueue_requests(quicly_conn_t *conn)
 {
     size_t i;
     int ret;
+    char *req = malloc(1024);
+    char *destfile = malloc(1024);
+    assert(req && destfile);
 
     for (i = 0; reqs[i].path != NULL; ++i) {
-        char req[1024], destfile[1024];
         quicly_stream_t *stream;
         ret = quicly_open_stream(conn, &stream, 0);
         assert(ret == 0);
@@ -527,6 +608,7 @@ static void enqueue_requests(quicly_conn_t *conn)
     enqueue_requests_at = INT64_MAX;
 }
 
+#if defined(QUICLY_CLIENT) || !defined(QUICLY_SERVER)
 static int run_client(int fd, struct sockaddr *sa, const char *host)
 {
     struct sockaddr_in local;
@@ -609,7 +691,9 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         if (conn != NULL) {
             ret = send_pending(fd, conn);
             if (ret != 0) {
+#ifndef PARTICLE
                 ech_save_retry_configs();
+#endif
                 quicly_free(conn);
                 conn = NULL;
                 if (ret == QUICLY_ERROR_FREE_CONNECTION) {
@@ -622,7 +706,9 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         }
     }
 }
+#endif
 
+#if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
 static quicly_conn_t **conns;
 static size_t num_conns = 0;
 
@@ -707,7 +793,9 @@ CIDMismatch:
     *err_desc = "CID mismatch";
     return 0;
 }
+#endif
 
+#if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
 static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
 {
     signal(SIGINT, on_signal);
@@ -873,7 +961,9 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
         }
     }
 }
+#endif
 
+#ifndef PARTICLE
 static void load_session(void)
 {
     static uint8_t buf[65536];
@@ -916,6 +1006,7 @@ static void load_session(void)
 
 Exit:;
 }
+#endif
 
 static struct {
     ptls_iovec_t tls_ticket;
@@ -1002,6 +1093,7 @@ static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_o
     return 0;
 }
 
+#ifndef PARTICLE
 static void usage(const char *cmd)
 {
     printf("Usage: %s [options] host port\n"
@@ -1062,6 +1154,7 @@ static void usage(const char *cmd)
            "\n",
            cmd);
 }
+#endif
 
 static void push_req(const char *path, int to_file)
 {
@@ -1074,13 +1167,22 @@ static void push_req(const char *path, int to_file)
     memset(reqs + i + 1, 0, sizeof(*reqs));
 }
 
+#ifdef PARTICLE
+int quic_transaction(const char *host, const char *port, const char *req)
+#else
 int main(int argc, char **argv)
+#endif
 {
+#ifndef PARTICLE
     const char *cert_file = NULL, *raw_pubkey_file = NULL, *host, *port, *cid_key = NULL;
+#endif
     struct sockaddr_storage sa;
     socklen_t salen;
     unsigned udpbufsize = 0;
-    int ch, opt_index, fd;
+#ifndef PARTICLE
+    int ch, opt_index;
+#endif
+    int fd;
 
     reqs = malloc(sizeof(*reqs));
     memset(reqs, 0, sizeof(*reqs));
@@ -1101,6 +1203,7 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
+#ifndef PARTICLE
     static const struct option longopts[] = {
         {"ech-key", required_argument, NULL, 0}, {"ech-configs", required_argument, NULL, 0}, {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
@@ -1341,6 +1444,14 @@ int main(int argc, char **argv)
     }
     argc -= optind;
     argv += optind;
+#else
+    negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init("hq-interop", strlen("hq-interop"));
+    if (!validate_path(req)) {
+        fprintf(stderr, "invalid path:%s\n", req);
+        exit(1);
+    }
+    push_req(req, 0);
+#endif
 
     if (reqs[0].path == NULL)
         push_req("/", 0);
@@ -1380,6 +1491,7 @@ int main(int argc, char **argv)
         ctx.transport_params.max_datagram_frame_size = ctx.transport_params.max_udp_payload_size;
     }
 
+#ifndef PARTICLE
     if (cert_file != NULL || ctx.tls->sign_certificate != NULL) {
         /* server */
         if (cert_file == NULL || ctx.tls->sign_certificate == NULL) {
@@ -1416,8 +1528,10 @@ int main(int argc, char **argv)
             EVP_PKEY_free(pubkey);
             ctx.tls->use_raw_public_keys = 1;
         }
+#endif
         hs_properties.client.negotiated_protocols.list = negotiated_protocols.list;
         hs_properties.client.negotiated_protocols.count = negotiated_protocols.count;
+#ifndef PARTICLE
         if (session_file != NULL)
             load_session();
         hs_properties.client.ech.configs = ech.config_list;
@@ -1429,6 +1543,7 @@ int main(int argc, char **argv)
     }
     host = (--argc, *argv++);
     port = (--argc, *argv++);
+#endif
 
     if (resolve_address((void *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
@@ -1437,7 +1552,9 @@ int main(int argc, char **argv)
         perror("socket(2) failed");
         return 1;
     }
+#ifndef PARTICLE
     fcntl(fd, F_SETFL, O_NONBLOCK);
+#endif
     {
         int on = 1;
         if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
@@ -1471,5 +1588,13 @@ int main(int argc, char **argv)
     }
 #endif
 
+#if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+    assert(ctx.tls->certificates.count == 0);
+    return run_client(fd, (void *)&sa, host);
+#elif defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+    assert(ctx.tls->certificates.count != 0);
+    return run_server(fd, (void *)&sa, salen);
+#else
     return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, host);
+#endif
 }

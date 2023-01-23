@@ -31,6 +31,9 @@ extern "C" {
 #include <stdint.h>
 #include "quicly/constants.h"
 #include "quicly/sentmap.h"
+#if PARTICLE
+#include <logging.h>
+#endif
 
 typedef struct quicly_loss_conf_t {
     /**
@@ -331,7 +334,9 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         alarm_duration = quicly_rtt_get_pto(&r->rtt, handshake_is_in_progress ? 0 : *r->max_ack_delay, r->conf->min_pto);
         alarm_duration <<= r->pto_count;
     }
+    LOG_PRINTF(INFO, "%d %d %d\n", now, last_retransmittable_sent_at, alarm_duration);
     SET_ALARM(last_retransmittable_sent_at + alarm_duration);
+    LOG_PRINTF(INFO, "done\n");
 
 #undef SET_ALARM
 }

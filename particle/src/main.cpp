@@ -32,8 +32,8 @@
 SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
 
-#if !defined(NDEBUG) || defined(DSTACK)
-static SerialDebugOutput serial;
+#if !defined(NDEBUG)
+SerialLogHandler logHandler(LOG_LEVEL_TRACE);
 #endif
 
 static const int led = D7;
@@ -52,43 +52,76 @@ extern "C" void ping(void)
 
 void button_action()
 {
+    digitalWrite(led, HIGH);
+
+    LOG_PRINTF(INFO, "Particle Device OS: %lu.%lu.%lu\n", (System.versionNumber() & 0xff000000) >> 24,
+               (System.versionNumber() & 0x00ff0000) >> 16, (System.versionNumber() & 0x0000ff00) >> 8);
+
+    quic_transaction("quant.eggert.org", "4433", "/2000");
+
+    // WiFi.off();
+    delay(1s);
+    digitalWrite(led, LOW);
+}
+
+void setup()
+{
     Serial.begin(9600);
     delay(1000);
 
     WiFi.on();
     WiFi.connect(WIFI_CONNECT_SKIP_LISTEN);
     waitUntil(WiFi.ready);
-    digitalWrite(led, HIGH);
 
-    DEBUG("Particle Device OS: %lu.%lu.%lu", (System.versionNumber() & 0xff000000) >> 24,
-         (System.versionNumber() & 0x00ff0000) >> 16, (System.versionNumber() & 0x0000ff00) >> 8);
-
-    // char msg[64];
-    // const float voltage = analogRead(BATT) * 0.0011224;
-    // const size_t msg_len = snprintf(
-    //     msg, sizeof(msg), "Hello from Particle! Voltage is %f.", voltage);
-    // warpcore_transaction(msg, msg_len);
-
-    quic_transaction();
-
-    WiFi.off();
-    digitalWrite(led, LOW);
-}
-
-void setup()
-{
-    // let's gather some entropy and seed the RNG
+    // let's gather some weak entropy and seed the RNG
     const int temp = analogRead(A0);
     const int volt = analogRead(BATT);
     randomSeed(((temp << 12) | volt));
 
     pinMode(led, OUTPUT);
-    button_action();
+    // button_action();
 }
 
 void loop()
 {
-    System.sleep(BTN, FALLING);
-    if (System.sleepResult().reason() == WAKEUP_REASON_PIN)
-        button_action();
+    button_action();
+    delay(1s);
+    // System.sleep(BTN, FALLING);
+    // if (System.sleepResult().reason() == WAKEUP_REASON_PIN)
+    //     button_action();
+}
+
+static uint32_t stack_lim = 0;
+static uint32_t max_stack = 0;
+static uint32_t heap_lim = 0;
+static uint32_t dstack_depth = 0;
+
+extern "C" void __attribute__((no_instrument_function)) __cyg_profile_func_enter(void *, void *)
+{
+    static const char *stack_start = 0;
+    dstack_depth++;
+    const char *const frame = (const char *)__builtin_frame_address(0);
+    if (stack_lim == 0) {
+        stack_start = frame;
+
+        stack_lim = 6144; // TODO: can this be determined dynamically?
+    }
+
+    uint32_t heap = 0;
+    runtime_info_t info = {.size = sizeof(info)};
+    HAL_Core_Runtime_Info(&info, NULL);
+    heap = info.freeheap;
+    heap_lim = info.total_init_heap;
+
+    const uint32_t stack = (uint32_t)(stack_start - frame);
+
+    LOG_PRINTF(INFO, "s=%" PRIu32 " h=%" PRIu32 " l=%" PRIu32 "\n", stack, heap, dstack_depth);
+
+    if (stack < UINT16_MAX)
+        max_stack = MAX(max_stack, stack);
+}
+
+extern "C" void __attribute__((no_instrument_function)) __cyg_profile_func_exit(void *, void *)
+{
+    dstack_depth--;
 }
