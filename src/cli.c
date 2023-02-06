@@ -621,7 +621,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         perror("bind(2) failed");
         return 1;
     }
-    ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params);
+    ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params, NULL);
     assert(ret == 0);
     ++next_cid.master_id;
     enqueue_requests(conn);
@@ -925,7 +925,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             break;
                         } else {
                             /* new connection */
-                            int ret = quicly_accept(&conn, &ctx, NULL, &remote.sa, &packet, token, &next_cid, NULL);
+                            int ret = quicly_accept(&conn, &ctx, NULL, &remote.sa, &packet, token, &next_cid, NULL, NULL);
                             if (ret == 0) {
                                 assert(conn != NULL);
                                 ++next_cid.master_id;
