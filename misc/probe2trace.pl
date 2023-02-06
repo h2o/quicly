@@ -284,7 +284,7 @@ EOT
 
 static void __attribute__((noinline)) QUICLY_TRACER_@{[ uc $probe->[0] ]}($params)
 {
-    LOG_PRINTF(INFO, "%s {$fmt}\\n", __func__, @{[join ', ', @ap]});
+    LOG_PRINTF(INFO, "{$fmt}\\n", @{[join ', ', @ap]});
 }
 EOT
         } else {

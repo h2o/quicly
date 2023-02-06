@@ -25,9 +25,9 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#include <Particle.h>
-
 #include "quic.h"
+
+#include <Particle.h>
 
 SYSTEM_MODE(MANUAL);
 // SYSTEM_THREAD(ENABLED);
@@ -57,7 +57,7 @@ void button_action()
     LOG_PRINTF(INFO, "Particle Device OS: %lu.%lu.%lu\n", (System.versionNumber() & 0xff000000) >> 24,
                (System.versionNumber() & 0x00ff0000) >> 16, (System.versionNumber() & 0x0000ff00) >> 8);
 
-    quic_transaction("quant.eggert.org", "4433", "/2000");
+    quic_transaction("172.16.100.12", "4435", "/2000");
 
     // WiFi.off();
     delay(1s);

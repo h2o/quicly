@@ -46,9 +46,9 @@
 #include <timer_hal.h>
 #include <rng_hal.h>
 
-#define perror(x) LOG_PRINTF(INFO, x)
+#define perror(x) LOG_PRINTF(INFO, x "\n")
 #define fprintf(x, ...) LOG_PRINTF(INFO, __VA_ARGS__)
-#define fputs(x, y) LOG_PRINTF(INFO, x)
+#define fputs(x, y) LOG_PRINTF(INFO, x "\n")
 #define fputc(x, y) LOG_PRINTF(INFO, "%c", x)
 
 #define MAX_BURST_PACKETS 2 // FIXME: assert fails w/1
@@ -254,6 +254,7 @@ static void send_header(quicly_stream_t *stream, int is_http1, int status, const
     send_str(stream, buf);
 }
 
+#ifndef PARTICLE
 static int flatten_file_vec(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     int fd = (intptr_t)vec->cbdata;
@@ -271,9 +272,13 @@ static void discard_file_vec(quicly_sendbuf_vec_t *vec)
     int fd = (intptr_t)vec->cbdata;
     close(fd);
 }
+#endif
 
 static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, const char *mime_type)
 {
+#ifdef PARTICLE
+    return 0;
+#else
     static const quicly_streambuf_sendvec_callbacks_t send_file_callbacks = {flatten_file_vec, discard_file_vec};
     int fd;
     struct stat st;
@@ -289,6 +294,7 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
     quicly_sendbuf_vec_t vec = {&send_file_callbacks, (size_t)st.st_size, (void *)(intptr_t)fd};
     quicly_streambuf_egress_write_vec(stream, &vec);
     return 1;
+#endif
 }
 
 /**
@@ -717,6 +723,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
 static quicly_conn_t **conns;
 static size_t num_conns = 0;
 
+#ifndef PARTICLE
 static void on_signal(int signo)
 {
     size_t i;
@@ -728,6 +735,7 @@ static void on_signal(int signo)
     if (signo == SIGINT)
         _exit(0);
 }
+#endif
 
 static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
                           quicly_address_token_plaintext_t *token, const char **err_desc)
@@ -803,8 +811,10 @@ CIDMismatch:
 #if defined(QUICLY_SERVER) || !defined(QUICLY_CLIENT)
 static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
 {
+#ifndef PARTICLE
     signal(SIGINT, on_signal);
     signal(SIGHUP, on_signal);
+#endif
 
     if (bind(fd, sa, salen) != 0) {
         perror("bind(2) failed");

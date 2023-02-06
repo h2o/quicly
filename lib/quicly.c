@@ -40,9 +40,6 @@
 #include "quicly-probes.h"
 #endif
 #include "quicly/retire_cid.h"
-#if PARTICLE
-#include <logging.h>
-#endif
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_FINAL 0x39
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_DRAFT 0xffa5
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
@@ -777,7 +774,7 @@ static int on_invalid_ack(quicly_sentmap_t *map, const quicly_sent_packet_t *pac
     return 0;
 }
 
-static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn, uint32_t cwnd, uint32_t mtu)
+static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn, uint32_t cwnd, uint64_t mtu)
 {
     static __thread struct {
         uint32_t values[8];
@@ -2265,7 +2262,15 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     assert(slots[1].type == UINT16_MAX);
 
     const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_transport_parameters_t *tmp_params __attribute__((__cleanup__(ptls_cleanup_free))) =
+        malloc(sizeof(quicly_transport_parameters_t));
+    if (tmp_params == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#define params (*tmp_params)
+#else
     quicly_transport_parameters_t params;
+#endif
     quicly_cid_t original_dcid, initial_scid, retry_scid = {};
 
     /* obtain pointer to initial CID of the peer. It is guaranteed to exist in the first slot, as TP is received before any frame
@@ -2321,6 +2326,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
 Exit:
     return ret; /* negative error codes used to transmit QUIC errors through picotls */
+#undef params
 }
 
 int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *dest_addr,
@@ -4119,6 +4125,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
     /* build token */
     token.type = QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION;
     token.issued_at = conn->super.ctx->now->cb(conn->super.ctx->now);
+    token.remote = conn->super.remote.address;
     /* TODO fill token.resumption */
 
     /* encrypt */
@@ -4486,7 +4493,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(secret, secret, cipher->hash->digest_size);
     });
 
-    if (PTLS_LOG_IS_ACTIVE(ptls_log) && tlsctx->log_event != NULL) {
+    if (tlsctx->log_event != NULL) {
         char hexbuf[PTLS_MAX_DIGEST_SIZE * 2 + 1];
         ptls_hexdump(hexbuf, secret, cipher->hash->digest_size);
         tlsctx->log_event->cb(tlsctx->log_event, tls, log_label, "%s", hexbuf);
@@ -6915,18 +6922,24 @@ const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {
 
 void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
 {
-#if QUICLY_USE_DTRACE
+#if QUICLY_USE_DTRACE || (defined(PARTICLE) && defined(QUICLY_USE_TRACER))
     char buf[1024];
     va_list args;
 
+#if !defined(PARTICLE)
     if (!QUICLY_DEBUG_MESSAGE_ENABLED())
         return;
+#endif
 
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
+#if defined(PARTICLE) && defined(QUICLY_USE_TRACER)
+    QUICLY_TRACER_DEBUG_MESSAGE(conn, function, line, buf);
+#else
     QUICLY_DEBUG_MESSAGE(conn, function, line, buf);
+#endif
 #endif
 }
 
