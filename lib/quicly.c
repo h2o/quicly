@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <arpa/inet.h>
 #include "khash.h"
 #include "quicly.h"
 #include "quicly/defaults.h"
@@ -559,6 +560,7 @@ static inline uint8_t get_epoch(uint8_t first_byte)
         return QUICLY_EPOCH_0RTT;
     default:
         assert(!"FIXME");
+        abort();
     }
 }
 
@@ -2154,7 +2156,16 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         assert(ctx->receive_datagram_frame != NULL);
 
     /* create TLS context */
-    if ((tls = ptls_new(ctx->tls, server_name == NULL)) == NULL)
+#if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+    assert(server_name != 0);
+    tls = ptls_client_new(ctx->tls);
+#elif !defined(QUICLY_CLIENT) && defined(QUICLY_SERVER)
+    assert(server_name == 0);
+    tls = ptls_server_new(ctx->tls);
+#else
+    tls = ptls_new(ctx->tls, server_name == NULL);
+#endif
+    if (tls == NULL)
         return NULL;
     if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0) {
         ptls_free(tls);
@@ -2252,7 +2263,15 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     assert(slots[1].type == UINT16_MAX);
 
     const uint8_t *src = slots[0].data.base, *end = src + slots[0].data.len;
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_transport_parameters_t *tmp_params __attribute__((__cleanup__(ptls_cleanup_free))) =
+        malloc(sizeof(quicly_transport_parameters_t));
+    if (tmp_params == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#define params (*tmp_params)
+#else
     quicly_transport_parameters_t params;
+#endif
     quicly_cid_t original_dcid, initial_scid, retry_scid = {};
 
     /* obtain pointer to initial CID of the peer. It is guaranteed to exist in the first slot, as TP is received before any frame
@@ -2308,6 +2327,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
 
 Exit:
     return ret; /* negative error codes used to transmit QUIC errors through picotls */
+#undef params
 }
 
 int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *dest_addr,
@@ -4083,17 +4103,29 @@ Exit:
 
 static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
 {
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_address_token_plaintext_t *tmp_token __attribute__((__cleanup__(ptls_cleanup_free))) =
+        calloc(1, sizeof(quicly_address_token_plaintext_t));
+    if (tmp_token == NULL)
+        return SIZE_MAX;
+#define token (*tmp_token)
+#else
     quicly_address_token_plaintext_t token;
+#endif
     ptls_buffer_t tokenbuf;
-    uint8_t tokenbuf_small[128];
     quicly_sent_t *sent;
     int ret;
 
+#ifdef PTLS_MINIMIZE_STACK
+    ptls_buffer_init(&tokenbuf, "", 0);
+#else
+    uint8_t tokenbuf_small[128];
     ptls_buffer_init(&tokenbuf, tokenbuf_small, sizeof(tokenbuf_small));
+#endif
 
     /* build token */
-    token =
-        (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION, conn->super.ctx->now->cb(conn->super.ctx->now)};
+    token.type = QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION;
+    token.issued_at = conn->super.ctx->now->cb(conn->super.ctx->now);
     token.remote = conn->super.remote.address;
     /* TODO fill token.resumption */
 
@@ -4123,6 +4155,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
 Exit:
     ptls_buffer_dispose(&tokenbuf);
     return ret;
+#undef token
 }
 
 size_t quicly_send_version_negotiation(quicly_context_t *ctx, ptls_iovec_t dest_cid, ptls_iovec_t src_cid, const uint32_t *versions,
@@ -4185,14 +4218,23 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
                          ptls_iovec_t odcid, ptls_iovec_t token_prefix, ptls_iovec_t appdata,
                          ptls_aead_context_t **retry_aead_cache, uint8_t *datagram)
 {
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_address_token_plaintext_t *tmp_token __attribute__((__cleanup__(ptls_cleanup_free))) =
+        calloc(1, sizeof(quicly_address_token_plaintext_t));
+    if (tmp_token == NULL)
+        return SIZE_MAX;
+#define token (*tmp_token)
+#else
     quicly_address_token_plaintext_t token;
+#endif
     ptls_buffer_t buf;
     int ret;
 
     assert(!(src_cid.len == odcid.len && memcmp(src_cid.base, odcid.base, src_cid.len) == 0));
 
     /* build token as plaintext */
-    token = (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RETRY, ctx->now->cb(ctx->now)};
+    token.type = QUICLY_ADDRESS_TOKEN_TYPE_RETRY;
+    token.issued_at = ctx->now->cb(ctx->now);
     set_address(&token.remote, dest_addr);
     set_address(&token.local, src_addr);
 
@@ -4249,6 +4291,7 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
 
 Exit:
     return ret == 0 ? buf.off : SIZE_MAX;
+#undef token
 }
 
 static struct st_quicly_pn_space_t *setup_send_space(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s)
@@ -4501,7 +4544,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
     } break;
     default:
         assert(!"logic flaw");
-        break;
+        abort();
     }
 
 #undef SELECT_CIPHER_CONTEXT
@@ -4806,12 +4849,23 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize)
 {
-    quicly_send_context_t s = {.current = {.first_byte = -1},
-                               .datagrams = datagrams,
-                               .max_datagrams = *num_datagrams,
-                               .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
-                               .first_packet_number = conn->egress.packet_number};
     int ret;
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_send_context_t *tmp_s __attribute__((__cleanup__(ptls_cleanup_free))) = calloc(1, sizeof(quicly_send_context_t));
+    if (tmp_s == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+
+#define s (*tmp_s)
+#else
+    quicly_send_context_t s;
+#endif
+
+    s.current.first_byte = -1;
+    s.datagrams = datagrams;
+    s.max_datagrams = *num_datagrams;
+    s.payload_buf.datagram = buf;
+    s.payload_buf.end = (uint8_t *)buf + bufsize;
+    s.first_packet_number = conn->egress.packet_number;
 
     lock_now(conn, 0);
 
@@ -4875,6 +4929,7 @@ Exit:
     *num_datagrams = s.num_datagrams;
     unlock_now(conn);
     return ret;
+#undef s
 }
 
 size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
@@ -5144,7 +5199,14 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
 
 static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_ack_frame_t *tmp_frame __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(sizeof(quicly_ack_frame_t));
+    if (tmp_frame == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#define frame (*tmp_frame)
+#else
     quicly_ack_frame_t frame;
+#endif
     quicly_sentmap_iter_t iter;
     struct {
         uint64_t pn;
@@ -5285,6 +5347,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     setup_next_send(conn);
 
     return 0;
+#undef frame
 }
 
 static int handle_max_stream_data_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
@@ -5675,7 +5738,14 @@ int handle_close(quicly_conn_t *conn, int err, uint64_t frame_type, ptls_iovec_t
 
 static int handle_transport_close_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
+#ifdef PTLS_MINIMIZE_STACK
+    quicly_transport_close_frame_t *tmp_frame __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(sizeof(quicly_transport_close_frame_t));
+    if (tmp_frame == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#define frame (*tmp_frame)
+#else
     quicly_transport_close_frame_t frame;
+#endif
     int ret;
 
     if ((ret = quicly_decode_transport_close_frame(&state->src, state->end, &frame)) != 0)
@@ -5689,6 +5759,7 @@ static int handle_transport_close_frame(quicly_conn_t *conn, struct st_quicly_ha
         PTLS_LOG_ELEMENT_UNSAFESTR(reason_phrase, (const char *)frame.reason_phrase.base, frame.reason_phrase.len);
     });
     return handle_close(conn, QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(frame.error_code), frame.frame_type, frame.reason_phrase);
+#undef frame
 }
 
 static int handle_application_close_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
@@ -6012,7 +6083,13 @@ static int handle_stateless_reset(quicly_conn_t *conn)
 static int validate_retry_tag(quicly_decoded_packet_t *packet, quicly_cid_t *odcid, ptls_aead_context_t *retry_aead)
 {
     size_t pseudo_packet_len = 1 + odcid->len + packet->encrypted_off;
+#ifdef PTLS_MINIMIZE_STACK
+    uint8_t *pseudo_packet __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(pseudo_packet_len);
+    if (pseudo_packet == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#else
     uint8_t pseudo_packet[pseudo_packet_len];
+#endif
     pseudo_packet[0] = odcid->len;
     memcpy(pseudo_packet + 1, odcid->cid, odcid->len);
     memcpy(pseudo_packet + 1 + odcid->len, packet->octets.base, packet->encrypted_off);
@@ -6615,7 +6692,7 @@ int quicly_encrypt_address_token(void (*random_bytes)(void *, size_t), ptls_aead
                 break;
             default:
                 assert(!"unsupported address type");
-                break;
+                abort();
             }
         });
         ptls_buffer_push16(buf, port);
@@ -6654,7 +6731,13 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
                                  size_t len, size_t prefix_len, const char **err_desc)
 {
     const uint8_t *const token = _token;
+#ifdef PTLS_MINIMIZE_STACK
+    uint8_t *ptbuf __attribute__((__cleanup__(ptls_cleanup_free))) = malloc(QUICLY_MIN_CLIENT_INITIAL_SIZE);
+    if (ptbuf == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+#else
     uint8_t ptbuf[QUICLY_MIN_CLIENT_INITIAL_SIZE];
+#endif
     size_t ptlen;
 
     *err_desc = NULL;
@@ -6664,7 +6747,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
         *err_desc = "token too small";
         return PTLS_ALERT_DECODE_ERROR;
     }
-    if (prefix_len + 1 + aead->algo->iv_size + sizeof(ptbuf) + aead->algo->tag_size < len) {
+    if (prefix_len + 1 + aead->algo->iv_size + QUICLY_MIN_CLIENT_INITIAL_SIZE + aead->algo->tag_size < len) {
         *err_desc = "token too large";
         return PTLS_ALERT_DECODE_ERROR;
     }
@@ -6837,18 +6920,24 @@ const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {
 
 void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
 {
-#if QUICLY_USE_DTRACE
+#if QUICLY_USE_DTRACE || (defined(PARTICLE) && defined(QUICLY_USE_TRACER))
     char buf[1024];
     va_list args;
 
+#if !defined(PARTICLE)
     if (!QUICLY_DEBUG_MESSAGE_ENABLED())
         return;
+#endif
 
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
+#if defined(PARTICLE) && defined(QUICLY_USE_TRACER)
+    QUICLY_TRACER_DEBUG_MESSAGE(conn, function, line, buf);
+#else
     QUICLY_DEBUG_MESSAGE(conn, function, line, buf);
+#endif
 #endif
 }
 

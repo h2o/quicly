@@ -911,7 +911,9 @@ uint32_t quicly_num_streams_by_group(quicly_conn_t *conn, int uni, int locally_i
 /**
  *
  */
+#if defined(QUICLY_CLIENT) == defined(QUICLY_SERVER)
 static int quicly_is_client(quicly_conn_t *conn);
+#endif
 /**
  *
  */
@@ -1260,9 +1262,10 @@ void quicly_stream_noop_on_receive_reset(quicly_stream_t *stream, int err);
 
 extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
 
+#ifndef NO_LOG
 #define QUICLY_LOG_CONN(_type, _conn, _block)                                                                                      \
     do {                                                                                                                           \
-        if (!ptls_log.is_active)                                                                                                   \
+        if (!PTLS_LOG_IS_ACTIVE(ptls_log))                                                                                         \
             break;                                                                                                                 \
         quicly_conn_t *_c = (_conn);                                                                                               \
         if (ptls_skip_tracing(_c->crypto.tls))                                                                                     \
@@ -1275,6 +1278,9 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
             } while (0);                                                                                                           \
         });                                                                                                                        \
     } while (0)
+#else
+#define QUICLY_LOG_CONN(...)
+#endif
 
 /* inline definitions */
 
@@ -1332,11 +1338,18 @@ inline const quicly_transport_parameters_t *quicly_get_remote_transport_paramete
     return &c->remote.transport_params;
 }
 
+#if defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+#define quicly_is_client(x) (1)
+#elif !defined(QUICLY_CLIENT) && defined(QUICLY_SERVER)
+#define quicly_is_client(x) (0)
+#else
 inline int quicly_is_client(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return (c->local.bidi.next_stream_id & 1) == 0;
 }
+#endif
+
 
 inline quicly_stream_id_t quicly_get_local_next_stream_id(quicly_conn_t *conn, int uni)
 {
