@@ -40,6 +40,7 @@
 #include "quicly-probes.h"
 #endif
 #include "quicly/retire_cid.h"
+
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_FINAL 0x39
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_DRAFT 0xffa5
 #define QUICLY_TRANSPORT_PARAMETER_ID_ORIGINAL_CONNECTION_ID 0
@@ -4848,26 +4849,23 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize)
 {
+    int ret;
 #ifdef PTLS_MINIMIZE_STACK
     quicly_send_context_t *tmp_s __attribute__((__cleanup__(ptls_cleanup_free))) = calloc(1, sizeof(quicly_send_context_t));
     if (tmp_s == NULL)
         return PTLS_ERROR_NO_MEMORY;
 
 #define s (*tmp_s)
+#else
+    quicly_send_context_t s;
+#endif
+
     s.current.first_byte = -1;
     s.datagrams = datagrams;
     s.max_datagrams = *num_datagrams;
     s.payload_buf.datagram = buf;
     s.payload_buf.end = (uint8_t *)buf + bufsize;
     s.first_packet_number = conn->egress.packet_number;
-#else
-    quicly_send_context_t s = {.current = {.first_byte = -1},
-                               .datagrams = datagrams,
-                               .max_datagrams = *num_datagrams,
-                               .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
-                               .first_packet_number = conn->egress.packet_number};
-#endif
-    int ret;
 
     lock_now(conn, 0);
 

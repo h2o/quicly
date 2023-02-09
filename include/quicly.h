@@ -911,7 +911,7 @@ uint32_t quicly_num_streams_by_group(quicly_conn_t *conn, int uni, int locally_i
 /**
  *
  */
-#if !defined(QUICLY_CLIENT) && !defined(QUICLY_SERVER)
+#if defined(QUICLY_CLIENT) == defined(QUICLY_SERVER)
 static int quicly_is_client(quicly_conn_t *conn);
 #endif
 /**

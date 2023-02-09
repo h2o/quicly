@@ -47,10 +47,8 @@ CSRC+=\
 	../lib/sentmap.c \
 	../lib/streambuf.c \
 
-# CSRC+=../deps/picotls/t/minicrypto.c
 CSRC+=../src/cli.c
 CPPSRC+=$(USRSRC)/main.cpp
-
 
 # -Wshadow
 EXTRA_CFLAGS+=-Wno-undef -Wno-pointer-to-int-cast -Werror

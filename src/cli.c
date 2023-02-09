@@ -46,6 +46,8 @@
 #include <timer_hal.h>
 #include <rng_hal.h>
 
+#include <uECC.h>
+
 #define perror(x) LOG_PRINTF(INFO, x "\n")
 #define fprintf(x, ...) LOG_PRINTF(INFO, __VA_ARGS__)
 #define fputs(x, y) LOG_PRINTF(INFO, x "\n")
@@ -125,6 +127,12 @@ static void random_bytes(void *buf, size_t len)
         buf += sizeof(uint8_t);
         len -= sizeof(uint8_t);
     }
+}
+
+static int uecc_rng(uint8_t * dest, unsigned size)
+{
+    random_bytes(dest, size);
+    return 1;
 }
 
 static ptls_context_t tlsctx = {.random_bytes = random_bytes,
@@ -1460,7 +1468,7 @@ int main(int argc, char **argv)
     argc -= optind;
     argv += optind;
 #else
-    negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init("hq-interop", strlen("hq-interop"));
+    // negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init("hq-interop", strlen("hq-interop"));
     if (!validate_path(req)) {
         fprintf(stderr, "invalid path:%s\n", req);
         exit(1);
@@ -1543,6 +1551,8 @@ int main(int argc, char **argv)
             EVP_PKEY_free(pubkey);
             ctx.tls->use_raw_public_keys = 1;
         }
+#else
+        uECC_set_rng(uecc_rng);
 #endif
         hs_properties.client.negotiated_protocols.list = negotiated_protocols.list;
         hs_properties.client.negotiated_protocols.count = negotiated_protocols.count;
