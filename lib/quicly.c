@@ -5439,6 +5439,8 @@ static int handle_new_token_frame(quicly_conn_t *conn, struct st_quicly_handle_p
     quicly_new_token_frame_t frame;
     int ret;
 
+    if (!quicly_is_client(conn))
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     if ((ret = quicly_decode_new_token_frame(&state->src, state->end, &frame)) != 0)
         return ret;
     QUICLY_PROBE(NEW_TOKEN_RECEIVE, conn, conn->stash.now, frame.token.base, frame.token.len);
