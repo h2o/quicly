@@ -1431,11 +1431,10 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
 {
     int ret, ack_now, is_out_of_order;
 
-    ret = record_pn(&space->ack_queue, pn, &is_out_of_order);
+    if ((ret = record_pn(&space->ack_queue, pn, &is_out_of_order)) != 0)
+        goto Exit;
     if (is_out_of_order)
         *received_out_of_order += 1;
-    if (ret != 0)
-        goto Exit;
 
     ack_now = is_out_of_order && !space->ignore_order && !is_ack_only;
 
