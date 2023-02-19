@@ -450,6 +450,10 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total number of Initial and Handshake packets sent.                                                                     \
          */                                                                                                                        \
         uint64_t initial_handshake_sent;                                                                                           \
+        /**                                                                                                                        \
+         * Total number of packets received out of order.                                                                          \
+         */                                                                                                                        \
+        uint64_t received_out_of_order;                                                                                            \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
