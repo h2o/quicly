@@ -264,6 +264,10 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
+    uint8_t reliable_reset_stream : 1;
+    /**
+     *
+     */
     uint64_t active_connection_id_limit;
     /**
      *

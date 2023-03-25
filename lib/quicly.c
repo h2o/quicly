@@ -60,6 +60,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_SOURCE_CONNECTION_ID 15
 #define QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID 16
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE 0x20
+#define QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_RESET_STREAM 0x727273
 #define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xff03de1a
 
 /**
@@ -1881,6 +1882,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
     }
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
+    if (params->reliable_reset_stream)
+        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_RESET_STREAM, {});
     if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); });
@@ -2085,6 +2088,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 params->active_connection_id_limit = v;
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_RESET_STREAM, { params->reliable_reset_stream = 1; });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -3586,7 +3590,7 @@ static int send_control_frames_of_stream(quicly_stream_t *stream, quicly_send_co
                                                on_ack_reset_stream)) != 0)
             return ret;
         s->dst = quicly_encode_reset_stream_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
-                                                  stream->sendstate.size_inflight);
+                                                  stream->sendstate.size_inflight, 0);
         ++stream->conn->super.stats.num_frames_sent.reset_stream;
         QUICLY_PROBE(RESET_STREAM_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
                      stream->_send_aux.reset_stream.error_code, stream->sendstate.size_inflight);
@@ -5112,7 +5116,7 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
     quicly_stream_t *stream;
     int ret;
 
-    if ((ret = quicly_decode_reset_stream_frame(&state->src, state->end, &frame)) != 0)
+    if ((ret = quicly_decode_reset_stream_frame(&state->frame_type, &state->src, state->end, &frame)) != 0)
         return ret;
     QUICLY_PROBE(RESET_STREAM_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size);
     QUICLY_LOG_CONN(reset_stream_receive, conn, {
