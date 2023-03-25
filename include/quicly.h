@@ -492,7 +492,7 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
             max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
             retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            ack_frequency;                                                                                                         \
+            reliable_reset_stream, ack_frequency;                                                                                  \
     } num_frames_sent, num_frames_received;                                                                                        \
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
@@ -744,6 +744,10 @@ struct st_quicly_stream_t {
             quicly_linklist_t control; /* links to conn_t::control (or to conn_t::streams_blocked if the blocked flag is set) */
             quicly_linklist_t default_scheduler;
         } pending_link;
+        /**
+         * if the stream is closed using reliable reset
+         */
+        unsigned is_reliable_reset : 1;
     } _send_aux;
     /**
      *
@@ -1141,6 +1145,10 @@ int quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id, quicly_st
  *
  */
 void quicly_reset_stream(quicly_stream_t *stream, int err);
+/**
+ *
+ */
+int quicly_reset_stream_reliable(quicly_stream_t *stream, uint64_t reliable_size, int err);
 /**
  *
  */

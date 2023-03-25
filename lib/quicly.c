@@ -1085,6 +1085,7 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     stream->_send_aux.blocked = QUICLY_SENDER_STATE_NONE;
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
     quicly_linklist_init(&stream->_send_aux.pending_link.default_scheduler);
+    stream->_send_aux.is_reliable_reset = 0;
 
     stream->_recv_aux.window = initial_max_stream_data_local;
 
@@ -3739,6 +3740,22 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
         *dst++ = QUICLY_FRAME_TYPE_CRYPTO;
         dst = quicly_encodev(dst, off);
         len = s->dst_end - dst;
+    } else if (off == stream->sendstate.final_size && stream->_send_aux.is_reliable_reset) {
+        /* reliable reset is sent in a special way */
+        if ((ret = allocate_ack_eliciting_frame(stream->conn, s, QUICLY_RST_FRAME_CAPACITY, &sent, on_ack_stream)) != 0)
+            return ret;
+        s->dst = quicly_encode_reset_stream_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
+                                                  stream->sendstate.final_size, stream->sendstate.final_size);
+        ++stream->conn->super.stats.num_frames_sent.reliable_reset_stream;
+        QUICLY_PROBE(RELIABLE_RESET_STREAM_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
+                     stream->_send_aux.reset_stream.error_code, stream->sendstate.final_size, stream->sendstate.final_size);
+        QUICLY_LOG_CONN(reliable_reset_stream_send, stream->conn, {
+            PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
+            PTLS_LOG_ELEMENT_UNSIGNED(error_code, stream->_send_aux.reset_stream.error_code);
+            PTLS_LOG_ELEMENT_UNSIGNED(final_size, stream->sendstate.final_size);
+            PTLS_LOG_ELEMENT_UNSIGNED(reliable_size, stream->sendstate.final_size);
+        });
+        return 0;
     } else {
         uint8_t header[18], *hp = header + 1;
         hp = quicly_encodev(hp, stream->stream_id);
@@ -3817,7 +3834,7 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     adjust_stream_frame_layout(&dst, s->dst_end, &len, &wrote_all, &s->dst);
 
     /* determine if the frame incorporates FIN */
-    if (off + len == stream->sendstate.final_size) {
+    if (off + len == stream->sendstate.final_size && !stream->_send_aux.is_reliable_reset) {
         assert(!quicly_sendstate_is_open(&stream->sendstate));
         assert(s->dst != NULL);
         is_fin = 1;
@@ -6484,6 +6501,21 @@ void quicly_reset_stream(quicly_stream_t *stream, int err)
     /* schedule for delivery */
     sched_stream_control(stream);
     resched_stream_data(stream);
+}
+
+int quicly_reset_stream_reliable(quicly_stream_t *stream, uint64_t reliable_size, int err)
+{
+    assert(stream->sendstate.final_size == UINT64_MAX && stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE &&
+           "reliable reset cannot be used after the stream is shutdown or reset");
+
+    /* for simplicity, reliable size is rounded up to `size_inflight`, then that value is set as `final_size` */
+    if (reliable_size < stream->sendstate.size_inflight)
+        reliable_size = stream->sendstate.size_inflight;
+
+    stream->_send_aux.reset_stream.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+    stream->_send_aux.is_reliable_reset = 1;
+
+    return quicly_sendstate_shutdown(&stream->sendstate, reliable_size);
 }
 
 void quicly_request_stop(quicly_stream_t *stream, int err)
