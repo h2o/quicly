@@ -5133,14 +5133,28 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
     quicly_stream_t *stream;
     int ret;
 
-    if ((ret = quicly_decode_reset_stream_frame(&state->frame_type, &state->src, state->end, &frame)) != 0)
+    if ((ret = quicly_decode_reset_stream_frame(state->frame_type, &state->src, state->end, &frame)) != 0)
         return ret;
-    QUICLY_PROBE(RESET_STREAM_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size);
-    QUICLY_LOG_CONN(reset_stream_receive, conn, {
-        PTLS_LOG_ELEMENT_SIGNED(stream_id, (quicly_stream_id_t)frame.stream_id);
-        PTLS_LOG_ELEMENT_UNSIGNED(app_error_code, frame.app_error_code);
-        PTLS_LOG_ELEMENT_UNSIGNED(final_size, frame.final_size);
-    });
+    switch (state->frame_type) {
+    case QUICLY_FRAME_TYPE_RESET_STREAM:
+        QUICLY_PROBE(RESET_STREAM_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size);
+        QUICLY_LOG_CONN(reset_stream_receive, conn, {
+            PTLS_LOG_ELEMENT_SIGNED(stream_id, (quicly_stream_id_t)frame.stream_id);
+            PTLS_LOG_ELEMENT_UNSIGNED(app_error_code, frame.app_error_code);
+            PTLS_LOG_ELEMENT_UNSIGNED(final_size, frame.final_size);
+        });
+        break;
+    case QUICLY_FRAME_TYPE_RELIABLE_RESET_STREAM:
+        QUICLY_PROBE(RELIABLE_RESET_STREAM_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size,
+                     frame.reliable_size);
+        QUICLY_LOG_CONN(reset_stream_receive, conn, {
+            PTLS_LOG_ELEMENT_SIGNED(stream_id, (quicly_stream_id_t)frame.stream_id);
+            PTLS_LOG_ELEMENT_UNSIGNED(app_error_code, frame.app_error_code);
+            PTLS_LOG_ELEMENT_UNSIGNED(final_size, frame.final_size);
+            PTLS_LOG_ELEMENT_UNSIGNED(reliable_size, frame.reliable_size);
+        });
+        break;
+    }
 
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
@@ -5969,15 +5983,16 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
             offsetof(quicly_conn_t, super.stats.num_frames_received.lc) \
         },                                                                                                                         \
     }
-        /*   +----------------------------------+-------------------+---------------+
-         *   |               frame              |  permitted epochs |               |
-         *   |------------------+---------------+----+----+----+----+ ack-eliciting |
-         *   |    upper-case    |  lower-case   | IN | 0R | HS | 1R |               |
-         *   +------------------+---------------+----+----+----+----+---------------+ */
-        FRAME( DATAGRAM_NOLEN   , datagram      ,  0 ,  1,   0,   1 ,             1 ),
-        FRAME( DATAGRAM_WITHLEN , datagram      ,  0 ,  1,   0,   1 ,             1 ),
-        FRAME( ACK_FREQUENCY    , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ),
-        /*   +------------------+---------------+-------------------+---------------+ */
+        /*   +---------------------------------------+-------------------+---------------+
+         *   |                 frame                 |  permitted epochs |               |
+         *   |-----------------------+---------------+----+----+----+----+ ack-eliciting |
+         *   |      upper-case       |   lower-case  | IN | 0R | HS | 1R |               |
+         *   +-----------------------+---------------+----+----+----+----+---------------+ */
+        FRAME( DATAGRAM_NOLEN        , datagram      ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( DATAGRAM_WITHLEN      , datagram      ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( RELIABLE_RESET_STREAM , reset_stream  ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( ACK_FREQUENCY         , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ),
+        /*   +-----------------------+---------------+-------------------+---------------+ */
 #undef FRAME
         {UINT64_MAX},
     };

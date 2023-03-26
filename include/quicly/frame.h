@@ -72,7 +72,7 @@ extern "C" {
 #define QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY (1 + 8 + 8)
 #define QUICLY_MAX_STREAMS_FRAME_CAPACITY (1 + 8)
 #define QUICLY_PING_FRAME_CAPACITY 1
-#define QUICLY_RST_FRAME_CAPACITY (1 + 8 + 8 + 8 + 8) /* last 8 for reliable_reset_stream extension */
+#define QUICLY_RST_FRAME_CAPACITY (8 + 8 + 8 + 8 + 8) /* for reliable_reset_stream allocate space for type and reliable_size */
 #define QUICLY_DATA_BLOCKED_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STREAM_DATA_BLOCKED_FRAME_CAPACITY (1 + 8 + 8)
 #define QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY (1 + 8)
@@ -456,7 +456,11 @@ Error:
 inline uint8_t *quicly_encode_reset_stream_frame(uint8_t *dst, uint64_t stream_id, uint16_t app_error_code, uint64_t final_size,
                                                  uint64_t reliable_size)
 {
-    *dst++ = reliable_size != 0 ? QUICLY_FRAME_TYPE_RELIABLE_RESET_STREAM : QUICLY_FRAME_TYPE_RESET_STREAM;
+    if (reliable_size == 0) {
+        *dst++ = QUICLY_FRAME_TYPE_RESET_STREAM;
+    } else {
+        dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_RELIABLE_RESET_STREAM);
+    }
     dst = quicly_encodev(dst, stream_id);
     dst = quicly_encodev(dst, app_error_code);
     dst = quicly_encodev(dst, final_size);
