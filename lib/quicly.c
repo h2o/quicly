@@ -3755,7 +3755,10 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
             PTLS_LOG_ELEMENT_UNSIGNED(final_size, stream->sendstate.final_size);
             PTLS_LOG_ELEMENT_UNSIGNED(reliable_size, stream->sendstate.final_size);
         });
-        return 0;
+        len = 0;
+        is_fin = 1;
+        wrote_all = 1;
+        goto UpdateState_AllFrames;
     } else {
         uint8_t header[18], *hp = header + 1;
         hp = quicly_encodev(hp, stream->stream_id);
@@ -3834,11 +3837,16 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
     adjust_stream_frame_layout(&dst, s->dst_end, &len, &wrote_all, &s->dst);
 
     /* determine if the frame incorporates FIN */
-    if (off + len == stream->sendstate.final_size && !stream->_send_aux.is_reliable_reset) {
+    if (off + len == stream->sendstate.final_size) {
         assert(!quicly_sendstate_is_open(&stream->sendstate));
         assert(s->dst != NULL);
-        is_fin = 1;
-        *s->dst |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+        if (stream->_send_aux.is_reliable_reset) {
+            is_fin = 0;
+            wrote_all = 0;
+        } else {
+            is_fin = 1;
+            *s->dst |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+        }
     } else {
         is_fin = 0;
     }
@@ -3863,8 +3871,9 @@ UpdateState:
         PTLS_LOG_ELEMENT_UNSIGNED(len, len);
         PTLS_LOG_ELEMENT_BOOL(is_fin, is_fin);
     });
-
     QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, len, is_fin);
+
+UpdateState_AllFrames:
     /* update sendstate (and also MAX_DATA counter) */
     if (stream->sendstate.size_inflight < off + len) {
         if (stream->stream_id >= 0)
@@ -5161,7 +5170,7 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
 
     if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t bytes_missing;
-        if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, &bytes_missing)) != 0)
+        if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, frame.reliable_size, &bytes_missing)) != 0)
             return ret;
         stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
         int err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code);

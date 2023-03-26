@@ -44,6 +44,10 @@ typedef struct st_quicly_recvstate_t {
      * end_of_stream offset (or UINT64_MAX)
      */
     uint64_t eos;
+    /**
+     *
+     */
+    uint64_t reliable_size;
 } quicly_recvstate_t;
 
 void quicly_recvstate_init(quicly_recvstate_t *state);
@@ -57,7 +61,7 @@ static size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state);
  * backward from the end of given range).
  */
 int quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin, size_t max_ranges);
-int quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t eos_at, uint64_t *bytes_missing);
+int quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_size, uint64_t reliable_size, uint64_t *bytes_missing);
 
 /* inline definitions */
 
