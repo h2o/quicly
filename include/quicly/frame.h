@@ -483,7 +483,10 @@ inline int quicly_decode_reset_stream_frame(uint64_t frame_type, const uint8_t *
     if (frame_type != QUICLY_FRAME_TYPE_RESET_STREAM) {
         assert(frame_type == QUICLY_FRAME_TYPE_RELIABLE_RESET_STREAM);
         frame->reliable_size = quicly_decodev(src, end);
+    } else {
+        frame->reliable_size = 0;
     }
+
     return 0;
 Error:
     return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
