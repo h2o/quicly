@@ -876,14 +876,14 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     quicly_conn_t *conn = NULL;
                     size_t i;
                     for (i = 0; i != num_conns; ++i) {
-                        if (quicly_is_destination(conns[i], NULL, &remote.sa, &packet)) {
+                        if (quicly_is_destination(conns[i], &local.sa, &remote.sa, &packet)) {
                             conn = conns[i];
                             break;
                         }
                     }
                     if (conn != NULL) {
                         /* existing connection */
-                        quicly_receive(conn, NULL, &remote.sa, &packet);
+                        quicly_receive(conn, &local.sa, &remote.sa, &packet);
                     } else if (QUICLY_PACKET_IS_INITIAL(packet.octets.base[0])) {
                         /* long header packet; potentially a new connection */
                         quicly_address_token_plaintext_t *token = NULL, token_buf;
@@ -921,7 +921,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             break;
                         } else {
                             /* new connection */
-                            int ret = quicly_accept(&conn, &ctx, NULL, &remote.sa, &packet, token, &next_cid, NULL, NULL);
+                            int ret = quicly_accept(&conn, &ctx, &local.sa, &remote.sa, &packet, token, &next_cid, NULL, NULL);
                             if (ret == 0) {
                                 assert(conn != NULL);
                                 ++next_cid.master_id;
