@@ -6157,6 +6157,21 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         PTLS_LOG_ELEMENT_HEXDUMP(bytes, packet->octets.base, packet->octets.len);
     });
 
+    /* drop packets with invalid server tuple (note: when running as a server, `dest_addr` may not be available depending on the
+     * socket option being used */
+    if (quicly_is_client(conn)) {
+        if (compare_socket_address(src_addr, &conn->super.remote.address.sa) != 0) {
+            ret = QUICLY_ERROR_PACKET_IGNORED;
+            goto Exit;
+        }
+    } else if (dest_addr != NULL && dest_addr->sa_family != AF_UNSPEC) {
+        assert(conn->super.local.address.sa.sa_family != AF_UNSPEC);
+        if (compare_socket_address(dest_addr, &conn->super.local.address.sa) != 0) {
+            ret = QUICLY_ERROR_PACKET_IGNORED;
+            goto Exit;
+        }
+    }
+
     if (is_stateless_reset(conn, packet)) {
         ret = handle_stateless_reset(conn);
         goto Exit;
