@@ -19,12 +19,16 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#ifdef __APPLE__
+#define __APPLE_USE_RFC_3542 /* to use IPV6_PKTINFO */
+#endif
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <getopt.h>
+#include <netinet/in.h>
 #include <netinet/udp.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -416,15 +420,109 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
-static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
+/* buf should be ctx.transport_params.max_udp_payload_size bytes long */
+static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *dest, quicly_address_t *src, uint16_t destport)
+{
+    struct iovec vec = {.iov_base = buf, .iov_len = ctx.transport_params.max_udp_payload_size};
+    char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))] = {};
+    struct msghdr mess = {
+        .msg_name = &src->sa,
+        .msg_namelen = sizeof(*src),
+        .msg_iov = &vec,
+        .msg_iovlen = 1,
+        .msg_control = cmsgbuf,
+        .msg_controllen = sizeof(cmsgbuf),
+    };
+
+    ssize_t rret;
+    while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+        ;
+
+    if (rret >= 0) {
+        dest->sa.sa_family = AF_UNSPEC;
+        for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&mess); cmsg != NULL; cmsg = CMSG_NXTHDR(&mess, cmsg)) {
+#ifdef IP_PKTINFO
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO) {
+                dest->sin.sin_family = AF_INET;
+                memcpy(&dest->sin.sin_addr, CMSG_DATA(cmsg) + offsetof(struct in_pktinfo, ipi_addr), sizeof(dest->sin.sin_addr));
+                dest->sin.sin_port = htons(destport);
+            }
+#endif
+#ifdef IP_RECVDSTADDR
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_RECVDSTADDR) {
+                dest->sin.sin_family = AF_INET;
+                memcpy(&dest->sin.sin_addr, CMSG_DATA(cmsg), sizeof(dest->sin.sin_addr));
+                dest->sin.sin_port = htons(destport);
+            }
+#endif
+#ifdef IPV6_PKTINFO
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IPV6_PKTINFO) {
+                dest->sin6.sin6_family = AF_INET6;
+                memcpy(&dest->sin6.sin6_addr, CMSG_DATA(cmsg) + offsetof(struct in6_pktinfo, ipi6_addr),
+                       sizeof(dest->sin6.sin6_addr));
+                dest->sin6.sin6_port = htons(destport);
+            }
+#endif
+        }
+    }
+
+    return rret;
+}
+
+/* in6_pktinfo would be the largest structure among the ones that might be stored */
+static void set_srcaddr(struct cmsghdr *cmsg, quicly_address_t *addr, socklen_t *space)
+{
+    switch (addr->sa.sa_family) {
+    case AF_INET: {
+#ifdef IP_PKTINFO
+        struct in_pktinfo info = {.ipi_spec_dst = addr->sin.sin_addr};
+        cmsg->cmsg_level = IPPROTO_IP;
+        cmsg->cmsg_type = IP_PKTINFO;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(info));
+        memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
+        *space += CMSG_SPACE(sizeof(info));
+#elif defined(IP_SENDSRCADDR)
+        cmsg->cmsg_level = IPPROTO_IP;
+        cmsg->cmsg_type = IP_SENDSRCADDR;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(addr->sin));
+        memcpy(CMSG_DATA(cmsg), &addr->sin, sizeof(addr->sin));
+        *space += CMSG_SPACE(sizeof(addr->sin));
+#else
+        assert(!"FIXME");
+#endif
+    } break;
+    case AF_INET6: {
+        struct in6_pktinfo info = {.ipi6_addr = addr->sin6.sin6_addr};
+        cmsg->cmsg_level = IPPROTO_IP;
+        cmsg->cmsg_type = IPV6_PKTINFO;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(info));
+        memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
+        *space += CMSG_SPACE(sizeof(info));
+    } break;
+    default:
+        assert(!"FIXME");
+        break;
+    }
+}
+
+static void send_packets_default(int fd, quicly_address_t *dest, quicly_address_t *src, struct iovec *packets, size_t num_packets)
 {
     for (size_t i = 0; i != num_packets; ++i) {
-        struct msghdr mess;
-        memset(&mess, 0, sizeof(mess));
-        mess.msg_name = dest;
-        mess.msg_namelen = quicly_get_socklen(dest);
-        mess.msg_iov = &packets[i];
-        mess.msg_iovlen = 1;
+        char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
+        struct msghdr mess = {
+            .msg_name = &dest->sa,
+            .msg_namelen = quicly_get_socklen(&dest->sa),
+            .msg_iov = &packets[i],
+            .msg_iovlen = 1,
+            .msg_control = cmsgbuf,
+            .msg_controllen = sizeof(cmsgbuf),
+        };
+        socklen_t cmsglen = 0;
+        if (src != NULL && src->sa.sa_family != AF_UNSPEC)
+            set_srcaddr(CMSG_FIRSTHDR(&mess), src, &cmsglen);
+        if (cmsglen == 0)
+            mess.msg_control = NULL;
+        mess.msg_controllen = cmsglen;
         if (verbosity >= 2)
             hexdump("sendmsg", packets[i].iov_base, packets[i].iov_len);
         int ret;
@@ -441,29 +539,36 @@ static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *pa
 #define UDP_SEGMENT 103
 #endif
 
-static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
+static void send_packets_gso(int fd, quicly_address_t *dest, quicly_address_t *src, struct iovec *packets, size_t num_packets)
 {
     struct iovec vec = {.iov_base = (void *)packets[0].iov_base,
                         .iov_len = packets[num_packets - 1].iov_base + packets[num_packets - 1].iov_len - packets[0].iov_base};
+    char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(uint16_t))];
     struct msghdr mess = {
         .msg_name = dest,
-        .msg_namelen = quicly_get_socklen(dest),
+        .msg_namelen = quicly_get_socklen(&dest->sa),
         .msg_iov = &vec,
         .msg_iovlen = 1,
+        .msg_control = cmsgbuf,
+        .msg_controllen = sizeof(cmsgbuf),
     };
 
-    union {
-        struct cmsghdr hdr;
-        char buf[CMSG_SPACE(sizeof(uint16_t))];
-    } cmsg;
-    if (num_packets != 1) {
-        cmsg.hdr.cmsg_level = SOL_UDP;
-        cmsg.hdr.cmsg_type = UDP_SEGMENT;
-        cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(uint16_t));
-        *(uint16_t *)CMSG_DATA(&cmsg.hdr) = packets[0].iov_len;
-        mess.msg_control = &cmsg;
-        mess.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(uint16_t));
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&mess);
+    socklen_t cmsglen = 0;
+    if (src != NULL && src->sa.sa_family != AF_UNSPEC) {
+        set_srcaddr(cmsg, src, &cmsglen);
+        cmsg = CMSG_NXTHDR(&mess, cmsg);
     }
+    if (num_packets != 1) {
+        cmsg->cmsg_level = SOL_UDP;
+        cmsg->cmsg_type = UDP_SEGMENT;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+        *(uint16_t *)CMSG_DATA(cmsg) = packets[0].iov_len;
+        cmsglen += CMSG_SPACE(sizeof(uint16_t));
+    }
+    if (cmsglen == 0)
+        mess.msg_control = NULL;
+    mess.msg_controllen = cmsglen;
 
     int ret;
     while ((ret = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
@@ -474,12 +579,12 @@ static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packet
 
 #endif
 
-static void (*send_packets)(int, struct sockaddr *, struct iovec *, size_t) = send_packets_default;
+static void (*send_packets)(int, quicly_address_t *, quicly_address_t *, struct iovec *, size_t) = send_packets_default;
 
-static void send_one_packet(int fd, struct sockaddr *dest, const void *payload, size_t payload_len)
+static void send_one_packet(int fd, quicly_address_t *dest, quicly_address_t *src, const void *payload, size_t payload_len)
 {
     struct iovec vec = {.iov_base = (void *)payload, .iov_len = payload_len};
-    send_packets(fd, dest, &vec, 1);
+    send_packets(fd, dest, src, &vec, 1);
 }
 
 static int send_pending(int fd, quicly_conn_t *conn)
@@ -491,7 +596,7 @@ static int send_pending(int fd, quicly_conn_t *conn)
     int ret;
 
     if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0)
-        send_packets(fd, &dest.sa, packets, num_packets);
+        send_packets(fd, &dest, &src, packets, num_packets);
 
     return ret;
 }
@@ -578,19 +683,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
                 uint8_t buf[ctx.transport_params.max_udp_payload_size];
-                struct msghdr mess;
-                struct sockaddr sa;
-                struct iovec vec;
-                memset(&mess, 0, sizeof(mess));
-                mess.msg_name = &sa;
-                mess.msg_namelen = sizeof(sa);
-                vec.iov_base = buf;
-                vec.iov_len = sizeof(buf);
-                mess.msg_iov = &vec;
-                mess.msg_iovlen = 1;
-                ssize_t rret;
-                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-                    ;
+                quicly_address_t dest, src;
+                ssize_t rret = receive_datagram(fd, buf, &dest, &src, ntohs(local.sin_port));
                 if (rret <= 0)
                     break;
                 if (verbosity >= 2)
@@ -600,7 +694,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                     quicly_decoded_packet_t packet;
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
-                    quicly_receive(conn, NULL, &sa, &packet);
+                    quicly_receive(conn, &dest.sa, &src.sa, &packet);
                     if (send_datagram_frame && quicly_connection_is_ready(conn)) {
                         const char *message = "hello datagram!";
                         ptls_iovec_t datagram = ptls_iovec_init(message, strlen(message));
@@ -751,20 +845,11 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
+                quicly_address_t local, remote;
                 uint8_t buf[ctx.transport_params.max_udp_payload_size];
-                struct msghdr mess;
-                quicly_address_t remote;
-                struct iovec vec;
-                memset(&mess, 0, sizeof(mess));
-                mess.msg_name = &remote.sa;
-                mess.msg_namelen = sizeof(remote);
-                vec.iov_base = buf;
-                vec.iov_len = sizeof(buf);
-                mess.msg_iov = &vec;
-                mess.msg_iovlen = 1;
-                ssize_t rret;
-                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-                    ;
+                ssize_t rret = receive_datagram(fd, buf, &local, &remote,
+                                                ntohs(sa->sa_family == AF_INET ? ((struct sockaddr_in *)sa)->sin_port
+                                                                               : ((struct sockaddr_in6 *)sa)->sin6_port));
                 if (rret == -1)
                     break;
                 if (verbosity >= 2)
@@ -780,7 +865,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             size_t payload_len = quicly_send_version_negotiation(&ctx, packet.cid.src, packet.cid.dest.encrypted,
                                                                                  quicly_supported_versions, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote.sa, payload, payload_len);
+                            send_one_packet(fd, &remote, &local, payload, payload_len);
                             break;
                         }
                         /* there is no way to send response to these v1 packets */
@@ -817,7 +902,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                 size_t payload_len = quicly_send_close_invalid_token(&ctx, packet.version, packet.cid.src,
                                                                                      packet.cid.dest.encrypted, err_desc, payload);
                                 assert(payload_len != SIZE_MAX);
-                                send_one_packet(fd, &remote.sa, payload, payload_len);
+                                send_one_packet(fd, &remote, NULL, payload, payload_len);
                             }
                         }
                         if (enforce_retry && token == NULL && packet.cid.dest.encrypted.len >= 8) {
@@ -832,7 +917,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                 ptls_iovec_init(new_server_cid, sizeof(new_server_cid)), packet.cid.dest.encrypted,
                                 ptls_iovec_init(NULL, 0), ptls_iovec_init(NULL, 0), NULL, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote.sa, payload, payload_len);
+                            send_one_packet(fd, &remote, NULL, payload, payload_len);
                             break;
                         } else {
                             /* new connection */
@@ -855,7 +940,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
                             size_t payload_len = quicly_send_stateless_reset(&ctx, packet.cid.dest.encrypted.base, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote.sa, payload, payload_len);
+                            send_one_packet(fd, &remote, NULL, payload, payload_len);
                         }
                     }
                 }
@@ -1482,6 +1567,32 @@ int main(int argc, char **argv)
             perror("Warning: setsockopt(IP_MTU_DISCOVER) failed");
     }
 #endif
+    switch (sa.ss_family) {
+    case AF_INET: {
+#ifdef IP_PKTINFO
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IP_PKTINFO) failed");
+            return 1;
+        }
+#elif defined(IP_RECVDSTADDR)
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_RECVDSTADDR, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IP_RECVDSTADDR) failed");
+            return 1;
+        }
+#endif
+    } break;
+    case AF_INET6: {
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IPV6_RECVPKTINFO, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IPV6_RECVPKTINNFO) failed");
+            return 1;
+        }
+    } break;
+    default:
+        break;
+    }
 
     return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, host);
 }
