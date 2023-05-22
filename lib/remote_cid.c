@@ -180,7 +180,7 @@ int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, 
                                const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to,
                                uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT], size_t *num_unregistered_seqs)
 {
-    quicly_remote_cid_t backup_cid = set->cids[0]; // preserve one valid entry in cids[0] to handle protocol violation
+    quicly_remote_cid_set_t backup = *set; /* preserve current state so that it can be restored to notify protocol violation */
     int ret;
 
     assert(sequence >= retire_prior_to);
@@ -193,7 +193,7 @@ int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, 
     if ((ret = do_register(set, sequence, cid, cid_len, srt)) != 0) {
         /* restore the backup and send the error */
         if (!set->cids[0].is_active)
-            set->cids[0] = backup_cid;
+            *set = backup;
         return ret;
     }
 
