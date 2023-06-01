@@ -372,6 +372,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
         if (reqs[num_resp_received].path == NULL) {
             if (request_interval != 0) {
                 enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
+                num_resp_received = 0;
             } else {
                 dump_stats(stderr, stream->conn);
                 quicly_close(stream->conn, 0, "");
