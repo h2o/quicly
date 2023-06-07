@@ -422,7 +422,7 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
 /* buf should be ctx.transport_params.max_udp_payload_size bytes long */
-static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *dest, quicly_address_t *src, uint16_t destport)
+static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *dest, quicly_address_t *src)
 {
     struct iovec vec = {.iov_base = buf, .iov_len = ctx.transport_params.max_udp_payload_size};
     char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))] = {};
@@ -434,8 +434,13 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *dest, quicl
         .msg_control = cmsgbuf,
         .msg_controllen = sizeof(cmsgbuf),
     };
-
+    quicly_address_t localaddr = {};
+    socklen_t localaddrlen = sizeof(localaddr);
     ssize_t rret;
+
+    if (getsockname(fd, &localaddr.sa, &localaddrlen) != 0)
+        perror("getsockname failed");
+
     while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
         ;
 
@@ -446,14 +451,14 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *dest, quicl
             if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO) {
                 dest->sin.sin_family = AF_INET;
                 memcpy(&dest->sin.sin_addr, CMSG_DATA(cmsg) + offsetof(struct in_pktinfo, ipi_addr), sizeof(dest->sin.sin_addr));
-                dest->sin.sin_port = htons(destport);
+                dest->sin.sin_port = localaddr.sin.sin_port;
             }
 #endif
 #ifdef IP_RECVDSTADDR
             if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_RECVDSTADDR) {
                 dest->sin.sin_family = AF_INET;
                 memcpy(&dest->sin.sin_addr, CMSG_DATA(cmsg), sizeof(dest->sin.sin_addr));
-                dest->sin.sin_port = htons(destport);
+                dest->sin.sin_port = localaddr.sin.sin_port;
             }
 #endif
 #ifdef IPV6_PKTINFO
@@ -461,7 +466,7 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *dest, quicl
                 dest->sin6.sin6_family = AF_INET6;
                 memcpy(&dest->sin6.sin6_addr, CMSG_DATA(cmsg) + offsetof(struct in6_pktinfo, ipi6_addr),
                        sizeof(dest->sin6.sin6_addr));
-                dest->sin6.sin6_port = htons(destport);
+                dest->sin6.sin6_port = localaddr.sin6.sin6_port;
             }
 #endif
         }
@@ -637,15 +642,24 @@ static void enqueue_requests(quicly_conn_t *conn)
     enqueue_requests_at = INT64_MAX;
 }
 
+static volatile int got_sigusr1 = 0;
+
+static void on_sigusr1(int unused)
+{
+    got_sigusr1 = 1;
+}
+
 static int run_client(int fd, struct sockaddr *sa, const char *host)
 {
-    struct sockaddr_in local;
+    quicly_address_t local;
     int ret;
     quicly_conn_t *conn = NULL;
 
+    signal(SIGUSR1, on_sigusr1);
+
     memset(&local, 0, sizeof(local));
-    local.sin_family = AF_INET;
-    if (bind(fd, (void *)&local, sizeof(local)) != 0) {
+    local.sa.sa_family = sa->sa_family;
+    if (bind(fd, &local.sa, local.sa.sa_family == AF_INET ? sizeof(local.sin) : sizeof(local.sin6)) != 0) {
         perror("bind(2) failed");
         return 1;
     }
@@ -679,13 +693,24 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             FD_ZERO(&readfds);
             FD_SET(fd, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
+        if (got_sigusr1) {
+            got_sigusr1 = 0;
+            int newfd = socket(local.sa.sa_family, SOCK_DGRAM, IPPROTO_UDP);
+            if (newfd != -1) {
+                close(fd);
+                fcntl(newfd, F_SETFL, O_NONBLOCK);
+                fd = newfd;
+            } else {
+                fprintf(stderr, "socket(2) failed:%s\n", strerror(errno));
+            }
+        }
         if (enqueue_requests_at <= ctx.now->cb(ctx.now))
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
                 uint8_t buf[ctx.transport_params.max_udp_payload_size];
                 quicly_address_t dest, src;
-                ssize_t rret = receive_datagram(fd, buf, &dest, &src, ntohs(local.sin_port));
+                ssize_t rret = receive_datagram(fd, buf, &dest, &src);
                 if (rret <= 0)
                     break;
                 if (verbosity >= 2)
@@ -848,9 +873,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
             while (1) {
                 quicly_address_t local, remote;
                 uint8_t buf[ctx.transport_params.max_udp_payload_size];
-                ssize_t rret = receive_datagram(fd, buf, &local, &remote,
-                                                ntohs(sa->sa_family == AF_INET ? ((struct sockaddr_in *)sa)->sin_port
-                                                                               : ((struct sockaddr_in6 *)sa)->sin6_port));
+                ssize_t rret = receive_datagram(fd, buf, &local, &remote);
                 if (rret == -1)
                     break;
                 if (verbosity >= 2)
