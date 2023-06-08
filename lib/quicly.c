@@ -295,7 +295,7 @@ struct st_quicly_conn_t {
          */
         int64_t last_retransmittable_sent_at;
         /**
-         * when to send an ACK, or other frames used for managing the connection
+         * when to send an ACK, connection close frames or to destroy the connection
          */
         int64_t send_ack_at;
         /**
