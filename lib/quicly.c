@@ -326,12 +326,13 @@ struct st_quicly_conn_t {
          * bit vector indicating if there's any pending crypto data (the insignificant 4 bits), or other non-stream data
          */
         uint8_t pending_flows;
-#define QUICLY_PENDING_FLOW_NEW_TOKEN_BIT (1 << 5)
-#define QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT (1 << 6)
+/* The flags below indicate if the respective frames have to be sent or not. There are no false positives. */
+#define QUICLY_PENDING_FLOW_NEW_TOKEN_BIT (1 << 4)
+#define QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT (1 << 5)
 /* Indicates that PATH_CHALLENGE, PATH_RESPONSE, MAX_STREAMS, MAX_DATA, DATA_BLOCKED, STREAMS_BLOCKED, NEW_CONNECTION_ID _might_
- * have to be sent. Contrary to NEW_TOKEN_BIT and HANDSHAKE_DONE_BIT, there could be false positives; logic for sending each of
- * these frames have the capability of detecting such false positives. This bit consolidates the information as an optimization. */
-#define QUICLY_PENDING_FLOW_OTHERS_BIT (1 << 7)
+ * have to be sent. There could be false positives; logic for sending each of these frames have the capability of detecting such
+ * false positives. The purpose of this bit is to consolidate information as an optimization. */
+#define QUICLY_PENDING_FLOW_OTHERS_BIT (1 << 6)
         /**
          * pending RETIRE_CONNECTION_ID frames to be sent
          */
@@ -843,6 +844,8 @@ static void resched_stream_data(quicly_stream_t *stream)
     if (stream->stream_id < 0) {
         assert(-4 <= stream->stream_id);
         uint8_t mask = 1 << -(1 + stream->stream_id);
+        assert((mask & (QUICLY_PENDING_FLOW_NEW_TOKEN_BIT | QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT |
+                        QUICLY_PENDING_FLOW_OTHERS_BIT)) == 0);
         if (stream->sendstate.pending.num_ranges != 0) {
             stream->conn->egress.pending_flows |= mask;
         } else {
