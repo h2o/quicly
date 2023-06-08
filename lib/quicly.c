@@ -325,7 +325,7 @@ struct st_quicly_conn_t {
         /**
          * bit vector indicating if there's any pending crypto data (the insignificant 4 bits), or other non-stream data
          */
-        uint16_t pending_flows;
+        uint8_t pending_flows;
 #define QUICLY_PENDING_FLOW_NEW_TOKEN_BIT (1 << 5)
 #define QUICLY_PENDING_FLOW_HANDSHAKE_DONE_BIT (1 << 6)
 /* Indicates that PATH_CHALLENGE, PATH_RESPONSE, MAX_STREAMS, MAX_DATA, DATA_BLOCKED, STREAMS_BLOCKED, NEW_CONNECTION_ID _might_
