@@ -560,10 +560,6 @@ struct _st_quicly_conn_public_t {
          */
         quicly_local_cid_set_t cid_set;
         /**
-         * the local address (may be AF_UNSPEC)
-         */
-        quicly_address_t address;
-        /**
          * the SCID used in long header packets. Equivalent to local_cid[seq=0]. Retaining the value separately is the easiest way
          * of staying away from the complexity caused by remote peer sending RCID frames before the handshake concludes.
          */
@@ -578,10 +574,6 @@ struct _st_quicly_conn_public_t {
          * CIDs received from the remote peer
          */
         quicly_remote_cid_set_t cid_set;
-        /**
-         * the remote address (cannot be AF_UNSPEC)
-         */
-        quicly_address_t address;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
@@ -927,11 +919,11 @@ static quicly_stream_id_t quicly_get_remote_next_stream_id(quicly_conn_t *conn, 
 /**
  * Returns the local address of the connection. This may be AF_UNSPEC, indicating that the operating system is choosing the address.
  */
-static struct sockaddr *quicly_get_sockname(quicly_conn_t *conn);
+struct sockaddr *quicly_get_sockname(quicly_conn_t *conn);
 /**
  * Returns the remote address of the connection. This would never be AF_UNSPEC.
  */
-static struct sockaddr *quicly_get_peername(quicly_conn_t *conn);
+struct sockaddr *quicly_get_peername(quicly_conn_t *conn);
 /**
  *
  */
@@ -1083,8 +1075,8 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
  */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *dest_addr,
                    struct sockaddr *src_addr, const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
-                   ptls_handshake_properties_t *handshake_properties,
-                   const quicly_transport_parameters_t *resumed_transport_params, void *appdata);
+                   ptls_handshake_properties_t *handshake_properties, const quicly_transport_parameters_t *resumed_transport_params,
+                   void *appdata);
 /**
  * accepts a new connection
  * @param new_cid        The CID to be used for the connection. When an error is being returned, the application can reuse the CID
@@ -1352,18 +1344,6 @@ inline quicly_stream_id_t quicly_get_remote_next_stream_id(quicly_conn_t *conn, 
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return uni ? c->remote.uni.next_stream_id : c->remote.bidi.next_stream_id;
-}
-
-inline struct sockaddr *quicly_get_sockname(quicly_conn_t *conn)
-{
-    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->local.address.sa;
-}
-
-inline struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
-{
-    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->remote.address.sa;
 }
 
 inline uint32_t quicly_get_protocol_version(quicly_conn_t *conn)

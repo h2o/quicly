@@ -45,6 +45,7 @@ provider quicly {
     probe send(struct st_quicly_conn_t *conn, int64_t at, int state, const char *dcid);
     probe receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const void *bytes, size_t bytes_len);
     probe version_switch(struct st_quicly_conn_t *conn, int64_t at, uint32_t new_version);
+    probe migrate_active_path(struct st_quicly_conn_t *conn, int64_t at);
     probe idle_timeout(struct st_quicly_conn_t *conn, int64_t at);
     probe handshake_timeout(struct st_quicly_conn_t *conn, int64_t at, int64_t elapsed, uint32_t rtt_smoothed);
     probe initial_handshake_packet_exceed(struct st_quicly_conn_t *conn, int64_t at, uint64_t num_packets);
@@ -125,6 +126,12 @@ provider quicly {
 
     probe stream_data_blocked_send(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t maximum);
     probe stream_data_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t maximum);
+
+    probe path_challenge_send(struct st_quicly_conn_t *conn, int64_t at, const void *bytes, size_t bytes_len);
+    probe path_challenge_receive(struct st_quicly_conn_t *conn, int64_t at, const void *bytes, size_t bytes_len);
+
+    probe path_response_send(struct st_quicly_conn_t *conn, int64_t at, const void *bytes, size_t bytes_len);
+    probe path_response_receive(struct st_quicly_conn_t *conn, int64_t at, const void *bytes, size_t bytes_len);
 
     probe datagram_send(struct st_quicly_conn_t *conn, int64_t at, const void *payload, size_t payload_len);
     probe datagram_receive(struct st_quicly_conn_t *conn, int64_t at, const void *payload, size_t payload_len);
