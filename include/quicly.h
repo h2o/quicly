@@ -327,6 +327,10 @@ struct st_quicly_context_t {
      */
     uint64_t max_initial_handshake_packets;
     /**
+     * maximum number of probe packets (i.e., packets carrying PATH_CHALLENGE frames) to be sent before calling a path unreachable
+     */
+    uint64_t max_probe_packets;
+    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;

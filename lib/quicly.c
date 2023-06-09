@@ -4870,8 +4870,6 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 path->path_challenge.num_sent += 1;
                 path->path_challenge.send_at =
                     conn->stash.now + ((3 * conn->super.ctx->loss.default_initial_rtt) << (path->path_challenge.num_sent - 1));
-                if (conn->egress.send_probe_at > path->path_challenge.send_at)
-                    conn->egress.send_probe_at = path->path_challenge.send_at;
             }
             if (path->path_response.send_) {
                 if ((ret = send_path_challenge(conn, s, 1, path->path_response.data)) != 0)
@@ -5024,6 +5022,7 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
                                .max_datagrams = *num_datagrams,
                                .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
                                .first_packet_number = conn->egress.packet_number};
+    size_t num_path_challenges_sent_upon_entry = conn->super.stats.num_frames_sent.path_challenge;
     int ret;
 
     lock_now(conn, 0);
@@ -5083,12 +5082,17 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
         goto Exit;
     }
 
-    /* try emitting a probe packet on one of the backup paths, or... */
+    /* try emitting one probe packet on one of the backup paths, or ... (note: API of `quicly_send` allows us to send packets on no
+     * more than one path at a time) */
     if (conn->egress.send_probe_at <= conn->stash.now) {
-        conn->egress.send_probe_at = INT64_MAX; /* `do_send` shortens this value */
         for (s.path_index = 1; s.path_index < PTLS_ELEMENTSOF(conn->paths); ++s.path_index) {
             if (conn->paths[s.path_index] == NULL || conn->stash.now < conn->paths[s.path_index]->path_challenge.send_at)
                 continue;
+            if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
+                free(conn->paths[s.path_index]);
+                conn->paths[s.path_index] = NULL;
+                continue;
+            }
             /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
             if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
                 free(conn->paths[s.path_index]);
@@ -5115,6 +5119,14 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
 Exit:
     if (s.path_index == 0)
         clear_datagram_frame_payloads(conn);
+    if (num_path_challenges_sent_upon_entry != conn->super.stats.num_frames_sent.path_challenge) {
+        /* if we've sent PATH_CHALLENGE, update send_probe_at */
+        conn->egress.send_probe_at = INT64_MAX;
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+            if (conn->paths[i] != NULL && conn->egress.send_probe_at > conn->paths[i]->path_challenge.send_at)
+                conn->egress.send_probe_at = conn->paths[i]->path_challenge.send_at;
+        }
+    }
     if (s.num_datagrams != 0) {
         *dest = conn->paths[s.path_index]->address.remote;
         *src = conn->paths[s.path_index]->address.local;
