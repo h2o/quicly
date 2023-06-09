@@ -203,6 +203,7 @@ struct st_quicly_conn_path_t {
      */
     struct {
         int64_t send_at;
+        uint64_t num_sent;
         uint8_t data[QUICLY_PATH_CHALLENGE_DATA_LEN];
     } path_challenge;
     /**
@@ -4863,9 +4864,12 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             struct st_quicly_conn_path_t *path = conn->paths[s->path_index];
             assert(path != NULL);
             if (path->path_challenge.send_at <= conn->stash.now) {
+                /* emit path challenge frame, doing exponential back off using PTO(initial_rtt) */
                 if ((ret = send_path_challenge(conn, s, 0, path->path_challenge.data)) != 0)
                     goto Exit;
-                path->path_challenge.send_at = conn->stash.now + 500; /* FIXME use proper value */
+                path->path_challenge.num_sent += 1;
+                path->path_challenge.send_at =
+                    conn->stash.now + ((3 * conn->super.ctx->loss.default_initial_rtt) << (path->path_challenge.num_sent - 1));
                 if (conn->egress.send_probe_at > path->path_challenge.send_at)
                     conn->egress.send_probe_at = path->path_challenge.send_at;
             }
