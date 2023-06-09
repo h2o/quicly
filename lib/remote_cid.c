@@ -93,8 +93,6 @@ static int do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const ui
 
 static void do_unregister(quicly_remote_cid_set_t *set, size_t idx_to_unreg)
 {
-    assert(set->cids[idx_to_unreg].state != QUICLY_REMOTE_CID_UNAVAILABLE);
-
     set->cids[idx_to_unreg].state = QUICLY_REMOTE_CID_UNAVAILABLE;
     set->cids[idx_to_unreg].sequence = ++set->_largest_sequence_expected;
 }
@@ -116,10 +114,9 @@ static size_t unregister_prior_to(quicly_remote_cid_set_t *set, uint64_t seq_unr
     size_t num_unregistered = 0;
 
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        if (set->cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE && set->cids[i].sequence < seq_unreg_prior_to) {
+        if (set->cids[i].sequence < seq_unreg_prior_to) {
             unregistered_seqs[num_unregistered++] = set->cids[i].sequence;
             do_unregister(set, i);
-            continue;
         }
     }
 

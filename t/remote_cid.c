@@ -152,15 +152,16 @@ void test_received_cid(void)
     TEST_SET({6, QUICLY_REMOTE_CID_UNAVAILABLE}, {7, QUICLY_REMOTE_CID_AVAILABLE}, {5, QUICLY_REMOTE_CID_AVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
 
-    /* unregister prior to 8 -- seq=5,7 should be unregistered at this moment */
+    /* unregister prior to 8 -- seq=5-7 should be unregistered at this moment */
     ok(quicly_remote_cid_register(&set, 8, cids[8], CID_LEN, srts[8], 8, unregistered_seqs, &num_unregistered) == 0);
     /* active CIDs = {*8} */
-    ok(num_unregistered == 2);
+    ok(num_unregistered == 3);
     /* check unregistered_seqs */
-    ok(unregistered_seqs[0] == 7);
-    ok(unregistered_seqs[1] == 5);
+    ok(unregistered_seqs[0] == 6);
+    ok(unregistered_seqs[1] == 7);
+    ok(unregistered_seqs[2] == 5);
     /* active CIDs = {(6), (9), (10), 8} */
-    TEST_SET({6, QUICLY_REMOTE_CID_UNAVAILABLE}, {9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE},
+    TEST_SET({9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE}, {11, QUICLY_REMOTE_CID_UNAVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
 
     /* register 11 */
