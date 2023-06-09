@@ -160,12 +160,14 @@ void test_received_cid(void)
     ok(unregistered_seqs[0] == 6);
     ok(unregistered_seqs[1] == 7);
     ok(unregistered_seqs[2] == 5);
-    /* active CIDs = {(6), (9), (10), 8} */
+    /* active CIDs = {(9), (10), (11), 8} */
     TEST_SET({9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE}, {11, QUICLY_REMOTE_CID_UNAVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
 
     /* register 11 */
     ok(quicly_remote_cid_register(&set, 11, cids[11], CID_LEN, srts[11], 8, unregistered_seqs, &num_unregistered) == 0);
     ok(num_unregistered == 0);
-    /* active CIDs */
+    /* active CIDs = {(9), (10), (11), 8} */
+    TEST_SET({9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE}, {11, QUICLY_REMOTE_CID_AVAILABLE},
+             {8, QUICLY_REMOTE_CID_AVAILABLE});
 }
