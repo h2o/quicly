@@ -7182,19 +7182,21 @@ const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {
 
 void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
 {
-#if QUICLY_USE_DTRACE
-    char buf[1024];
-    va_list args;
+    if (QUICLY_DEBUG_MESSAGE_ENABLED() || ptls_log.is_active) {
+        char buf[1024];
+        va_list args;
 
-    if (!QUICLY_DEBUG_MESSAGE_ENABLED())
-        return;
+        va_start(args, fmt);
+        vsnprintf(buf, sizeof(buf), fmt, args);
+        va_end(args);
 
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-
-    QUICLY_DEBUG_MESSAGE(conn, function, line, buf);
-#endif
+        QUICLY_DEBUG_MESSAGE(conn, function, line, buf);
+        QUICLY_LOG_CONN(debug_message, conn, {
+            PTLS_LOG_ELEMENT_UNSAFESTR(function, function, strlen(function));
+            PTLS_LOG_ELEMENT_SIGNED(line, line);
+            PTLS_LOG_ELEMENT_UNSAFESTR(message, buf, strlen(buf));
+        });
+    }
 }
 
 const uint32_t quicly_supported_versions[] = {QUICLY_PROTOCOL_VERSION_1, QUICLY_PROTOCOL_VERSION_DRAFT29,
