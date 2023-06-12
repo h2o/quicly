@@ -1685,6 +1685,22 @@ static inline void update_open_count(quicly_context_t *ctx, ssize_t delta)
         ctx->update_open_count->cb(ctx->update_open_count, delta);
 }
 
+static void recalc_send_probe_at(quicly_conn_t *conn)
+{
+    conn->egress.send_probe_at = INT64_MAX;
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        if (conn->paths[i] == NULL)
+            continue;
+        if (conn->egress.send_probe_at > conn->paths[i]->path_challenge.send_at)
+            conn->egress.send_probe_at = conn->paths[i]->path_challenge.send_at;
+        if (conn->paths[i]->path_response.send_) {
+            conn->egress.send_probe_at = 0;
+            break;
+        }
+    }
+}
+
 void quicly_free(quicly_conn_t *conn)
 {
     lock_now(conn, 0);
@@ -3322,6 +3338,10 @@ struct st_quicly_send_context_t {
      * DCID to be used for the path
      */
     quicly_cid_t *dcid;
+    /**
+     * if `conn->egress.send_probe_at` should be recalculated
+     */
+    unsigned recalc_send_probe_at : 1;
 };
 
 static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
@@ -4873,11 +4893,13 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 path->path_challenge.num_sent += 1;
                 path->path_challenge.send_at =
                     conn->stash.now + ((3 * conn->super.ctx->loss.default_initial_rtt) << (path->path_challenge.num_sent - 1));
+                s->recalc_send_probe_at = 1;
             }
             if (path->path_response.send_) {
                 if ((ret = send_path_challenge(conn, s, 1, path->path_response.data)) != 0)
                     goto Exit;
                 path->path_response.send_ = 0;
+                s->recalc_send_probe_at = 1;
             }
         }
         /* non probing frames are sent only on path zero */
@@ -5025,8 +5047,6 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
                                .max_datagrams = *num_datagrams,
                                .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
                                .first_packet_number = conn->egress.packet_number};
-    uint64_t num_path_probes_sent_upon_entry =
-        conn->super.stats.num_frames_sent.path_challenge + conn->super.stats.num_frames_sent.path_response;
     int ret;
 
     lock_now(conn, 0);
@@ -5095,12 +5115,14 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
                 free(conn->paths[s.path_index]);
                 conn->paths[s.path_index] = NULL;
+                s.recalc_send_probe_at = 1;
                 continue;
             }
             /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
             if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
                 free(conn->paths[s.path_index]);
                 conn->paths[s.path_index] = NULL;
+                s.recalc_send_probe_at = 1;
                 continue;
             }
             if ((ret = do_send(conn, &s)) != 0)
@@ -5123,15 +5145,8 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
 Exit:
     if (s.path_index == 0)
         clear_datagram_frame_payloads(conn);
-    if (num_path_probes_sent_upon_entry !=
-        conn->super.stats.num_frames_sent.path_challenge + conn->super.stats.num_frames_sent.path_response) {
-        /* if we've sent PATH_CHALLENGE, update send_probe_at */
-        conn->egress.send_probe_at = INT64_MAX;
-        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-            if (conn->paths[i] != NULL && conn->egress.send_probe_at > conn->paths[i]->path_challenge.send_at)
-                conn->egress.send_probe_at = conn->paths[i]->path_challenge.send_at;
-        }
-    }
+    if (s.recalc_send_probe_at)
+        recalc_send_probe_at(conn);
     if (s.num_datagrams != 0) {
         *dest = conn->paths[s.path_index]->address.remote;
         *src = conn->paths[s.path_index]->address.local;
@@ -6719,6 +6734,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             free(conn->paths[0]);
             conn->paths[0] = conn->paths[path_index];
             conn->paths[path_index] = NULL;
+            recalc_send_probe_at(conn);
         }
         break;
     default:
