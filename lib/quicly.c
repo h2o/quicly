@@ -5106,6 +5106,8 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
         s.path_index = 0;
         if ((ret = do_send(conn, &s)) != 0)
             goto Exit;
+    } else {
+        ret = 0;
     }
 
     assert_consistency(conn, 1);
