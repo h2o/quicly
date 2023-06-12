@@ -4699,6 +4699,9 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         conn->application->one_rtt_writable = 1;
         open_blocked_streams(conn, 1);
         open_blocked_streams(conn, 0);
+        if (quicly_linklist_is_linked(&conn->egress.pending_streams.blocked.bidi) ||
+            quicly_linklist_is_linked(&conn->egress.pending_streams.blocked.uni))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
         /* send the first resumption token using the 0.5 RTT window */
         if (!quicly_is_client(conn) && conn->super.ctx->generate_resumption_token != NULL) {
             ret = quicly_send_resumption_token(conn);
@@ -6779,7 +6782,10 @@ int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
         stream->streams_blocked = 1;
         quicly_linklist_insert((uni ? &conn->egress.pending_streams.blocked.uni : &conn->egress.pending_streams.blocked.bidi)->prev,
                                &stream->_send_aux.pending_link.control);
-        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        /* schedule the emission of STREAMS_BLOCKED if application write key is available (otherwise the scheduling is done when
+         * the key becomes available) */
+        if (stream->conn->application != NULL && stream->conn->application->cipher.egress.key.aead != NULL)
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
 
     /* application-layer initialization */
