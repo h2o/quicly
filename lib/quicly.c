@@ -5025,7 +5025,8 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
                                .max_datagrams = *num_datagrams,
                                .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
                                .first_packet_number = conn->egress.packet_number};
-    size_t num_path_challenges_sent_upon_entry = conn->super.stats.num_frames_sent.path_challenge;
+    uint64_t num_path_probes_sent_upon_entry =
+        conn->super.stats.num_frames_sent.path_challenge + conn->super.stats.num_frames_sent.path_response;
     int ret;
 
     lock_now(conn, 0);
@@ -5122,7 +5123,8 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
 Exit:
     if (s.path_index == 0)
         clear_datagram_frame_payloads(conn);
-    if (num_path_challenges_sent_upon_entry != conn->super.stats.num_frames_sent.path_challenge) {
+    if (num_path_probes_sent_upon_entry !=
+        conn->super.stats.num_frames_sent.path_challenge + conn->super.stats.num_frames_sent.path_response) {
         /* if we've sent PATH_CHALLENGE, update send_probe_at */
         conn->egress.send_probe_at = INT64_MAX;
         for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
