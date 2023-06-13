@@ -1746,7 +1746,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
     if (QUICLY_NEW_PATH_ENABLED() || ptls_log.is_active) {
         char remote[sizeof(LONGEST_ADDRESS_STR)];
         stringify_address(remote, &path->address.remote.sa);
-        QUICLY_NEW_PATH(conn, path_index, remote);
+        QUICLY_NEW_PATH(conn, conn->stash.now, path_index, remote);
         QUICLY_LOG_CONN(new_path, conn, {
             PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index);
             PTLS_LOG_ELEMENT_SAFESTR(remote, remote);
@@ -1756,15 +1756,30 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
     return 0;
 }
 
-static void free_path(quicly_conn_t *conn, size_t path_index)
+/**
+ * if is_promote is set, paths[0] (the default path) is freed and the path specified by `path_index` is promoted
+ * if is_promote is not_set, paths[path_index] is freed
+ */
+static void free_path(quicly_conn_t *conn, int is_promote, size_t path_index)
 {
-    if (conn->paths[path_index] == NULL)
-        return;
+    struct st_quicly_conn_path_t *path;
 
-    QUICLY_DELETE_PATH(conn, path_index);
-    QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
-    free(conn->paths[path_index]);
-    conn->paths[path_index] = NULL;
+    /* fetch and detatch the path object to be freed */
+    if (is_promote) {
+        QUICLY_PROMOTE_PATH(conn, conn->stash.now, path_index);
+        QUICLY_LOG_CONN(promote_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
+        path = conn->paths[0];
+        conn->paths[0] = conn->paths[path_index];
+        conn->paths[path_index] = NULL;
+    } else {
+        QUICLY_DELETE_PATH(conn, conn->stash.now, path_index);
+        QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
+        path = conn->paths[path_index];
+        conn->paths[path_index] = NULL;
+    }
+
+    /* deinstantiate */
+    free(path);
 }
 
 static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
@@ -1789,7 +1804,8 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
     }
 
     /* free existing path info */
-    free_path(conn, *path_index);
+    if (conn->paths[*path_index] != NULL)
+        free_path(conn, 0, *path_index);
 
     /* initialize new path info */
     if ((ret = new_path(conn, *path_index, remote_addr, local_addr)) != 0)
@@ -1861,8 +1877,10 @@ void quicly_free(quicly_conn_t *conn)
         ptls_free(conn->crypto.tls);
     }
 
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i)
-        free_path(conn, i);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        if (conn->paths[i] != NULL)
+            free_path(conn, 0, i);
+    }
 
     unlock_now(conn);
 
@@ -5174,13 +5192,13 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             if (conn->paths[s.path_index] == NULL || conn->stash.now < conn->paths[s.path_index]->path_challenge.send_at)
                 continue;
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
-                free_path(conn, s.path_index);
+                free_path(conn, 0, s.path_index);
                 s.recalc_send_probe_at = 1;
                 continue;
             }
             /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
             if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
-                free_path(conn, s.path_index);
+                free_path(conn, 0, s.path_index);
                 s.recalc_send_probe_at = 1;
                 continue;
             }
@@ -6788,13 +6806,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             !conn->paths[path_index]->probe_only) {
             if (conn->super.remote.cid_set.cids[0].cid.len != 0)
                 retire_connection_id(conn, 0);
-            free_path(conn, 0);
-            free(conn->paths[0]);
-            conn->paths[0] = conn->paths[path_index];
-            conn->paths[path_index] = NULL;
+            free_path(conn, 1 /* promote */, path_index);
             recalc_send_probe_at(conn);
-            QUICLY_PROBE(PROMOTE_PATH, conn, conn->stash.now, path_index);
-            QUICLY_LOG_CONN(promote_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
         }
         break;
     default:
