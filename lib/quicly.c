@@ -290,10 +290,6 @@ struct st_quicly_conn_t {
          */
         uint64_t next_pn_to_skip;
         /**
-         * smallest packet number being sent on any path other than the initial path
-         */
-        uint64_t pn_first_migration;
-        /**
          *
          */
         uint16_t max_udp_payload_size;
@@ -1776,8 +1772,6 @@ static void free_path(quicly_conn_t *conn, int is_promote, size_t path_index)
         path = conn->paths[0];
         conn->paths[0] = conn->paths[path_index];
         conn->paths[path_index] = NULL;
-        if (conn->egress.pn_first_migration == UINT64_MAX)
-            conn->egress.pn_first_migration = conn->egress.packet_number;
         conn->super.stats.num_paths.promoted += 1;
     } else {
         QUICLY_DELETE_PATH(conn, conn->stash.now, path_index);
@@ -2422,7 +2416,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
                      &conn->super.remote.transport_params.max_ack_delay, &conn->super.remote.transport_params.ack_delay_exponent);
     conn->egress.next_pn_to_skip =
         calc_next_pn_to_skip(conn->super.ctx->tls, 0, initcwnd, conn->super.ctx->initial_egress_max_udp_payload_size);
-    conn->egress.pn_first_migration = UINT64_MAX;
     conn->egress.max_udp_payload_size = conn->super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->egress.max_streams.uni);
     init_max_streams(&conn->egress.max_streams.bidi);
@@ -5584,8 +5577,6 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                 }
             }
             ++conn->super.stats.num_packets.ack_received;
-            if (pn_acked >= conn->egress.pn_first_migration)
-                ++conn->super.stats.num_packets.ack_received_post_migration;
             largest_newly_acked.pn = pn_acked;
             largest_newly_acked.sent_at = sent->sent_at;
             QUICLY_PROBE(PACKET_ACKED, conn, conn->stash.now, pn_acked, is_late_ack);
