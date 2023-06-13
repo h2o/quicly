@@ -1766,7 +1766,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
  * if is_promote is set, paths[0] (the default path) is freed and the path specified by `path_index` is promoted
  * if is_promote is not_set, paths[path_index] is freed
  */
-static void free_path(quicly_conn_t *conn, int is_promote, size_t path_index)
+static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
 {
     struct st_quicly_conn_path_t *path;
 
@@ -1818,7 +1818,7 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
 
     /* free existing path info */
     if (conn->paths[*path_index] != NULL)
-        free_path(conn, 0, *path_index);
+        delete_path(conn, 0, *path_index);
 
     /* initialize new path info */
     if ((ret = new_path(conn, *path_index, remote_addr, local_addr)) != 0)
@@ -1892,7 +1892,7 @@ void quicly_free(quicly_conn_t *conn)
 
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
         if (conn->paths[i] != NULL)
-            free_path(conn, 0, i);
+            delete_path(conn, 0, i);
     }
 
     unlock_now(conn);
@@ -5209,13 +5209,13 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             if (conn->paths[s.path_index] == NULL || conn->stash.now < conn->paths[s.path_index]->path_challenge.send_at)
                 continue;
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
-                free_path(conn, 0, s.path_index);
+                delete_path(conn, 0, s.path_index);
                 s.recalc_send_probe_at = 1;
                 continue;
             }
             /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
             if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
-                free_path(conn, 0, s.path_index);
+                delete_path(conn, 0, s.path_index);
                 s.recalc_send_probe_at = 1;
                 conn->super.stats.num_paths.closed_no_dcid += 1;
                 continue;
@@ -6834,7 +6834,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             !conn->paths[path_index]->probe_only) {
             if (conn->super.remote.cid_set.cids[0].cid.len != 0)
                 retire_connection_id(conn, 0);
-            free_path(conn, 1 /* promote */, path_index);
+            delete_path(conn, 1 /* promote */, path_index);
             recalc_send_probe_at(conn);
         }
         break;
