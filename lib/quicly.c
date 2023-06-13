@@ -215,6 +215,10 @@ struct st_quicly_conn_path_t {
         uint8_t data[QUICLY_PATH_CHALLENGE_DATA_LEN];
     } path_response;
     /**
+     * if this path is the initial path (i.e., the one on which handshake is done)
+     */
+    uint8_t initial : 1;
+    /**
      * if only probe packets have been received (and hence have been sent) on the path
      */
     uint8_t probe_only : 1;
@@ -1728,6 +1732,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
         *path = (struct st_quicly_conn_path_t){
             .dcid = 0,
             .path_challenge.send_at = INT64_MAX,
+            .initial = 1,
             .probe_only = 0,
         };
     } else {
@@ -3485,6 +3490,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         s->dst_payload_from - s->payload_buf.datagram, conn->egress.packet_number, coalesced);
 
     /* update CC, commit sentmap */
+    int on_promoted_path = s->path_index == 0 && !conn->paths[0]->initial;
     if (s->target.ack_eliciting) {
         packet_bytes_in_flight = s->dst - s->target.first_byte_at;
         s->send_window -= packet_bytes_in_flight;
@@ -3492,7 +3498,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         packet_bytes_in_flight = 0;
     }
     if (quicly_sentmap_is_open(&conn->egress.loss.sentmap))
-        quicly_sentmap_commit(&conn->egress.loss.sentmap, (uint16_t)packet_bytes_in_flight);
+        quicly_sentmap_commit(&conn->egress.loss.sentmap, (uint16_t)packet_bytes_in_flight, on_promoted_path);
 
     conn->egress.cc.type->cc_on_sent(&conn->egress.cc, &conn->egress.loss, (uint32_t)packet_bytes_in_flight, conn->stash.now);
     QUICLY_PROBE(PACKET_SENT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
@@ -3506,6 +3512,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
 
     ++conn->egress.packet_number;
     ++conn->super.stats.num_packets.sent;
+    if (on_promoted_path)
+        ++conn->super.stats.num_packets.sent_promoted_paths;
 
     if (!coalesced) {
         conn->super.stats.num_bytes.sent += datagram_size;
@@ -3525,7 +3533,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
             return ret;
         if (quicly_sentmap_allocate(&conn->egress.loss.sentmap, on_invalid_ack) == NULL)
             return PTLS_ERROR_NO_MEMORY;
-        quicly_sentmap_commit(&conn->egress.loss.sentmap, 0);
+        quicly_sentmap_commit(&conn->egress.loss.sentmap, 0, 0);
         ++conn->egress.packet_number;
         conn->egress.next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, conn->egress.packet_number, conn->egress.cc.cwnd,
                                                             conn->egress.max_udp_payload_size);
@@ -5335,7 +5343,7 @@ static int enter_close(quicly_conn_t *conn, int local_is_initiating, int wait_dr
         return ret;
     if (quicly_sentmap_allocate(&conn->egress.loss.sentmap, on_end_closing) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    quicly_sentmap_commit(&conn->egress.loss.sentmap, 0);
+    quicly_sentmap_commit(&conn->egress.loss.sentmap, 0, 0);
     ++conn->egress.packet_number;
 
     if (local_is_initiating) {
@@ -5577,6 +5585,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                 }
             }
             ++conn->super.stats.num_packets.ack_received;
+            if (sent->promoted_path)
+                ++conn->super.stats.num_packets.ack_received_promoted_paths;
             largest_newly_acked.pn = pn_acked;
             largest_newly_acked.sent_at = sent->sent_at;
             QUICLY_PROBE(PACKET_ACKED, conn, conn->stash.now, pn_acked, is_late_ack);

@@ -462,6 +462,14 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total number of packets received out of order.                                                                          \
          */                                                                                                                        \
         uint64_t received_out_of_order;                                                                                            \
+        /**                                                                                                                        \
+         * Total number of packets sent on promoted paths.                                                                         \
+         */                                                                                                                        \
+        uint64_t sent_promoted_paths;                                                                                              \
+        /**                                                                                                                        \
+         * Total number of acked packets that were sent on promoted.                                                               \
+         */                                                                                                                        \
+        uint64_t ack_received_promoted_paths;                                                                                      \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
