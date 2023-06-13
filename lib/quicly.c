@@ -21,6 +21,7 @@
  */
 #include <assert.h>
 #include <inttypes.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -1685,6 +1686,120 @@ static inline void update_open_count(quicly_context_t *ctx, ssize_t delta)
         ctx->update_open_count->cb(ctx->update_open_count, delta);
 }
 
+#define LONGEST_ADDRESS_STR "[0000:1111:2222:3333:4444:5555:6666:7777]:12345"
+static void stringify_address(char *buf, struct sockaddr *sa)
+{
+    char *p = buf;
+    uint16_t port = 0;
+
+    p = buf;
+    switch (sa->sa_family) {
+    case AF_INET:
+        inet_ntop(AF_INET, &((struct sockaddr_in *)sa)->sin_addr, p, sizeof(LONGEST_ADDRESS_STR));
+        p += strlen(p);
+        port = ntohs(((struct sockaddr_in *)sa)->sin_port);
+        break;
+    case AF_INET6:
+        *p++ = '[';
+        inet_ntop(AF_INET6, &((struct sockaddr_in6 *)sa)->sin6_addr, p, sizeof(LONGEST_ADDRESS_STR));
+        *p++ = ']';
+        port = ntohs(((struct sockaddr_in *)sa)->sin_port);
+        break;
+    default:
+        assert("unexpected addres family");
+        break;
+    }
+
+    *p++ = ':';
+    sprintf(p, "%" PRIu16, port);
+}
+
+static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
+{
+    struct st_quicly_conn_path_t *path;
+
+    assert(conn->paths[path_index] == NULL);
+
+    if ((path = malloc(sizeof(*conn->paths[path_index]))) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+
+    if (path_index == 0) {
+        /* default path used for handshake */
+        *path = (struct st_quicly_conn_path_t){
+            .dcid = 0,
+            .path_challenge.send_at = INT64_MAX,
+            .probe_only = 0,
+        };
+    } else {
+        *path = (struct st_quicly_conn_path_t){
+            .dcid = UINT64_MAX,
+            .path_challenge.send_at = 0,
+            .probe_only = 1,
+        };
+        conn->super.ctx->tls->random_bytes(path->path_challenge.data, sizeof(path->path_challenge.data));
+    }
+    set_address(&path->address.remote, remote_addr);
+    set_address(&path->address.local, local_addr);
+
+    conn->paths[path_index] = path;
+
+    if (QUICLY_NEW_PATH_ENABLED() || ptls_log.is_active) {
+        char remote[sizeof(LONGEST_ADDRESS_STR)];
+        stringify_address(remote, &path->address.remote.sa);
+        QUICLY_NEW_PATH(conn, path_index, remote);
+        QUICLY_LOG_CONN(new_path, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index);
+            PTLS_LOG_ELEMENT_SAFESTR(remote, remote);
+        });
+    }
+
+    return 0;
+}
+
+static void free_path(quicly_conn_t *conn, size_t path_index)
+{
+    if (conn->paths[path_index] == NULL)
+        return;
+
+    QUICLY_DELETE_PATH(conn, path_index);
+    QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
+    free(conn->paths[path_index]);
+    conn->paths[path_index] = NULL;
+}
+
+static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
+{
+    int ret;
+
+    PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(conn->paths) >= 2);
+    *path_index = 1;
+
+    /* choose an unused path slot, or use the least-recently-used one */
+    for (size_t i = *path_index + 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        struct st_quicly_conn_path_t *p = conn->paths[i];
+        if (p == NULL) {
+            *path_index = i;
+            break;
+        }
+        if (p->path_challenge.send_at != INT64_MAX)
+            continue;
+        if (p->packet_last_received < conn->paths[i]->packet_last_received)
+            *path_index = i;
+    }
+
+    /* free existing path info */
+    free_path(conn, *path_index);
+
+    /* initialize new path info */
+    if ((ret = new_path(conn, *path_index, remote_addr, local_addr)) != 0)
+        return ret;
+
+    /* schedule emission of PATH_CHALLENGE */
+    conn->egress.send_probe_at = 0;
+
+    return 0;
+}
+
 static void recalc_send_probe_at(quicly_conn_t *conn)
 {
     conn->egress.send_probe_at = INT64_MAX;
@@ -1746,7 +1861,7 @@ void quicly_free(quicly_conn_t *conn)
     }
 
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i)
-        free(conn->paths[i]);
+        free_path(conn, i);
 
     unlock_now(conn);
 
@@ -2204,66 +2319,6 @@ static int collect_transport_parameters(ptls_t *tls, struct st_ptls_handshake_pr
     return type == get_transport_parameters_extension_id(conn->super.version);
 }
 
-static struct st_quicly_conn_path_t *new_path(quicly_context_t *ctx, struct sockaddr *remote_addr, struct sockaddr *local_addr,
-                                              int initial_path)
-{
-    struct st_quicly_conn_path_t *path;
-
-    if ((path = malloc(sizeof(*path))) == NULL)
-        return NULL;
-
-    if (initial_path) {
-        *path = (struct st_quicly_conn_path_t){
-            .dcid = 0,
-            .path_challenge.send_at = INT64_MAX,
-            .probe_only = 0,
-        };
-    } else {
-        *path = (struct st_quicly_conn_path_t){
-            .dcid = UINT64_MAX,
-            .path_challenge.send_at = 0,
-            .probe_only = 1,
-        };
-        ctx->tls->random_bytes(path->path_challenge.data, sizeof(path->path_challenge.data));
-    }
-    set_address(&path->address.remote, remote_addr);
-    set_address(&path->address.local, local_addr);
-
-    return path;
-}
-
-static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
-{
-    PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(conn->paths) >= 2);
-    *path_index = 1;
-
-    /* choose an unused path slot, or use the least-recently-used one */
-    for (size_t i = *path_index + 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-        struct st_quicly_conn_path_t *p = conn->paths[i];
-        if (p == NULL) {
-            *path_index = i;
-            break;
-        }
-        if (p->path_challenge.send_at != INT64_MAX)
-            continue;
-        if (p->packet_last_received < conn->paths[i]->packet_last_received)
-            *path_index = i;
-    }
-
-    /* free existing path info */
-    if (conn->paths[*path_index] != NULL)
-        free(conn->paths[*path_index]);
-
-    /* initialize new path info */
-    if ((conn->paths[*path_index] = new_path(conn->super.ctx, remote_addr, local_addr, 0)) == NULL)
-        return PTLS_ERROR_NO_MEMORY;
-
-    /* schedule emission of PATH_CHALLENGE */
-    conn->egress.send_probe_at = 0;
-
-    return 0;
-}
-
 static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol_version, const char *server_name,
                                         struct sockaddr *remote_addr, struct sockaddr *local_addr, ptls_iovec_t *remote_cid,
                                         const quicly_cid_plaintext_t *local_cid, ptls_handshake_properties_t *handshake_properties,
@@ -2296,7 +2351,13 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     lock_now(conn, 0);
     conn->created_at = conn->stash.now;
     conn->super.stats.handshake_confirmed_msec = UINT64_MAX;
-    conn->paths[0] = new_path(conn->super.ctx, remote_addr, local_addr, 1);
+    conn->crypto.tls = tls;
+    if (new_path(conn, 0, remote_addr, local_addr) != 0) {
+        unlock_now(conn);
+        ptls_free(tls);
+        free(conn);
+        return NULL;
+    }
     quicly_local_cid_init_set(&conn->super.local.cid_set, ctx->cid_encryptor, local_cid);
     conn->super.local.long_header_src_cid = conn->super.local.cid_set.cids[0].cid;
     quicly_remote_cid_init_set(&conn->super.remote.cid_set, remote_cid, ctx->tls->random_bytes);
@@ -2340,7 +2401,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
     quicly_ratemeter_init(&conn->egress.ratemeter);
-    conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
         assert(handshake_properties->collect_extension == NULL);
@@ -5113,15 +5173,13 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             if (conn->paths[s.path_index] == NULL || conn->stash.now < conn->paths[s.path_index]->path_challenge.send_at)
                 continue;
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
-                free(conn->paths[s.path_index]);
-                conn->paths[s.path_index] = NULL;
+                free_path(conn, s.path_index);
                 s.recalc_send_probe_at = 1;
                 continue;
             }
             /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
             if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
-                free(conn->paths[s.path_index]);
-                conn->paths[s.path_index] = NULL;
+                free_path(conn, s.path_index);
                 s.recalc_send_probe_at = 1;
                 continue;
             }
@@ -6727,14 +6785,15 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         /* switch active path to current path, if current path is validated and not probe-only */
         if (path_index != 0 && conn->paths[path_index]->path_challenge.send_at == INT64_MAX &&
             !conn->paths[path_index]->probe_only) {
-            QUICLY_PROBE(MIGRATE_ACTIVE_PATH, conn, conn->stash.now);
-            QUICLY_LOG_CONN(migrate_active_path, conn, {});
             if (conn->super.remote.cid_set.cids[0].cid.len != 0)
                 retire_connection_id(conn, 0);
+            free_path(conn, 0);
             free(conn->paths[0]);
             conn->paths[0] = conn->paths[path_index];
             conn->paths[path_index] = NULL;
             recalc_send_probe_at(conn);
+            QUICLY_PROBE(PROMOTE_PATH, conn, conn->stash.now, path_index);
+            QUICLY_LOG_CONN(promote_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
         }
         break;
     default:
