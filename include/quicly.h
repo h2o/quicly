@@ -511,6 +511,10 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t validation_failed;                                                                                                \
         /**                                                                                                                        \
+         * number of paths on which migration has been elicited (i.e., received non-probing packets)                               \
+         */                                                                                                                        \
+        uint64_t migration_elicited;                                                                                               \
+        /**                                                                                                                        \
          * number of migrations                                                                                                    \
          */                                                                                                                        \
         uint64_t promoted;                                                                                                         \

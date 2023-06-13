@@ -6781,8 +6781,10 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     if ((ret = handle_payload(conn, epoch, path_index, payload.base, payload.len, &offending_frame_type, &is_ack_only,
                               &is_probe_only)) != 0)
         goto Exit;
-    if (!is_probe_only)
+    if (!is_probe_only && conn->paths[path_index]->probe_only) {
+        ++conn->super.stats.num_paths.migration_elicited;
         conn->paths[path_index]->probe_only = 0;
+    }
     if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
         if ((ret = record_receipt(*space, pn, is_ack_only, conn->stash.now, &conn->egress.send_ack_at,
                                   &conn->super.stats.num_packets.received_out_of_order)) != 0)
