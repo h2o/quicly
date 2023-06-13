@@ -485,6 +485,20 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t stream_data_resent;                                                                                               \
     } num_bytes;                                                                                                                   \
+    struct {                                                                                                                       \
+        /**                                                                                                                        \
+         * number of alternate paths created                                                                                       \
+         */                                                                                                                        \
+        uint64_t created;                                                                                                          \
+        /**                                                                                                                        \
+         * number alternate paths validated                                                                                        \
+         */                                                                                                                        \
+        uint64_t validated;                                                                                                        \
+        /**                                                                                                                        \
+         * number of migrations                                                                                                    \
+         */                                                                                                                        \
+        uint64_t promoted;                                                                                                         \
+    } num_paths;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of each frame being sent / received.                                                                           \
      */                                                                                                                            \

@@ -1737,6 +1737,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
             .probe_only = 1,
         };
         conn->super.ctx->tls->random_bytes(path->path_challenge.data, sizeof(path->path_challenge.data));
+        conn->super.stats.num_paths.created += 1;
     }
     set_address(&path->address.remote, remote_addr);
     set_address(&path->address.local, local_addr);
@@ -1771,6 +1772,7 @@ static void free_path(quicly_conn_t *conn, int is_promote, size_t path_index)
         path = conn->paths[0];
         conn->paths[0] = conn->paths[path_index];
         conn->paths[path_index] = NULL;
+        conn->super.stats.num_paths.promoted += 1;
     } else {
         QUICLY_DELETE_PATH(conn, conn->stash.now, path_index);
         QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
@@ -5811,6 +5813,7 @@ static int handle_path_response_frame(quicly_conn_t *conn, struct st_quicly_hand
     if (ptls_mem_equal(path->path_challenge.data, frame.data, QUICLY_PATH_CHALLENGE_DATA_LEN)) {
         /* Path validation succeeded, stop sending PATH_CHALLENGEs. Active path might become changed in `quicly_receive`. */
         path->path_challenge.send_at = INT64_MAX;
+        conn->super.stats.num_paths.validated += 1;
     }
 
     return 0;
