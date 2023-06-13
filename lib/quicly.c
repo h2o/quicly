@@ -5217,6 +5217,7 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
                 free_path(conn, 0, s.path_index);
                 s.recalc_send_probe_at = 1;
+                conn->super.stats.num_paths.closed_no_dcid += 1;
                 continue;
             }
             if ((ret = do_send(conn, &s)) != 0)

@@ -518,6 +518,10 @@ struct st_quicly_conn_streamgroup_state_t {
          * number of migrations                                                                                                    \
          */                                                                                                                        \
         uint64_t promoted;                                                                                                         \
+        /**                                                                                                                        \
+         * number of alternate paths that were closed due to Connection ID being unavailable                                       \
+         */                                                                                                                        \
+        uint64_t closed_no_dcid;                                                                                                   \
     } num_paths;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of each frame being sent / received.                                                                           \
