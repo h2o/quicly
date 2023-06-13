@@ -1778,6 +1778,8 @@ static void free_path(quicly_conn_t *conn, int is_promote, size_t path_index)
         QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
         path = conn->paths[path_index];
         conn->paths[path_index] = NULL;
+        if (path->path_challenge.send_at != INT64_MAX)
+            conn->super.stats.num_paths.validation_failed += 1;
     }
 
     /* deinstantiate */
@@ -1788,22 +1790,26 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
 {
     int ret;
 
-    /* choose an unused path slot, or use the least-recently-used one */
-    PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(conn->paths) >= 2);
-    *path_index = 1;
-    if (conn->paths[*path_index] != NULL) {
-        for (size_t i = *path_index + 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-            struct st_quicly_conn_path_t *p = conn->paths[i];
-            if (p == NULL) {
-                *path_index = i;
-                break;
-            }
-            if (p->path_challenge.send_at != INT64_MAX)
-                continue;
-            if (p->packet_last_received < conn->paths[i]->packet_last_received)
-                *path_index = i;
+    /* packets arriving from new paths will start to get ignored once the number of paths that failed to validate reaches the
+     * defined threshold */
+    if (conn->super.stats.num_paths.validation_failed > conn->super.ctx->max_path_validation_failures)
+        return QUICLY_ERROR_PACKET_IGNORED;
+
+    /* choose a slot that in unused or the least-recently-used one that has completed validation */
+    *path_index = SIZE_MAX;
+    for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        struct st_quicly_conn_path_t *p = conn->paths[i];
+        if (p == NULL) {
+            *path_index = i;
+            break;
         }
+        if (p->path_challenge.send_at != INT64_MAX)
+            continue;
+        if (*path_index == SIZE_MAX || p->packet_last_received < conn->paths[*path_index]->packet_last_received)
+            *path_index = i;
     }
+    if (*path_index == SIZE_MAX)
+        return QUICLY_ERROR_PACKET_IGNORED;
 
     /* free existing path info */
     if (conn->paths[*path_index] != NULL)

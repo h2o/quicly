@@ -31,6 +31,7 @@
 #define DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER 400
 #define DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS 1000
 #define DEFAULT_MAX_PROBE_PACKETS 5
+#define DEFAULT_MAX_PATH_VALIDATION_FAILURES 100
 
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {NULL,                                                 /* tls */
@@ -51,6 +52,7 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
                                               DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                               DEFAULT_MAX_PROBE_PACKETS,
+                                              DEFAULT_MAX_PATH_VALIDATION_FAILURES,
                                               0, /* enlarge_client_hello */
                                               NULL,
                                               NULL, /* on_stream_open */
@@ -82,6 +84,7 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
                                                     DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                                     DEFAULT_MAX_PROBE_PACKETS,
+                                                    DEFAULT_MAX_PATH_VALIDATION_FAILURES,
                                                     0, /* enlarge_client_hello */
                                                     NULL,
                                                     NULL, /* on_stream_open */

@@ -331,6 +331,10 @@ struct st_quicly_context_t {
      */
     uint64_t max_probe_packets;
     /**
+     * once path validation fails for the specified number of times, packets arriving on new tuples will be dropped
+     */
+    uint64_t max_path_validation_failures;
+    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
@@ -494,6 +498,10 @@ struct st_quicly_conn_streamgroup_state_t {
          * number alternate paths validated                                                                                        \
          */                                                                                                                        \
         uint64_t validated;                                                                                                        \
+        /**                                                                                                                        \
+         * number of alternate paths that were created but failed to validate                                                      \
+         */                                                                                                                        \
+        uint64_t validation_failed;                                                                                                \
         /**                                                                                                                        \
          * number of migrations                                                                                                    \
          */                                                                                                                        \
