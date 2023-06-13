@@ -673,6 +673,17 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         fd_set readfds;
         struct timeval *tv, tvbuf;
         do {
+            if (got_sigusr1) {
+                got_sigusr1 = 0;
+                int newfd = socket(local.sa.sa_family, SOCK_DGRAM, IPPROTO_UDP);
+                if (newfd != -1) {
+                    close(fd);
+                    fcntl(newfd, F_SETFL, O_NONBLOCK);
+                    fd = newfd;
+                } else {
+                    fprintf(stderr, "socket(2) failed:%s\n", strerror(errno));
+                }
+            }
             int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
             if (enqueue_requests_at < timeout_at)
                 timeout_at = enqueue_requests_at;
@@ -693,17 +704,6 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             FD_ZERO(&readfds);
             FD_SET(fd, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
-        if (got_sigusr1) {
-            got_sigusr1 = 0;
-            int newfd = socket(local.sa.sa_family, SOCK_DGRAM, IPPROTO_UDP);
-            if (newfd != -1) {
-                close(fd);
-                fcntl(newfd, F_SETFL, O_NONBLOCK);
-                fd = newfd;
-            } else {
-                fprintf(stderr, "socket(2) failed:%s\n", strerror(errno));
-            }
-        }
         if (enqueue_requests_at <= ctx.now->cb(ctx.now))
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
