@@ -53,6 +53,7 @@ provider quicly {
     probe new_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index, const char *remote);
     probe delete_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);
     probe promote_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);
+    probe elicit_path_migration(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);
 
     probe crypto_handshake(struct st_quicly_conn_t *conn, int64_t at, int ret);
     probe crypto_update_secret(struct st_quicly_conn_t *conn, int64_t at, int is_enc, uint8_t epoch, const char *label, const char *secret);

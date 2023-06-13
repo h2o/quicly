@@ -6782,8 +6782,13 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                               &is_probe_only)) != 0)
         goto Exit;
     if (!is_probe_only && conn->paths[path_index]->probe_only) {
-        ++conn->super.stats.num_paths.migration_elicited;
+        assert(path_index != 0);
         conn->paths[path_index]->probe_only = 0;
+        ++conn->super.stats.num_paths.migration_elicited;
+        QUICLY_ELICIT_PATH_MIGRATION(conn, conn->stash.now, path_index);
+        QUICLY_LOG_CONN(elicit_path_migration, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index);
+        });
     }
     if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
         if ((ret = record_receipt(*space, pn, is_ack_only, conn->stash.now, &conn->egress.send_ack_at,
