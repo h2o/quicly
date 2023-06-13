@@ -1771,20 +1771,21 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
 {
     int ret;
 
+    /* choose an unused path slot, or use the least-recently-used one */
     PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(conn->paths) >= 2);
     *path_index = 1;
-
-    /* choose an unused path slot, or use the least-recently-used one */
-    for (size_t i = *path_index + 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-        struct st_quicly_conn_path_t *p = conn->paths[i];
-        if (p == NULL) {
-            *path_index = i;
-            break;
+    if (conn->paths[*path_index] != NULL) {
+        for (size_t i = *path_index + 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+            struct st_quicly_conn_path_t *p = conn->paths[i];
+            if (p == NULL) {
+                *path_index = i;
+                break;
+            }
+            if (p->path_challenge.send_at != INT64_MAX)
+                continue;
+            if (p->packet_last_received < conn->paths[i]->packet_last_received)
+                *path_index = i;
         }
-        if (p->path_challenge.send_at != INT64_MAX)
-            continue;
-        if (p->packet_last_received < conn->paths[i]->packet_last_received)
-            *path_index = i;
     }
 
     /* free existing path info */
