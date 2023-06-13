@@ -4714,6 +4714,7 @@ static int send_path_challenge(quicly_conn_t *conn, quicly_send_context_t *s, in
         return ret;
 
     s->dst = quicly_encode_path_challenge_frame(s->dst, is_response, data);
+    s->target.full_size = 1; /* ensure that the path can transfer full-size packets */
 
     if (!is_response) {
         ++conn->super.stats.num_frames_sent.path_challenge;
