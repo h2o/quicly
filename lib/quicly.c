@@ -1883,16 +1883,18 @@ void quicly_free(quicly_conn_t *conn)
     free_application_space(&conn->application);
 
     ptls_buffer_dispose(&conn->crypto.transport_params.buf);
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        if (conn->paths[i] != NULL)
+            delete_path(conn, 0, i);
+    }
+
+    /* `crytpo.tls` is disposed late, because logging relies on `ptls_skip_tracing` */
     if (conn->crypto.async_in_progress) {
         /* When async signature generation is inflight, `ptls_free` will be called from `quicly_resume_handshake` laterwards. */
         *ptls_get_data_ptr(conn->crypto.tls) = NULL;
     } else {
         ptls_free(conn->crypto.tls);
-    }
-
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-        if (conn->paths[i] != NULL)
-            delete_path(conn, 0, i);
     }
 
     unlock_now(conn);
