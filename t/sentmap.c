@@ -24,7 +24,8 @@
 
 static int on_acked_callcnt, on_acked_ackcnt;
 
-static int on_acked(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
+static int on_acked(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent,
+                    struct st_quicly_conn_t *conn)
 {
     ++on_acked_callcnt;
     if (acked)
@@ -84,7 +85,7 @@ static void test_basic(void)
         quicly_sentmap_skip(&iter);
     assert(quicly_sentmap_get(&iter)->packet_number == 11);
     while (quicly_sentmap_get(&iter)->packet_number <= 40)
-        quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_EXPIRED);
+        quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_EXPIRED, NULL);
     ok(on_acked_callcnt == 30 * 2);
     ok(on_acked_ackcnt == 0);
 
@@ -125,7 +126,7 @@ static void test_late_ack(void)
     quicly_sentmap_init_iter(&map, &iter);
     sent = quicly_sentmap_get(&iter);
     assert(sent->packet_number == 1);
-    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_LOST) == 0);
+    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_LOST, NULL) == 0);
     ok(on_acked_callcnt == 1);
     ok(on_acked_ackcnt == 0);
     ok(map.bytes_in_flight == 20);
@@ -134,10 +135,10 @@ static void test_late_ack(void)
     quicly_sentmap_init_iter(&map, &iter);
     sent = quicly_sentmap_get(&iter);
     assert(sent->packet_number == 1);
-    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_ACKED) == 0);
+    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_ACKED, NULL) == 0);
     sent = quicly_sentmap_get(&iter);
     assert(sent->packet_number == 2);
-    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_ACKED) == 0);
+    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_ACKED, NULL) == 0);
     ok(on_acked_callcnt == 3);
     ok(on_acked_ackcnt == 2);
     ok(map.bytes_in_flight == 0);
@@ -169,7 +170,7 @@ static void test_pto(void)
     quicly_sentmap_init_iter(&map, &iter);
     sent = quicly_sentmap_get(&iter);
     assert(sent->packet_number == 1);
-    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_PTO) == 0);
+    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_PTO, NULL) == 0);
     ok(on_acked_callcnt == 1);
     ok(on_acked_ackcnt == 0);
     ok(map.bytes_in_flight == 30);
@@ -178,10 +179,10 @@ static void test_pto(void)
     quicly_sentmap_init_iter(&map, &iter);
     sent = quicly_sentmap_get(&iter);
     assert(sent->packet_number == 1);
-    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_ACKED) == 0);
+    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_ACKED, NULL) == 0);
     sent = quicly_sentmap_get(&iter);
     assert(sent->packet_number == 2);
-    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_ACKED) == 0);
+    ok(quicly_sentmap_update(&map, &iter, QUICLY_SENTMAP_EVENT_ACKED, NULL) == 0);
     ok(on_acked_callcnt == 3);
     ok(on_acked_ackcnt == 2);
     ok(map.bytes_in_flight == 0);
