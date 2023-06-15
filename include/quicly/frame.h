@@ -60,6 +60,8 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_DATAGRAM_NOLEN 48
 #define QUICLY_FRAME_TYPE_DATAGRAM_WITHLEN 49
 #define QUICLY_FRAME_TYPE_ACK_FREQUENCY 0xaf
+#define QUICLY_FRAME_TYPE_ACK_MP 0xbaba00
+#define QUICLY_FRAME_TYPE_ACK_MP_ECN 0xbaba01
 
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
 #define QUICLY_FRAME_TYPE_STREAM_BIT_OFF 0x4
@@ -77,6 +79,7 @@ extern "C" {
 #define QUICLY_STOP_SENDING_FRAME_CAPACITY (1 + 8 + 8)
 #define QUICLY_ACK_MAX_GAPS 256
 #define QUICLY_ACK_FRAME_CAPACITY (1 + 8 + 8 + 1)
+#define QUICLY_ACK_MP_FRAME_CAPACITY (4 + 8 + 8 + 8 + 1)
 #define QUICLY_PATH_CHALLENGE_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STREAM_FRAME_CAPACITY (1 + 8 + 8 + 1)
 
@@ -234,9 +237,11 @@ typedef struct st_quicly_stop_sending_frame_t {
 
 static int quicly_decode_stop_sending_frame(const uint8_t **src, const uint8_t *end, quicly_stop_sending_frame_t *frame);
 
-uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t *ranges, uint64_t ack_delay);
+uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t multipath_cid, quicly_ranges_t *ranges,
+                                 uint64_t ack_delay);
 
 typedef struct st_quicly_ack_frame_t {
+    uint64_t multipath_cid;
     uint64_t largest_acknowledged;
     uint64_t smallest_acknowledged;
     uint64_t ack_delay;
@@ -245,7 +250,7 @@ typedef struct st_quicly_ack_frame_t {
     uint64_t gaps[QUICLY_ACK_MAX_GAPS];
 } quicly_ack_frame_t;
 
-int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame, int is_ack_ecn);
+int quicly_decode_ack_frame(uint64_t frame_type, const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame);
 
 static size_t quicly_new_token_frame_capacity(ptls_iovec_t token);
 static uint8_t *quicly_encode_new_token_frame(uint8_t *dst, ptls_iovec_t token);

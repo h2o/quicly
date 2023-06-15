@@ -574,7 +574,7 @@ static void do_test_record_receipt(size_t epoch)
         now += 1;
     }
 
-    do_free_pn_space(space);
+    free_pn_space(space);
 }
 
 static void test_record_receipt(void)

@@ -55,6 +55,9 @@ typedef struct st_quicly_local_cid_t {
     uint64_t sequence;
     quicly_cid_t cid;
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
+    struct {
+        struct st_quicly_pn_space_t *space;
+    } multipath;
 } quicly_local_cid_t;
 
 /**
@@ -122,7 +125,8 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence);
  * This makes one slot for CIDs empty. The CID generator callback is then called to fill the slot with a new CID.
  * @return 0 if the request was legal, otherwise an error code
  */
-int quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *has_pending);
+int quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *has_pending,
+                            struct st_quicly_pn_space_t **multipath_space);
 
 /* inline definitions */
 

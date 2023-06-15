@@ -192,10 +192,11 @@ typedef struct st_quicly_crypto_engine_t {
      * header protection using `header_protect_ctx`. Quicly does not read or write the content of the UDP datagram payload after
      * this function is called. Therefore, an engine might retain the information provided by this function, and protect the packet
      * and the header at a later moment (e.g., hardware crypto offload).
+     * @param dcid if non-NULL specifies the CID sequence number for encrypting Multipath QUIC packets
      */
     void (*encrypt_packet)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn, ptls_cipher_context_t *header_protect_ctx,
                            ptls_aead_context_t *packet_protect_ctx, ptls_iovec_t datagram, size_t first_byte_at,
-                           size_t payload_from, uint64_t packet_number, int coalesced);
+                           size_t payload_from, uint64_t *dcid, uint64_t packet_number, int coalesced);
 } quicly_crypto_engine_t;
 
 /**
@@ -261,6 +262,10 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint8_t disable_active_migration : 1;
+    /**
+     *
+     */
+    uint8_t enable_multipath : 1;
     /**
      *
      */
@@ -530,7 +535,7 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
             max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
             retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            ack_frequency;                                                                                                         \
+            ack_frequency, ack_mp;                                                                                                 \
     } num_frames_sent, num_frames_received;                                                                                        \
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
@@ -1137,6 +1142,10 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
  */
 ptls_t *quicly_get_tls(quicly_conn_t *conn);
 /**
+ *
+ */
+static int quicly_is_multipath(quicly_conn_t *conn);
+/**
  * Resumes an async TLS handshake, and returns a pointer to the QUIC connection or NULL if the corresponding QUIC connection has
  * been discarded. See `quicly_async_handshake_t`.
  */
@@ -1230,6 +1239,12 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc);
  *
  */
 void quicly_amend_ptls_context(ptls_context_t *ptls);
+/**
+ * Builds the IV prefix of used to encrypt / decrypt Multipath QUIC packets. Size of the supplied buffer (`iv`) must be no less than
+ * `PTLS_MAX_IV_SIZE`. Once the IV is built, that should be applied to AEAD using `ptls_aead_xor_iv` prior to calling the encryption
+ * function. After that, `ptls_aead_xor_iv` should be called again with the same arguments to nagate the changes to IV.
+ */
+size_t quicly_build_multipath_iv(ptls_aead_algorithm_t *algo, uint64_t sequence, void *iv);
 /**
  * Encrypts an address token by serializing the plaintext structure and appending an authentication tag.
  *
@@ -1409,6 +1424,12 @@ inline quicly_tracer_t *quicly_get_tracer(quicly_conn_t *conn)
 inline int quicly_stop_requested(quicly_stream_t *stream)
 {
     return stream->_send_aux.stop_sending.sender_state != QUICLY_SENDER_STATE_NONE;
+}
+
+inline int quicly_is_multipath(quicly_conn_t *conn)
+{
+    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
+    return c->ctx->transport_params.enable_multipath && c->remote.transport_params.enable_multipath;
 }
 
 inline uint32_t quicly_stream_get_receive_window(quicly_stream_t *stream)
