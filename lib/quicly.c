@@ -161,16 +161,18 @@ struct st_quicly_application_space_t {
             struct st_quicly_cipher_context_t key;
             uint8_t secret[PTLS_MAX_DIGEST_SIZE];
             uint64_t key_phase;
+            uint64_t next_key_update_num_sent;
             struct {
                 /**
-                 * PN at which key update was initiated. Set to UINT64_MAX once key update is acked.
+                 * stats.num_packets.sent at which key update was initiated. Set to UINT64_MAX once key update is acked.
                  */
                 uint64_t last;
                 /**
-                 * PN at which key update should be initiated. Set to UINT64_MAX when key update cannot be initiated.
+                 * stats.num_packets.sent at which key update should be initiated. Set to UINT64_MAX when key update cannot be
+                 * initiated.
                  */
                 uint64_t next;
-            } key_update_pn;
+            } key_update_at;
         } egress;
     } cipher;
     int one_rtt_writable;
@@ -1578,8 +1580,8 @@ static int setup_application_space(quicly_conn_t *conn)
     memset(conn->application, 0, sizeof(*conn->application));
 
     /* prohibit key-update until receiving an ACK for an 1-RTT packet */
-    conn->application->cipher.egress.key_update_pn.last = 0;
-    conn->application->cipher.egress.key_update_pn.next = UINT64_MAX;
+    conn->application->cipher.egress.key_update_at.last = 0;
+    conn->application->cipher.egress.key_update_at.next = UINT64_MAX;
 
     return create_handshake_flow(conn, QUICLY_EPOCH_1RTT);
 }
@@ -1657,8 +1659,8 @@ static int update_1rtt_egress_key(quicly_conn_t *conn)
     ++space->cipher.egress.key_phase;
 
     /* signal that we are waiting for an ACK */
-    space->cipher.egress.key_update_pn.last = conn->paths[0]->space->packet_number; /* FIXME key_update_pn should be per-path */
-    space->cipher.egress.key_update_pn.next = UINT64_MAX;
+    space->cipher.egress.key_update_at.last = conn->super.stats.num_packets.sent;
+    space->cipher.egress.key_update_at.next = UINT64_MAX;
 
     QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE, conn, conn->stash.now, space->cipher.egress.key_phase,
                  QUICLY_PROBE_HEXDUMP(space->cipher.egress.secret, cipher->hash->digest_size));
@@ -3477,15 +3479,13 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
             break;
         }
     } else {
-#if 0 /* FIXME multipath */
-        if (conn->egress.packet_number >= conn->application->cipher.egress.key_update_pn.next) {
+        if (conn->super.stats.num_packets.sent >= conn->application->cipher.egress.key_update_at.next) {
             int ret;
             if ((ret = update_1rtt_egress_key(conn)) != 0)
                 return ret;
         }
         if ((conn->application->cipher.egress.key_phase & 1) != 0)
             *s->target.first_byte_at |= QUICLY_KEY_PHASE_BIT;
-#endif
     }
     quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE, (uint16_t)path->space->packet_number);
 
@@ -3508,7 +3508,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         packet_bytes_in_flight = 0;
     }
     if (quicly_sentmap_is_open(&path->space->loss.sentmap))
-        quicly_sentmap_commit(&path->space->loss.sentmap, (uint16_t)packet_bytes_in_flight, on_promoted_path);
+        quicly_sentmap_commit(&path->space->loss.sentmap, (uint16_t)packet_bytes_in_flight, on_promoted_path,
+                              (*s->target.first_byte_at & QUICLY_KEY_PHASE_BIT) != 0);
 
     path->space->cc.type->cc_on_sent(&path->space->cc, &path->space->loss, (uint32_t)packet_bytes_in_flight, conn->stash.now);
     QUICLY_PROBE(PACKET_SENT, conn, conn->stash.now, path->space->packet_number, s->dst - s->target.first_byte_at,
@@ -3543,7 +3544,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
             return ret;
         if (quicly_sentmap_allocate(&path->space->loss.sentmap, on_invalid_ack) == NULL)
             return PTLS_ERROR_NO_MEMORY;
-        quicly_sentmap_commit(&path->space->loss.sentmap, 0, 0);
+        quicly_sentmap_commit(&path->space->loss.sentmap, 0, 0, 0);
         ++path->space->packet_number;
         path->space->next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, path->space->packet_number, path->space->cc.cwnd,
                                                             conn->egress.max_udp_payload_size);
@@ -5356,7 +5357,7 @@ static int enter_close(quicly_conn_t *conn, int local_is_initiating, int wait_dr
         return ret;
     if (quicly_sentmap_allocate(&conn->paths[0]->space->loss.sentmap, on_end_closing) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    quicly_sentmap_commit(&conn->paths[0]->space->loss.sentmap, 0, 0);
+    quicly_sentmap_commit(&conn->paths[0]->space->loss.sentmap, 0, 0, 0);
     ++conn->paths[0]->space->packet_number;
 
     if (local_is_initiating) {
@@ -5617,12 +5618,13 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                 return ret;
             if (state->epoch == QUICLY_EPOCH_1RTT) {
                 struct st_quicly_application_space_t *space = conn->application;
-                if (space->cipher.egress.key_update_pn.last <= pn_acked) {
-                    space->cipher.egress.key_update_pn.last = UINT64_MAX;
-                    space->cipher.egress.key_update_pn.next = path->space->packet_number + conn->super.ctx->max_packets_per_key;
-                    QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, conn->stash.now, space->cipher.egress.key_update_pn.next);
+                if (space->cipher.egress.key_update_at.next == UINT64_MAX &&
+                    sent->key_phase_bit == (space->cipher.egress.key_phase & 1)) {
+                    space->cipher.egress.key_update_at.next =
+                        space->cipher.egress.key_update_at.last + conn->super.ctx->max_packets_per_key;
+                    QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, conn->stash.now, space->cipher.egress.key_update_at.next);
                     QUICLY_LOG_CONN(crypto_send_key_update_confirmed, conn,
-                                    { PTLS_LOG_ELEMENT_UNSIGNED(next_pn, space->cipher.egress.key_update_pn.next); });
+                                    { PTLS_LOG_ELEMENT_UNSIGNED(next, space->cipher.egress.key_update_at.next); });
                 }
             }
             ++pn_acked;

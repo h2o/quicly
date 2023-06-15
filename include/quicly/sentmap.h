@@ -61,6 +61,10 @@ typedef struct st_quicly_sent_packet_t {
      */
     uint8_t promoted_path : 1;
     /**
+     * key phase bit used on 1-RTT packets
+     */
+    uint8_t key_phase_bit : 1;
+    /**
      * number of bytes in-flight for the packet, from the context of CC (becomes zero when deemed lost, but not when PTO fires)
      */
     uint16_t cc_bytes_in_flight;
@@ -257,7 +261,7 @@ int quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_
 /**
  * commits a write
  */
-static void quicly_sentmap_commit(quicly_sentmap_t *map, uint16_t bytes_in_flight, int promoted_path);
+static void quicly_sentmap_commit(quicly_sentmap_t *map, uint16_t bytes_in_flight, int promoted_path, int key_phase_bit);
 /**
  * Allocates a slot to contain a callback for a frame.  The function MUST be called after _prepare but before _commit.
  */
@@ -297,7 +301,7 @@ inline int quicly_sentmap_is_open(quicly_sentmap_t *map)
     return map->_pending_packet != NULL;
 }
 
-inline void quicly_sentmap_commit(quicly_sentmap_t *map, uint16_t bytes_in_flight, int promoted_path)
+inline void quicly_sentmap_commit(quicly_sentmap_t *map, uint16_t bytes_in_flight, int promoted_path, int key_phase_bit)
 {
     assert(quicly_sentmap_is_open(map));
 
@@ -307,8 +311,9 @@ inline void quicly_sentmap_commit(quicly_sentmap_t *map, uint16_t bytes_in_fligh
         map->bytes_in_flight += bytes_in_flight;
     }
     map->_pending_packet->data.packet.frames_in_flight = 1;
-    if (promoted_path)
-        map->_pending_packet->data.packet.promoted_path = 1;
+    map->_pending_packet->data.packet.promoted_path = promoted_path;
+    map->_pending_packet->data.packet.key_phase_bit = key_phase_bit;
+
     map->_pending_packet = NULL;
 
     ++map->num_packets;
