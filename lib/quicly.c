@@ -6849,6 +6849,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             if (conn->super.remote.cid_set.cids[0].cid.len != 0)
                 retire_connection_id(conn, 0);
             delete_path(conn, 1 /* promote */, path_index);
+            path_index = 0;
         }
         break;
     default:
