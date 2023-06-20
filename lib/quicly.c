@@ -5143,7 +5143,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 struct st_quicly_pn_space_t *space;
                 uint64_t cid;
                 FOREACH_APP_SPACE(conn, space, &cid, {
-                    if (space->unacked_count != 0 && space->send_ack_at <= conn->stash.now) {
+                    if (space->send_ack_at <= conn->stash.now) {
+                        assert(space->unacked_count != 0);
                         if ((ret = send_ack(conn, cid, space, s)) != 0)
                             goto Exit;
                         space->send_ack_at = INT64_MAX;
