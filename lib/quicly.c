@@ -1625,6 +1625,7 @@ static void free_application_space(struct st_quicly_application_space_t **space)
         ptls_clear_memory((*space)->cipher.egress.secret, sizeof((*space)->cipher.egress.secret));
         if ((*space)->non_multipath.space != NULL)
             free_pn_space((*space)->non_multipath.space);
+        free(*space);
         *space = NULL;
     }
 }
