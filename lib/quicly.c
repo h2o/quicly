@@ -1545,8 +1545,8 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
     return 0;
 }
 
-static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, int64_t now,
-                          uint64_t *received_out_of_order)
+static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, int handshake_is_in_progress,
+                          int64_t now, uint64_t *received_out_of_order)
 {
     int ret, ack_now, is_out_of_order;
 
@@ -1564,8 +1564,14 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
     /* if the received packet is ack-eliciting, update / schedule transmission of ACK */
     if (!is_ack_only) {
         space->unacked_count++;
-        if (space->unacked_count >= space->packet_tolerance)
+        if (space->unacked_count >= space->packet_tolerance) {
             ack_now = 1;
+        } else if (handshake_is_in_progress) {
+            /* ACK immediately if handshake is in progress, even if it is the application data space. This mirrors quicly's design
+             * as the sender that does take ack delay into consideration until both initial and handshake contexts are discarded.
+             * TODO induce immediate ACK on the sender side rather than having this logic at the receiver side. */
+            ack_now = 1;
+        }
     }
 
     if (ack_now) {
@@ -6714,7 +6720,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, 0, &(*conn)->initial->super, payload.base, payload.len,
                               &offending_frame_type, &is_ack_only, &is_probe_only)) != 0)
         goto Exit;
-    if ((ret = record_receipt(&(*conn)->initial->super, pn, 0, (*conn)->stash.now,
+    if ((ret = record_receipt(&(*conn)->initial->super, pn, 0, 1, (*conn)->stash.now,
                               &(*conn)->super.stats.num_packets.received_out_of_order)) != 0)
         goto Exit;
 
@@ -6991,7 +6997,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         QUICLY_LOG_CONN(elicit_path_migration, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
     }
     if (conn->super.state < QUICLY_STATE_CLOSING && space != NULL) {
-        if ((ret = record_receipt(space, pn, is_ack_only, conn->stash.now, &conn->super.stats.num_packets.received_out_of_order)) !=
+        if ((ret = record_receipt(space, pn, is_ack_only, conn->initial != NULL || conn->handshake != NULL, conn->stash.now,
+                                  &conn->super.stats.num_packets.received_out_of_order)) !=
             0)
             goto Exit;
     }
