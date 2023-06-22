@@ -2604,7 +2604,7 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
         }
     }
 
-    if (params.enable_multipath && !can_negotiate_multipath(conn)) {
+    if (conn->super.ctx->transport_params.enable_multipath && params.enable_multipath && !can_negotiate_multipath(conn)) {
         ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
         goto Exit;
     }
@@ -2768,7 +2768,8 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
             ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
             goto Exit;
         }
-        if (conn->super.remote.transport_params.enable_multipath && !can_negotiate_multipath(conn)) {
+        if (conn->super.ctx->transport_params.enable_multipath && conn->super.remote.transport_params.enable_multipath &&
+            !can_negotiate_multipath(conn)) {
             ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
             goto Exit;
         }
