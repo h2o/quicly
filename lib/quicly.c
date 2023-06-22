@@ -5144,7 +5144,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         }
         /* non probing frames are sent only on path zero */
         if (s->path_index == 0) {
-            /* acks (TODO send on the correct path rather than on path 0 */
+            /* acks (in case of multipath the paths on which we send acks should be stable; we use path 0 all the time) */
             if (conn->application->one_rtt_writable) {
                 struct st_quicly_pn_space_t *space;
                 uint64_t cid;
