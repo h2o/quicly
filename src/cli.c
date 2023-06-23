@@ -1570,6 +1570,7 @@ int main(int argc, char **argv)
         ctx.transport_params.max_datagram_frame_size = ctx.transport_params.max_udp_payload_size;
     }
 
+    int use_cid_encryptor = 0;
     if (cert_file != NULL || ctx.tls->sign_certificate != NULL) {
         /* server */
         if (cert_file == NULL || ctx.tls->sign_certificate == NULL) {
@@ -1584,13 +1585,7 @@ int main(int argc, char **argv)
         } else {
             load_certificate_chain(ctx.tls, cert_file);
         }
-        if (cid_key == NULL) {
-            static char random_key[17];
-            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
-            cid_key = random_key;
-        }
-        ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_bfecb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
-                                                             ptls_iovec_init(cid_key, strlen(cid_key)));
+        use_cid_encryptor = 1;
     } else {
         /* client */
         if (raw_pubkey_file != NULL) {
@@ -1612,6 +1607,16 @@ int main(int argc, char **argv)
             load_session();
         hs_properties.client.ech.configs = ech.config_list;
         hs_properties.client.ech.retry_configs = &ech.retry.configs;
+        use_cid_encryptor = cid_key != NULL;
+    }
+    if (use_cid_encryptor) {
+        if (cid_key == NULL) {
+            static char random_key[17];
+            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
+            cid_key = random_key;
+        }
+        ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_bfecb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+                                                             ptls_iovec_init(cid_key, strlen(cid_key)));
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");
