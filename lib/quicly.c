@@ -987,6 +987,7 @@ static void retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
             path->dcid = UINT64_MAX;
     }
 
+    quicly_remote_cid_unregister(&conn->super.remote.cid_set, sequence);
     schedule_retire_connection_id_frame(conn, sequence);
 }
 
@@ -1788,6 +1789,8 @@ static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
     }
 
     /* deinstantiate */
+    if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0)
+        retire_connection_id(conn, path->dcid);
     free(path);
 }
 
@@ -6832,8 +6835,6 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         /* switch active path to current path, if current path is validated and not probe-only */
         if (path_index != 0 && conn->paths[path_index]->path_challenge.send_at == INT64_MAX &&
             !conn->paths[path_index]->probe_only) {
-            if (conn->super.remote.cid_set.cids[0].cid.len != 0)
-                retire_connection_id(conn, 0);
             delete_path(conn, 1 /* promote */, path_index);
             recalc_send_probe_at(conn);
         }
