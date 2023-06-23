@@ -348,29 +348,38 @@ subtest "raw-certificates-ec" => sub {
 };
 
 subtest "path-migration" => sub {
-    my $guard = spawn_server("-e", "$tempdir/events");
-    # spawn client that sends one request every second, recording events to file
-    my $pid = fork;
-    die "fork failed:$!"
+    my $doit = sub {
+        my @client_opts = @_;
+        my $guard = spawn_server("-e", "$tempdir/events");
+        # spawn client that sends one request every second, recording events to file
+        my $pid = fork;
+        die "fork failed:$!"
         unless defined $pid;
-    if ($pid == 0) {
-        exec $cli, qw(-O -i 1000 127.0.0.1), $port;
-        die "exec $cli failed:$!";
-    }
-    # send two USR1 signals, each of them causing path migration between requests
-    sleep .5;
-    kill 'USR1', $pid;
-    sleep 2;
-    kill 'USR1', $pid;
-    sleep 2;
-    # kill the peers
-    kill 9, $pid;
-    while (waitpid($pid, 0) != $pid) {}
-    undef $guard;
-    # read the log
-    my $log = slurp_file("$tempdir/events");
-    # check that the path has migrated twice
-    like $log, qr{"type":"promote_path".*\n.*"type":"promote_path"}s;
+        if ($pid == 0) {
+            exec $cli, @client_opts, qw(-O -i 1000 127.0.0.1), $port;
+            die "exec $cli failed:$!";
+        }
+        # send two USR1 signals, each of them causing path migration between requests
+        sleep .5;
+        kill 'USR1', $pid;
+        sleep 2;
+        kill 'USR1', $pid;
+        sleep 2;
+        # kill the peers
+        kill 9, $pid;
+        while (waitpid($pid, 0) != $pid) {}
+        undef $guard;
+        # read the log
+        my $log = slurp_file("$tempdir/events");
+        # check that the path has migrated twice
+        like $log, qr{"type":"promote_path".*\n.*"type":"promote_path"}s;
+    };
+    subtest "without-cid" => sub {
+        $doit->();
+    };
+    subtest "with-cid" => sub {
+        $doit->(qw(-B 01234567));
+    };
 };
 
 done_testing;
