@@ -4964,7 +4964,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         }
     }
 
-    s->dcid = get_dcid(conn, 0);
+    s->dcid = get_dcid(conn, s->path_index);
 
     s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size,
                                       calc_amplification_limit_allowance(conn), restrict_sending);
