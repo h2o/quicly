@@ -45,11 +45,15 @@ provider quicly {
     probe send(struct st_quicly_conn_t *conn, int64_t at, int state, const char *dcid);
     probe receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const void *bytes, size_t bytes_len);
     probe version_switch(struct st_quicly_conn_t *conn, int64_t at, uint32_t new_version);
-    probe migrate_active_path(struct st_quicly_conn_t *conn, int64_t at);
     probe idle_timeout(struct st_quicly_conn_t *conn, int64_t at);
     probe handshake_timeout(struct st_quicly_conn_t *conn, int64_t at, int64_t elapsed, uint32_t rtt_smoothed);
     probe initial_handshake_packet_exceed(struct st_quicly_conn_t *conn, int64_t at, uint64_t num_packets);
     probe stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t at);
+
+    probe new_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index, const char *remote);
+    probe delete_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);
+    probe promote_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);
+    probe elicit_path_migration(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);
 
     probe crypto_handshake(struct st_quicly_conn_t *conn, int64_t at, int ret);
     probe crypto_update_secret(struct st_quicly_conn_t *conn, int64_t at, int is_enc, uint8_t epoch, const char *label, const char *secret);

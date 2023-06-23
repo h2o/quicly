@@ -50,7 +50,7 @@
 #define MAX_BURST_PACKETS 10
 
 FILE *quicly_trace_fp = NULL;
-static unsigned verbosity = 0;
+static unsigned verbosity = 0, udpbufsize = 0;
 static int suppress_output = 0, send_datagram_frame = 0;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
 
@@ -121,6 +121,77 @@ struct st_stream_data_t {
     FILE *outfp;
 };
 
+static int new_socket(int af)
+{
+    int fd;
+
+    if ((fd = socket(af, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
+        perror("socket(2) failed");
+        return -1;
+    }
+    fcntl(fd, F_SETFL, O_NONBLOCK);
+    {
+        int on = 1;
+        if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
+            perror("setsockopt(SO_REUSEADDR) failed");
+            return -1;
+        }
+    }
+    if (udpbufsize != 0) {
+        unsigned arg = udpbufsize;
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &arg, sizeof(arg)) != 0) {
+            perror("setsockopt(SO_RCVBUF) failed");
+            return -1;
+        }
+        arg = udpbufsize;
+        if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &arg, sizeof(arg)) != 0) {
+            perror("setsockopt(SO_RCVBUF) failed");
+            return -1;
+        }
+    }
+#if defined(IP_DONTFRAG)
+    {
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_DONTFRAG, &on, sizeof(on)) != 0)
+            perror("Warning: setsockopt(IP_DONTFRAG) failed");
+    }
+#elif defined(IP_PMTUDISC_DO)
+    {
+        int opt = IP_PMTUDISC_DO;
+        if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0)
+            perror("Warning: setsockopt(IP_MTU_DISCOVER) failed");
+    }
+#endif
+    switch (af) {
+    case AF_INET: {
+#ifdef IP_PKTINFO
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IP_PKTINFO) failed");
+            return -1;
+        }
+#elif defined(IP_RECVDSTADDR)
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_RECVDSTADDR, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IP_RECVDSTADDR) failed");
+            return -1;
+        }
+#endif
+    } break;
+    case AF_INET6: {
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IPV6_RECVPKTINFO, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IPV6_RECVPKTINNFO) failed");
+            return -1;
+        }
+    } break;
+    default:
+        break;
+    }
+
+    return fd;
+}
+
 static void on_stop_sending(quicly_stream_t *stream, int err);
 static void on_receive_reset(quicly_stream_t *stream, int err);
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
@@ -147,10 +218,11 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
     fprintf(fp,
             "packets-received: %" PRIu64 ", packets-decryption-failed: %" PRIu64 ", packets-sent: %" PRIu64
             ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64
-            ", bytes-sent: %" PRIu64 ", srtt: %" PRIu32 "\n",
+            ", bytes-sent: %" PRIu64 ", paths-created %" PRIu64 ", paths-validated %" PRIu64 ", paths-promoted: %" PRIu64
+            ", srtt: %" PRIu32 "\n",
             stats.num_packets.received, stats.num_packets.decryption_failed, stats.num_packets.sent, stats.num_packets.lost,
             stats.num_packets.ack_received, stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent,
-            stats.rtt.smoothed);
+            stats.num_paths.created, stats.num_paths.validated, stats.num_paths.promoted, stats.rtt.smoothed);
 }
 
 static int validate_path(const char *path)
@@ -673,6 +745,15 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         fd_set readfds;
         struct timeval *tv, tvbuf;
         do {
+            if (got_sigusr1) {
+                got_sigusr1 = 0;
+                int newfd = new_socket(local.sa.sa_family);
+                if (newfd != -1) {
+                    close(fd);
+                    fcntl(newfd, F_SETFL, O_NONBLOCK);
+                    fd = newfd;
+                }
+            }
             int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
             if (enqueue_requests_at < timeout_at)
                 timeout_at = enqueue_requests_at;
@@ -693,17 +774,6 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             FD_ZERO(&readfds);
             FD_SET(fd, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
-        if (got_sigusr1) {
-            got_sigusr1 = 0;
-            int newfd = socket(local.sa.sa_family, SOCK_DGRAM, IPPROTO_UDP);
-            if (newfd != -1) {
-                close(fd);
-                fcntl(newfd, F_SETFL, O_NONBLOCK);
-                fd = newfd;
-            } else {
-                fprintf(stderr, "socket(2) failed:%s\n", strerror(errno));
-            }
-        }
         if (enqueue_requests_at <= ctx.now->cb(ctx.now))
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
@@ -1192,7 +1262,6 @@ int main(int argc, char **argv)
     const char *cert_file = NULL, *raw_pubkey_file = NULL, *host, *port, *cid_key = NULL;
     struct sockaddr_storage sa;
     socklen_t salen;
-    unsigned udpbufsize = 0;
     int ch, opt_index, fd;
 
     ERR_load_crypto_strings();
@@ -1501,6 +1570,7 @@ int main(int argc, char **argv)
         ctx.transport_params.max_datagram_frame_size = ctx.transport_params.max_udp_payload_size;
     }
 
+    int use_cid_encryptor = 0;
     if (cert_file != NULL || ctx.tls->sign_certificate != NULL) {
         /* server */
         if (cert_file == NULL || ctx.tls->sign_certificate == NULL) {
@@ -1515,13 +1585,7 @@ int main(int argc, char **argv)
         } else {
             load_certificate_chain(ctx.tls, cert_file);
         }
-        if (cid_key == NULL) {
-            static char random_key[17];
-            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
-            cid_key = random_key;
-        }
-        ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_bfecb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
-                                                             ptls_iovec_init(cid_key, strlen(cid_key)));
+        use_cid_encryptor = 1;
     } else {
         /* client */
         if (raw_pubkey_file != NULL) {
@@ -1543,6 +1607,16 @@ int main(int argc, char **argv)
             load_session();
         hs_properties.client.ech.configs = ech.config_list;
         hs_properties.client.ech.retry_configs = &ech.retry.configs;
+        use_cid_encryptor = cid_key != NULL;
+    }
+    if (use_cid_encryptor) {
+        if (cid_key == NULL) {
+            static char random_key[17];
+            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
+            cid_key = random_key;
+        }
+        ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_bfecb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+                                                             ptls_iovec_init(cid_key, strlen(cid_key)));
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");
@@ -1554,69 +1628,8 @@ int main(int argc, char **argv)
     if (resolve_address((void *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
-    if ((fd = socket(sa.ss_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
-        perror("socket(2) failed");
+    if ((fd = new_socket(sa.ss_family)) == -1)
         return 1;
-    }
-    fcntl(fd, F_SETFL, O_NONBLOCK);
-    {
-        int on = 1;
-        if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
-            perror("setsockopt(SO_REUSEADDR) failed");
-            return 1;
-        }
-    }
-    if (udpbufsize != 0) {
-        unsigned arg = udpbufsize;
-        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &arg, sizeof(arg)) != 0) {
-            perror("setsockopt(SO_RCVBUF) failed");
-            return 1;
-        }
-        arg = udpbufsize;
-        if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &arg, sizeof(arg)) != 0) {
-            perror("setsockopt(SO_RCVBUF) failed");
-            return 1;
-        }
-    }
-#if defined(IP_DONTFRAG)
-    {
-        int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IP_DONTFRAG, &on, sizeof(on)) != 0)
-            perror("Warning: setsockopt(IP_DONTFRAG) failed");
-    }
-#elif defined(IP_PMTUDISC_DO)
-    {
-        int opt = IP_PMTUDISC_DO;
-        if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0)
-            perror("Warning: setsockopt(IP_MTU_DISCOVER) failed");
-    }
-#endif
-    switch (sa.ss_family) {
-    case AF_INET: {
-#ifdef IP_PKTINFO
-        int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof(on)) != 0) {
-            perror("setsockopt(IP_PKTINFO) failed");
-            return 1;
-        }
-#elif defined(IP_RECVDSTADDR)
-        int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IP_RECVDSTADDR, &on, sizeof(on)) != 0) {
-            perror("setsockopt(IP_RECVDSTADDR) failed");
-            return 1;
-        }
-#endif
-    } break;
-    case AF_INET6: {
-        int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IPV6_RECVPKTINFO, &on, sizeof(on)) != 0) {
-            perror("setsockopt(IPV6_RECVPKTINNFO) failed");
-            return 1;
-        }
-    } break;
-    default:
-        break;
-    }
 
     return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, host);
 }

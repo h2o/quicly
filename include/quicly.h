@@ -327,6 +327,14 @@ struct st_quicly_context_t {
      */
     uint64_t max_initial_handshake_packets;
     /**
+     * maximum number of probe packets (i.e., packets carrying PATH_CHALLENGE frames) to be sent before calling a path unreachable
+     */
+    uint64_t max_probe_packets;
+    /**
+     * once path validation fails for the specified number of times, packets arriving on new tuples will be dropped
+     */
+    uint64_t max_path_validation_failures;
+    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
@@ -454,6 +462,14 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total number of packets received out of order.                                                                          \
          */                                                                                                                        \
         uint64_t received_out_of_order;                                                                                            \
+        /**                                                                                                                        \
+         * Total number of packets sent on promoted paths.                                                                         \
+         */                                                                                                                        \
+        uint64_t sent_promoted_paths;                                                                                              \
+        /**                                                                                                                        \
+         * Total number of acked packets that were sent on promoted.                                                               \
+         */                                                                                                                        \
+        uint64_t ack_received_promoted_paths;                                                                                      \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -481,6 +497,32 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t stream_data_resent;                                                                                               \
     } num_bytes;                                                                                                                   \
+    struct {                                                                                                                       \
+        /**                                                                                                                        \
+         * number of alternate paths created                                                                                       \
+         */                                                                                                                        \
+        uint64_t created;                                                                                                          \
+        /**                                                                                                                        \
+         * number alternate paths validated                                                                                        \
+         */                                                                                                                        \
+        uint64_t validated;                                                                                                        \
+        /**                                                                                                                        \
+         * number of alternate paths that were created but failed to validate                                                      \
+         */                                                                                                                        \
+        uint64_t validation_failed;                                                                                                \
+        /**                                                                                                                        \
+         * number of paths on which migration has been elicited (i.e., received non-probing packets)                               \
+         */                                                                                                                        \
+        uint64_t migration_elicited;                                                                                               \
+        /**                                                                                                                        \
+         * number of migrations                                                                                                    \
+         */                                                                                                                        \
+        uint64_t promoted;                                                                                                         \
+        /**                                                                                                                        \
+         * number of alternate paths that were closed due to Connection ID being unavailable                                       \
+         */                                                                                                                        \
+        uint64_t closed_no_dcid;                                                                                                   \
+    } num_paths;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of each frame being sent / received.                                                                           \
      */                                                                                                                            \
