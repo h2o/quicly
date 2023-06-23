@@ -373,6 +373,17 @@ subtest "path-migration" => sub {
         my $log = slurp_file("$tempdir/events");
         # check that the path has migrated twice
         like $log, qr{"type":"promote_path".*\n.*"type":"promote_path"}s;
+        subtest "CID seq 1 is used for 1st path probe" => sub {
+            plan skip_all => "zero-length CID"
+                unless @client_opts;
+            complex $log, sub {
+                /"type":"new_connection_id_receive",[^\n]*"sequence":1,[^\n]*"cid":"(.*?)"/s;
+                my $cid1 = $1;
+                /"type":"packet_prepare",[^\n]*"dcid":"([^\"]*)"[^\n]*\n[^\n]*"type":"path_challenge_send",/s;
+                my $cid_probe = $1;
+                $cid1 eq $cid_probe;
+            };
+        };
     };
     subtest "without-cid" => sub {
         $doit->();
