@@ -115,17 +115,19 @@ struct st_quicly_sent_t {
     union {
         quicly_sent_packet_t packet;
         /**
-         * ACK frame. Represents up to 8 ack ranges. If not full, `additional` list is terminated by .gap = 0.
+         * ACK frame. Represents up to 7 ack ranges. If not full, `additional` list is terminated by .gap = 0.
          */
         struct {
             uint64_t start;
             union {
                 struct {
                     uint64_t start_length;
-                    struct st_quicly_sent_ack_additional_t additional[4];
+                    uint8_t path_id;
+                    struct st_quicly_sent_ack_additional_t additional[3];
                 } ranges64;
                 struct {
                     uint8_t start_length;
+                    uint8_t path_id;
                     struct st_quicly_sent_ack_additional_t additional[7];
                 } ranges8;
             };

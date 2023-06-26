@@ -2974,10 +2974,11 @@ static int decrypt_packet(ptls_cipher_context_t *header_protection,
     return 0;
 }
 
-static int do_on_ack_ack(quicly_conn_t *conn, quicly_sentmap_t *map, const quicly_sent_packet_t *packet, uint64_t start,
-                         uint64_t start_length, struct st_quicly_sent_ack_additional_t *additional, size_t additional_capacity)
+static int do_on_ack_ack(quicly_conn_t *conn, quicly_sentmap_t *map, const quicly_sent_packet_t *packet, uint8_t path_id,
+                         uint64_t start, uint64_t start_length, struct st_quicly_sent_ack_additional_t *additional,
+                         size_t additional_capacity)
 {
-    struct st_quicly_pn_space_t *space;
+    struct st_quicly_pn_space_t *space = NULL;
 
     switch (packet->ack_epoch) {
     case QUICLY_EPOCH_INITIAL:
@@ -2987,7 +2988,23 @@ static int do_on_ack_ack(quicly_conn_t *conn, quicly_sentmap_t *map, const quicl
         space = &conn->handshake->super;
         break;
     case QUICLY_EPOCH_1RTT:
-        space = (void *)((char *)map - offsetof(struct st_quicly_path_egress_t, loss.sentmap));
+        if (quicly_is_multipath(conn)) {
+            for (size_t i = 0, size = quicly_local_cid_get_size(&conn->super.local.cid_set); i < size; ++i) {
+                quicly_local_cid_t *l = &conn->super.local.cid_set.cids[i];
+                if (l->state == QUICLY_LOCAL_CID_STATE_IDLE)
+                    continue;
+                if (l->sequence == path_id) {
+                    space = l->multipath.space;
+                    assert(space != NULL);
+                    break;
+                }
+            }
+            /* space might have been retired already */
+            if (space == NULL)
+                return 0;
+        } else {
+            space = conn->application->non_multipath.space;
+        }
         break;
     default:
         assert(!"FIXME");
@@ -3023,8 +3040,9 @@ static int on_ack_ack_ranges64(quicly_sentmap_t *map, const quicly_sent_packet_t
 {
     /* TODO log */
 
-    return acked ? do_on_ack_ack(conn, map, packet, sent->data.ack.start, sent->data.ack.ranges64.start_length,
-                                 sent->data.ack.ranges64.additional, PTLS_ELEMENTSOF(sent->data.ack.ranges64.additional))
+    return acked ? do_on_ack_ack(conn, map, packet, sent->data.ack.ranges64.path_id, sent->data.ack.start,
+                                 sent->data.ack.ranges64.start_length, sent->data.ack.ranges64.additional,
+                                 PTLS_ELEMENTSOF(sent->data.ack.ranges64.additional))
                  : 0;
 }
 
@@ -3033,8 +3051,9 @@ static int on_ack_ack_ranges8(quicly_sentmap_t *map, const quicly_sent_packet_t 
 {
     /* TODO log */
 
-    return acked ? do_on_ack_ack(conn, map, packet, sent->data.ack.start, sent->data.ack.ranges8.start_length,
-                                 sent->data.ack.ranges8.additional, PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional))
+    return acked ? do_on_ack_ack(conn, map, packet, sent->data.ack.ranges8.path_id, sent->data.ack.start,
+                                 sent->data.ack.ranges8.start_length, sent->data.ack.ranges8.additional,
+                                 PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional))
                  : 0;
 }
 
@@ -3909,16 +3928,21 @@ Emit: /* emit an ACK frame */
             /* allocate */
             if ((sent = quicly_sentmap_allocate(&path->egress->loss.sentmap, on_ack_ack_ranges8)) == NULL)
                 return PTLS_ERROR_NO_MEMORY;
+            /* make certain path_id is storable in 8-bit */
+            PTLS_BUILD_ASSERT((1u << 8 * sizeof(sent->data.ack.ranges8.path_id)) > QUICLY_MAX_PATH_ID);
+            assert(cid == UINT64_MAX || cid < (1u << 8 * sizeof(sent->data.ack.ranges8.path_id)));
             /* store the first range, as well as preparing references to the additional slots */
             sent->data.ack.start = space->ack_queue.ranges[range_index].start;
             uint64_t length = space->ack_queue.ranges[range_index].end - space->ack_queue.ranges[range_index].start;
             if (length <= UINT8_MAX) {
                 sent->data.ack.ranges8.start_length = length;
+                sent->data.ack.ranges8.path_id = cid;
                 additional = sent->data.ack.ranges8.additional;
                 additional_end = additional + PTLS_ELEMENTSOF(sent->data.ack.ranges8.additional);
             } else {
                 sent->acked = on_ack_ack_ranges64;
                 sent->data.ack.ranges64.start_length = length;
+                sent->data.ack.ranges64.path_id = cid;
                 additional = sent->data.ack.ranges64.additional;
                 additional_end = additional + PTLS_ELEMENTSOF(sent->data.ack.ranges64.additional);
             }
