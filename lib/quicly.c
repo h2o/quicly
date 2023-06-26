@@ -5687,7 +5687,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
     if (frame.multipath_cid != UINT64_MAX) {
         if ((state->epoch != QUICLY_EPOCH_1RTT || !quicly_is_multipath(conn)))
             return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
-        if (frame.multipath_cid >= conn->super.local.cid_set.plaintext.path_id)
+        if (frame.multipath_cid > conn->super.remote.cid_set._largest_sequence_expected) /* FIXME need wapper? */
             return QUICLY_TRANSPORT_ERROR_MP_PROTOCOL_VIOLATION;
         for (path_index = 0; path_index < PTLS_ELEMENTSOF(conn->paths); ++path_index) {
             if (conn->paths[path_index] == NULL)
