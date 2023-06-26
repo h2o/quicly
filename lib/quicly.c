@@ -3572,6 +3572,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
 {
     struct st_quicly_conn_path_t *path = conn->paths[s->path_index];
     size_t datagram_size, packet_bytes_in_flight;
+    uint64_t encrypt_dcid = 0;
 
     assert(s->target.cipher->aead != NULL);
 
@@ -3609,6 +3610,8 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         }
         if ((conn->application->cipher.egress.key_phase & 1) != 0)
             *s->target.first_byte_at |= QUICLY_KEY_PHASE_BIT;
+        if (quicly_is_multipath(conn))
+            encrypt_dcid = path->dcid;
     }
     quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE, (uint16_t)path->egress->packet_number);
 
@@ -3620,7 +3623,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     conn->super.ctx->crypto_engine->encrypt_packet(
         conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead,
         ptls_iovec_init(s->payload_buf.datagram, datagram_size), s->target.first_byte_at - s->payload_buf.datagram,
-        s->dst_payload_from - s->payload_buf.datagram, path->dcid, path->egress->packet_number, coalesced);
+        s->dst_payload_from - s->payload_buf.datagram, encrypt_dcid, path->egress->packet_number, coalesced);
 
     /* update CC, commit sentmap */
     int on_promoted_path = s->path_index == 0 && !conn->paths[0]->initial; /* FIXME multipath */
