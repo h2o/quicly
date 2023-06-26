@@ -5728,6 +5728,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         do {
             const quicly_sent_packet_t *sent = quicly_sentmap_get(&iter);
             uint64_t pn_sent = sent->packet_number;
+            uint8_t key_phase_bit_sent = sent->key_phase_bit;
             assert(pn_acked <= pn_sent);
             if (pn_acked < pn_sent) {
                 /* set pn_acked to pn_sent; or past the end of the ack block, for use with the next ack block */
@@ -5766,10 +5767,11 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
             }
             if ((ret = quicly_sentmap_update(&path->egress->loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED, conn)) != 0)
                 return ret;
+            sent = NULL; /* the object is destroyed by `quicly_sentmap_update` */
             if (state->epoch == QUICLY_EPOCH_1RTT) {
                 struct st_quicly_application_space_t *space = conn->application;
                 if (space->cipher.egress.key_update_at.next == UINT64_MAX &&
-                    sent->key_phase_bit == (space->cipher.egress.key_phase & 1)) {
+                    key_phase_bit_sent == (space->cipher.egress.key_phase & 1)) {
                     space->cipher.egress.key_update_at.next =
                         space->cipher.egress.key_update_at.last + conn->super.ctx->max_packets_per_key;
                     QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, conn->stash.now, space->cipher.egress.key_update_at.next);
