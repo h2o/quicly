@@ -192,11 +192,11 @@ typedef struct st_quicly_crypto_engine_t {
      * header protection using `header_protect_ctx`. Quicly does not read or write the content of the UDP datagram payload after
      * this function is called. Therefore, an engine might retain the information provided by this function, and protect the packet
      * and the header at a later moment (e.g., hardware crypto offload).
-     * @param dcid if non-NULL specifies the CID sequence number for encrypting Multipath QUIC packets
+     * @param dcid specifies the CID sequence number for encrypting Multipath QUIC packets; will always be zero in QUIC v1
      */
     void (*encrypt_packet)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn, ptls_cipher_context_t *header_protect_ctx,
                            ptls_aead_context_t *packet_protect_ctx, ptls_iovec_t datagram, size_t first_byte_at,
-                           size_t payload_from, uint64_t *dcid, uint64_t packet_number, int coalesced);
+                           size_t payload_from, uint64_t dcid, uint64_t packet_number, int coalesced);
 } quicly_crypto_engine_t;
 
 /**

@@ -3620,7 +3620,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
     conn->super.ctx->crypto_engine->encrypt_packet(
         conn->super.ctx->crypto_engine, conn, s->target.cipher->header_protection, s->target.cipher->aead,
         ptls_iovec_init(s->payload_buf.datagram, datagram_size), s->target.first_byte_at - s->payload_buf.datagram,
-        s->dst_payload_from - s->payload_buf.datagram, &path->dcid, path->egress->packet_number, coalesced);
+        s->dst_payload_from - s->payload_buf.datagram, path->dcid, path->egress->packet_number, coalesced);
 
     /* update CC, commit sentmap */
     int on_promoted_path = s->path_index == 0 && !conn->paths[0]->initial; /* FIXME multipath */
@@ -5442,7 +5442,7 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_
     /* encrypt packet */
     quicly_default_crypto_engine.encrypt_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
                                                 ptls_iovec_init(datagram, datagram_len), 0, payload_from - (uint8_t *)datagram,
-                                                NULL, 0, 0);
+                                                0, 0, 0);
 
     dispose_cipher(&egress);
     return datagram_len;
