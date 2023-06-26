@@ -1573,7 +1573,7 @@ int main(int argc, char **argv)
         ctx.transport_params.max_datagram_frame_size = ctx.transport_params.max_udp_payload_size;
     }
 
-    int needs_cid_encryptor = 0;
+    int use_cid_encryptor = 0;
     if (cert_file != NULL || ctx.tls->sign_certificate != NULL) {
         /* server */
         if (cert_file == NULL || ctx.tls->sign_certificate == NULL) {
@@ -1588,7 +1588,7 @@ int main(int argc, char **argv)
         } else {
             load_certificate_chain(ctx.tls, cert_file);
         }
-        needs_cid_encryptor = 1;
+        use_cid_encryptor = 1;
     } else {
         /* client */
         if (raw_pubkey_file != NULL) {
@@ -1610,9 +1610,9 @@ int main(int argc, char **argv)
             load_session();
         hs_properties.client.ech.configs = ech.config_list;
         hs_properties.client.ech.retry_configs = &ech.retry.configs;
-        needs_cid_encryptor = ctx.transport_params.enable_multipath;
+        use_cid_encryptor = cid_key != NULL || ctx.transport_params.enable_multipath;
     }
-    if (needs_cid_encryptor) {
+    if (use_cid_encryptor) {
         if (cid_key == NULL) {
             static char random_key[17];
             tlsctx.random_bytes(random_key, sizeof(random_key) - 1);

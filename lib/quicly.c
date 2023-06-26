@@ -1049,6 +1049,7 @@ static void retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
             path->dcid = UINT64_MAX;
     }
 
+    quicly_remote_cid_unregister(&conn->super.remote.cid_set, sequence);
     schedule_retire_connection_id_frame(conn, sequence);
 }
 
@@ -1889,6 +1890,8 @@ static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
         quicly_loss_dispose(&path->egress->loss);
         free(path->egress);
     }
+    if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0)
+        retire_connection_id(conn, path->dcid);
     free(path);
 }
 
@@ -5109,7 +5112,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         }
     }
 
-    s->dcid = get_dcid(conn, 0);
+    s->dcid = get_dcid(conn, s->path_index);
 
     s->send_window = calc_send_window(conn, s->path_index, min_packets_to_send * conn->egress.max_udp_payload_size,
                                       calc_amplification_limit_allowance(conn), restrict_sending);
@@ -7039,8 +7042,6 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         /* switch active path to current path, if current path is validated and not probe-only */
         if (path_index != 0 && conn->paths[path_index]->path_challenge.send_at == INT64_MAX &&
             !conn->paths[path_index]->probe_only) {
-            if (conn->super.remote.cid_set.cids[0].cid.len != 0)
-                retire_connection_id(conn, 0);
             delete_path(conn, 1 /* promote */, path_index);
             path_index = 0;
         }
