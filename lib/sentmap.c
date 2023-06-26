@@ -84,6 +84,9 @@ static void discard_entry(quicly_sentmap_t *map, quicly_sentmap_iter_t *iter)
 
 void quicly_sentmap_dispose(quicly_sentmap_t *map)
 {
+    /* size of `quicly_sent_t` is meant to be 4 pointers */
+    PTLS_BUILD_ASSERT(sizeof(void *) == 8 ? sizeof(quicly_sent_t) == sizeof(uint64_t) * 4 : 1);
+
     struct st_quicly_sent_block_t *block;
 
     while ((block = map->head) != NULL) {
