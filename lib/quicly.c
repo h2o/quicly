@@ -1820,6 +1820,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
             free(path);
             return PTLS_ERROR_NO_MEMORY;
         }
+        memset(path->egress, 0, sizeof(*path->egress));
 
         path->path_challenge.send_at = INT64_MAX;
         path->initial = 1;
