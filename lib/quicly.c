@@ -153,6 +153,29 @@ struct st_quicly_handshake_space_t {
     uint16_t largest_ingress_udp_payload_size;
 };
 
+struct st_quicly_application_space_t;
+
+struct st_quicly_path_vtable_t {
+    /**
+     * if this is a MP-QUIC connection
+     */
+    unsigned multipath : 1;
+    /**
+     * Returns pn space. If multipath is not used, the only one application space is always returned. If multipath is used, space
+     * corresponding to given path ID is returned, or if the corresponding path no longer exists, PACKET_IGNORED is returned. Other
+     * error codes indicate fatal error to the connection.
+     */
+    int (*get_space)(quicly_conn_t *conn, struct st_quicly_pn_space_t **space, uint64_t path_id);
+    /**
+     * iteration; see quicly_local_cid_get_next
+     */
+    ssize_t (*foreach_space)(quicly_conn_t *conn, struct st_quicly_pn_space_t **space, uint64_t *path_id, ssize_t index);
+    /**
+     * returns IV to be provided to `ptls_aead_xor_iv`
+     */
+    size_t (*get_iv)(struct st_quicly_application_space_t *space, uint8_t *iv, uint64_t path_id);
+};
+
 struct st_quicly_application_space_t {
     struct {
         struct {
@@ -185,6 +208,7 @@ struct st_quicly_application_space_t {
         } egress;
     } cipher;
     int one_rtt_writable;
+    const struct st_quicly_path_vtable_t *vtable;
     struct {
         struct st_quicly_pn_space_t *space;
     } non_multipath;
@@ -812,32 +836,6 @@ uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uin
     return candidate;
 }
 
-static ssize_t foreach_app_space(quicly_conn_t *conn, struct st_quicly_pn_space_t **space, uint64_t *path_id, ssize_t index)
-{
-    if (quicly_is_multipath(conn)) {
-        while ((index = quicly_local_cid_get_next(&conn->super.local.cid_set, index)) != -1) {
-            quicly_local_cid_t *cid = &conn->super.local.cid_set.cids[index];
-            if (cid->multipath.space != NULL) {
-                *space = cid->multipath.space;
-                if (path_id != NULL)
-                    *path_id = cid->sequence;
-                break;
-            }
-        }
-    } else {
-        if (index == -1) {
-            *space = conn->application->non_multipath.space;
-            if (path_id != NULL)
-                *path_id = UINT64_MAX;
-            index = 0;
-        } else {
-            index = -1;
-        }
-    }
-
-    return index;
-}
-
 static int64_t calc_min_send_ack_at(quicly_conn_t *conn)
 {
     int64_t at = INT64_MAX;
@@ -849,7 +847,7 @@ static int64_t calc_min_send_ack_at(quicly_conn_t *conn)
     if (conn->application != NULL && conn->application->one_rtt_writable) {
         struct st_quicly_pn_space_t *space;
         ssize_t i = -1;
-        while ((i = foreach_app_space(conn, &space, NULL, i)) != -1) {
+        while ((i = conn->application->vtable->foreach_space(conn, &space, NULL, i)) != -1) {
             if (at > space->send_ack_at)
                 at = space->send_ack_at;
         }
@@ -1350,6 +1348,11 @@ ptls_t *quicly_get_tls(quicly_conn_t *conn)
     return conn->crypto.tls;
 }
 
+int quicly_is_multipath(quicly_conn_t *conn)
+{
+    return conn->application != NULL && conn->application->vtable->multipath;
+}
+
 uint32_t quicly_num_streams_by_group(quicly_conn_t *conn, int uni, int locally_initiated)
 {
     int server_initiated = quicly_is_client(conn) != locally_initiated;
@@ -1637,19 +1640,92 @@ static void free_application_space(struct st_quicly_application_space_t **space)
     }
 }
 
+/**
+ * given path ID (i.e., local CID sequence), return the corresponding ack space
+ */
+static int multipath_get_space(quicly_conn_t *conn, struct st_quicly_pn_space_t **space, uint64_t path_id)
+{
+    for (size_t i = 0; i < quicly_local_cid_get_size(&conn->super.local.cid_set); ++i) {
+        quicly_local_cid_t *cid = &conn->super.local.cid_set.cids[i];
+        if (cid->sequence != path_id)
+            continue;
+        assert(cid->state != QUICLY_LOCAL_CID_STATE_IDLE);
+        if (cid->multipath.space == NULL &&
+            (cid->multipath.space = alloc_pn_space(sizeof(*cid->multipath.space), QUICLY_DEFAULT_PACKET_TOLERANCE)) == NULL)
+            return PTLS_ERROR_NO_MEMORY;
+        *space = cid->multipath.space;
+        return 0;
+    }
+    return QUICLY_ERROR_PACKET_IGNORED;
+}
+
+static ssize_t multipath_foreach_space(quicly_conn_t *conn, struct st_quicly_pn_space_t **space, uint64_t *path_id, ssize_t index)
+{
+    while ((index = quicly_local_cid_get_next(&conn->super.local.cid_set, index)) != -1) {
+        quicly_local_cid_t *cid = &conn->super.local.cid_set.cids[index];
+        if (cid->multipath.space != NULL) {
+            *space = cid->multipath.space;
+            if (path_id != NULL)
+                *path_id = cid->sequence;
+            break;
+        }
+    }
+
+    return index;
+}
+
+static size_t multipath_get_iv(struct st_quicly_application_space_t *space, uint8_t *iv, uint64_t path_id)
+{
+    assert(space->cipher.ingress.aead[0] != NULL && "slot 0 should always be available");
+    return quicly_build_multipath_iv(space->cipher.ingress.aead[0]->algo, path_id, iv);
+}
+
+static int non_multipath_get_space(quicly_conn_t *conn, struct st_quicly_pn_space_t **space, uint64_t path_id)
+{
+    *space = conn->application->non_multipath.space;
+    return 0;
+}
+
+static ssize_t non_multipath_foreach_space(quicly_conn_t *conn, struct st_quicly_pn_space_t **space, uint64_t *path_id,
+                                           ssize_t index)
+{
+    if (index != -1)
+        return -1;
+
+    *space = conn->application->non_multipath.space;
+    if (path_id != NULL)
+        *path_id = UINT64_MAX;
+
+    return 0;
+}
+
+static size_t non_multipath_get_iv(struct st_quicly_application_space_t *space, uint8_t *iv, uint64_t path_id)
+{
+    return 0;
+}
+
 static int setup_application_space(quicly_conn_t *conn)
 {
     if ((conn->application = malloc(sizeof(*conn->application))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     memset(conn->application, 0, sizeof(*conn->application));
 
-    if (!quicly_is_multipath(conn)) {
+    if (conn->super.ctx->transport_params.enable_multipath && conn->super.remote.transport_params.enable_multipath) {
+        static const struct st_quicly_path_vtable_t callbacks = {
+            .multipath = 1, .get_space = multipath_get_space, .foreach_space = multipath_foreach_space, .get_iv = multipath_get_iv};
+        conn->application->vtable = &callbacks;
+    } else {
         if ((conn->application->non_multipath.space =
                  alloc_pn_space(sizeof(*conn->application->non_multipath.space), QUICLY_DEFAULT_PACKET_TOLERANCE)) == NULL) {
             free(conn->application);
             conn->application = NULL;
             return PTLS_ERROR_NO_MEMORY;
         }
+        static const struct st_quicly_path_vtable_t callbacks = {.multipath = 0,
+                                                                 .get_space = non_multipath_get_space,
+                                                                 .foreach_space = non_multipath_foreach_space,
+                                                                 .get_iv = non_multipath_get_iv};
+        conn->application->vtable = &callbacks;
     }
 
     /* prohibit key-update until receiving an ACK for an 1-RTT packet */
@@ -2836,15 +2912,11 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
 {
     quicly_conn_t *conn = ctx;
     struct st_quicly_application_space_t *space = conn->application;
-    size_t aead_index = (packet->octets.base[0] & QUICLY_KEY_PHASE_BIT) != 0, multipath_iv_len = 0;
     uint8_t multipath_iv[PTLS_MAX_IV_SIZE];
+    size_t aead_index = (packet->octets.base[0] & QUICLY_KEY_PHASE_BIT) != 0, multipath_iv_len;
     int ret;
 
-    if (!QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0]) && quicly_is_multipath(conn)) {
-        assert(space->cipher.ingress.aead[0] != NULL && "slot 0 should always be available");
-        multipath_iv_len =
-            quicly_build_multipath_iv(space->cipher.ingress.aead[0]->algo, packet->cid.dest.plaintext.path_id, multipath_iv);
-    }
+    multipath_iv_len = space->vtable->get_iv(space, multipath_iv, packet->cid.dest.plaintext.path_id);
 
     /* prepare key, when not available (yet) */
     if (space->cipher.ingress.aead[aead_index] == NULL) {
@@ -2987,22 +3059,9 @@ static int do_on_ack_ack(quicly_conn_t *conn, quicly_sentmap_t *map, const quicl
         space = &conn->handshake->super;
         break;
     case QUICLY_EPOCH_1RTT:
-        if (quicly_is_multipath(conn)) {
-            ssize_t i = -1;
-            while ((i = quicly_local_cid_get_next(&conn->super.local.cid_set, i)) != -1) {
-                quicly_local_cid_t *l = &conn->super.local.cid_set.cids[i];
-                if (l->sequence == path_id) {
-                    space = l->multipath.space;
-                    assert(space != NULL);
-                    break;
-                }
-            }
-            /* space might have been retired already */
-            if (space == NULL)
-                return 0;
-        } else {
-            space = conn->application->non_multipath.space;
-        }
+        /* when multipath is used, space might have been retired already, in which case PACKET_IGNORED will be returned */
+        if (conn->application->vtable->get_space(conn, &space, path_id) != 0)
+            return 0;
         break;
     default:
         assert(!"FIXME");
@@ -3451,7 +3510,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
 uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn)
 {
-    if (conn->application == NULL || quicly_is_multipath(conn))
+    if (conn->application == NULL || conn->application->vtable->multipath)
         return UINT64_MAX;
     return conn->application->non_multipath.space->next_expected_packet_number; /* FIXME support multipath? */
 }
@@ -3628,7 +3687,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         }
         if ((conn->application->cipher.egress.key_phase & 1) != 0)
             *s->target.first_byte_at |= QUICLY_KEY_PHASE_BIT;
-        if (quicly_is_multipath(conn))
+        if (conn->application->vtable->multipath)
             encrypt_dcid = path->dcid;
     }
     quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE, (uint16_t)path->egress->packet_number);
@@ -5179,7 +5238,7 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 struct st_quicly_pn_space_t *space;
                 uint64_t cid;
                 ssize_t i = -1;
-                while ((i = foreach_app_space(conn, &space, &cid, i)) != -1) {
+                while ((i = conn->application->vtable->foreach_space(conn, &space, &cid, i)) != -1) {
                     if (space->send_ack_at <= conn->stash.now) {
                         assert(space->unacked_count != 0);
                         if ((ret = send_ack(conn, cid, space, s)) != 0)
@@ -5468,8 +5527,8 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_
 
     /* encrypt packet */
     quicly_default_crypto_engine.encrypt_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
-                                                ptls_iovec_init(datagram, datagram_len), 0, payload_from - (uint8_t *)datagram,
-                                                0, 0, 0);
+                                                ptls_iovec_init(datagram, datagram_len), 0, payload_from - (uint8_t *)datagram, 0,
+                                                0, 0);
 
     dispose_cipher(&egress);
     return datagram_len;
@@ -5708,7 +5767,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     /* multipath: check for violation, then lookup the path. Upon lookup failure, the frame is discarded. */
     if (frame.multipath_cid != UINT64_MAX) {
-        if ((state->epoch != QUICLY_EPOCH_1RTT || !quicly_is_multipath(conn)))
+        if ((state->epoch != QUICLY_EPOCH_1RTT || !conn->application->vtable->multipath))
             return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
         if (frame.multipath_cid > conn->super.remote.cid_set._largest_sequence_expected) /* FIXME need wapper? */
             return QUICLY_TRANSPORT_ERROR_MP_PROTOCOL_VIOLATION;
@@ -6461,7 +6520,7 @@ static int handle_ack_frequency_frame(quicly_conn_t *conn, struct st_quicly_hand
 
     if (frame.sequence >= conn->ingress.ack_frequency.next_sequence) {
         conn->ingress.ack_frequency.next_sequence = frame.sequence + 1;
-        assert(!quicly_is_multipath(conn) && "ack-frequency is incompatible with multipath");
+        assert(!conn->application->vtable->multipath && "ack-frequency is incompatible with multipath");
         conn->application->non_multipath.space->packet_tolerance =
             (uint32_t)(frame.packet_tolerance < QUICLY_MAX_PACKET_TOLERANCE ? frame.packet_tolerance : QUICLY_MAX_PACKET_TOLERANCE);
         conn->application->non_multipath.space->ignore_order = frame.ignore_order;
@@ -6626,30 +6685,6 @@ static int validate_retry_tag(quicly_decoded_packet_t *packet, quicly_cid_t *odc
     memcpy(pseudo_packet + 1 + odcid->len, packet->octets.base, packet->encrypted_off);
     return ptls_aead_decrypt(retry_aead, packet->octets.base + packet->encrypted_off, packet->octets.base + packet->encrypted_off,
                              PTLS_AESGCM_TAG_SIZE, 0, pseudo_packet, pseudo_packet_len) == 0;
-}
-
-/**
- * given path ID (i.e., local CID sequence), return the corresponding ack space
- */
-static int get_app_pn_space(quicly_conn_t *conn, uint64_t path_id, struct st_quicly_pn_space_t **space)
-{
-    if (quicly_is_multipath(conn)) {
-        for (size_t i = 0; i < quicly_local_cid_get_size(&conn->super.local.cid_set); ++i) {
-            quicly_local_cid_t *cid = &conn->super.local.cid_set.cids[i];
-            if (cid->sequence != path_id)
-                continue;
-            assert(cid->state != QUICLY_LOCAL_CID_STATE_IDLE);
-            if (cid->multipath.space == NULL &&
-                (cid->multipath.space = alloc_pn_space(sizeof(*cid->multipath.space), QUICLY_DEFAULT_PACKET_TOLERANCE)) == NULL)
-                return PTLS_ERROR_NO_MEMORY;
-            *space = cid->multipath.space;
-            return 0;
-        }
-        return QUICLY_ERROR_PACKET_IGNORED;
-    } else {
-        *space = conn->application->non_multipath.space;
-        return 0;
-    }
 }
 
 int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *dest_addr, struct sockaddr *src_addr,
@@ -6925,7 +6960,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             }
             aead.cb = aead_decrypt_fixed_key;
             aead.ctx = conn->application->cipher.ingress.aead[1];
-            if ((ret = get_app_pn_space(conn, packet->cid.dest.plaintext.path_id, &space)) != 0)
+            if ((ret = conn->application->vtable->get_space(conn, &space, packet->cid.dest.plaintext.path_id)) != 0)
                 goto Exit;
             epoch = QUICLY_EPOCH_0RTT;
             break;
@@ -6942,7 +6977,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         }
         aead.cb = aead_decrypt_1rtt;
         aead.ctx = conn;
-        if ((ret = get_app_pn_space(conn, packet->cid.dest.plaintext.path_id, &space)) != 0)
+        if ((ret = conn->application->vtable->get_space(conn, &space, packet->cid.dest.plaintext.path_id)) != 0)
             goto Exit;
         epoch = QUICLY_EPOCH_1RTT;
     }
@@ -7017,8 +7052,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     }
     if (conn->super.state < QUICLY_STATE_CLOSING && space != NULL) {
         if ((ret = record_receipt(space, pn, is_ack_only, conn->initial != NULL || conn->handshake != NULL, conn->stash.now,
-                                  &conn->super.stats.num_packets.received_out_of_order)) !=
-            0)
+                                  &conn->super.stats.num_packets.received_out_of_order)) != 0)
             goto Exit;
     }
 

@@ -1140,7 +1140,7 @@ ptls_t *quicly_get_tls(quicly_conn_t *conn);
 /**
  *
  */
-static int quicly_is_multipath(quicly_conn_t *conn);
+int quicly_is_multipath(quicly_conn_t *conn);
 /**
  * Resumes an async TLS handshake, and returns a pointer to the QUIC connection or NULL if the corresponding QUIC connection has
  * been discarded. See `quicly_async_handshake_t`.
@@ -1420,12 +1420,6 @@ inline quicly_tracer_t *quicly_get_tracer(quicly_conn_t *conn)
 inline int quicly_stop_requested(quicly_stream_t *stream)
 {
     return stream->_send_aux.stop_sending.sender_state != QUICLY_SENDER_STATE_NONE;
-}
-
-inline int quicly_is_multipath(quicly_conn_t *conn)
-{
-    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return c->ctx->transport_params.enable_multipath && c->remote.transport_params.enable_multipath;
 }
 
 inline uint32_t quicly_stream_get_receive_window(quicly_stream_t *stream)
