@@ -7068,8 +7068,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         break;
     case QUICLY_EPOCH_HANDSHAKE:
         if (quicly_is_client(conn)) {
-            /* Running as a client.
-             * Respect "disable_migration" TP sent by the remote peer at the end of the TLS handshake. */
+            /* Running as a client. If "disable_active_migration" TP was sent by the peer, pin the local address to the destination
+             * address of the current packet at the end of the handshake, so that we do not migrate unintentionally. */
             if (conn->paths[0]->address.local.sa.sa_family == AF_UNSPEC && dest_addr != NULL && dest_addr->sa_family != AF_UNSPEC &&
                 ptls_handshake_is_complete(conn->crypto.tls) && conn->super.remote.transport_params.disable_active_migration)
                 set_address(&conn->paths[0]->address.local, dest_addr);
