@@ -2414,7 +2414,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     }
     conn->super.remote.transport_params = default_transport_params;
     conn->super.version = protocol_version;
-    conn->super.remote.largest_retire_prior_to = 0;
     quicly_linklist_init(&conn->super._default_scheduler.active);
     quicly_linklist_init(&conn->super._default_scheduler.blocked);
     conn->streams = kh_init(quicly_stream_t);
@@ -6154,17 +6153,6 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         PTLS_LOG_ELEMENT_HEXDUMP(stateless_reset_token, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
     });
 
-    if (frame.sequence < conn->super.remote.largest_retire_prior_to) {
-        /* An endpoint that receives a NEW_CONNECTION_ID frame with a sequence number smaller than the Retire Prior To
-         * field of a previously received NEW_CONNECTION_ID frame MUST send a corresponding RETIRE_CONNECTION_ID frame
-         * that retires the newly received connection ID, unless it has already done so for that sequence number. (19.15)
-         * TODO: "unless ..." part may not be properly addressed here (we may already have sent the RCID frame for this
-         * sequence) */
-        retire_connection_id(conn, frame.sequence);
-        /* do not install this CID */
-        return 0;
-    }
-
     uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
     size_t num_unregistered_seqs;
     if ((ret = quicly_remote_cid_register(&conn->super.remote.cid_set, frame.sequence, frame.cid.base, frame.cid.len,
@@ -6174,9 +6162,6 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
 
     for (size_t i = 0; i < num_unregistered_seqs; i++)
         retire_connection_id(conn, unregistered_seqs[i]);
-
-    if (frame.retire_prior_to > conn->super.remote.largest_retire_prior_to)
-        conn->super.remote.largest_retire_prior_to = frame.retire_prior_to;
 
     return 0;
 }

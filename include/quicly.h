@@ -622,10 +622,6 @@ struct _st_quicly_conn_public_t {
             unsigned validated : 1;
             unsigned send_probe : 1;
         } address_validation;
-        /**
-         * largest value of Retire Prior To field observed so far
-         */
-        uint64_t largest_retire_prior_to;
     } remote;
     /**
      * Retains the original DCID used by the client. Servers use this to route packets incoming packets. Clients use this when

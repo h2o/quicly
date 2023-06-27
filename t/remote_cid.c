@@ -27,27 +27,33 @@
 
 /* clang-format off */
 static uint8_t cids[][CID_LEN] = {
-	{0, 1, 2, 3, 4, 5, 6, 7}, /* 0 */
-	{1, 2, 3, 4, 5, 6, 7, 0},
-	{2, 3, 4, 5, 6, 7, 0, 1},
-	{3, 4, 5, 6, 7, 0, 1, 2},
-	{4, 5, 6, 7, 0, 1, 2, 3},
-	{5, 6, 7, 0, 1, 2, 3, 4},
-	{6, 7, 0, 1, 2, 3, 4, 5},
-	{7, 0, 1, 2, 3, 4, 5, 6},
-	{8, 9, 10, 11, 12, 13, 14, 15}, /* 8 */
+    {0, 1, 2, 3, 4, 5, 6, 7}, /* 0 */
+    {1, 2, 3, 4, 5, 6, 7, 0},
+    {2, 3, 4, 5, 6, 7, 0, 1},
+    {3, 4, 5, 6, 7, 0, 1, 2},
+    {4, 5, 6, 7, 0, 1, 2, 3},
+    {5, 6, 7, 0, 1, 2, 3, 4},
+    {6, 7, 0, 1, 2, 3, 4, 5},
+    {7, 0, 1, 2, 3, 4, 5, 6},
+    {8, 9, 10, 11, 12, 13, 14, 15}, /* 8 */
+    {9, 10, 11, 12, 13, 14, 15, 16},
+    {10, 11, 12, 13, 14, 15, 16, 17},
+    {11, 12, 13, 14, 15, 16, 17, 18},
 };
 
 static uint8_t srts[][QUICLY_STATELESS_RESET_TOKEN_LEN] = {
-	{0},
-	{1},
-	{2},
-	{3},
-	{4},
-	{5},
-	{6},
-	{7},
-	{8},
+    {0},
+    {1},
+    {2},
+    {3},
+    {4},
+    {5},
+    {6},
+    {7},
+    {8},
+    {9},
+    {10},
+    {11},
 };
 /* clang-format on */
 
@@ -146,17 +152,22 @@ void test_received_cid(void)
     TEST_SET({6, QUICLY_REMOTE_CID_UNAVAILABLE}, {7, QUICLY_REMOTE_CID_AVAILABLE}, {5, QUICLY_REMOTE_CID_AVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
 
-    /* unregister prior to 8 -- seq=5,7 should be unregistered at this moment */
+    /* unregister prior to 8 -- seq=5-7 should be unregistered at this moment */
     ok(quicly_remote_cid_register(&set, 8, cids[8], CID_LEN, srts[8], 8, unregistered_seqs, &num_unregistered) == 0);
     /* active CIDs = {*8} */
-    ok(num_unregistered == 2);
+    ok(num_unregistered == 3);
     /* check unregistered_seqs */
-    ok(unregistered_seqs[0] == 7);
-    ok(unregistered_seqs[1] == 5);
-    /* active CIDs = {(6), (9), (10), 8} */
-    TEST_SET({6, QUICLY_REMOTE_CID_UNAVAILABLE}, {9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE},
+    ok(unregistered_seqs[0] == 6);
+    ok(unregistered_seqs[1] == 7);
+    ok(unregistered_seqs[2] == 5);
+    /* active CIDs = {(9), (10), (11), 8} */
+    TEST_SET({9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE}, {11, QUICLY_REMOTE_CID_UNAVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
 
-    /* FIXME right above we receive NCID with retire_prior_to=8. Then, we should start accepting CIDs 8,9,10,11. But the code does
-     * not behave that way. */
+    /* register 11 */
+    ok(quicly_remote_cid_register(&set, 11, cids[11], CID_LEN, srts[11], 8, unregistered_seqs, &num_unregistered) == 0);
+    ok(num_unregistered == 0);
+    /* active CIDs = {(9), (10), (11), 8} */
+    TEST_SET({9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE}, {11, QUICLY_REMOTE_CID_AVAILABLE},
+             {8, QUICLY_REMOTE_CID_AVAILABLE});
 }
