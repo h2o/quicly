@@ -2988,10 +2988,9 @@ static int do_on_ack_ack(quicly_conn_t *conn, quicly_sentmap_t *map, const quicl
         break;
     case QUICLY_EPOCH_1RTT:
         if (quicly_is_multipath(conn)) {
-            for (size_t i = 0, size = quicly_local_cid_get_size(&conn->super.local.cid_set); i < size; ++i) {
+            ssize_t i = -1;
+            while ((i = quicly_local_cid_get_next(&conn->super.local.cid_set, i)) != -1) {
                 quicly_local_cid_t *l = &conn->super.local.cid_set.cids[i];
-                if (l->state == QUICLY_LOCAL_CID_STATE_IDLE)
-                    continue;
                 if (l->sequence == path_id) {
                     space = l->multipath.space;
                     assert(space != NULL);
