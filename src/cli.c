@@ -192,6 +192,33 @@ static int new_socket(int af)
     return fd;
 }
 
+static int tuple_is_equal(struct sockaddr *x, struct sockaddr *y, int check_port)
+{
+    int port_is_equal;
+
+    /* check address, deferring the use of port number match to type-specific checks */
+    if (x->sa_family != y->sa_family)
+        return 0;
+    switch (x->sa_family) {
+    case AF_INET: {
+        struct sockaddr_in *x4 = (void *)x, *y4 = (void *)y;
+        if (x4->sin_addr.s_addr != y4->sin_addr.s_addr)
+            return 0;
+        port_is_equal = x4->sin_port == y4->sin_port;
+    } break;
+    case AF_INET6: {
+        struct sockaddr_in6 *x6 = (void *)x, *y6 = (void *)y;
+        if (memcmp(&x6->sin6_addr, &y6->sin6_addr, sizeof(x6->sin6_addr)) != 0)
+            return 0;
+        port_is_equal = x6->sin6_port == y6->sin6_port;
+    } break;
+    default:
+        return 0;
+    }
+
+    return check_port ? port_is_equal : 1;
+}
+
 static void on_stop_sending(quicly_stream_t *stream, int err);
 static void on_receive_reset(quicly_stream_t *stream, int err);
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
@@ -721,14 +748,16 @@ static void on_sigusr1(int unused)
     got_sigusr1 = 1;
 }
 
-static int run_client(int fd, struct sockaddr *sa, const char *host)
+static int run_client(struct sockaddr *sa, const char *host)
 {
     quicly_address_t local;
-    int ret;
+    int fd, ret;
     quicly_conn_t *conn = NULL;
 
     signal(SIGUSR1, on_sigusr1);
 
+    if ((fd = new_socket(sa->sa_family)) == -1)
+        return 1;
     memset(&local, 0, sizeof(local));
     local.sa.sa_family = sa->sa_family;
     if (bind(fd, &local.sa, local.sa.sa_family == AF_INET ? sizeof(local.sin) : sizeof(local.sin6)) != 0) {
@@ -836,38 +865,21 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
                           quicly_address_token_plaintext_t *token, const char **err_desc)
 {
     int64_t age;
-    int port_is_equal;
 
     /* calculate and normalize age */
     if ((age = ctx.now->cb(ctx.now) - token->issued_at) < 0)
         age = 0;
 
     /* check address, deferring the use of port number match to type-specific checks */
-    if (remote->sa_family != token->remote.sa.sa_family)
+    if (!tuple_is_equal(remote, &token->remote.sa, 0))
         goto AddressMismatch;
-    switch (remote->sa_family) {
-    case AF_INET: {
-        struct sockaddr_in *sin = (struct sockaddr_in *)remote;
-        if (sin->sin_addr.s_addr != token->remote.sin.sin_addr.s_addr)
-            goto AddressMismatch;
-        port_is_equal = sin->sin_port == token->remote.sin.sin_port;
-    } break;
-    case AF_INET6: {
-        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)remote;
-        if (memcmp(&sin6->sin6_addr, &token->remote.sin6.sin6_addr, sizeof(sin6->sin6_addr)) != 0)
-            goto AddressMismatch;
-        port_is_equal = sin6->sin6_port == token->remote.sin6.sin6_port;
-    } break;
-    default:
-        goto UnknownAddressType;
-    }
 
     /* type-specific checks */
     switch (token->type) {
     case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
         if (age > 30000)
             goto Expired;
-        if (!port_is_equal)
+        if (!tuple_is_equal(remote, &token->remote.sa, 1))
             goto AddressMismatch;
         if (!quicly_cid_is_equal(&token->retry.client_cid, client_cid))
             goto CIDMismatch;
@@ -891,9 +903,6 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
 AddressMismatch:
     *err_desc = "token address mismatch";
     return 0;
-UnknownAddressType:
-    *err_desc = "unknown address type";
-    return 0;
 Expired:
     *err_desc = "token expired";
     return 0;
@@ -902,10 +911,15 @@ CIDMismatch:
     return 0;
 }
 
-static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
+static int run_server(struct sockaddr *sa, socklen_t salen)
 {
+    int fd;
+
     signal(SIGINT, on_signal);
     signal(SIGHUP, on_signal);
+
+    if ((fd = new_socket(sa->sa_family)) == -1)
+        return 1;
 
     if (bind(fd, sa, salen) != 0) {
         perror("bind(2) failed");
@@ -1262,7 +1276,7 @@ int main(int argc, char **argv)
     const char *cert_file = NULL, *raw_pubkey_file = NULL, *host, *port, *cid_key = NULL;
     struct sockaddr_storage sa;
     socklen_t salen;
-    int ch, opt_index, fd;
+    int ch, opt_index;
 
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
@@ -1631,8 +1645,5 @@ int main(int argc, char **argv)
     if (resolve_address((void *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
-    if ((fd = new_socket(sa.ss_family)) == -1)
-        return 1;
-
-    return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, host);
+    return ctx.tls->certificates.count != 0 ? run_server((void *)&sa, salen) : run_client((void *)&sa, host);
 }
