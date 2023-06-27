@@ -1136,6 +1136,10 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 /**
  *
  */
+int quicly_open_path(quicly_conn_t *conn, struct sockaddr *remote, struct sockaddr *local);
+/**
+ *
+ */
 ptls_t *quicly_get_tls(quicly_conn_t *conn);
 /**
  *

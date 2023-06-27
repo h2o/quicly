@@ -1976,11 +1976,6 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
 {
     int ret;
 
-    /* packets arriving from new paths will start to get ignored once the number of paths that failed to validate reaches the
-     * defined threshold */
-    if (conn->super.stats.num_paths.validation_failed > conn->super.ctx->max_path_validation_failures)
-        return QUICLY_ERROR_PACKET_IGNORED;
-
     /* choose a slot that in unused or the least-recently-used one that has completed validation */
     *path_index = SIZE_MAX;
     for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
@@ -7003,8 +6998,16 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         if (path != NULL && compare_socket_address(src_addr, &path->address.remote.sa) == 0)
             break;
     }
-    if (path_index == PTLS_ELEMENTSOF(conn->paths) && (ret = open_path(conn, &path_index, src_addr, dest_addr)) != 0)
-        goto Exit;
+    if (path_index == PTLS_ELEMENTSOF(conn->paths)) {
+        /* packets arriving from new paths will start to get ignored once the number of paths that failed to validate reaches the
+         * defined threshold */
+        if (conn->super.stats.num_paths.validation_failed > conn->super.ctx->max_path_validation_failures) {
+            ret = QUICLY_ERROR_PACKET_IGNORED;
+            goto Exit;
+        }
+        if ((ret = open_path(conn, &path_index, src_addr, dest_addr)) != 0)
+            goto Exit;
+    }
 
     /* update states */
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
@@ -7126,6 +7129,13 @@ Exit:
     }
     unlock_now(conn);
     return ret;
+}
+
+int quicly_open_path(quicly_conn_t *conn, struct sockaddr *remote, struct sockaddr *local)
+{
+    size_t path_index;
+
+    return open_path(conn, &path_index, remote, local);
 }
 
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
