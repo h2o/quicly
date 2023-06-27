@@ -812,32 +812,31 @@ uint64_t quicly_determine_packet_number(uint32_t truncated, size_t num_bits, uin
     return candidate;
 }
 
-#define FOREACH_APP_SPACE(conn, spvar, seq_opt, block)                                                                             \
-    do {                                                                                                                           \
-        quicly_conn_t *_conn = (conn);                                                                                             \
-        uint64_t *_seq_opt = (seq_opt);                                                                                            \
-        if (quicly_is_multipath(_conn)) {                                                                                          \
-            for (size_t _i = 0, _size = quicly_local_cid_get_size(&_conn->super.local.cid_set); _i < _size; ++_i) {                \
-                quicly_local_cid_t *_cid = &_conn->super.local.cid_set.cids[_i];                                                   \
-                if (_cid->multipath.space == NULL)                                                                                 \
-                    continue;                                                                                                      \
-                assert(_cid->state != QUICLY_LOCAL_CID_STATE_IDLE);                                                                \
-                (spvar) = _cid->multipath.space;                                                                                   \
-                if (_seq_opt != NULL)                                                                                              \
-                    *_seq_opt = _cid->sequence;                                                                                    \
-                do {                                                                                                               \
-                    block;                                                                                                         \
-                } while (0);                                                                                                       \
-            }                                                                                                                      \
-        } else {                                                                                                                   \
-            (spvar) = _conn->application->non_multipath.space;                                                                     \
-            if (_seq_opt != NULL)                                                                                                  \
-                *_seq_opt = UINT64_MAX;                                                                                            \
-            do {                                                                                                                   \
-                block;                                                                                                             \
-            } while (0);                                                                                                           \
-        }                                                                                                                          \
-    } while (0)
+static ssize_t foreach_app_space(quicly_conn_t *conn, struct st_quicly_pn_space_t **space, uint64_t *path_id, ssize_t index)
+{
+    if (quicly_is_multipath(conn)) {
+        while ((index = quicly_local_cid_get_next(&conn->super.local.cid_set, index)) != -1) {
+            quicly_local_cid_t *cid = &conn->super.local.cid_set.cids[index];
+            if (cid->multipath.space != NULL) {
+                *space = cid->multipath.space;
+                if (path_id != NULL)
+                    *path_id = cid->sequence;
+                break;
+            }
+        }
+    } else {
+        if (index == -1) {
+            *space = conn->application->non_multipath.space;
+            if (path_id != NULL)
+                *path_id = UINT64_MAX;
+            index = 0;
+        } else {
+            index = -1;
+        }
+    }
+
+    return index;
+}
 
 static int64_t calc_min_send_ack_at(quicly_conn_t *conn)
 {
@@ -849,10 +848,11 @@ static int64_t calc_min_send_ack_at(quicly_conn_t *conn)
         at = conn->handshake->super.send_ack_at;
     if (conn->application != NULL && conn->application->one_rtt_writable) {
         struct st_quicly_pn_space_t *space;
-        FOREACH_APP_SPACE(conn, space, NULL, {
+        ssize_t i = -1;
+        while ((i = foreach_app_space(conn, &space, NULL, i)) != -1) {
             if (at > space->send_ack_at)
                 at = space->send_ack_at;
-        });
+        }
     }
 
     return at;
@@ -5179,14 +5179,15 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
             if (conn->application->one_rtt_writable) {
                 struct st_quicly_pn_space_t *space;
                 uint64_t cid;
-                FOREACH_APP_SPACE(conn, space, &cid, {
+                ssize_t i = -1;
+                while ((i = foreach_app_space(conn, &space, &cid, i)) != -1) {
                     if (space->send_ack_at <= conn->stash.now) {
                         assert(space->unacked_count != 0);
                         if ((ret = send_ack(conn, cid, space, s)) != 0)
                             goto Exit;
                         space->send_ack_at = INT64_MAX;
                     }
-                });
+                }
             }
             /* DATAGRAM frame. Notes regarding current implementation:
              * * Not limited by CC, nor the bytes counted by CC.

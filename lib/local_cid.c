@@ -233,3 +233,13 @@ int quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int 
 
     return 0;
 }
+
+ssize_t quicly_local_cid_get_next(quicly_local_cid_set_t *set, ssize_t index)
+{
+    while (++index < quicly_local_cid_get_size(set)) {
+        if (set->cids[index].state == QUICLY_LOCAL_CID_STATE_IDLE)
+            continue;
+        return index;
+    }
+    return -1;
+}

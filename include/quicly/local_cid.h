@@ -127,6 +127,12 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence);
  */
 int quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *has_pending,
                             struct st_quicly_pn_space_t **multipath_space);
+/**
+ * iterates through CIDs being issued
+ * @param index set to -1 to start new iteration
+ * @return index of the next entry that has been issued, or -1 if the iteration ended
+ */
+ssize_t quicly_local_cid_get_next(quicly_local_cid_set_t *set, ssize_t index);
 
 /* inline definitions */
 
