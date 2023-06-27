@@ -5767,7 +5767,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     /* multipath: check for violation, then lookup the path. Upon lookup failure, the frame is discarded. */
     if (frame.multipath_cid != UINT64_MAX) {
-        if ((state->epoch != QUICLY_EPOCH_1RTT || !conn->application->vtable->multipath))
+        if (!(state->epoch == QUICLY_EPOCH_1RTT && conn->application->vtable->multipath))
             return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
         if (frame.multipath_cid > conn->super.remote.cid_set._largest_sequence_expected) /* FIXME need wapper? */
             return QUICLY_TRANSPORT_ERROR_MP_PROTOCOL_VIOLATION;
