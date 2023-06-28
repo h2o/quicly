@@ -750,7 +750,6 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                 int newfd = new_socket(local.sa.sa_family);
                 if (newfd != -1) {
                     close(fd);
-                    fcntl(newfd, F_SETFL, O_NONBLOCK);
                     fd = newfd;
                 }
             }
