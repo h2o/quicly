@@ -1136,7 +1136,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 /**
  *
  */
-int quicly_open_path(quicly_conn_t *conn, struct sockaddr *remote, struct sockaddr *local);
+int quicly_add_path(quicly_conn_t *conn, struct sockaddr *local);
 /**
  *
  */

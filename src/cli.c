@@ -121,30 +121,42 @@ struct st_stream_data_t {
     FILE *outfp;
 };
 
-static int new_socket(int af)
-{
+struct fdinfo {
     int fd;
+    quicly_address_t localaddr;
+};
 
-    if ((fd = socket(af, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
+static int new_socket(struct fdinfo *fd, sa_family_t af)
+{
+    int bind_to_specified;
+
+    if (af == AF_UNSPEC) {
+        bind_to_specified = 1;
+        af = fd->localaddr.sa.sa_family;
+    } else {
+        bind_to_specified = 0;
+    }
+
+    if ((fd->fd = socket(af, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         perror("socket(2) failed");
         return -1;
     }
-    fcntl(fd, F_SETFL, O_NONBLOCK);
+    fcntl(fd->fd, F_SETFL, O_NONBLOCK);
     {
         int on = 1;
-        if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
+        if (setsockopt(fd->fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) != 0) {
             perror("setsockopt(SO_REUSEADDR) failed");
             return -1;
         }
     }
     if (udpbufsize != 0) {
         unsigned arg = udpbufsize;
-        if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &arg, sizeof(arg)) != 0) {
+        if (setsockopt(fd->fd, SOL_SOCKET, SO_RCVBUF, &arg, sizeof(arg)) != 0) {
             perror("setsockopt(SO_RCVBUF) failed");
             return -1;
         }
         arg = udpbufsize;
-        if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &arg, sizeof(arg)) != 0) {
+        if (setsockopt(fd->fd, SOL_SOCKET, SO_SNDBUF, &arg, sizeof(arg)) != 0) {
             perror("setsockopt(SO_RCVBUF) failed");
             return -1;
         }
@@ -152,13 +164,13 @@ static int new_socket(int af)
 #if defined(IP_DONTFRAG)
     {
         int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IP_DONTFRAG, &on, sizeof(on)) != 0)
+        if (setsockopt(fd->fd, IPPROTO_IP, IP_DONTFRAG, &on, sizeof(on)) != 0)
             perror("Warning: setsockopt(IP_DONTFRAG) failed");
     }
 #elif defined(IP_PMTUDISC_DO)
     {
         int opt = IP_PMTUDISC_DO;
-        if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0)
+        if (setsockopt(fd->fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0)
             perror("Warning: setsockopt(IP_MTU_DISCOVER) failed");
     }
 #endif
@@ -166,13 +178,13 @@ static int new_socket(int af)
     case AF_INET: {
 #ifdef IP_PKTINFO
         int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof(on)) != 0) {
+        if (setsockopt(fd->fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof(on)) != 0) {
             perror("setsockopt(IP_PKTINFO) failed");
             return -1;
         }
 #elif defined(IP_RECVDSTADDR)
         int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IP_RECVDSTADDR, &on, sizeof(on)) != 0) {
+        if (setsockopt(fd->fd, IPPROTO_IP, IP_RECVDSTADDR, &on, sizeof(on)) != 0) {
             perror("setsockopt(IP_RECVDSTADDR) failed");
             return -1;
         }
@@ -180,7 +192,7 @@ static int new_socket(int af)
     } break;
     case AF_INET6: {
         int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IPV6_RECVPKTINFO, &on, sizeof(on)) != 0) {
+        if (setsockopt(fd->fd, IPPROTO_IP, IPV6_RECVPKTINFO, &on, sizeof(on)) != 0) {
             perror("setsockopt(IPV6_RECVPKTINNFO) failed");
             return -1;
         }
@@ -189,34 +201,48 @@ static int new_socket(int af)
         break;
     }
 
-    return fd;
+    socklen_t locallen = af == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+    if (bind_to_specified) {
+        if (bind(fd->fd, &fd->localaddr.sa, locallen) != 0) {
+            perror("bind(2) failed");
+            return -1;
+        }
+    } else {
+        if (getsockname(fd->fd, &fd->localaddr.sa, &locallen) != 0) {
+            perror("getsockname(2) failed");
+            return -1;
+        }
+    }
+
+    return fd->fd;
 }
 
-static int tuple_is_equal(struct sockaddr *x, struct sockaddr *y, int check_port)
+static int tuple_is_equal(struct sockaddr *x, struct sockaddr *y, int check_addr, int check_port)
 {
-    int port_is_equal;
-
     /* check address, deferring the use of port number match to type-specific checks */
     if (x->sa_family != y->sa_family)
         return 0;
     switch (x->sa_family) {
     case AF_INET: {
         struct sockaddr_in *x4 = (void *)x, *y4 = (void *)y;
-        if (x4->sin_addr.s_addr != y4->sin_addr.s_addr)
+        if (check_addr && x4->sin_addr.s_addr != y4->sin_addr.s_addr)
             return 0;
-        port_is_equal = x4->sin_port == y4->sin_port;
+        if (check_port && x4->sin_port != y4->sin_port)
+            return 0;
     } break;
     case AF_INET6: {
         struct sockaddr_in6 *x6 = (void *)x, *y6 = (void *)y;
-        if (memcmp(&x6->sin6_addr, &y6->sin6_addr, sizeof(x6->sin6_addr)) != 0)
+        if (check_addr && memcmp(&x6->sin6_addr, &y6->sin6_addr, sizeof(x6->sin6_addr)) != 0)
             return 0;
-        port_is_equal = x6->sin6_port == y6->sin6_port;
+        if (check_port && x6->sin6_port == y6->sin6_port)
+            return 0;
     } break;
     default:
-        return 0;
+        if (check_addr || check_port)
+            return 0;
     }
 
-    return check_port ? port_is_equal : 1;
+    return 1;
 }
 
 static void on_stop_sending(quicly_stream_t *stream, int err);
@@ -692,7 +718,7 @@ static void send_one_packet(int fd, quicly_address_t *dest, quicly_address_t *sr
     send_packets(fd, dest, src, &vec, 1);
 }
 
-static int send_pending(int fd, quicly_conn_t *conn)
+static int send_pending(struct fdinfo *fds, size_t numfds, quicly_conn_t *conn)
 {
     quicly_address_t dest, src;
     struct iovec packets[MAX_BURST_PACKETS];
@@ -700,8 +726,25 @@ static int send_pending(int fd, quicly_conn_t *conn)
     size_t num_packets = MAX_BURST_PACKETS;
     int ret;
 
-    if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0)
-        send_packets(fd, &dest, &src, packets, num_packets);
+    if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0) {
+        // find fd match by IP and port
+        size_t fd_index;
+        if (numfds > 1) {
+            for (fd_index = 0; fd_index < numfds; ++fd_index) {
+                if (tuple_is_equal(&src.sa, &fds[fd_index].localaddr.sa, 1, 1))
+                    goto Found_FD;
+            }
+            for (fd_index = 0; fd_index < numfds; ++fd_index) {
+                if (tuple_is_equal(&src.sa, &fds[fd_index].localaddr.sa, 0, 1))
+                    goto Found_FD;
+            }
+            fd_index = 0; /* fd zero as last resort */
+        Found_FD:;
+        } else {
+            fd_index = 0;
+        }
+        send_packets(fds[0].fd, &dest, &src, packets, num_packets);
+    }
 
     return ret;
 }
@@ -741,45 +784,62 @@ static void enqueue_requests(quicly_conn_t *conn)
     enqueue_requests_at = INT64_MAX;
 }
 
-static volatile int got_sigusr1 = 0;
+static volatile int got_sig_rebind = 0, got_sig_addpath = 0;
 
-static void on_sigusr1(int unused)
+static void on_sig_rebind(int unused)
 {
-    got_sigusr1 = 1;
+    got_sig_rebind = 1;
+}
+
+static void on_sig_addpath(int unused)
+{
+    got_sig_addpath = 1;
 }
 
 static int run_client(struct sockaddr *sa, const char *host)
 {
-    quicly_address_t local;
-    int fd, ret;
+
+    struct fdinfo fds[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+    int ret;
+    size_t numfds;
     quicly_conn_t *conn = NULL;
 
-    signal(SIGUSR1, on_sigusr1);
+    signal(SIGUSR1, on_sig_rebind);
+    signal(SIGUSR2, on_sig_addpath);
 
-    if ((fd = new_socket(sa->sa_family)) == -1)
+    if (new_socket(&fds[0], sa->sa_family) == -1)
         return 1;
-    memset(&local, 0, sizeof(local));
-    local.sa.sa_family = sa->sa_family;
-    if (bind(fd, &local.sa, local.sa.sa_family == AF_INET ? sizeof(local.sin) : sizeof(local.sin6)) != 0) {
-        perror("bind(2) failed");
-        return 1;
-    }
+    numfds = 1;
+
     ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params, NULL);
     assert(ret == 0);
     ++next_cid.master_id;
     enqueue_requests(conn);
-    send_pending(fd, conn);
+    send_pending(fds, 1, conn);
 
     while (1) {
         fd_set readfds;
+        int maxfd;
         struct timeval *tv, tvbuf;
         do {
-            if (got_sigusr1) {
-                got_sigusr1 = 0;
-                int newfd = new_socket(local.sa.sa_family);
-                if (newfd != -1) {
-                    close(fd);
-                    fd = newfd;
+            if (got_sig_rebind) {
+                got_sig_rebind = 0;
+                struct fdinfo newfd;
+                if (new_socket(&newfd, sa->sa_family) != -1) {
+                    close(fds[0].fd);
+                    fds[0] = newfd;
+                }
+            }
+            if (got_sig_addpath && quicly_is_multipath(conn)) {
+                got_sig_addpath = 0;
+                struct fdinfo newfd;
+                if (new_socket(&newfd, sa->sa_family) != -1) {
+                    if (numfds < PTLS_ELEMENTSOF(fds) && quicly_add_path(conn, &newfd.localaddr.sa) == 0) {
+                        fds[numfds++] = newfd;
+                    } else {
+                        fprintf(stderr, "[multipath] failed to add path\n");
+                        close(newfd.fd);
+                    }
                 }
             }
             int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
@@ -800,15 +860,22 @@ static int run_client(struct sockaddr *sa, const char *host)
                 tv = NULL;
             }
             FD_ZERO(&readfds);
-            FD_SET(fd, &readfds);
-        } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
+            maxfd = 0;
+            for (size_t i = 0; i < numfds; ++i) {
+                FD_SET(fds[i].fd, &readfds);
+                if (maxfd < fds[i].fd)
+                    maxfd = fds[i].fd;
+            }
+        } while (select(maxfd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (enqueue_requests_at <= ctx.now->cb(ctx.now))
             enqueue_requests(conn);
-        if (FD_ISSET(fd, &readfds)) {
+        for (size_t i = 0; i < numfds; ++i) {
+            if (!FD_ISSET(fds[i].fd, &readfds))
+                continue;
             while (1) {
                 uint8_t buf[ctx.transport_params.max_udp_payload_size];
                 quicly_address_t dest, src;
-                ssize_t rret = receive_datagram(fd, buf, &dest, &src);
+                ssize_t rret = receive_datagram(fds[i].fd, buf, &dest, &src);
                 if (rret <= 0)
                     break;
                 if (verbosity >= 2)
@@ -829,7 +896,7 @@ static int run_client(struct sockaddr *sa, const char *host)
             }
         }
         if (conn != NULL) {
-            ret = send_pending(fd, conn);
+            ret = send_pending(fds, numfds, conn);
             if (ret != 0) {
                 ech_save_retry_configs();
                 quicly_free(conn);
@@ -870,7 +937,7 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
         age = 0;
 
     /* check address, deferring the use of port number match to type-specific checks */
-    if (!tuple_is_equal(remote, &token->remote.sa, 0))
+    if (!tuple_is_equal(remote, &token->remote.sa, 1, 0))
         goto AddressMismatch;
 
     /* type-specific checks */
@@ -878,7 +945,7 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
     case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
         if (age > 30000)
             goto Expired;
-        if (!tuple_is_equal(remote, &token->remote.sa, 1))
+        if (!tuple_is_equal(remote, &token->remote.sa, 1, 1))
             goto AddressMismatch;
         if (!quicly_cid_is_equal(&token->retry.client_cid, client_cid))
             goto CIDMismatch;
@@ -912,18 +979,14 @@ CIDMismatch:
 
 static int run_server(struct sockaddr *sa, socklen_t salen)
 {
-    int fd;
+    struct fdinfo fd;
 
     signal(SIGINT, on_signal);
     signal(SIGHUP, on_signal);
 
-    if ((fd = new_socket(sa->sa_family)) == -1)
+    memcpy(&fd.localaddr.sa, sa, salen);
+    if (new_socket(&fd, AF_UNSPEC) == -1)
         return 1;
-
-    if (bind(fd, sa, salen) != 0) {
-        perror("bind(2) failed");
-        return 1;
-    }
 
     while (1) {
         fd_set readfds;
@@ -950,13 +1013,13 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                 tv = NULL;
             }
             FD_ZERO(&readfds);
-            FD_SET(fd, &readfds);
-        } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
-        if (FD_ISSET(fd, &readfds)) {
+            FD_SET(fd.fd, &readfds);
+        } while (select(fd.fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
+        if (FD_ISSET(fd.fd, &readfds)) {
             while (1) {
                 quicly_address_t local, remote;
                 uint8_t buf[ctx.transport_params.max_udp_payload_size];
-                ssize_t rret = receive_datagram(fd, buf, &local, &remote);
+                ssize_t rret = receive_datagram(fd.fd, buf, &local, &remote);
                 if (rret == -1)
                     break;
                 if (verbosity >= 2)
@@ -972,7 +1035,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                             size_t payload_len = quicly_send_version_negotiation(&ctx, packet.cid.src, packet.cid.dest.encrypted,
                                                                                  quicly_supported_versions, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote, &local, payload, payload_len);
+                            send_one_packet(fd.fd, &remote, &local, payload, payload_len);
                             break;
                         }
                         /* there is no way to send response to these v1 packets */
@@ -1009,7 +1072,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                                 size_t payload_len = quicly_send_close_invalid_token(&ctx, packet.version, packet.cid.src,
                                                                                      packet.cid.dest.encrypted, err_desc, payload);
                                 assert(payload_len != SIZE_MAX);
-                                send_one_packet(fd, &remote, NULL, payload, payload_len);
+                                send_one_packet(fd.fd, &remote, NULL, payload, payload_len);
                             }
                         }
                         if (enforce_retry && token == NULL && packet.cid.dest.encrypted.len >= 8) {
@@ -1024,7 +1087,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                                 ptls_iovec_init(new_server_cid, sizeof(new_server_cid)), packet.cid.dest.encrypted,
                                 ptls_iovec_init(NULL, 0), ptls_iovec_init(NULL, 0), NULL, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote, NULL, payload, payload_len);
+                            send_one_packet(fd.fd, &remote, NULL, payload, payload_len);
                             break;
                         } else {
                             /* new connection */
@@ -1047,7 +1110,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
                             size_t payload_len = quicly_send_stateless_reset(&ctx, packet.cid.dest.encrypted.base, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote, NULL, payload, payload_len);
+                            send_one_packet(fd.fd, &remote, NULL, payload, payload_len);
                         }
                     }
                 }
@@ -1057,7 +1120,7 @@ static int run_server(struct sockaddr *sa, socklen_t salen)
             size_t i;
             for (i = 0; i != num_conns; ++i) {
                 if (quicly_get_first_timeout(conns[i]) <= ctx.now->cb(ctx.now)) {
-                    if (send_pending(fd, conns[i]) != 0) {
+                    if (send_pending(&fd, 1, conns[i]) != 0) {
                         dump_stats(stderr, conns[i]);
                         quicly_free(conns[i]);
                         memmove(conns + i, conns + i + 1, (num_conns - i - 1) * sizeof(*conns));

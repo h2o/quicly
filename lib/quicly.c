@@ -7131,11 +7131,16 @@ Exit:
     return ret;
 }
 
-int quicly_open_path(quicly_conn_t *conn, struct sockaddr *remote, struct sockaddr *local)
+int quicly_add_path(quicly_conn_t *conn, struct sockaddr *local)
 {
     size_t path_index;
 
-    return open_path(conn, &path_index, remote, local);
+    assert(quicly_is_client(conn));
+
+    if (conn->paths[0]->address.remote.sa.sa_family != local->sa_family)
+        return QUICLY_ERROR_INVALID_PARAMETERS;
+
+    return open_path(conn, &path_index, &conn->paths[0]->address.remote.sa, local);
 }
 
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
