@@ -190,11 +190,12 @@ static int send_one(int fd, struct sockaddr *dest, struct iovec *vec)
     return ret;
 }
 
-static int run_loop(int fd, quicly_conn_t *client)
+static int run_loop(int fd, int is_client, const char *host, struct sockaddr_storage *dest_addr)
 {
-    quicly_conn_t *conns[256] = {client}; /* a null-terminated list of connections; proper app should use a hashmap or something */
+    quicly_conn_t *conns[256] = {NULL}; /* a null-terminated list of connections; proper app should use a hashmap or something */
     size_t i;
-    int read_stdin = client != NULL;
+    int read_stdin = is_client;
+    quicly_conn_t *client = NULL;
 
     while (1) {
 
@@ -235,11 +236,23 @@ static int run_loop(int fd, quicly_conn_t *client)
             while ((rret = recvmsg(fd, &msg, 0)) == -1 && errno == EINTR)
                 ;
             if (rret > 0)
-                process_msg(client != NULL, conns, &msg, rret);
+                process_msg(is_client, conns, &msg, rret);
         }
 
         /* read stdin, send the input to the active stram */
         if (FD_ISSET(0, &readfds)) {
+            if (is_client && client == NULL) {
+                /* initiate a connection, and open a stream */
+                int ret;
+                if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)dest_addr, NULL, &next_cid,
+                                          ptls_iovec_init(NULL, 0), NULL, NULL, NULL)) != 0) {
+                    fprintf(stderr, "quicly_connect failed:%d\n", ret);
+                    exit(1);
+                }
+                conns[0] = client;
+                quicly_stream_t *stream; /* we retain the opened stream via the on_stream_open callback */
+                quicly_open_stream(client, &stream, 0);
+            }
             assert(client != NULL);
             if (!forward_stdin(client))
                 read_stdin = 0;
@@ -380,20 +393,6 @@ int main(int argc, char **argv)
             exit(1);
         }
     }
-
-    quicly_conn_t *client = NULL;
-    if (!is_server()) {
-        /* initiate a connection, and open a stream */
-        int ret;
-        if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)&sa, NULL, &next_cid, ptls_iovec_init(NULL, 0), NULL,
-                                  NULL, NULL)) != 0) {
-            fprintf(stderr, "quicly_connect failed:%d\n", ret);
-            exit(1);
-        }
-        quicly_stream_t *stream; /* we retain the opened stream via the on_stream_open callback */
-        quicly_open_stream(client, &stream, 0);
-    }
-
     /* enter the event loop with a connection object */
-    return run_loop(fd, client);
+    return run_loop(fd, !is_server(), host, &sa);
 }
