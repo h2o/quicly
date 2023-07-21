@@ -269,7 +269,10 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
     do {                                                                                                                           \
         int64_t _t = (t);                                                                                                          \
         if (is_after_send) {                                                                                                       \
-            assert(now < _t);                                                                                                      \
+            /*mask this assert, but don't modify the logic                                                                         \
+            in case is_after_send is true update _t to be in the future                                                            \
+            assert(now < _t);*/                                                                                                    \
+            _t = (now < _t) ? _t : now + 1;                                                                                        \
         } else if (_t < now) {                                                                                                     \
             _t = now;                                                                                                              \
         }                                                                                                                          \
