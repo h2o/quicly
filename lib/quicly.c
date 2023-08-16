@@ -3827,8 +3827,10 @@ static int do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size
     }
     s->target.ack_eliciting = 0;
 
-    QUICLY_PROBE(PACKET_PREPARE, conn, conn->stash.now, s->current.first_byte, QUICLY_PROBE_HEXDUMP(s->dcid->cid, s->dcid->len));
+    QUICLY_PROBE(PACKET_PREPARE, conn, conn->stash.now, s->path_index, s->current.first_byte,
+                 QUICLY_PROBE_HEXDUMP(s->dcid->cid, s->dcid->len));
     QUICLY_LOG_CONN(packet_prepare, conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(path_index, s->path_index);
         PTLS_LOG_ELEMENT_UNSIGNED(first_octet, s->current.first_byte);
         PTLS_LOG_ELEMENT_HEXDUMP(dcid, s->dcid->cid, s->dcid->len);
     });
@@ -6756,7 +6758,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         PTLS_LOG_ELEMENT_HEXDUMP(dcid, packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len);
         PTLS_LOG_ELEMENT_PTR(address_token, address_token);
     });
-    QUICLY_PROBE(PACKET_RECEIVED, *conn, (*conn)->stash.now, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
+    QUICLY_PROBE(PACKET_RECEIVED, *conn, (*conn)->stash.now, 0, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, *conn, {
         PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
         PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(decrypted, payload.base, payload.len);
@@ -6985,14 +6987,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         goto Exit;
     }
 
-    QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
-    QUICLY_LOG_CONN(packet_received, conn, {
-        PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
-        PTLS_LOG_ELEMENT_UNSIGNED(decrypted_len, payload.len);
-        PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
-    });
-
-    /* determine the incoming path; if it is a new path, open a new one */
+    /* determine the incoming path; if it is a new path, open a new one (note: error is kept and we bail out after running the
+     * probe) */
     for (path_index = 0; path_index < PTLS_ELEMENTSOF(conn->paths); ++path_index) {
         struct st_quicly_conn_path_t *path = conn->paths[path_index];
         if (path != NULL && compare_socket_address(src_addr, &path->address.remote.sa) == 0)
@@ -7001,13 +6997,23 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     if (path_index == PTLS_ELEMENTSOF(conn->paths)) {
         /* packets arriving from new paths will start to get ignored once the number of paths that failed to validate reaches the
          * defined threshold */
-        if (conn->super.stats.num_paths.validation_failed > conn->super.ctx->max_path_validation_failures) {
+        if (conn->super.stats.num_paths.validation_failed < conn->super.ctx->max_path_validation_failures) {
+            ret = open_path(conn, &path_index, src_addr, dest_addr);
+        } else {
             ret = QUICLY_ERROR_PACKET_IGNORED;
-            goto Exit;
         }
-        if ((ret = open_path(conn, &path_index, src_addr, dest_addr)) != 0)
-            goto Exit;
     }
+    /* emit probe, then bail out if corresponding path is unavailable */
+    QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, ret == 0 ? path_index : SIZE_MAX, pn, payload.base, payload.len,
+                 get_epoch(packet->octets.base[0]));
+    QUICLY_LOG_CONN(packet_received, conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(path_index, ret == 0 ? path_index : SIZE_MAX);
+        PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
+        PTLS_LOG_ELEMENT_UNSIGNED(decrypted_len, payload.len);
+        PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
+    });
+    if (ret != 0)
+        goto Exit;
 
     /* update states */
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
