@@ -817,7 +817,8 @@ static int run_client(struct sockaddr *sa, const char *host)
         return 1;
     numfds = 1;
 
-    ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params, NULL);
+    ret = quicly_connect(&conn, &ctx, host, sa, &fds[0].localaddr.sa, &next_cid, resumption_token, &hs_properties,
+                         &resumed_transport_params, NULL);
     assert(ret == 0);
     ++next_cid.master_id;
     enqueue_requests(conn);
