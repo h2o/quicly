@@ -1889,18 +1889,31 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
 
     if ((path = malloc(sizeof(*path))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    memset(path, 0, sizeof(*path));
+    *path = (struct st_quicly_conn_path_t){};
 
+    /* setup non-zero fields */
+    set_address(&path->address.remote, remote_addr);
+    set_address(&path->address.local, local_addr);
     if (path_index == 0) {
-        /* default path used for handshake */
+        /* handshake path */
+        path->path_challenge.send_at = INT64_MAX;
+        path->initial = 1;
+    } else {
+        /* alternate path (requires probing) */
+        path->dcid = UINT64_MAX;
+        path->probe_only = 1;
+        conn->super.ctx->tls->random_bytes(path->path_challenge.data, sizeof(path->path_challenge.data));
+        conn->super.stats.num_paths.created += 1;
+    }
+
+    /* setup egress; instantiate or share ack queue, loss detection, and CC depending on if multipah is used */
+    if (path_index == 0 || quicly_is_multipath(conn)) {
         if ((path->egress = malloc(sizeof(*path->egress))) == NULL) {
             free(path);
             return PTLS_ERROR_NO_MEMORY;
         }
-        memset(path->egress, 0, sizeof(*path->egress));
+        *path->egress = (struct st_quicly_path_egress_t){};
 
-        path->path_challenge.send_at = INT64_MAX;
-        path->initial = 1;
         quicly_loss_init(&path->egress->loss, &conn->super.ctx->loss,
                          conn->super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                          &conn->super.remote.transport_params.max_ack_delay,
@@ -1910,17 +1923,9 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
         conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &path->egress->cc, initcwnd, conn->stash.now);
         quicly_ratemeter_init(&path->egress->ratemeter);
     } else {
-        path->dcid = UINT64_MAX;
-        path->probe_only = 1;
-        conn->super.ctx->tls->random_bytes(path->path_challenge.data, sizeof(path->path_challenge.data));
-
         /* ack queue, loss detection, CC are shared */
         path->egress = conn->paths[0]->egress;
-
-        conn->super.stats.num_paths.created += 1;
     }
-    set_address(&path->address.remote, remote_addr);
-    set_address(&path->address.local, local_addr);
 
     conn->paths[path_index] = path;
 
@@ -1970,7 +1975,7 @@ static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
     }
 
     /* deinstantiate */
-    if (path_index == 0) {
+    if (path_index == 0 || quicly_is_multipath(conn)) {
         quicly_loss_dispose(&path->egress->loss);
         free(path->egress);
     }
@@ -2008,7 +2013,9 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
         delete_path(conn, 0, *path_index);
 
     /* initialize new path info */
-    if ((ret = new_path(conn, *path_index, remote_addr, local_addr, 0)) != 0)
+    if ((ret = new_path(conn, *path_index, remote_addr, local_addr,
+                        quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets,
+                                                    conn->super.ctx->transport_params.max_udp_payload_size))) != 0)
         return ret;
 
     return 0;
@@ -2051,10 +2058,11 @@ void quicly_free(quicly_conn_t *conn)
 
     ptls_buffer_dispose(&conn->crypto.transport_params.buf);
 
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+    for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
         if (conn->paths[i] != NULL)
             delete_path(conn, 0, i);
     }
+    delete_path(conn, 0, 0);
 
     /* `crytpo.tls` is disposed late, because logging relies on `ptls_skip_tracing` */
     if (conn->crypto.async_in_progress) {
