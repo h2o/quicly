@@ -1134,7 +1134,9 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
                   const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties, void *appdata);
 /**
- *
+ * Adds a new path. Only usable when running as a client. Local must contain sufficient information to distinguish between the paths
+ * being establisished; i.e, either the port number should be different or if one port is shared then the IP addresses of each
+ * local address must be different.
  */
 int quicly_add_path(quicly_conn_t *conn, struct sockaddr *local);
 /**
