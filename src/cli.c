@@ -835,6 +835,18 @@ static int run_client(struct sockaddr *sa, const char *host)
                 if (new_socket(&newfd, sa->sa_family) != -1) {
                     close(fds[0].fd);
                     fds[0] = newfd;
+                    /* nasty hack that replaces the local port number retained by quicly */
+                    switch (sa->sa_family) {
+                    case AF_INET:
+                        ((struct sockaddr_in *)quicly_get_sockname(conn))->sin_port = newfd.localaddr.sin.sin_port;
+                        break;
+                    case AF_INET6:
+                        ((struct sockaddr_in6 *)quicly_get_sockname(conn))->sin6_port = newfd.localaddr.sin6.sin6_port;
+                        break;
+                    default:
+                        assert(!"FIXME");
+                        break;
+                    }
                 }
             }
             if (got_sig_addpath && quicly_is_multipath(conn)) {
