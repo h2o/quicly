@@ -1983,6 +1983,10 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
 {
     int ret;
 
+    if (quicly_is_client(conn))
+        assert(conn->paths[0]->address.local.sa.sa_family != AF_UNSPEC &&
+               "when running as client, at least the port number is needed to distingush between the paths");
+
     /* choose a slot that in unused or the least-recently-used one that has completed validation */
     *path_index = SIZE_MAX;
     for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
