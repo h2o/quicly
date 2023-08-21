@@ -50,7 +50,7 @@ provider quicly {
     probe initial_handshake_packet_exceed(struct st_quicly_conn_t *conn, int64_t at, uint64_t num_packets);
     probe stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t at);
 
-    probe new_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index, const char *remote);
+    probe new_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index, const char *remote, const char *local);
     probe delete_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);
     probe promote_path(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);
     probe elicit_path_migration(struct st_quicly_conn_t *conn, int64_t at, size_t path_index);

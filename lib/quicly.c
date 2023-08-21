@@ -1925,12 +1925,18 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
     conn->paths[path_index] = path;
 
     if (QUICLY_NEW_PATH_ENABLED() || ptls_log.is_active) {
-        char remote[sizeof(LONGEST_ADDRESS_STR)];
+        char remote[sizeof(LONGEST_ADDRESS_STR)], local[sizeof(LONGEST_ADDRESS_STR)];
         stringify_address(remote, &path->address.remote.sa);
-        QUICLY_NEW_PATH(conn, conn->stash.now, path_index, remote);
+        if (path->address.local.sa.sa_family != AF_UNSPEC) {
+            stringify_address(local, &path->address.local.sa);
+        } else {
+            local[0] = '\0';
+        }
+        QUICLY_NEW_PATH(conn, conn->stash.now, path_index, remote, local);
         QUICLY_LOG_CONN(new_path, conn, {
             PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index);
             PTLS_LOG_ELEMENT_SAFESTR(remote, remote);
+            PTLS_LOG_ELEMENT_SAFESTR(local, local);
         });
     }
 
