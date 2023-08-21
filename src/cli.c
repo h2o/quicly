@@ -208,6 +208,12 @@ static int new_socket(struct fdinfo *fd, sa_family_t af)
             return -1;
         }
     } else {
+        assert(af != AF_UNSPEC);
+        quicly_address_t local = {.sa.sa_family = af};
+        if (bind(fd->fd, &local.sa, locallen) != 0) {
+            perror("bind(2) failed");
+            return -1;
+        }
         if (getsockname(fd->fd, &fd->localaddr.sa, &locallen) != 0) {
             perror("getsockname(2) failed");
             return -1;
@@ -743,7 +749,7 @@ static int send_pending(struct fdinfo *fds, size_t numfds, quicly_conn_t *conn)
         } else {
             fd_index = 0;
         }
-        send_packets(fds[0].fd, &dest, &src, packets, num_packets);
+        send_packets(fds[fd_index].fd, &dest, &src, packets, num_packets);
     }
 
     return ret;
