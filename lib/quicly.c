@@ -1956,7 +1956,7 @@ static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
 {
     struct st_quicly_conn_path_t *path;
 
-    /* fetch and detatch the path object to be freed */
+    /* fetch and detach the path object to be freed */
     if (is_promote) {
         assert(path_index != 0);
         QUICLY_PROMOTE_PATH(conn, conn->stash.now, path_index);
