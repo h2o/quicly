@@ -3976,8 +3976,9 @@ Emit: /* emit an ACK frame */
     } else {
         ++conn->super.stats.num_frames_sent.ack_mp;
     }
-    QUICLY_PROBE(ACK_SEND, conn, conn->stash.now, space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end - 1, ack_delay);
+    QUICLY_PROBE(ACK_SEND, conn, conn->stash.now, cid, space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end - 1, ack_delay);
     QUICLY_LOG_CONN(ack_send, conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(dcid_sequence_number, cid);
         PTLS_LOG_ELEMENT_UNSIGNED(largest_acked, space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end - 1);
         PTLS_LOG_ELEMENT_UNSIGNED(ack_delay, ack_delay);
     });
@@ -5820,8 +5821,9 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         /* Ack blocks are organized in the ACK frame and consequently in the ack_block_lengths array from the largest acked down.
          * Processing acks in packet number order requires processing the ack blocks in reverse order. */
         uint64_t pn_block_max = pn_acked + frame.ack_block_lengths[gap_index] - 1;
-        QUICLY_PROBE(ACK_BLOCK_RECEIVED, conn, conn->stash.now, pn_acked, pn_block_max);
+        QUICLY_PROBE(ACK_BLOCK_RECEIVED, conn, conn->stash.now, frame.multipath_cid, pn_acked, pn_block_max);
         QUICLY_LOG_CONN(ack_block_received, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(dcid_sequence_number, frame.multipath_cid);
             PTLS_LOG_ELEMENT_UNSIGNED(ack_block_begin, pn_acked);
             PTLS_LOG_ELEMENT_UNSIGNED(ack_block_end, pn_block_max);
         });
@@ -6786,8 +6788,11 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         PTLS_LOG_ELEMENT_HEXDUMP(dcid, packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len);
         PTLS_LOG_ELEMENT_PTR(address_token, address_token);
     });
-    QUICLY_PROBE(PACKET_RECEIVED, *conn, (*conn)->stash.now, 0, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
+    QUICLY_PROBE(PACKET_RECEIVED, *conn, (*conn)->stash.now, SIZE_MAX, 0, pn, payload.base, payload.len,
+                 get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, *conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(path_index, SIZE_MAX);
+        PTLS_LOG_ELEMENT_UNSIGNED(dcid_sequence_number, 0);
         PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
         PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(decrypted, payload.base, payload.len);
         PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
@@ -7034,10 +7039,11 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         }
     }
     /* emit probe, then bail out if corresponding path is unavailable */
-    QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, ret == 0 ? path_index : SIZE_MAX, pn, payload.base, payload.len,
-                 get_epoch(packet->octets.base[0]));
+    QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, ret == 0 ? path_index : SIZE_MAX, packet->cid.dest.plaintext.path_id, pn,
+                 payload.base, payload.len, get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, conn, {
         PTLS_LOG_ELEMENT_UNSIGNED(path_index, ret == 0 ? path_index : SIZE_MAX);
+        PTLS_LOG_ELEMENT_UNSIGNED(dcid_sequence_number, (uint32_t)packet->cid.dest.plaintext.path_id);
         PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
         PTLS_LOG_ELEMENT_UNSIGNED(decrypted_len, payload.len);
         PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));

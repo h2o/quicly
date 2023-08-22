@@ -63,8 +63,8 @@ provider quicly {
     probe crypto_receive_key_update_prepare(struct st_quicly_conn_t *conn, int64_t at, uint64_t phase, const char *secret);
 
     probe packet_sent(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, size_t len, uint8_t packet_type, int ack_only);
-    probe packet_received(struct st_quicly_conn_t *conn, int64_t at, size_t path_index, uint64_t pn, const void *decrypted,
-                          size_t decrypted_len, uint8_t packet_type);
+    probe packet_received(struct st_quicly_conn_t *conn, int64_t at, size_t path_index, uint32_t dcid_sequence_number,
+                          uint64_t pn, const void *decrypted, size_t decrypted_len, uint8_t packet_type);
     probe packet_prepare(struct st_quicly_conn_t *conn, int64_t at, size_t path_index, uint8_t first_octet, const char *dcid);
     probe packet_acked(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, int is_late_ack);
     probe packet_lost(struct st_quicly_conn_t *conn, int64_t at, uint64_t pn, uint8_t packet_type);
@@ -75,9 +75,11 @@ provider quicly {
                           size_t inflight);
     probe cc_congestion(struct st_quicly_conn_t *conn, int64_t at, uint64_t max_lost_pn, size_t inflight, uint32_t cwnd);
 
-    probe ack_block_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t ack_block_begin, uint64_t ack_block_end);
+    probe ack_block_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t dcid_sequence_number, uint64_t ack_block_begin,
+                             uint64_t ack_block_end);
     probe ack_delay_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t ack_delay);
-    probe ack_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t largest_acked, uint64_t ack_delay);
+    probe ack_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t dcid_sequence_number, uint64_t largest_acked,
+                   uint64_t ack_delay);
 
     probe ping_send(struct st_quicly_conn_t *conn, int64_t at);
     probe ping_receive(struct st_quicly_conn_t *conn, int64_t at);
