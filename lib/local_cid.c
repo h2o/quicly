@@ -35,7 +35,7 @@ static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
         return 0;
 
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
-    set->cids[0].multipath.space = NULL;
+    set->cids[idx].multipath.space = NULL;
     set->cids[idx].sequence = set->plaintext.path_id++;
 
     return 1;
