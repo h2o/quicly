@@ -1988,7 +1988,6 @@ static int delete_path(quicly_conn_t *conn, size_t path_index, enum delete_path_
     }
 
     /* deinstantiate */
-    quicly_debug_printf(conn, "delete_path: deinstantiating path_index=%zu\n", path_index);
     if (path_index == 0 || quicly_is_multipath(conn)) {
         if (mode != DELETE_PATH_MODE_FREE) {
             /* before disposing the path egress, mark all data inflight on the discarded path as lost */
