@@ -1948,16 +1948,29 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
     return 0;
 }
 
-/**
- * if is_promote is set, paths[0] (the default path) is freed and the path specified by `path_index` is promoted
- * if is_promote is not_set, paths[path_index] is freed
- */
-static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
+enum delete_path_mode {
+    /**
+     * frees all data associated to given path; this mode is guaranteed to succeed
+     */
+    DELETE_PATH_MODE_FREE,
+    /**
+     * deletes given path, marking inflight data on that path as lost
+     */
+    DELETE_PATH_MODE_DELETE,
+    /**
+     * promotes given path as the default path (i.e., path_index zero), deleting existing path zero; this mode is used when apparent
+     * port rebinding is confirmed
+     */
+    DELETE_PATH_MODE_PROMOTE,
+};
+
+static int delete_path(quicly_conn_t *conn, size_t path_index, enum delete_path_mode mode)
 {
     struct st_quicly_conn_path_t *path;
+    int ret;
 
     /* fetch and detach the path object to be freed */
-    if (is_promote) {
+    if (mode == DELETE_PATH_MODE_PROMOTE) {
         assert(path_index != 0);
         QUICLY_PROMOTE_PATH(conn, conn->stash.now, path_index);
         QUICLY_LOG_CONN(promote_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
@@ -1975,13 +1988,29 @@ static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
     }
 
     /* deinstantiate */
+    quicly_debug_printf(conn, "delete_path: deinstantiating path_index=%zu\n", path_index);
     if (path_index == 0 || quicly_is_multipath(conn)) {
+        if (mode != DELETE_PATH_MODE_FREE) {
+            /* before disposing the path egress, mark all data inflight on the discarded path as lost */
+            quicly_sentmap_iter_t iter;
+            const quicly_sent_packet_t *sent;
+            quicly_sentmap_init_iter(&path->egress->loss.sentmap, &iter);
+            while ((sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
+                if ((ret = quicly_sentmap_update(&path->egress->loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_EXPIRED, conn)) != 0)
+                    goto Exit;
+            }
+        }
         quicly_loss_dispose(&path->egress->loss);
         free(path->egress);
     }
     if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0)
         retire_connection_id(conn, path->dcid);
     free(path);
+
+    ret = 0;
+
+Exit:
+    return ret;
 }
 
 static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
@@ -2009,8 +2038,8 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
         return QUICLY_ERROR_PACKET_IGNORED;
 
     /* free existing path info */
-    if (conn->paths[*path_index] != NULL)
-        delete_path(conn, 0, *path_index);
+    if (conn->paths[*path_index] != NULL && (ret = delete_path(conn, *path_index, DELETE_PATH_MODE_DELETE)) != 0)
+        return ret;
 
     /* initialize new path info */
     if ((ret = new_path(conn, *path_index, remote_addr, local_addr,
@@ -2060,9 +2089,9 @@ void quicly_free(quicly_conn_t *conn)
 
     for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
         if (conn->paths[i] != NULL)
-            delete_path(conn, 0, i);
+            delete_path(conn, i, DELETE_PATH_MODE_FREE);
     }
-    delete_path(conn, 0, 0);
+    delete_path(conn, 0, DELETE_PATH_MODE_FREE);
 
     /* `crytpo.tls` is disposed late, because logging relies on `ptls_skip_tracing` */
     if (conn->crypto.async_in_progress) {
@@ -5466,7 +5495,8 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             continue;
         if (conn->paths[s.path_index]->path_challenge.send_at <= conn->stash.now) {
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
-                delete_path(conn, 0, s.path_index);
+                if ((ret = delete_path(conn, s.path_index, DELETE_PATH_MODE_DELETE)) != 0)
+                    goto Exit;
                 continue;
             }
         } else if (!conn->paths[s.path_index]->path_response.send_) {
@@ -5474,7 +5504,8 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
         }
         /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
         if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
-            delete_path(conn, 0, s.path_index);
+            if ((ret = delete_path(conn, s.path_index, DELETE_PATH_MODE_DELETE)) != 0)
+                goto Exit;
             conn->super.stats.num_paths.closed_no_dcid += 1;
             continue;
         }
@@ -7136,7 +7167,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         /* switch active path to current path, if current path is validated and not probe-only */
         if (path_index != 0 && conn->paths[path_index]->path_challenge.send_at == INT64_MAX &&
             !conn->paths[path_index]->probe_only) {
-            delete_path(conn, 1 /* promote */, path_index);
+            if ((ret = delete_path(conn, path_index, DELETE_PATH_MODE_PROMOTE)) != 0)
+                goto Exit;
             path_index = 0;
         }
         break;
