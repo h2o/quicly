@@ -62,7 +62,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID 16
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE 0x20
 #define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xff03de1a
-#define QUICLY_TRANSPORT_PARAMETER_ID_ENABLE_MULTIPATH 0x0f739bbc1b666d04
+#define QUICLY_TRANSPORT_PARAMETER_ID_ENABLE_MULTIPATH 0x0f739bbc1b666d05
 
 /**
  * maximum size of token that quicly accepts
@@ -2295,7 +2295,7 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
     if (params->enable_multipath)
-        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ENABLE_MULTIPATH, { ptls_buffer_push_quicint(buf, 1); });
+        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ENABLE_MULTIPATH, {});
     if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); });
@@ -2500,22 +2500,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 params->active_connection_id_limit = v;
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
-            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_ENABLE_MULTIPATH, {
-                uint64_t v;
-                if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
-                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
-                    goto Exit;
-                }
-                switch (v) {
-                case 0:
-                case 1:
-                    params->enable_multipath = v;
-                    break;
-                default:
-                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
-                    goto Exit;
-                }
-            });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_ENABLE_MULTIPATH, { params->enable_multipath = 1; });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
