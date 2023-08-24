@@ -287,6 +287,15 @@ struct st_quicly_conn_path_t {
      */
     uint8_t probe_only : 1;
     /**
+     * if other paths have been pruned from which this path was potentially rebound
+     */
+    uint8_t rebinding_handled : 1;
+    /**
+     * The most recent CID observed for packets arriving on this path. This value is used for detecting NAT rebinding (in which case
+     * we retire the old path).
+     */
+    uint64_t ingress_cid;
+    /**
      * number of packets being sent / received on the path
      */
     struct {
@@ -1881,7 +1890,7 @@ static void stringify_address(char *buf, struct sockaddr *sa)
 }
 
 static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr,
-                    uint32_t initcwnd)
+                    uint64_t ingress_cid, uint32_t initcwnd)
 {
     struct st_quicly_conn_path_t *path;
 
@@ -1889,7 +1898,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
 
     if ((path = malloc(sizeof(*path))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    *path = (struct st_quicly_conn_path_t){};
+    *path = (struct st_quicly_conn_path_t){.ingress_cid = ingress_cid};
 
     /* setup non-zero fields */
     set_address(&path->address.remote, remote_addr);
@@ -1898,6 +1907,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
         /* handshake path */
         path->path_challenge.send_at = INT64_MAX;
         path->initial = 1;
+        path->rebinding_handled = 1;
     } else {
         /* alternate path (requires probing) */
         path->dcid = UINT64_MAX;
@@ -2012,7 +2022,40 @@ Exit:
     return ret;
 }
 
-static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
+/**
+ * When a path sharing a same incoming DCID with other paths is validated, the other paths have to be removed, as it is an apparent
+ * NAT rebinding and we do not want to send through the old paths.
+ *
+ * @param path_index the path that has just been validated; this is an in-out parameter as this function might move the slot
+ */
+static int handle_path_rebind(quicly_conn_t *conn, size_t *path_index)
+{
+    int ret;
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        if (i == *path_index || conn->paths[i] == NULL)
+            continue;
+        if (conn->paths[i]->ingress_cid == conn->paths[*path_index]->ingress_cid &&
+            conn->paths[i]->path_challenge.send_at == INT64_MAX) {
+            if (i == 0) {
+                if ((ret = delete_path(conn, *path_index, DELETE_PATH_MODE_PROMOTE)) != 0)
+                    goto Exit;
+                *path_index = 0;
+            } else {
+                if ((ret = delete_path(conn, i, DELETE_PATH_MODE_DELETE)) != 0)
+                    goto Exit;
+            }
+        }
+    }
+
+    ret = 0;
+
+Exit:
+    return ret;
+}
+
+static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr,
+                     uint64_t ingress_cid)
 {
     int ret;
 
@@ -2041,7 +2084,7 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
         return ret;
 
     /* initialize new path info */
-    if ((ret = new_path(conn, *path_index, remote_addr, local_addr,
+    if ((ret = new_path(conn, *path_index, remote_addr, local_addr, ingress_cid,
                         quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets,
                                                     conn->super.ctx->transport_params.max_udp_payload_size))) != 0)
         return ret;
@@ -2599,7 +2642,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->created_at = conn->stash.now;
     conn->super.stats.handshake_confirmed_msec = UINT64_MAX;
     conn->crypto.tls = tls;
-    if (new_path(conn, 0, remote_addr, local_addr, initcwnd) != 0) {
+    if (new_path(conn, 0, remote_addr, local_addr, UINT64_MAX, initcwnd) != 0) {
         unlock_now(conn);
         ptls_free(tls);
         free(conn);
@@ -7048,7 +7091,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         /* packets arriving from new paths will start to get ignored once the number of paths that failed to validate reaches the
          * defined threshold */
         if (conn->super.stats.num_paths.validation_failed < conn->super.ctx->max_path_validation_failures) {
-            ret = open_path(conn, &path_index, src_addr, dest_addr);
+            ret = open_path(conn, &path_index, src_addr, dest_addr, packet->cid.dest.plaintext.path_id);
         } else {
             ret = QUICLY_ERROR_PACKET_IGNORED;
         }
@@ -7071,6 +7114,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         conn->super.state = QUICLY_STATE_CONNECTED;
     conn->super.stats.num_packets.received += 1;
     conn->paths[path_index]->packet_last_received = conn->super.stats.num_packets.received;
+    conn->paths[path_index]->ingress_cid = packet->cid.dest.plaintext.path_id;
     conn->paths[path_index]->num_packets.received += 1;
 
     /* state updates, that are triggered by the receipt of a packet */
@@ -7103,7 +7147,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         free_pn_space(space);
         space = NULL;
     }
-    if (!is_probe_only && conn->paths[path_index]->probe_only) {
+    if (!is_probe_only && conn->paths[path_index]->probe_only && !quicly_is_multipath(conn)) {
         assert(path_index != 0);
         conn->paths[path_index]->probe_only = 0;
         ++conn->super.stats.num_paths.migration_elicited;
@@ -7148,12 +7192,12 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     case QUICLY_EPOCH_1RTT:
         if (!is_ack_only && should_send_max_data(conn))
             conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
-        /* switch active path to current path, if current path is validated and not probe-only */
-        if (path_index != 0 && conn->paths[path_index]->path_challenge.send_at == INT64_MAX &&
-            !conn->paths[path_index]->probe_only) {
-            if ((ret = delete_path(conn, path_index, DELETE_PATH_MODE_PROMOTE)) != 0)
+        /* immediately after the path has been validated, prune other paths sharing the same incoming DCID, as they are likely the
+         * source of NAT rebinding */
+        if (!conn->paths[path_index]->rebinding_handled && conn->paths[path_index]->path_challenge.send_at == INT64_MAX) {
+            conn->paths[path_index]->rebinding_handled = 1;
+            if ((ret = handle_path_rebind(conn, &path_index)) != 0)
                 goto Exit;
-            path_index = 0;
         }
         break;
     default:
@@ -7198,7 +7242,7 @@ int quicly_add_path(quicly_conn_t *conn, struct sockaddr *local)
     if (conn->paths[0]->address.remote.sa.sa_family != local->sa_family)
         return QUICLY_ERROR_INVALID_PARAMETERS;
 
-    return open_path(conn, &path_index, &conn->paths[0]->address.remote.sa, local);
+    return open_path(conn, &path_index, &conn->paths[0]->address.remote.sa, local, UINT64_MAX);
 }
 
 int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
