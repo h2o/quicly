@@ -5525,7 +5525,10 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
                 continue;
             }
         } else if (!conn->paths[s.path_index]->path_response.send_) {
-            continue;
+            /* We can skip this path if neither PATH_CHALLENGE nor PATH_RESPONSE is to be sent, unless multipath is used. If
+             * multipath is used, we have to run the per-path loss recovery / CC. */
+            if (!quicly_is_multipath(conn))
+                continue;
         }
         /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
         if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
