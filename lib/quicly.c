@@ -287,12 +287,12 @@ struct st_quicly_conn_path_t {
      */
     uint8_t probe_only : 1;
     /**
-     * if other paths have been pruned from which this path was potentially rebound
+     *
      */
-    uint8_t rebinding_handled : 1;
+    uint8_t multipath_rebinding_check_complete : 1;
     /**
-     * The most recent CID observed for packets arriving on this path. This value is used for detecting NAT rebinding (in which case
-     * we retire the old path).
+     * The most recent CID observed for packets arriving on this path. When multipath is active, this value is used for detecting
+     * NAT rebinding (in which case we'd want to retire the old path).
      */
     uint64_t ingress_cid;
     /**
@@ -1907,7 +1907,6 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
         /* handshake path */
         path->path_challenge.send_at = INT64_MAX;
         path->initial = 1;
-        path->rebinding_handled = 1;
     } else {
         /* alternate path (requires probing) */
         path->dcid = UINT64_MAX;
@@ -2028,15 +2027,14 @@ Exit:
  *
  * @param path_index the path that has just been validated; this is an in-out parameter as this function might move the slot
  */
-static int handle_path_rebind(quicly_conn_t *conn, size_t *path_index)
+static int multipath_handle_rebinding(quicly_conn_t *conn, size_t *path_index)
 {
     int ret;
 
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
         if (i == *path_index || conn->paths[i] == NULL)
             continue;
-        if (conn->paths[i]->ingress_cid == conn->paths[*path_index]->ingress_cid &&
-            conn->paths[i]->path_challenge.send_at == INT64_MAX) {
+        if (conn->paths[i]->ingress_cid == conn->paths[*path_index]->ingress_cid) {
             if (i == 0) {
                 if ((ret = delete_path(conn, *path_index, DELETE_PATH_MODE_PROMOTE)) != 0)
                     goto Exit;
@@ -7192,12 +7190,25 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     case QUICLY_EPOCH_1RTT:
         if (!is_ack_only && should_send_max_data(conn))
             conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
-        /* immediately after the path has been validated, prune other paths sharing the same incoming DCID, as they are likely the
-         * source of NAT rebinding */
-        if (!conn->paths[path_index]->rebinding_handled && conn->paths[path_index]->path_challenge.send_at == INT64_MAX) {
-            conn->paths[path_index]->rebinding_handled = 1;
-            if ((ret = handle_path_rebind(conn, &path_index)) != 0)
-                goto Exit;
+        /* prune / promote paths, if current path has been validated */
+        if (conn->paths[path_index]->path_challenge.send_at == INT64_MAX) {
+            if (quicly_is_multipath(conn)) {
+                /* if multipath is used, paths sharing the ingress CID are removed at the moment current path is validated, as they
+                 * are the source of NAT rebinding and therefore likely to have ceased */
+                if (!conn->paths[path_index]->multipath_rebinding_check_complete) {
+                    conn->paths[path_index]->multipath_rebinding_check_complete = 1;
+                    if ((ret = multipath_handle_rebinding(conn, &path_index)) != 0)
+                        goto Exit;
+                }
+            } else {
+                /* if multipath is not used, active path is path zero. Receipt of a probe only packet on an alternate path is used
+                 * as the trigger to promote path. */
+                if (path_index != 0 && !conn->paths[path_index]->probe_only) {
+                    if ((ret = delete_path(conn, path_index, DELETE_PATH_MODE_PROMOTE)) != 0)
+                        goto Exit;
+                    path_index = 0;
+                }
+            }
         }
         break;
     default:
