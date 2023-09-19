@@ -6313,7 +6313,7 @@ static int compare_socket_address(const struct sockaddr *x, int x_allow_unspecif
             CMP(ntohl(xin->sin_addr.s_addr), ntohl(yin->sin_addr.s_addr));
         CMP(ntohs(xin->sin_port), ntohs(yin->sin_port));
     } else if (x->sa_family == AF_INET6) {
-        in6_addr_t zeroaddr = {};
+        struct in6_addr zeroaddr = {};
         const struct sockaddr_in6 *xin6 = (void *)x, *yin6 = (void *)y;
         if (!(x_allow_unspecified && memcmp(xin6->sin6_addr.s6_addr, &zeroaddr, sizeof(xin6->sin6_addr.s6_addr)) == 0)) {
             int r = memcmp(xin6->sin6_addr.s6_addr, yin6->sin6_addr.s6_addr, sizeof(xin6->sin6_addr.s6_addr));
@@ -7150,8 +7150,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         }
     }
     /* emit probe, then bail out if corresponding path is unavailable */
-    QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, ret == 0 ? path_index : SIZE_MAX, packet->cid.dest.plaintext.path_id, pn,
-                 payload.base, payload.len, get_epoch(packet->octets.base[0]));
+    QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, ret == 0 ? path_index : SIZE_MAX,
+                 (uint32_t)packet->cid.dest.plaintext.path_id, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, conn, {
         PTLS_LOG_ELEMENT_UNSIGNED(path_index, ret == 0 ? path_index : SIZE_MAX);
         PTLS_LOG_ELEMENT_UNSIGNED(dcid_sequence_number, (uint32_t)packet->cid.dest.plaintext.path_id);
