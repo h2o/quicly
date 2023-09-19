@@ -5302,10 +5302,10 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 goto Exit;
             path->path_response.send_ = 0;
         }
-        /* non probing frames are sent only on path zero */
-        if (s->path_index == 0) {
+        /* emit non-probing frames; unless multipath is used, this is done only on the active path which is one and only */
+        if (s->path_index == 0 || quicly_is_multipath(conn)) {
             /* acks (in case of multipath the paths on which we send acks should be stable; we use path 0 all the time) */
-            if (conn->application->one_rtt_writable) {
+            if (conn->application->one_rtt_writable && s->path_index == 0) {
                 struct st_quicly_pn_space_t *space;
                 uint64_t cid;
                 ssize_t i = -1;
@@ -5513,25 +5513,28 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
         goto Exit;
     }
 
-    /* try emitting one probe packet on one of the backup paths, or ... (note: API of `quicly_send` allows us to send packets on no
-     * more than one path at a time) */
-    for (s.path_index = 1; s.path_index < PTLS_ELEMENTSOF(conn->paths); ++s.path_index) {
-        if (conn->paths[s.path_index] == NULL)
+    /* emit packets */
+    for (s.path_index = 0; s.path_index < PTLS_ELEMENTSOF(conn->paths); ++s.path_index) {
+        if (conn->paths[s.path_index] == NULL) {
+            assert(s.path_index != 0);
             continue;
-        if (conn->paths[s.path_index]->path_challenge.send_at <= conn->stash.now) {
+        }
+        if (conn->paths[s.path_index]->path_challenge.send_at <= conn->stash.now && s.path_index != 0) {
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
+                assert(s.path_index != 0);
                 if ((ret = delete_path(conn, s.path_index, DELETE_PATH_MODE_DELETE)) != 0)
                     goto Exit;
                 continue;
             }
         } else if (!conn->paths[s.path_index]->path_response.send_) {
-            /* We can skip this path if neither PATH_CHALLENGE nor PATH_RESPONSE is to be sent, unless multipath is used. If
+            /* We can skip backup paths if neither PATH_CHALLENGE nor PATH_RESPONSE is to be sent. If this is an active path or if
              * multipath is used, we have to run the per-path loss recovery / CC. */
-            if (!quicly_is_multipath(conn))
+            if (!(s.path_index == 0 || quicly_is_multipath(conn)))
                 continue;
         }
         /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
         if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
+            assert(s.path_index != 0);
             if ((ret = delete_path(conn, s.path_index, DELETE_PATH_MODE_DELETE)) != 0)
                 goto Exit;
             conn->super.stats.num_paths.closed_no_dcid += 1;
@@ -5539,16 +5542,16 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
         }
         if ((ret = do_send(conn, &s)) != 0)
             goto Exit;
+        /* API of `quicly_send` allows us to build packets for only one set of 4-tuple at once, therefore return what we have built.
+         * Successive calls to `quicly_send` will generate packets for all the paths. */
         if (s.num_datagrams != 0)
             break;
     }
-    /* otherwise, emit non-probing packets */
-    if (s.num_datagrams == 0) {
-        s.path_index = 0;
-        if ((ret = do_send(conn, &s)) != 0)
-            goto Exit;
-    } else {
+    /* if quicly_send was called for all the paths but nothing could be be sent (e.g., when PTO fires but there's amplification
+     * limit), change the result to success and let the consistency check run fo the active path */
+    if (s.path_index == PTLS_ELEMENTSOF(conn->paths)) {
         ret = 0;
+        s.path_index = 0;
     }
 
     assert_consistency(conn, s.path_index, 1);
