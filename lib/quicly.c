@@ -6618,6 +6618,53 @@ static int handle_ack_frequency_frame(quicly_conn_t *conn, struct st_quicly_hand
     return 0;
 }
 
+static int handle_path_abandon_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    quicly_path_abandon_frame_t frame;
+    int ret;
+
+    if (!quicly_is_multipath(conn))
+        return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+
+    if ((ret = quicly_decode_path_abandon_frame(&state->src, state->end, &frame)) != 0)
+        return ret;
+
+    QUICLY_PROBE(PATH_ABANDON_RECEIVE, conn, conn->stash.now, frame.dcid, frame.error_code,
+                 QUICLY_PROBE_ESCAPE_UNSAFE_STRING(frame.reason_phrase.base, frame.reason_phrase.len));
+    QUICLY_LOG_CONN(path_abandon_receive, conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(dcid, frame.dcid);
+        PTLS_LOG_ELEMENT_UNSIGNED(error_code, frame.error_code);
+        PTLS_LOG_ELEMENT_UNSAFESTR(reason_phrase, (const char *)frame.reason_phrase.base, frame.reason_phrase.len);
+    });
+
+    /* TODO handle the frame */
+
+    return 0;
+}
+
+static int handle_path_status_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    quicly_path_status_frame_t frame;
+    int ret;
+
+    if (!quicly_is_multipath(conn))
+        return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+
+    if ((ret = quicly_decode_path_status_frame(&state->src, state->end, &frame)) != 0)
+        return ret;
+
+    QUICLY_PROBE(PATH_STATUS_RECEIVE, conn, conn->stash.now, frame.dcid, frame.sequence, frame.available ? 2 : 1);
+    QUICLY_LOG_CONN(path_status_receive, conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(dcid, frame.dcid);
+        PTLS_LOG_ELEMENT_UNSIGNED(sequence, frame.sequence);
+        PTLS_LOG_ELEMENT_UNSIGNED(available, frame.available ? 2 : 1);
+    });
+
+    /* TODO handle the frame */
+
+    return 0;
+}
+
 static int handle_payload(quicly_conn_t *conn, size_t epoch, size_t path_index, struct st_quicly_pn_space_t *pn_space,
                           const uint8_t *_src, size_t _len, uint64_t *offending_frame_type, int *is_ack_only, int *is_probe_only)
 {
@@ -6702,6 +6749,8 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, size_t path_index, 
         FRAME( DATAGRAM_WITHLEN , datagram      ,  0 ,  1,   0,   1 ,             1 ,       0 ),
         FRAME( ACK_FREQUENCY    , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ,       0 ),
         FRAME( ACK_MP           , ack_mp        ,  0 ,  0 ,  0 ,  1 ,             0 ,       0 ),
+        FRAME( PATH_ABANDON     , path_abandon  ,  0 ,  0 ,  0 ,  1 ,             1 ,       0 ),
+        FRAME( PATH_STATUS      , path_status   ,  0 ,  0 ,  0 ,  1 ,             1 ,       0 ),
         /*   +------------------+---------------+-------------------+---------------+---------+ */
 #undef FRAME
         {UINT64_MAX},
