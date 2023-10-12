@@ -25,6 +25,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <getopt.h>
+#include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -416,6 +417,50 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
+/* buf should be ctx.transport_params.max_udp_payload_size bytes long */
+static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_t *ecn)
+{
+    struct iovec vec = {.iov_base = buf, .iov_len = ctx.transport_params.max_udp_payload_size};
+    char cmsgbuf[CMSG_SPACE(sizeof(int) /* == max(V4_TOS, V6_TCLASS) */)] = {};
+    struct msghdr mess = {
+        .msg_name = &src->sa,
+        .msg_namelen = sizeof(*src),
+        .msg_iov = &vec,
+        .msg_iovlen = 1,
+        .msg_control = cmsgbuf,
+        .msg_controllen = sizeof(cmsgbuf),
+    };
+    quicly_address_t localaddr = {};
+    socklen_t localaddrlen = sizeof(localaddr);
+    ssize_t rret;
+
+    if (getsockname(fd, &localaddr.sa, &localaddrlen) != 0)
+        perror("getsockname failed");
+
+    while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+        ;
+
+    if (rret >= 0) {
+        *ecn = 0;
+        for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&mess); cmsg != NULL; cmsg = CMSG_NXTHDR(&mess, cmsg)) {
+#ifdef IP_RECVTOS
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type ==
+#ifdef __APPLE__
+                IP_RECVTOS
+#else
+                IP_TOS
+#endif
+                ) {
+                assert(cmsg->cmsg_len == 1);
+                *ecn = *(uint8_t *)CMSG_DATA(cmsg) & IPTOS_ECN_MASK;
+            }
+#endif
+        }
+    }
+
+    return rret;
+}
+
 static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
 {
     for (size_t i = 0; i != num_packets; ++i) {
@@ -577,20 +622,9 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
-                uint8_t buf[ctx.transport_params.max_udp_payload_size];
-                struct msghdr mess;
-                struct sockaddr sa;
-                struct iovec vec;
-                memset(&mess, 0, sizeof(mess));
-                mess.msg_name = &sa;
-                mess.msg_namelen = sizeof(sa);
-                vec.iov_base = buf;
-                vec.iov_len = sizeof(buf);
-                mess.msg_iov = &vec;
-                mess.msg_iovlen = 1;
-                ssize_t rret;
-                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-                    ;
+                uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
+                quicly_address_t src;
+                ssize_t rret = receive_datagram(fd, buf, &src, &ecn);
                 if (rret <= 0)
                     break;
                 if (verbosity >= 2)
@@ -600,7 +634,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                     quicly_decoded_packet_t packet;
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
-                    quicly_receive(conn, NULL, &sa, &packet);
+                    packet.ecn = ecn;
+                    quicly_receive(conn, NULL, &src.sa, &packet);
                     if (send_datagram_frame && quicly_connection_is_ready(conn)) {
                         const char *message = "hello datagram!";
                         ptls_iovec_t datagram = ptls_iovec_init(message, strlen(message));
@@ -751,20 +786,9 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
-                uint8_t buf[ctx.transport_params.max_udp_payload_size];
-                struct msghdr mess;
+                uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
                 quicly_address_t remote;
-                struct iovec vec;
-                memset(&mess, 0, sizeof(mess));
-                mess.msg_name = &remote.sa;
-                mess.msg_namelen = sizeof(remote);
-                vec.iov_base = buf;
-                vec.iov_len = sizeof(buf);
-                mess.msg_iov = &vec;
-                mess.msg_iovlen = 1;
-                ssize_t rret;
-                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-                    ;
+                ssize_t rret = receive_datagram(fd, buf, &remote, &ecn);
                 if (rret == -1)
                     break;
                 if (verbosity >= 2)
@@ -774,6 +798,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     quicly_decoded_packet_t packet;
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
+                    packet.ecn = ecn;
                     if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
                         if (packet.version != 0 && !quicly_is_supported_version(packet.version)) {
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
@@ -1480,6 +1505,13 @@ int main(int argc, char **argv)
         int opt = IP_PMTUDISC_DO;
         if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0)
             perror("Warning: setsockopt(IP_MTU_DISCOVER) failed");
+    }
+#endif
+#ifdef IP_RECVTOS
+    {
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_RECVTOS, &on, sizeof(on)) != 0)
+            perror("Warning: setsockopt(IP_RECVTOS) failed");
     }
 #endif
 
