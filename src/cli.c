@@ -461,15 +461,36 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_
     return rret;
 }
 
-static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
+static void set_ecn(struct msghdr *mess, int ecn)
+{
+    if (ecn != 0)
+        return;
+
+    struct cmsghdr *cmsg = (struct cmsghdr *)((char *)mess->msg_control + mess->msg_controllen);
+
+    cmsg->cmsg_level = IPPROTO_IP;
+    cmsg->cmsg_type = IP_TOS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(ecn));
+    memcpy(CMSG_DATA(cmsg), &ecn, sizeof(ecn));
+
+    mess->msg_controllen += CMSG_SPACE(sizeof(ecn));
+}
+
+static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets, uint8_t ecn)
 {
     for (size_t i = 0; i != num_packets; ++i) {
-        struct msghdr mess;
-        memset(&mess, 0, sizeof(mess));
-        mess.msg_name = dest;
-        mess.msg_namelen = quicly_get_socklen(dest);
-        mess.msg_iov = &packets[i];
-        mess.msg_iovlen = 1;
+        char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
+        struct msghdr mess = {
+            .msg_name = dest,
+            .msg_namelen = quicly_get_socklen(dest),
+            .msg_iov = &packets[i],
+            .msg_iovlen = 1,
+            .msg_control = cmsgbuf,
+        };
+        set_ecn(&mess, ecn);
+        assert(mess.msg_controllen <= sizeof(cmsgbuf));
+        if (mess.msg_controllen == 0)
+            mess.msg_control = NULL;
         if (verbosity >= 2)
             hexdump("sendmsg", packets[i].iov_base, packets[i].iov_len);
         int ret;
@@ -486,29 +507,27 @@ static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *pa
 #define UDP_SEGMENT 103
 #endif
 
-static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
+static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets, uint8_t ecn)
 {
     struct iovec vec = {.iov_base = (void *)packets[0].iov_base,
                         .iov_len = packets[num_packets - 1].iov_base + packets[num_packets - 1].iov_len - packets[0].iov_base};
+    char cmsgbuf[CMSG_SPACE(sizeof(uint16_t)) + CMSG_SPACE(sizeof(int))]; /* UDP_SEGMENT and IP_TOS */
     struct msghdr mess = {
         .msg_name = dest,
         .msg_namelen = quicly_get_socklen(dest),
         .msg_iov = &vec,
         .msg_iovlen = 1,
+        .msg_control = cmsgbuf,
     };
-
-    union {
-        struct cmsghdr hdr;
-        char buf[CMSG_SPACE(sizeof(uint16_t))];
-    } cmsg;
     if (num_packets != 1) {
-        cmsg.hdr.cmsg_level = SOL_UDP;
-        cmsg.hdr.cmsg_type = UDP_SEGMENT;
-        cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(uint16_t));
-        *(uint16_t *)CMSG_DATA(&cmsg.hdr) = packets[0].iov_len;
-        mess.msg_control = &cmsg;
-        mess.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(uint16_t));
+        struct cmsghdr *cmsg = mess.msg_control;
+        cmsg->cmsg_level = SOL_UDP;
+        cmsg->cmsg_type = UDP_SEGMENT;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+        *(uint16_t *)CMSG_DATA(cmsg) = packets[0].iov_len;
+        mess.msg_controllen = CMSG_SPACE(sizeof(uint16_t));
     }
+    set_ecn(&mess, ecn);
 
     int ret;
     while ((ret = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
@@ -519,12 +538,12 @@ static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packet
 
 #endif
 
-static void (*send_packets)(int, struct sockaddr *, struct iovec *, size_t) = send_packets_default;
+static void (*send_packets)(int, struct sockaddr *, struct iovec *, size_t, uint8_t ecn) = send_packets_default;
 
 static void send_one_packet(int fd, struct sockaddr *dest, const void *payload, size_t payload_len)
 {
     struct iovec vec = {.iov_base = (void *)payload, .iov_len = payload_len};
-    send_packets(fd, dest, &vec, 1);
+    send_packets(fd, dest, &vec, 1, 0);
 }
 
 static int send_pending(int fd, quicly_conn_t *conn)
@@ -536,7 +555,7 @@ static int send_pending(int fd, quicly_conn_t *conn)
     int ret;
 
     if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0)
-        send_packets(fd, &dest.sa, packets, num_packets);
+        send_packets(fd, &dest.sa, packets, num_packets, quicly_send_get_ecn_bits(conn));
 
     return ret;
 }
@@ -1138,8 +1157,10 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    static const struct option longopts[] = {
-        {"ech-key", required_argument, NULL, 0}, {"ech-configs", required_argument, NULL, 0}, {NULL}};
+    static const struct option longopts[] = {{"ech-key", required_argument, NULL, 0},
+                                             {"ech-configs", required_argument, NULL, 0},
+                                             {"disable-ecn", no_argument, NULL, 0},
+                                             {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
         switch (ch) {
@@ -1148,6 +1169,8 @@ int main(int argc, char **argv)
                 ech_setup_key(&tlsctx, optarg);
             } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
                 ech_setup_configs(optarg);
+            } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
+                ctx.enable_ecn = 0;
             } else {
                 assert(!"unexpected longname");
             }
