@@ -22,6 +22,7 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -130,6 +131,10 @@ struct st_quicly_pn_space_t {
      * number of ACK-eliciting packets that have not been ACKed yet
      */
     uint32_t unacked_count;
+    /**
+     * ECN in the order of ECT(0), ECT(1), CE
+     */
+    uint64_t ecn_counts[3];
     /**
      * maximum number of ACK-eliciting packets to be queued before sending an ACK
      */
@@ -628,6 +633,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
     packet->datagram_size = *off == 0 ? datagram_size : 0;
     packet->token = ptls_iovec_init(NULL, 0);
     packet->decrypted.pn = UINT64_MAX;
+    packet->ecn = 0; /* non-ECT */
 
     /* move the cursor to the second byte */
     src += *off + 1;
@@ -1388,6 +1394,8 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz, uint32_t packet_to
     space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->unacked_count = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(space->ecn_counts); ++i)
+        space->ecn_counts[i] = 0;
     space->packet_tolerance = packet_tolerance;
     space->ignore_order = 0;
     if (sz != sizeof(*space))
@@ -1426,8 +1434,8 @@ static int record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
     return 0;
 }
 
-static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int is_ack_only, int64_t now, int64_t *send_ack_at,
-                          uint64_t *received_out_of_order)
+static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, uint8_t ecn, int is_ack_only, int64_t now,
+                          int64_t *send_ack_at, uint64_t *received_out_of_order)
 {
     int ret, ack_now, is_out_of_order;
 
@@ -1436,11 +1444,29 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, int i
     if (is_out_of_order)
         *received_out_of_order += 1;
 
-    ack_now = is_out_of_order && !space->ignore_order && !is_ack_only;
+    ack_now = !is_ack_only && ((is_out_of_order && !space->ignore_order) || ecn == IPTOS_ECN_CE);
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
         space->largest_pn_received_at = now;
+
+    /* ecn */
+    switch (ecn) {
+    case 0: /* NOT-ECT */
+        break;
+    case 1: /* ECT(1) */
+        space->ecn_counts[1] += 1;
+        break;
+    case 2: /* ECT(0) */
+        space->ecn_counts[0] += 1;
+        break;
+    case 3: /* CE */
+        space->ecn_counts[2] += 1;
+        break;
+    default:
+        assert(!"unexpected ecn flag");
+        break;
+    }
 
     /* if the received packet is ack-eliciting, update / schedule transmission of ACK */
     if (!is_ack_only) {
@@ -3448,7 +3474,7 @@ Emit: /* emit an ACK frame */
     if ((ret = do_allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY, ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING)) != 0)
         return ret;
     uint8_t *dst = s->dst;
-    dst = quicly_encode_ack_frame(dst, s->dst_end, &space->ack_queue, ack_delay);
+    dst = quicly_encode_ack_frame(dst, s->dst_end, &space->ack_queue, space->ecn_counts, ack_delay);
 
     /* when there's no space, retry with a new MTU-sized packet */
     if (dst == NULL) {
@@ -6111,7 +6137,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     (*conn)->super.stats.num_bytes.received += packet->datagram_size;
     if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
-    if ((ret = record_receipt(&(*conn)->initial->super, pn, 0, (*conn)->stash.now, &(*conn)->egress.send_ack_at,
+    if ((ret = record_receipt(&(*conn)->initial->super, pn, packet->ecn, 0, (*conn)->stash.now, &(*conn)->egress.send_ack_at,
                               &(*conn)->super.stats.num_packets.received_out_of_order)) != 0)
         goto Exit;
 
@@ -6349,7 +6375,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     if ((ret = handle_payload(conn, epoch, payload.base, payload.len, &offending_frame_type, &is_ack_only)) != 0)
         goto Exit;
     if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
-        if ((ret = record_receipt(*space, pn, is_ack_only, conn->stash.now, &conn->egress.send_ack_at,
+        if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->stash.now, &conn->egress.send_ack_at,
                                   &conn->super.stats.num_packets.received_out_of_order)) != 0)
             goto Exit;
     }

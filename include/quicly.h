@@ -819,6 +819,10 @@ typedef struct st_quicly_decoded_packet_t {
         uint64_t key_phase;
     } decrypted;
     /**
+     * ECN bits
+     */
+    uint8_t ecn : 2;
+    /**
      *
      */
     enum {
