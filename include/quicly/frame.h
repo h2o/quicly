@@ -243,6 +243,7 @@ typedef struct st_quicly_ack_frame_t {
     uint64_t num_gaps;
     uint64_t ack_block_lengths[QUICLY_ACK_MAX_GAPS + 1];
     uint64_t gaps[QUICLY_ACK_MAX_GAPS];
+    uint64_t ecn_counts[3];
 } quicly_ack_frame_t;
 
 int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_frame_t *frame, int is_ack_ecn);

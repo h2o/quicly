@@ -113,11 +113,14 @@ int quicly_decode_ack_frame(const uint8_t **src, const uint8_t *end, quicly_ack_
     }
 
     if (is_ack_ecn) {
-        /* just skip ECT(0), ECT(1), ECT-CE counters for the time being */
-        for (i = 0; i != 3; ++i)
-            if (quicly_decodev(src, end) == UINT64_MAX)
+        for (i = 0; i < PTLS_ELEMENTSOF(frame->ecn_counts); ++i)
+            if ((frame->ecn_counts[i] = quicly_decodev(src, end)) == UINT64_MAX)
                 goto Error;
+    } else {
+        for (i = 0; i < PTLS_ELEMENTSOF(frame->ecn_counts); ++i)
+            frame->ecn_counts[i] = 0;
     }
+
     return 0;
 Error:
     return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
