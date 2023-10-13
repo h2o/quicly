@@ -312,7 +312,7 @@ struct st_quicly_conn_t {
          */
         struct {
             enum en_quicly_ecn_state { QUICLY_ECN_OFF, QUICLY_ECN_ON, QUICLY_ECN_PROBING } state;
-            uint64_t ce_count;
+            uint64_t ce_count[QUICLY_NUM_EPOCHS];
         } ecn;
         /**
          * things to be sent at the stream-level, that are not governed by the stream scheduler
@@ -5354,10 +5354,11 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
             update_ecn_state(conn, QUICLY_ECN_ON);
 
         /* check if ECN_CE has increased; if so, raise a congestion event */
-        if (conn->egress.ecn.state != QUICLY_ECN_OFF && frame.ecn_counts[2] > conn->egress.ecn.ce_count) {
-            conn->egress.ecn.ce_count = frame.ecn_counts[2];
-            QUICLY_PROBE(ECN_CONGESTION, conn, conn->stash.now, conn->egress.ecn.ce_count);
-            QUICLY_LOG_CONN(ecn_congestion, conn, { PTLS_LOG_ELEMENT_UNSIGNED(ce_count, conn->egress.ecn.ce_count); });
+        if (conn->egress.ecn.state != QUICLY_ECN_OFF && frame.ecn_counts[2] > conn->egress.ecn.ce_count[state->epoch]) {
+            conn->egress.ecn.ce_count[state->epoch] = frame.ecn_counts[2];
+            QUICLY_PROBE(ECN_CONGESTION, conn, conn->stash.now, conn->egress.ecn.ce_count[state->epoch]);
+            QUICLY_LOG_CONN(ecn_congestion, conn,
+                            { PTLS_LOG_ELEMENT_UNSIGNED(ce_count, conn->egress.ecn.ce_count[state->epoch]); });
             notify_congestion_to_cc(conn, 0, largest_newly_acked.pn);
         }
     }
