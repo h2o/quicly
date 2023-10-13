@@ -1464,7 +1464,7 @@ static int record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, uint8
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
         space->largest_pn_received_at = now;
 
-    /* ecn */
+    /* increment ecn counters */
     switch (ecn) {
     case 0: /* NOT-ECT */
         break;
