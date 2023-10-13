@@ -145,11 +145,11 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             "packets-received: %" PRIu64 ", packets-decryption-failed: %" PRIu64 ", packets-sent: %" PRIu64
             ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", ack-ecn-ect0: %" PRIu64 ", ack-ecn-ect1: %" PRIu64
             ", ack-ecn-ce: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64
-            ", srtt: %" PRIu32 "\n",
+            ", srtt: %" PRIu32 ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 "\n",
             stats.num_packets.received, stats.num_packets.decryption_failed, stats.num_packets.sent, stats.num_packets.lost,
             stats.num_packets.ack_received, stats.num_packets.ack_ecn_counts[0], stats.num_packets.ack_ecn_counts[1],
             stats.num_packets.ack_ecn_counts[2], stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent,
-            stats.rtt.smoothed);
+            stats.rtt.smoothed, stats.cc.num_loss_episodes, stats.cc.num_ecn_loss_episodes);
 }
 
 static int validate_path(const char *path)

@@ -3979,6 +3979,8 @@ static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lo
 {
     quicly_conn_t *conn = (void *)((char *)loss - offsetof(quicly_conn_t, egress.loss));
 
+    assert(lost_packet->cc_bytes_in_flight != 0);
+
     ++conn->super.stats.num_packets.lost;
     if (is_time_threshold)
         ++conn->super.stats.num_packets.lost_time_threshold;
