@@ -451,7 +451,7 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_
                 IP_TOS
 #endif
                 ) {
-                assert(cmsg->cmsg_len == 1);
+                assert((char *)CMSG_DATA(cmsg) - (char *)cmsg + 1 == cmsg->cmsg_len);
                 *ecn = *(uint8_t *)CMSG_DATA(cmsg) & IPTOS_ECN_MASK;
             }
 #endif
