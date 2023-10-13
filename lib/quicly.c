@@ -5360,7 +5360,7 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         /* update counters */
         for (size_t i = 0; i < PTLS_ELEMENTSOF(frame.ecn_counts); ++i) {
             if (frame.ecn_counts[i] > conn->egress.ecn.counts[state->epoch][i]) {
-                conn->super.stats.num_packets.ack_ecn_counts[i] = frame.ecn_counts[i] - conn->egress.ecn.counts[state->epoch][i];
+                conn->super.stats.num_packets.ack_ecn_counts[i] += frame.ecn_counts[i] - conn->egress.ecn.counts[state->epoch][i];
                 conn->egress.ecn.counts[state->epoch][i] = frame.ecn_counts[i];
             }
         }

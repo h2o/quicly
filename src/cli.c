@@ -465,7 +465,7 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_
 
 static void set_ecn(struct msghdr *mess, int ecn)
 {
-    if (ecn != 0)
+    if (ecn == 0)
         return;
 
     struct cmsghdr *cmsg = (struct cmsghdr *)((char *)mess->msg_control + mess->msg_controllen);
