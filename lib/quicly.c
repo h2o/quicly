@@ -312,7 +312,7 @@ struct st_quicly_conn_t {
          */
         struct {
             enum en_quicly_ecn_state { QUICLY_ECN_OFF, QUICLY_ECN_ON, QUICLY_ECN_PROBING } state;
-            uint64_t ce_count[QUICLY_NUM_EPOCHS];
+            uint64_t counts[QUICLY_NUM_EPOCHS][3];
         } ecn;
         /**
          * things to be sent at the stream-level, that are not governed by the stream scheduler
@@ -5353,12 +5353,23 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
         if (conn->egress.ecn.state == QUICLY_ECN_PROBING && frame.ecn_counts[0] + frame.ecn_counts[2] > 0)
             update_ecn_state(conn, QUICLY_ECN_ON);
 
-        /* check if ECN_CE has increased; if so, raise a congestion event */
-        if (conn->egress.ecn.state != QUICLY_ECN_OFF && frame.ecn_counts[2] > conn->egress.ecn.ce_count[state->epoch]) {
-            conn->egress.ecn.ce_count[state->epoch] = frame.ecn_counts[2];
-            QUICLY_PROBE(ECN_CONGESTION, conn, conn->stash.now, conn->egress.ecn.ce_count[state->epoch]);
+        /* check if congestion should be reported */
+        int report_congestion =
+            conn->egress.ecn.state != QUICLY_ECN_OFF && frame.ecn_counts[2] > conn->egress.ecn.counts[state->epoch][2];
+
+        /* update counters */
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(frame.ecn_counts); ++i) {
+            if (frame.ecn_counts[i] > conn->egress.ecn.counts[state->epoch][i]) {
+                conn->super.stats.num_packets.ack_ecn_counts[i] = frame.ecn_counts[i] - conn->egress.ecn.counts[state->epoch][i];
+                conn->egress.ecn.counts[state->epoch][i] = frame.ecn_counts[i];
+            }
+        }
+
+        /* report congestion */
+        if (report_congestion) {
+            QUICLY_PROBE(ECN_CONGESTION, conn, conn->stash.now, conn->super.stats.num_packets.ack_ecn_counts[2]);
             QUICLY_LOG_CONN(ecn_congestion, conn,
-                            { PTLS_LOG_ELEMENT_UNSIGNED(ce_count, conn->egress.ecn.ce_count[state->epoch]); });
+                            { PTLS_LOG_ELEMENT_UNSIGNED(ce_count, conn->super.stats.num_packets.ack_ecn_counts[2]); });
             notify_congestion_to_cc(conn, 0, largest_newly_acked.pn);
         }
     }

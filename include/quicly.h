@@ -458,6 +458,10 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total number of packets received out of order.                                                                          \
          */                                                                                                                        \
         uint64_t received_out_of_order;                                                                                            \
+        /**                                                                                                                        \
+         * connection-wide ACK-ECN counters for ECT(0), ECT(1), CE                                                                 \
+         */                                                                                                                        \
+        uint64_t ack_ecn_counts[3];                                                                                                \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
