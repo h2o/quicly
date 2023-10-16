@@ -621,12 +621,13 @@ static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
     return quicly_loss_get_sentmap_expiration_time(&conn->egress.loss, conn->super.remote.transport_params.max_ack_delay);
 }
 
+/**
+ * converts ECN bits to index in the order of ACK-ECN field (i.e., ECT(0) -> 0, ECT(1) -> 1, CE -> 2)
+ */
 static size_t get_ecn_index_from_bits(uint8_t bits)
 {
     assert(1 <= bits && bits <= 3);
-    bits -= 1;
-    bits = bits < 2 ? (bits ^ 1) : bits;
-    return bits;
+    return (18 >> bits) & 3;
 }
 
 static void update_ecn_state(quicly_conn_t *conn, enum en_quicly_ecn_state new_state)
