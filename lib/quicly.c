@@ -632,7 +632,15 @@ static size_t get_ecn_index_from_bits(uint8_t bits)
 
 static void update_ecn_state(quicly_conn_t *conn, enum en_quicly_ecn_state new_state)
 {
+    assert(new_state == QUICLY_ECN_ON || new_state == QUICLY_ECN_OFF);
+
     conn->egress.ecn.state = new_state;
+    if (new_state == QUICLY_ECN_ON) {
+        ++conn->super.stats.num_paths.ecn_validated;
+    } else {
+        ++conn->super.stats.num_paths.ecn_failed;
+    }
+
     QUICLY_PROBE(ECN_VALIDATION, conn, conn->stash.now, (int)new_state);
     QUICLY_LOG_CONN(ecn_validation, conn, { PTLS_LOG_ELEMENT_SIGNED(state, (int)new_state); });
 }
