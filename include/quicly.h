@@ -192,10 +192,11 @@ typedef struct st_quicly_crypto_engine_t {
      * header protection using `header_protect_ctx`. Quicly does not read or write the content of the UDP datagram payload after
      * this function is called. Therefore, an engine might retain the information provided by this function, and protect the packet
      * and the header at a later moment (e.g., hardware crypto offload).
+     * @param dcid specifies the CID sequence number for encrypting Multipath QUIC packets; will always be zero in QUIC v1
      */
     void (*encrypt_packet)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn, ptls_cipher_context_t *header_protect_ctx,
                            ptls_aead_context_t *packet_protect_ctx, ptls_iovec_t datagram, size_t first_byte_at,
-                           size_t payload_from, uint64_t packet_number, int coalesced);
+                           size_t payload_from, uint64_t dcid, uint64_t packet_number, int coalesced);
 } quicly_crypto_engine_t;
 
 /**
@@ -261,6 +262,10 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint8_t disable_active_migration : 1;
+    /**
+     *
+     */
+    uint8_t enable_multipath : 1;
     /**
      *
      */
@@ -338,6 +343,10 @@ struct st_quicly_context_t {
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
+    /**
+     * whether to use ECN on the send side; ECN is always on on the receive side
+     */
+    unsigned enable_ecn : 1;
     /**
      *
      */
@@ -463,6 +472,14 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t received_out_of_order;                                                                                            \
         /**                                                                                                                        \
+         * connection-wide counters for ECT(0), ECT(1), CE                                                                         \
+         */                                                                                                                        \
+        uint64_t received_ecn_counts[3];                                                                                           \
+        /**                                                                                                                        \
+         * connection-wide ack-received counters for ECT(0), ECT(1), CE                                                            \
+         */                                                                                                                        \
+        uint64_t acked_ecn_counts[3];                                                                                              \
+        /**                                                                                                                        \
          * Total number of packets sent on promoted paths.                                                                         \
          */                                                                                                                        \
         uint64_t sent_promoted_paths;                                                                                              \
@@ -522,6 +539,14 @@ struct st_quicly_conn_streamgroup_state_t {
          * number of alternate paths that were closed due to Connection ID being unavailable                                       \
          */                                                                                                                        \
         uint64_t closed_no_dcid;                                                                                                   \
+        /**                                                                                                                        \
+         * number of paths that were ECN-capable                                                                                   \
+         */                                                                                                                        \
+        uint64_t ecn_validated;                                                                                                    \
+        /**                                                                                                                        \
+         * number of paths that were deemed as ECN black holes                                                                     \
+         */                                                                                                                        \
+        uint64_t ecn_failed;                                                                                                       \
     } num_paths;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of each frame being sent / received.                                                                           \
@@ -530,7 +555,7 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
             max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
             retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            ack_frequency;                                                                                                         \
+            ack_frequency, ack_mp, path_abandon, path_status;                                                                      \
     } num_frames_sent, num_frames_received;                                                                                        \
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
@@ -849,6 +874,10 @@ typedef struct st_quicly_decoded_packet_t {
         uint64_t key_phase;
     } decrypted;
     /**
+     * ECN bits
+     */
+    uint8_t ecn : 2;
+    /**
      *
      */
     enum {
@@ -1066,6 +1095,10 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize);
 /**
+ * returns ECN bits to be set for the packets built by the last invocation of `quicly_send`
+ */
+uint8_t quicly_send_get_ecn_bits(quicly_conn_t *conn);
+/**
  *
  */
 size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
@@ -1129,9 +1162,19 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
                   quicly_decoded_packet_t *packet, quicly_address_token_plaintext_t *address_token,
                   const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties, void *appdata);
 /**
+ * Adds a new path. Only usable when running as a client. Local must contain sufficient information to distinguish between the paths
+ * being establisished; i.e, either the port number should be different or if one port is shared then the IP addresses of each
+ * local address must be different.
+ */
+int quicly_add_path(quicly_conn_t *conn, struct sockaddr *local);
+/**
  *
  */
 ptls_t *quicly_get_tls(quicly_conn_t *conn);
+/**
+ *
+ */
+int quicly_is_multipath(quicly_conn_t *conn);
 /**
  * Resumes an async TLS handshake, and returns a pointer to the QUIC connection or NULL if the corresponding QUIC connection has
  * been discarded. See `quicly_async_handshake_t`.
@@ -1226,6 +1269,12 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc);
  *
  */
 void quicly_amend_ptls_context(ptls_context_t *ptls);
+/**
+ * Builds the IV prefix of used to encrypt / decrypt Multipath QUIC packets. Size of the supplied buffer (`iv`) must be no less than
+ * `PTLS_MAX_IV_SIZE`. Once the IV is built, that should be applied to AEAD using `ptls_aead_xor_iv` prior to calling the encryption
+ * function. After that, `ptls_aead_xor_iv` should be called again with the same arguments to nagate the changes to IV.
+ */
+static size_t quicly_build_multipath_iv(ptls_aead_algorithm_t *algo, uint64_t sequence, void *iv);
 /**
  * Encrypts an address token by serializing the plaintext structure and appending an authentication tag.
  *
@@ -1415,6 +1464,21 @@ inline uint32_t quicly_stream_get_receive_window(quicly_stream_t *stream)
 inline void quicly_stream_set_receive_window(quicly_stream_t *stream, uint32_t window)
 {
     stream->_recv_aux.window = window;
+}
+
+inline size_t quicly_build_multipath_iv(ptls_aead_algorithm_t *algo, uint64_t sequence, void *_iv)
+{
+    size_t len = algo->iv_size - 8;
+    uint8_t *iv = (uint8_t *)_iv;
+
+    for (size_t i = 0; i + 4 < len; ++i)
+        *iv++ = 0;
+    *iv++ = (uint8_t)(sequence >> 24);
+    *iv++ = (uint8_t)(sequence >> 16);
+    *iv++ = (uint8_t)(sequence >> 8);
+    *iv++ = (uint8_t)sequence;
+
+    return len;
 }
 
 inline int quicly_stream_is_client_initiated(quicly_stream_id_t stream_id)
