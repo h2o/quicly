@@ -724,7 +724,8 @@ static void send_packets_gso(int fd, quicly_address_t *dest, quicly_address_t *s
 {
     struct iovec vec = {.iov_base = (void *)packets[0].iov_base,
                         .iov_len = packets[num_packets - 1].iov_base + packets[num_packets - 1].iov_len - packets[0].iov_base};
-    char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(uint16_t)) /* UDP_SEGMENT */ + CMSG_SPACE(sizeof(int)) /* IP_TOS */)];
+    char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(uint16_t)) /* UDP_SEGMENT */ +
+                 CMSG_SPACE(sizeof(int)) /* IP_TOS */];
     struct msghdr mess = {
         .msg_name = dest,
         .msg_namelen = quicly_get_socklen(&dest->sa),
@@ -736,12 +737,12 @@ static void send_packets_gso(int fd, quicly_address_t *dest, quicly_address_t *s
     if (src != NULL && src->sa.sa_family != AF_UNSPEC)
         set_srcaddr(&mess, src);
     if (num_packets != 1) {
-        struct cmsghdr *cmsg = (struct cmsghdr *)((char *)mess->msg_control + mess->msg_controllen);
+        struct cmsghdr *cmsg = (struct cmsghdr *)((char *)mess.msg_control + mess.msg_controllen);
         cmsg->cmsg_level = SOL_UDP;
         cmsg->cmsg_type = UDP_SEGMENT;
         cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
         *(uint16_t *)CMSG_DATA(cmsg) = packets[0].iov_len;
-        mess.msg_controllen = CMSG_SPACE(sizeof(uint16_t));
+        mess.msg_controllen += CMSG_SPACE(sizeof(uint16_t));
     }
     set_ecn(&mess, ecn);
     assert(mess.msg_controllen <= sizeof(cmsgbuf));
