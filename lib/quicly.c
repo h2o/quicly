@@ -3598,8 +3598,14 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         }
     }
     if (has_send_window) {
-        if (conn->egress.pending_flows != 0)
-            return 0;
+        if (conn->egress.pending_flows != 0) {
+            /* crypto streams (as indicated by lower 4 bits) can be sent whenever CWND is available; other flows need application
+             * packet number space */
+            if (conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL)
+                return 0;
+            if ((conn->egress.pending_flows & 0xf) != 0)
+                return 0;
+        }
         if (quicly_linklist_is_linked(&conn->egress.pending_streams.control))
             return 0;
         if (scheduler_can_send(conn))
