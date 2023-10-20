@@ -5277,6 +5277,11 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
     return 0;
 }
 
+static int handle_reset_stream_at_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    return handle_reset_stream_frame(conn, state);
+}
+
 static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     quicly_ack_frame_t frame;
@@ -6113,16 +6118,16 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
             offsetof(quicly_conn_t, super.stats.num_frames_received.lc) \
         },                                                                                                                         \
     }
-        /*   +----------------------------------+-------------------+---------------+
-         *   |               frame              |  permitted epochs |               |
-         *   |------------------+---------------+----+----+----+----+ ack-eliciting |
-         *   |    upper-case    |   lower-case  | IN | 0R | HS | 1R |               |
-         *   +------------------+---------------+----+----+----+----+---------------+ */
-        FRAME( DATAGRAM_NOLEN   , datagram      ,  0 ,  1 ,  0 ,  1 ,             1 ),
-        FRAME( DATAGRAM_WITHLEN , datagram      ,  0 ,  1 ,  0 ,  1 ,             1 ),
-        FRAME( RESET_STREAM_AT  , reset_stream  ,  0 ,  1 ,  0 ,  1 ,             1 ),
-        FRAME( ACK_FREQUENCY    , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ),
-        /*   +------------------+---------------+-------------------+---------------+ */
+        /*   +------------------------------------+-------------------+---------------+
+         *   |                frame               |  permitted epochs |               |
+         *   |------------------+-----------------+----+----+----+----+ ack-eliciting |
+         *   |    upper-case    |    lower-case   | IN | 0R | HS | 1R |               |
+         *   +------------------+-----------------+----+----+----+----+---------------+ */
+        FRAME( DATAGRAM_NOLEN   , datagram        ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( DATAGRAM_WITHLEN , datagram        ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( RESET_STREAM_AT  , reset_stream_at ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( ACK_FREQUENCY    , ack_frequency   ,  0 ,  0 ,  0 ,  1 ,             1 ),
+        /*   +------------------+-----------------+-------------------+---------------+ */
 #undef FRAME
         {UINT64_MAX},
     };
