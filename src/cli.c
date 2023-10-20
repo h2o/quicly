@@ -25,12 +25,17 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <getopt.h>
+#include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <picotls.h>
+#include <openssl/err.h>
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/provider.h>
+#endif
 #if QUICLY_HAVE_FUSION
 #include "picotls/fusion.h"
 #endif
@@ -45,7 +50,6 @@ FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
 static int suppress_output = 0, send_datagram_frame = 0;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
-static void *datagram_frame_payload_buf;
 
 static void hexdump(const char *title, const uint8_t *p, size_t l)
 {
@@ -92,6 +96,7 @@ static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
                                 .get_time = &ptls_get_time,
                                 .key_exchanges = key_exchanges,
                                 .cipher_suites = cipher_suites,
+                                .ech.client = {ptls_openssl_hpke_cipher_suites, ptls_openssl_hpke_kems},
                                 .require_dhe_on_psk = 1,
                                 .save_ticket = &save_session_ticket,
                                 .on_client_hello = &on_client_hello};
@@ -137,12 +142,17 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
 
     quicly_get_stats(conn, &stats);
     fprintf(fp,
-            "packets-received: %" PRIu64 ", packets-decryption-failed: %" PRIu64 ", packets-sent: %" PRIu64
-            ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64
-            ", bytes-sent: %" PRIu64 ", srtt: %" PRIu32 "\n",
-            stats.num_packets.received, stats.num_packets.decryption_failed, stats.num_packets.sent, stats.num_packets.lost,
-            stats.num_packets.ack_received, stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent,
-            stats.rtt.smoothed);
+            "packets-received: %" PRIu64 ", received-ecn-ect0: %" PRIu64 ", received-ecn-ect1: %" PRIu64
+            ", received-ecn-ce: %" PRIu64 ", packets-decryption-failed: %" PRIu64 ", packets-sent: %" PRIu64
+            ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", ack-ecn-ect0: %" PRIu64 ", ack-ecn-ect1: %" PRIu64
+            ", ack-ecn-ce: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64
+            ", srtt: %" PRIu32 ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 "\n",
+            stats.num_packets.received, stats.num_packets.received_ecn_counts[0], stats.num_packets.received_ecn_counts[1],
+            stats.num_packets.received_ecn_counts[2], stats.num_packets.decryption_failed, stats.num_packets.sent,
+            stats.num_packets.lost, stats.num_packets.ack_received, stats.num_packets.acked_ecn_counts[0],
+            stats.num_packets.acked_ecn_counts[1], stats.num_packets.acked_ecn_counts[2], stats.num_packets.late_acked,
+            stats.num_bytes.received, stats.num_bytes.sent, stats.rtt.smoothed, stats.cc.num_loss_episodes,
+            stats.cc.num_ecn_loss_episodes);
 }
 
 static int validate_path(const char *path)
@@ -412,15 +422,80 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
-static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
+/* buf should be ctx.transport_params.max_udp_payload_size bytes long */
+static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_t *ecn)
+{
+    struct iovec vec = {.iov_base = buf, .iov_len = ctx.transport_params.max_udp_payload_size};
+    char cmsgbuf[CMSG_SPACE(sizeof(int) /* == max(V4_TOS, V6_TCLASS) */)] = {};
+    struct msghdr mess = {
+        .msg_name = &src->sa,
+        .msg_namelen = sizeof(*src),
+        .msg_iov = &vec,
+        .msg_iovlen = 1,
+        .msg_control = cmsgbuf,
+        .msg_controllen = sizeof(cmsgbuf),
+    };
+    quicly_address_t localaddr = {};
+    socklen_t localaddrlen = sizeof(localaddr);
+    ssize_t rret;
+
+    if (getsockname(fd, &localaddr.sa, &localaddrlen) != 0)
+        perror("getsockname failed");
+
+    while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
+        ;
+
+    if (rret >= 0) {
+        *ecn = 0;
+        for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&mess); cmsg != NULL; cmsg = CMSG_NXTHDR(&mess, cmsg)) {
+#ifdef IP_RECVTOS
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type ==
+#ifdef __APPLE__
+                IP_RECVTOS
+#else
+                IP_TOS
+#endif
+                ) {
+                assert((char *)CMSG_DATA(cmsg) - (char *)cmsg + 1 == cmsg->cmsg_len);
+                *ecn = *(uint8_t *)CMSG_DATA(cmsg) & IPTOS_ECN_MASK;
+            }
+#endif
+        }
+    }
+
+    return rret;
+}
+
+static void set_ecn(struct msghdr *mess, int ecn)
+{
+    if (ecn == 0)
+        return;
+
+    struct cmsghdr *cmsg = (struct cmsghdr *)((char *)mess->msg_control + mess->msg_controllen);
+
+    cmsg->cmsg_level = IPPROTO_IP;
+    cmsg->cmsg_type = IP_TOS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(ecn));
+    memcpy(CMSG_DATA(cmsg), &ecn, sizeof(ecn));
+
+    mess->msg_controllen += CMSG_SPACE(sizeof(ecn));
+}
+
+static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets, uint8_t ecn)
 {
     for (size_t i = 0; i != num_packets; ++i) {
-        struct msghdr mess;
-        memset(&mess, 0, sizeof(mess));
-        mess.msg_name = dest;
-        mess.msg_namelen = quicly_get_socklen(dest);
-        mess.msg_iov = &packets[i];
-        mess.msg_iovlen = 1;
+        char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
+        struct msghdr mess = {
+            .msg_name = dest,
+            .msg_namelen = quicly_get_socklen(dest),
+            .msg_iov = &packets[i],
+            .msg_iovlen = 1,
+            .msg_control = cmsgbuf,
+        };
+        set_ecn(&mess, ecn);
+        assert(mess.msg_controllen <= sizeof(cmsgbuf));
+        if (mess.msg_controllen == 0)
+            mess.msg_control = NULL;
         if (verbosity >= 2)
             hexdump("sendmsg", packets[i].iov_base, packets[i].iov_len);
         int ret;
@@ -437,29 +512,27 @@ static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *pa
 #define UDP_SEGMENT 103
 #endif
 
-static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets)
+static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets, uint8_t ecn)
 {
     struct iovec vec = {.iov_base = (void *)packets[0].iov_base,
                         .iov_len = packets[num_packets - 1].iov_base + packets[num_packets - 1].iov_len - packets[0].iov_base};
+    char cmsgbuf[CMSG_SPACE(sizeof(uint16_t)) + CMSG_SPACE(sizeof(int))]; /* UDP_SEGMENT and IP_TOS */
     struct msghdr mess = {
         .msg_name = dest,
         .msg_namelen = quicly_get_socklen(dest),
         .msg_iov = &vec,
         .msg_iovlen = 1,
+        .msg_control = cmsgbuf,
     };
-
-    union {
-        struct cmsghdr hdr;
-        char buf[CMSG_SPACE(sizeof(uint16_t))];
-    } cmsg;
     if (num_packets != 1) {
-        cmsg.hdr.cmsg_level = SOL_UDP;
-        cmsg.hdr.cmsg_type = UDP_SEGMENT;
-        cmsg.hdr.cmsg_len = CMSG_LEN(sizeof(uint16_t));
-        *(uint16_t *)CMSG_DATA(&cmsg.hdr) = packets[0].iov_len;
-        mess.msg_control = &cmsg;
-        mess.msg_controllen = (socklen_t)CMSG_SPACE(sizeof(uint16_t));
+        struct cmsghdr *cmsg = mess.msg_control;
+        cmsg->cmsg_level = SOL_UDP;
+        cmsg->cmsg_type = UDP_SEGMENT;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
+        *(uint16_t *)CMSG_DATA(cmsg) = packets[0].iov_len;
+        mess.msg_controllen = CMSG_SPACE(sizeof(uint16_t));
     }
+    set_ecn(&mess, ecn);
 
     int ret;
     while ((ret = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
@@ -470,12 +543,12 @@ static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packet
 
 #endif
 
-static void (*send_packets)(int, struct sockaddr *, struct iovec *, size_t) = send_packets_default;
+static void (*send_packets)(int, struct sockaddr *, struct iovec *, size_t, uint8_t ecn) = send_packets_default;
 
 static void send_one_packet(int fd, struct sockaddr *dest, const void *payload, size_t payload_len)
 {
     struct iovec vec = {.iov_base = (void *)payload, .iov_len = payload_len};
-    send_packets(fd, dest, &vec, 1);
+    send_packets(fd, dest, &vec, 1, 0);
 }
 
 static int send_pending(int fd, quicly_conn_t *conn)
@@ -487,28 +560,9 @@ static int send_pending(int fd, quicly_conn_t *conn)
     int ret;
 
     if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0)
-        send_packets(fd, &dest.sa, packets, num_packets);
-
-    if (datagram_frame_payload_buf != NULL) {
-        free(datagram_frame_payload_buf);
-        datagram_frame_payload_buf = NULL;
-    }
+        send_packets(fd, &dest.sa, packets, num_packets, quicly_send_get_ecn_bits(conn));
 
     return ret;
-}
-
-static void set_datagram_frame(quicly_conn_t *conn, ptls_iovec_t payload)
-{
-    if (datagram_frame_payload_buf != NULL)
-        free(datagram_frame_payload_buf);
-
-    /* replace payload.base with an allocated buffer */
-    datagram_frame_payload_buf = malloc(payload.len);
-    memcpy(datagram_frame_payload_buf, payload.base, payload.len);
-    payload.base = datagram_frame_payload_buf;
-
-    /* set data to be sent. The buffer is being freed in `send_pending` after `quicly_send` is being called. */
-    quicly_set_datagram_frame(conn, payload);
 }
 
 static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
@@ -516,7 +570,7 @@ static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, qui
     printf("DATAGRAM: %.*s\n", (int)payload.len, payload.base);
     /* send responds with a datagram frame */
     if (!quicly_is_client(conn))
-        set_datagram_frame(conn, payload);
+        quicly_send_datagram_frames(conn, &payload, 1);
 }
 
 static void enqueue_requests(quicly_conn_t *conn)
@@ -558,7 +612,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         perror("bind(2) failed");
         return 1;
     }
-    ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params);
+    ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params, NULL);
     assert(ret == 0);
     ++next_cid.master_id;
     enqueue_requests(conn);
@@ -592,20 +646,9 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
-                uint8_t buf[ctx.transport_params.max_udp_payload_size];
-                struct msghdr mess;
-                struct sockaddr sa;
-                struct iovec vec;
-                memset(&mess, 0, sizeof(mess));
-                mess.msg_name = &sa;
-                mess.msg_namelen = sizeof(sa);
-                vec.iov_base = buf;
-                vec.iov_len = sizeof(buf);
-                mess.msg_iov = &vec;
-                mess.msg_iovlen = 1;
-                ssize_t rret;
-                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-                    ;
+                uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
+                quicly_address_t src;
+                ssize_t rret = receive_datagram(fd, buf, &src, &ecn);
                 if (rret <= 0)
                     break;
                 if (verbosity >= 2)
@@ -615,10 +658,12 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                     quicly_decoded_packet_t packet;
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
-                    quicly_receive(conn, NULL, &sa, &packet);
+                    packet.ecn = ecn;
+                    quicly_receive(conn, NULL, &src.sa, &packet);
                     if (send_datagram_frame && quicly_connection_is_ready(conn)) {
                         const char *message = "hello datagram!";
-                        set_datagram_frame(conn, ptls_iovec_init(message, strlen(message)));
+                        ptls_iovec_t datagram = ptls_iovec_init(message, strlen(message));
+                        quicly_send_datagram_frames(conn, &datagram, 1);
                         send_datagram_frame = 0;
                     }
                 }
@@ -627,6 +672,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         if (conn != NULL) {
             ret = send_pending(fd, conn);
             if (ret != 0) {
+                ech_save_retry_configs();
                 quicly_free(conn);
                 conn = NULL;
                 if (ret == QUICLY_ERROR_FREE_CONNECTION) {
@@ -764,20 +810,9 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
-                uint8_t buf[ctx.transport_params.max_udp_payload_size];
-                struct msghdr mess;
+                uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
                 quicly_address_t remote;
-                struct iovec vec;
-                memset(&mess, 0, sizeof(mess));
-                mess.msg_name = &remote.sa;
-                mess.msg_namelen = sizeof(remote);
-                vec.iov_base = buf;
-                vec.iov_len = sizeof(buf);
-                mess.msg_iov = &vec;
-                mess.msg_iovlen = 1;
-                ssize_t rret;
-                while ((rret = recvmsg(fd, &mess, 0)) == -1 && errno == EINTR)
-                    ;
+                ssize_t rret = receive_datagram(fd, buf, &remote, &ecn);
                 if (rret == -1)
                     break;
                 if (verbosity >= 2)
@@ -787,6 +822,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     quicly_decoded_packet_t packet;
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
+                    packet.ecn = ecn;
                     if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
                         if (packet.version != 0 && !quicly_is_supported_version(packet.version)) {
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
@@ -825,7 +861,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             } else if (enforce_retry && (ret == QUICLY_TRANSPORT_ERROR_INVALID_TOKEN ||
                                                          (ret == 0 && token_buf.type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY))) {
                                 /* Token that looks like retry was unusable, and we require retry. There's no chance of the
-                                 * handshake succeeding. Therefore, send close without aquiring state. */
+                                 * handshake succeeding. Therefore, send close without acquiring state. */
                                 uint8_t payload[ctx.transport_params.max_udp_payload_size];
                                 size_t payload_len = quicly_send_close_invalid_token(&ctx, packet.version, packet.cid.src,
                                                                                      packet.cid.dest.encrypted, err_desc, payload);
@@ -849,7 +885,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             break;
                         } else {
                             /* new connection */
-                            int ret = quicly_accept(&conn, &ctx, NULL, &remote.sa, &packet, token, &next_cid, NULL);
+                            int ret = quicly_accept(&conn, &ctx, NULL, &remote.sa, &packet, token, &next_cid, NULL, NULL);
                             if (ret == 0) {
                                 assert(conn != NULL);
                                 ++next_cid.master_id;
@@ -924,7 +960,7 @@ static void load_session(void)
             src = end;
         });
         ptls_decode_open_block(src, end, 2, {
-            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, NULL, NULL, src, end, 0)) != 0)
+            if ((ret = quicly_decode_transport_parameter_list(&resumed_transport_params, NULL, NULL, NULL, NULL, src, end)) != 0)
                 goto Exit;
             src = end;
         });
@@ -1026,17 +1062,26 @@ static void usage(const char *cmd)
            "Options:\n"
            "  -a <alpn>                 ALPN identifier; repeat the option to set multiple\n"
            "                            candidates\n"
-           "  -b <buffer-size>          specifies the size of the send / receive buffer in bytes\n"
+           "  -b <buffer-size>          specifies the size of the send / receive buffer in\n"
+           "                            bytes\n"
            "  -B <cid-key>              CID encryption key (server-only). Randomly generated\n"
            "                            if omitted.\n"
            "  -c certificate-file\n"
            "  -k key-file               specifies the credentials to be used for running the\n"
            "                            server. If omitted, the command runs as a client.\n"
-           "  -C <algorithm>            the congestion control algorithm; either \"reno\" (default) or\n"
-           "                            \"cubic\"\n"
-           "  -d draft-number           specifies the draft version number to be used (e.g., 29)\n"
+           "  -C <algorithm>            the congestion control algorithm; either \"reno\"\n"
+           "                            (default), \"cubic\", or \"pico\"\n"
+           "  -d draft-number           specifies the draft version number to be used (e.g.,\n"
+           "                            29)\n"
            "  -e event-log-file         file to log events\n"
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
+           "  --ech-config <file>       file that contains ECHConfigList or an empty file to\n"
+           "                            grease ECH; will be overwritten when receiving\n"
+           "                            retry_configs from the server\n"
+           "  --ech-key <file>          ECH private key for each ECH config provided by\n"
+           "                            --ech-config\n"
+           "  -f fraction               increases the induced ack frequency to specified\n"
+           "                            fraction of CWND (default: 0)\n"
            "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
@@ -1048,15 +1093,21 @@ static void usage(const char *cmd)
            "  -n                        enforce version negotiation (client-only)\n"
            "  -O                        suppress output\n"
            "  -p path                   path to request (can be set multiple times)\n"
-           "  -P path                   path to request, store response to file (can be set multiple times)\n"
+           "  -P path                   path to request, store response to file (can be set\n"
+           "                            multiple times)\n"
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
            "  -u size                   initial size of UDP datagram payload\n"
-           "  -U size                   maximum size of UDP datagarm payload\n"
+           "  -U size                   maximum size of UDP datagram payload\n"
            "  -V                        verify peer using the default certificates\n"
            "  -v                        verbose mode (-vv emits packet dumps as well)\n"
+           "  -w packets                initial congestion window (default: 10)\n"
+           "  -W public-key-file        use raw public keys (RFC 7250). When set and running\n"
+           "                            as a client, the argument specifies the public keys\n"
+           "                            that the server is expected to use. When running as\n"
+           "                            a server, the argument is ignored.\n"
            "  -x named-group            named group to be used (default: secp256r1)\n"
            "  -X                        max bidirectional stream count (default: 100)\n"
            "  -y cipher-suite           cipher-suite to be used (default: all)\n"
@@ -1078,11 +1129,19 @@ static void push_req(const char *path, int to_file)
 
 int main(int argc, char **argv)
 {
-    const char *host, *port, *cid_key = NULL;
+    const char *cert_file = NULL, *raw_pubkey_file = NULL, *host, *port, *cid_key = NULL;
     struct sockaddr_storage sa;
     socklen_t salen;
     unsigned udpbufsize = 0;
-    int ch, fd;
+    int ch, opt_index, fd;
+
+    ERR_load_crypto_strings();
+    OpenSSL_add_all_algorithms();
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+    /* Explicitly load the legacy provider in addition to default, as we test Blowfish in one of the tests. */
+    (void)OSSL_PROVIDER_load(NULL, "legacy");
+    (void)OSSL_PROVIDER_load(NULL, "default");
+#endif
 
     reqs = malloc(sizeof(*reqs));
     memset(reqs, 0, sizeof(*reqs));
@@ -1103,8 +1162,24 @@ int main(int argc, char **argv)
         address_token_aead.dec = ptls_aead_new(&ptls_openssl_aes128gcm, &ptls_openssl_sha256, 0, secret, "");
     }
 
-    while ((ch = getopt(argc, argv, "a:b:B:c:C:Dd:k:Ee:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvx:X:y:h")) != -1) {
+    static const struct option longopts[] = {{"ech-key", required_argument, NULL, 0},
+                                             {"ech-configs", required_argument, NULL, 0},
+                                             {"disable-ecn", no_argument, NULL, 0},
+                                             {NULL}};
+    while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
+                             &opt_index)) != -1) {
         switch (ch) {
+        case 0: /* longopts */
+            if (strcmp(longopts[opt_index].name, "ech-key") == 0) {
+                ech_setup_key(&tlsctx, optarg);
+            } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
+                ech_setup_configs(optarg);
+            } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
+                ctx.enable_ecn = 0;
+            } else {
+                assert(!"unexpected longname");
+            }
+            break;
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
             negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init(optarg, strlen(optarg));
@@ -1119,18 +1194,20 @@ int main(int argc, char **argv)
             cid_key = optarg;
             break;
         case 'c':
-            load_certificate_chain(ctx.tls, optarg);
+            cert_file = optarg;
             break;
-        case 'C':
-            if (strcmp(optarg, "reno") == 0) {
-                ctx.init_cc = &quicly_cc_reno_init;
-            } else if (strcmp(optarg, "cubic") == 0) {
-                ctx.init_cc = &quicly_cc_cubic_init;
+        case 'C': {
+            quicly_cc_type_t **cc;
+            for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
+                if (strcmp((*cc)->name, optarg) == 0)
+                    break;
+            if (*cc != NULL) {
+                ctx.init_cc = (*cc)->cc_init;
             } else {
                 fprintf(stderr, "unknown congestion controller: %s\n", optarg);
                 exit(1);
             }
-            break;
+        } break;
         case 'G':
 #ifdef __linux__
             send_packets = send_packets_gso;
@@ -1156,13 +1233,23 @@ int main(int argc, char **argv)
         case 'E':
             ctx.expand_client_hello = 1;
             break;
-        case 'e':
-            if ((quicly_trace_fp = fopen(optarg, "w")) == NULL) {
+        case 'e': {
+            int fd;
+            if ((fd = open(optarg, O_WRONLY | O_CREAT | O_TRUNC, 0666)) == -1) {
                 fprintf(stderr, "failed to open file:%s:%s\n", optarg, strerror(errno));
                 exit(1);
             }
-            setvbuf(quicly_trace_fp, NULL, _IONBF, 0);
-            break;
+            ptls_log_add_fd(fd);
+            ptls_log.include_appdata = 1;
+        } break;
+        case 'f': {
+            double fraction;
+            if (sscanf(optarg, "%lf", &fraction) != 1) {
+                fprintf(stderr, "failed to parse ack frequency: %s\n", optarg);
+                exit(1);
+            }
+            ctx.ack_frequency = (uint32_t)(fraction * 1024);
+        } break;
         case 'i':
             if (sscanf(optarg, "%" SCNd64, &request_interval) != 1) {
                 fprintf(stderr, "failed to parse request interval: %s\n", optarg);
@@ -1247,10 +1334,19 @@ int main(int argc, char **argv)
             }
             break;
         case 'V':
-            setup_verify_certificate(ctx.tls);
+            setup_verify_certificate(ctx.tls, NULL);
             break;
         case 'v':
             ++verbosity;
+            break;
+        case 'w':
+            if (sscanf(optarg, "%" SCNu32, &ctx.initcwnd_packets) != 1) {
+                fprintf(stderr, "invalid argument passed to `-w`\n");
+                exit(1);
+            }
+            break;
+        case 'W':
+            raw_pubkey_file = optarg;
             break;
         case 'x': {
             size_t i;
@@ -1349,11 +1445,19 @@ int main(int argc, char **argv)
         ctx.transport_params.max_datagram_frame_size = ctx.transport_params.max_udp_payload_size;
     }
 
-    if (ctx.tls->certificates.count != 0 || ctx.tls->sign_certificate != NULL) {
+    if (cert_file != NULL || ctx.tls->sign_certificate != NULL) {
         /* server */
-        if (ctx.tls->certificates.count == 0 || ctx.tls->sign_certificate == NULL) {
+        if (cert_file == NULL || ctx.tls->sign_certificate == NULL) {
             fprintf(stderr, "-c and -k options must be used together\n");
             exit(1);
+        }
+        if (raw_pubkey_file != NULL) {
+            ctx.tls->certificates.list = malloc(sizeof(*ctx.tls->certificates.list));
+            load_raw_public_key(ctx.tls->certificates.list, cert_file);
+            ctx.tls->certificates.count = 1;
+            ctx.tls->use_raw_public_keys = 1;
+        } else {
+            load_certificate_chain(ctx.tls, cert_file);
         }
         if (cid_key == NULL) {
             static char random_key[17];
@@ -1364,10 +1468,25 @@ int main(int argc, char **argv)
                                                              ptls_iovec_init(cid_key, strlen(cid_key)));
     } else {
         /* client */
+        if (raw_pubkey_file != NULL) {
+            ptls_iovec_t raw_pub_key;
+            EVP_PKEY *pubkey;
+            load_raw_public_key(&raw_pub_key, raw_pubkey_file);
+            pubkey = d2i_PUBKEY(NULL, (const unsigned char **)&raw_pub_key.base, raw_pub_key.len);
+            if (pubkey == NULL) {
+                fprintf(stderr, "Failed to create an EVP_PKEY from the key found in %s\n", raw_pubkey_file);
+                return 1;
+            }
+            setup_raw_pubkey_verify_certificate(ctx.tls, pubkey);
+            EVP_PKEY_free(pubkey);
+            ctx.tls->use_raw_public_keys = 1;
+        }
         hs_properties.client.negotiated_protocols.list = negotiated_protocols.list;
         hs_properties.client.negotiated_protocols.count = negotiated_protocols.count;
         if (session_file != NULL)
             load_session();
+        hs_properties.client.ech.configs = ech.config_list;
+        hs_properties.client.ech.retry_configs = &ech.retry.configs;
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");
@@ -1406,18 +1525,21 @@ int main(int argc, char **argv)
 #if defined(IP_DONTFRAG)
     {
         int on = 1;
-        if (setsockopt(fd, IPPROTO_IP, IP_DONTFRAG, &on, sizeof(on)) != 0) {
-            perror("setsockopt(IP_DONTFRAG) failed");
-            return 1;
-        }
+        if (setsockopt(fd, IPPROTO_IP, IP_DONTFRAG, &on, sizeof(on)) != 0)
+            perror("Warning: setsockopt(IP_DONTFRAG) failed");
     }
 #elif defined(IP_PMTUDISC_DO)
     {
         int opt = IP_PMTUDISC_DO;
-        if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0) {
-            perror("setsockopt(IP_MTU_DISCOVER) failed");
-            return 1;
-        }
+        if (setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, &opt, sizeof(opt)) != 0)
+            perror("Warning: setsockopt(IP_MTU_DISCOVER) failed");
+    }
+#endif
+#ifdef IP_RECVTOS
+    {
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_RECVTOS, &on, sizeof(on)) != 0)
+            perror("Warning: setsockopt(IP_RECVTOS) failed");
     }
 #endif
 

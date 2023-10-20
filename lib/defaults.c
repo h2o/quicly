@@ -26,7 +26,10 @@
 #define DEFAULT_MAX_UDP_PAYLOAD_SIZE 1472
 #define DEFAULT_MAX_PACKETS_PER_KEY 16777216
 #define DEFAULT_MAX_CRYPTO_BYTES 65536
+#define DEFAULT_INITCWND_PACKETS 10
 #define DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT 3
+#define DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER 400
+#define DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS 1000
 
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {NULL,                                                 /* tls */
@@ -40,10 +43,14 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                                DEFAULT_MAX_UDP_PAYLOAD_SIZE},
                                               DEFAULT_MAX_PACKETS_PER_KEY,
                                               DEFAULT_MAX_CRYPTO_BYTES,
-                                              QUICLY_PROTOCOL_VERSION_CURRENT,
+                                              DEFAULT_INITCWND_PACKETS,
+                                              QUICLY_PROTOCOL_VERSION_1,
                                               DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
-                                              0, /* is_clustered */
+                                              0, /* ack_frequency */
+                                              DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
+                                              DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                               0, /* enlarge_client_hello */
+                                              1, /* enable_ecn */
                                               NULL,
                                               NULL, /* on_stream_open */
                                               &quicly_default_stream_scheduler,
@@ -67,10 +74,14 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                      DEFAULT_MAX_UDP_PAYLOAD_SIZE},
                                                     DEFAULT_MAX_PACKETS_PER_KEY,
                                                     DEFAULT_MAX_CRYPTO_BYTES,
-                                                    QUICLY_PROTOCOL_VERSION_CURRENT,
+                                                    DEFAULT_INITCWND_PACKETS,
+                                                    QUICLY_PROTOCOL_VERSION_1,
                                                     DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
-                                                    0, /* is_clustered */
+                                                    0, /* ack_frequency */
+                                                    DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
+                                                    DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                                     0, /* enlarge_client_hello */
+                                                    1, /* enable_ecn */
                                                     NULL,
                                                     NULL, /* on_stream_open */
                                                     &quicly_default_stream_scheduler,
@@ -144,28 +155,24 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
                                   size_t len)
 {
     struct st_quicly_default_encrypt_cid_t *self = (void *)_self;
-    uint8_t ptbuf[16], tmpbuf[16];
+    uint8_t ptbuf[16];
     const uint8_t *p;
-    size_t cid_len;
 
-    cid_len = self->cid_decrypt_ctx->algo->block_size;
-
-    /* normalize the input, so that we would get consistent routing */
-    if (len != 0 && len != cid_len) {
-        if (len > cid_len)
-            len = cid_len;
-        memcpy(tmpbuf, encrypted, cid_len);
-        if (len < cid_len)
-            memset(tmpbuf + len, 0, cid_len - len);
-        encrypted = tmpbuf;
+    if (len != 0) {
+        /* long header packet; decrypt only if given Connection ID matches the expected size */
+        if (len != self->cid_decrypt_ctx->algo->block_size)
+            return SIZE_MAX;
+    } else {
+        /* short header packet; we are the one to name the size */
+        len = self->cid_decrypt_ctx->algo->block_size;
     }
 
     /* decrypt */
-    ptls_cipher_encrypt(self->cid_decrypt_ctx, ptbuf, encrypted, cid_len);
+    ptls_cipher_encrypt(self->cid_decrypt_ctx, ptbuf, encrypted, len);
 
     /* decode */
     p = ptbuf;
-    if (cid_len == 16) {
+    if (len == 16) {
         plaintext->node_id = quicly_decode64(&p);
     } else {
         plaintext->node_id = 0;
@@ -173,9 +180,9 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
     plaintext->master_id = quicly_decode32(&p);
     plaintext->thread_id = quicly_decode24(&p);
     plaintext->path_id = *p++;
-    assert(p - ptbuf == cid_len);
+    assert(p - ptbuf == len);
 
-    return cid_len;
+    return len;
 }
 
 static int default_generate_reset_token(quicly_cid_encryptor_t *_self, void *token, const void *cid)
@@ -308,7 +315,7 @@ static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, qui
         }
         /* send! */
         if ((ret = quicly_send_stream(stream, s)) != 0) {
-            /* FIXME Stop quicly_send_stream emitting SENDBUF_FULL (happpens when CWND is congested). Otherwise, we need to make
+            /* FIXME Stop quicly_send_stream emitting SENDBUF_FULL (happens when CWND is congested). Otherwise, we need to make
              * adjustments to the scheduler after popping a stream */
             if (ret == QUICLY_ERROR_SENDBUF_FULL) {
                 assert(quicly_stream_can_send(stream, 1));
@@ -336,7 +343,7 @@ static int default_stream_scheduler_update_state(quicly_stream_scheduler_t *self
         /* activate if not */
         link_stream(sched, stream, quicly_is_blocked(stream->conn));
     } else {
-        /* disactivate if active */
+        /* deactivate if active */
         if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler))
             quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
     }
@@ -399,13 +406,6 @@ static int default_setup_cipher(quicly_crypto_engine_t *engine, quicly_conn_t *c
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
-    if (QUICLY_DEBUG) {
-        char *secret_hex = quicly_hexdump(secret, hash->digest_size, SIZE_MAX),
-             *hpkey_hex = quicly_hexdump(hpkey, aead->ctr_cipher->key_size, SIZE_MAX);
-        fprintf(stderr, "%s:\n  aead-secret: %s\n  hp-key: %s\n", __FUNCTION__, secret_hex, hpkey_hex);
-        free(secret_hex);
-        free(hpkey_hex);
-    }
 
     ret = 0;
 Exit:
@@ -414,7 +414,7 @@ Exit:
             ptls_aead_free(*aead_ctx);
             *aead_ctx = NULL;
         }
-        if (*hp_ctx != NULL) {
+        if (hp_ctx != NULL && *hp_ctx != NULL) {
             ptls_cipher_free(*hp_ctx);
             *hp_ctx = NULL;
         }
