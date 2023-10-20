@@ -251,7 +251,7 @@ int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
 
 int quicly_streambuf_egress_reset(quicly_stream_t *stream, uint64_t reliable_size, int err)
 {
-    assert(quicly_get_remote_transport_parameters(stream->conn)->reliable_reset_stream &&
+    assert(quicly_get_remote_transport_parameters(stream->conn)->reliable_stream_reset &&
            "use of reliable-reset-stream extension must be negotiated");
     quicly_reset_stream_reliable(stream, reliable_size, err);
     return quicly_stream_sync_sendbuf(stream, 1);

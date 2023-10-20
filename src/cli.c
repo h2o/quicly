@@ -346,7 +346,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     send_header(stream, is_http1, 404, "text/plain; charset=utf-8");
     send_str(stream, "not found\n");
 Sent:
-    if (ctx.transport_params.reliable_reset_stream && quicly_get_remote_transport_parameters(stream->conn)->reliable_reset_stream) {
+    if (ctx.transport_params.reliable_stream_reset && quicly_get_remote_transport_parameters(stream->conn)->reliable_stream_reset) {
         quicly_streambuf_t *sbuf = stream->data;
         quicly_streambuf_egress_reset(stream, sbuf->egress.bytes_written, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123));
     } else {
@@ -1197,7 +1197,7 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ecn = 0;
             } else if (strcmp(longopts[opt_index].name, "reliable-reset") == 0) {
-                ctx.transport_params.reliable_reset_stream = 1;
+                ctx.transport_params.reliable_stream_reset = 1;
             } else {
                 assert(!"unexpected longname");
             }

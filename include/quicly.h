@@ -264,7 +264,7 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint8_t reliable_reset_stream : 1;
+    uint8_t reliable_stream_reset : 1;
     /**
      *
      */
@@ -514,7 +514,7 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
             max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
             retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            reliable_reset_stream, ack_frequency;                                                                                  \
+            ack_frequency, reset_stream_at;                                                                                        \
     } num_frames_sent, num_frames_received;                                                                                        \
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \

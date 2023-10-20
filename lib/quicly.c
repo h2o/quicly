@@ -61,7 +61,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_SOURCE_CONNECTION_ID 15
 #define QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID 16
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE 0x20
-#define QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_RESET_STREAM 0x727273
+#define QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_STREAM_RESET 0x17f7586d2cb570
 #define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xff03de1a
 
 /**
@@ -1921,8 +1921,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
     }
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
-    if (params->reliable_reset_stream)
-        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_RESET_STREAM, {});
+    if (params->reliable_stream_reset)
+        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_STREAM_RESET, {});
     if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); });
@@ -2127,7 +2127,7 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
                 params->active_connection_id_limit = v;
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
-            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_RESET_STREAM, { params->reliable_reset_stream = 1; });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_STREAM_RESET, { params->reliable_stream_reset = 1; });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -3794,10 +3794,10 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
             return ret;
         s->dst = quicly_encode_reset_stream_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
                                                   stream->sendstate.final_size, stream->sendstate.final_size);
-        ++stream->conn->super.stats.num_frames_sent.reliable_reset_stream;
-        QUICLY_PROBE(RELIABLE_RESET_STREAM_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
+        ++stream->conn->super.stats.num_frames_sent.reset_stream_at;
+        QUICLY_PROBE(RESET_STREAM_AT_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
                      stream->_send_aux.reset_stream.error_code, stream->sendstate.final_size, stream->sendstate.final_size);
-        QUICLY_LOG_CONN(reliable_reset_stream_send, stream->conn, {
+        QUICLY_LOG_CONN(reset_stream_at_send, stream->conn, {
             PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
             PTLS_LOG_ELEMENT_UNSIGNED(error_code, stream->_send_aux.reset_stream.error_code);
             PTLS_LOG_ELEMENT_UNSIGNED(final_size, stream->sendstate.final_size);
@@ -5241,10 +5241,10 @@ static int handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handl
             PTLS_LOG_ELEMENT_UNSIGNED(final_size, frame.final_size);
         });
         break;
-    case QUICLY_FRAME_TYPE_RELIABLE_RESET_STREAM:
-        QUICLY_PROBE(RELIABLE_RESET_STREAM_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size,
+    case QUICLY_FRAME_TYPE_RESET_STREAM_AT:
+        QUICLY_PROBE(RESET_STREAM_AT_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size,
                      frame.reliable_size);
-        QUICLY_LOG_CONN(reset_stream_receive, conn, {
+        QUICLY_LOG_CONN(reset_stream_at_receive, conn, {
             PTLS_LOG_ELEMENT_SIGNED(stream_id, (quicly_stream_id_t)frame.stream_id);
             PTLS_LOG_ELEMENT_UNSIGNED(app_error_code, frame.app_error_code);
             PTLS_LOG_ELEMENT_UNSIGNED(final_size, frame.final_size);
@@ -6113,16 +6113,16 @@ static int handle_payload(quicly_conn_t *conn, size_t epoch, const uint8_t *_src
             offsetof(quicly_conn_t, super.stats.num_frames_received.lc) \
         },                                                                                                                         \
     }
-        /*   +---------------------------------------+-------------------+---------------+
-         *   |                 frame                 |  permitted epochs |               |
-         *   |-----------------------+---------------+----+----+----+----+ ack-eliciting |
-         *   |      upper-case       |   lower-case  | IN | 0R | HS | 1R |               |
-         *   +-----------------------+---------------+----+----+----+----+---------------+ */
-        FRAME( DATAGRAM_NOLEN        , datagram      ,  0 ,  1 ,  0 ,  1 ,             1 ),
-        FRAME( DATAGRAM_WITHLEN      , datagram      ,  0 ,  1 ,  0 ,  1 ,             1 ),
-        FRAME( RELIABLE_RESET_STREAM , reset_stream  ,  0 ,  1 ,  0 ,  1 ,             1 ),
-        FRAME( ACK_FREQUENCY         , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ),
-        /*   +-----------------------+---------------+-------------------+---------------+ */
+        /*   +----------------------------------+-------------------+---------------+
+         *   |               frame              |  permitted epochs |               |
+         *   |------------------+---------------+----+----+----+----+ ack-eliciting |
+         *   |    upper-case    |   lower-case  | IN | 0R | HS | 1R |               |
+         *   +------------------+---------------+----+----+----+----+---------------+ */
+        FRAME( DATAGRAM_NOLEN   , datagram      ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( DATAGRAM_WITHLEN , datagram      ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( RESET_STREAM_AT  , reset_stream  ,  0 ,  1 ,  0 ,  1 ,             1 ),
+        FRAME( ACK_FREQUENCY    , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ),
+        /*   +------------------+---------------+-------------------+---------------+ */
 #undef FRAME
         {UINT64_MAX},
     };

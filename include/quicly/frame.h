@@ -58,9 +58,9 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_TRANSPORT_CLOSE 28
 #define QUICLY_FRAME_TYPE_APPLICATION_CLOSE 29
 #define QUICLY_FRAME_TYPE_HANDSHAKE_DONE 30
+#define QUICLY_FRAME_TYPE_RESET_STREAM_AT 32
 #define QUICLY_FRAME_TYPE_DATAGRAM_NOLEN 48
 #define QUICLY_FRAME_TYPE_DATAGRAM_WITHLEN 49
-#define QUICLY_FRAME_TYPE_RELIABLE_RESET_STREAM 0x72
 #define QUICLY_FRAME_TYPE_ACK_FREQUENCY 0xaf
 
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
@@ -72,7 +72,7 @@ extern "C" {
 #define QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY (1 + 8 + 8)
 #define QUICLY_MAX_STREAMS_FRAME_CAPACITY (1 + 8)
 #define QUICLY_PING_FRAME_CAPACITY 1
-#define QUICLY_RST_FRAME_CAPACITY (8 + 8 + 8 + 8 + 8) /* for reliable_reset_stream allocate space for type and reliable_size */
+#define QUICLY_RST_FRAME_CAPACITY (8 + 8 + 8 + 8 + 8) /* for RESET_STREAM_AT allocate space for type and reliable_size */
 #define QUICLY_DATA_BLOCKED_FRAME_CAPACITY (1 + 8)
 #define QUICLY_STREAM_DATA_BLOCKED_FRAME_CAPACITY (1 + 8 + 8)
 #define QUICLY_STREAMS_BLOCKED_FRAME_CAPACITY (1 + 8)
@@ -460,7 +460,7 @@ inline uint8_t *quicly_encode_reset_stream_frame(uint8_t *dst, uint64_t stream_i
     if (reliable_size == 0) {
         *dst++ = QUICLY_FRAME_TYPE_RESET_STREAM;
     } else {
-        dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_RELIABLE_RESET_STREAM);
+        dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_RESET_STREAM_AT);
     }
     dst = quicly_encodev(dst, stream_id);
     dst = quicly_encodev(dst, app_error_code);
@@ -482,7 +482,7 @@ inline int quicly_decode_reset_stream_frame(uint64_t frame_type, const uint8_t *
     frame->app_error_code = (uint16_t)error_code;
     frame->final_size = quicly_decodev(src, end);
     if (frame_type != QUICLY_FRAME_TYPE_RESET_STREAM) {
-        assert(frame_type == QUICLY_FRAME_TYPE_RELIABLE_RESET_STREAM);
+        assert(frame_type == QUICLY_FRAME_TYPE_RESET_STREAM_AT);
         frame->reliable_size = quicly_decodev(src, end);
     } else {
         frame->reliable_size = 0;
