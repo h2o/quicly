@@ -1,11 +1,15 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8.11)
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8.12)
 CMAKE_POLICY(SET CMP0003 NEW)
 
 PROJECT(quicly)
 
+INCLUDE(CMakePushCheckState)
+INCLUDE(CheckCSourceCompiles)
+INCLUDE(deps/picotls/cmake/boringssl-adjust.cmake)
 INCLUDE(deps/picotls/cmake/dtrace-utils.cmake)
 
 FIND_PACKAGE(OpenSSL REQUIRED)
+BORINGSSL_ADJUST()
 IF (OPENSSL_FOUND AND (OPENSSL_VERSION VERSION_LESS "1.0.2"))
     MESSAGE(FATAL "OpenSSL 1.0.2 or above is missing")
 ENDIF ()
@@ -16,10 +20,11 @@ IF (WITH_DTRACE)
     MESSAGE(STATUS "Enabling USDT support")
 ENDIF ()
 
-IF ((CMAKE_SIZEOF_VOID_P EQUAL 8) AND
-    (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64") OR
-     (CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64") OR
-     (CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64"))
+CMAKE_PUSH_CHECK_STATE()
+SET(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -mavx2 -maes -mpclmul -mvaes -mvpclmulqdq")
+CHECK_C_SOURCE_COMPILES("int main(void) {}" CC_HAS_AESNI256)
+CMAKE_POP_CHECK_STATE()
+IF (CC_HAS_AESNI256)
     SET(WITH_FUSION_DEFAULT "ON")
 ELSE ()
     SET(WITH_FUSION_DEFAULT "OFF")
@@ -30,7 +35,7 @@ OPTION(WITH_FUSION "whether or not to use the Fusion AES-GCM engine in the cli b
 IF(NOT CMAKE_BUILD_TYPE)
     SET(CMAKE_BUILD_TYPE Release)
 ENDIF(NOT CMAKE_BUILD_TYPE)
-SET(CMAKE_C_FLAGS "-std=c99 -Wall -g ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
+SET(CMAKE_C_FLAGS "-std=c99 -Wall -g -DQUICLY_USE_TRACER=1 ${CC_WARNING_FLAGS} ${CMAKE_C_FLAGS}")
 SET(CMAKE_C_FLAGS_DEBUG "-O0")
 SET(CMAKE_C_FLAGS_RELEASE "-O2")
 
@@ -43,6 +48,7 @@ INCLUDE_DIRECTORIES(
     ${CMAKE_CURRENT_BINARY_DIR})
 
 SET(PICOTLS_OPENSSL_FILES
+    deps/picotls/lib/hpke.c
     deps/picotls/lib/openssl.c
     deps/picotls/lib/pembase64.c
     deps/picotls/lib/picotls.c)
@@ -51,17 +57,20 @@ SET(QUICLY_LIBRARY_FILES
     lib/frame.c
     lib/cc-reno.c
     lib/cc-cubic.c
+    lib/cc-pico.c
     lib/defaults.c
     lib/local_cid.c
     lib/loss.c
     lib/quicly.c
     lib/ranges.c
+    lib/rate.c
     lib/recvstate.c
     lib/remote_cid.c
     lib/retire_cid.c
     lib/sendstate.c
     lib/sentmap.c
-    lib/streambuf.c)
+    lib/streambuf.c
+    ${CMAKE_CURRENT_BINARY_DIR}/quicly-tracer.h)
 
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
@@ -72,6 +81,7 @@ SET(UNITTEST_SOURCE_FILES
     t/maxsender.c
     t/pacer.c
     t/ranges.c
+    t/rate.c
     t/remote_cid.c
     t/retire_cid.c
     t/sentmap.c
@@ -93,29 +103,33 @@ IF (WITH_DTRACE)
     ENDIF ()
 ENDIF ()
 
+ADD_CUSTOM_COMMAND(
+    OUTPUT quicly-tracer.h
+    COMMAND ${PROJECT_SOURCE_DIR}/misc/probe2trace.pl -a tracer < ${PROJECT_SOURCE_DIR}/quicly-probes.d > ${CMAKE_CURRENT_BINARY_DIR}/quicly-tracer.h
+    DEPENDS quicly-probes.d misc/probe2trace.pl
+    VERBATIM)
+
 ADD_LIBRARY(quicly ${QUICLY_LIBRARY_FILES})
 TARGET_LINK_LIBRARIES(quicly LINK_PUBLIC m)
 
-ADD_CUSTOM_COMMAND(
-    OUTPUT embedded-probes.h
-    COMMAND ${CMAKE_SOURCE_DIR}/misc/probe2trace.pl -a embedded < ${CMAKE_SOURCE_DIR}/quicly-probes.d > ${CMAKE_CURRENT_BINARY_DIR}/embedded-probes.h
-    DEPENDS quicly-probes.d misc/probe2trace.pl
-    VERBATIM)
-SET(CLI_FILES ${PICOTLS_OPENSSL_FILES} ${QUICLY_LIBRARY_FILES} src/cli.c embedded-probes.h)
-SET(CLI_COMPILE_FLAGS "-DQUICLY_USE_EMBEDDED_PROBES=1")
+SET(CLI_FILES ${PICOTLS_OPENSSL_FILES} ${QUICLY_LIBRARY_FILES} src/cli.c)
+SET(CLI_COMPILE_FLAGS "")
 IF (WITH_FUSION)
     LIST(APPEND CLI_FILES deps/picotls/lib/fusion.c)
-    SET(CLI_COMPILE_FLAGS "-mavx2 -maes -mpclmul -DQUICLY_HAVE_FUSION=1 ${CLI_COMPILE_FLAGS}")
+    SET(CLI_COMPILE_FLAGS "-mavx2 -maes -mpclmul -mvaes -mvpclmulqdq -DQUICLY_HAVE_FUSION=1 ${CLI_COMPILE_FLAGS}")
 ENDIF ()
 ADD_EXECUTABLE(cli ${CLI_FILES})
-SET_TARGET_PROPERTIES(cli PROPERTIES COMPILE_FLAGS ${CLI_COMPILE_FLAGS})
-TARGET_LINK_LIBRARIES(cli ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS} m)
+SET_TARGET_PROPERTIES(cli PROPERTIES COMPILE_FLAGS "${CLI_COMPILE_FLAGS}")
+TARGET_LINK_LIBRARIES(cli ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS} m)
 
 ADD_EXECUTABLE(test.t ${PICOTLS_OPENSSL_FILES} ${UNITTEST_SOURCE_FILES})
-TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+TARGET_LINK_LIBRARIES(test.t quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
+
+ADD_EXECUTABLE(simulator ${PICOTLS_OPENSSL_FILES} ${QUICLY_LIBRARY_FILES} t/simulator.c)
+TARGET_LINK_LIBRARIES(simulator ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS} m)
 
 ADD_EXECUTABLE(examples-echo ${PICOTLS_OPENSSL_FILES} examples/echo.c)
-TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
 
 ADD_EXECUTABLE(udpfw t/udpfw.c)
 
@@ -141,17 +155,17 @@ IF (BUILD_FUZZER)
         SET(LIB_FUZZER FuzzingEngine)
         SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
-        TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+        TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
     ELSEIF (USE_CLANG_RT)
         SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined -fsanitize-coverage=edge,indirect-calls")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined -fsanitize-coverage=edge,indirect-calls")
-        TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS})
+        TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
     ELSE()
         SET(LIB_FUZZER "${CMAKE_CURRENT_BINARY_DIR}/libFuzzer.a")
         SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-omit-frame-pointer -fsanitize=address -fsanitize-address-use-after-scope -fsanitize=fuzzer-no-link")
         SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fno-omit-frame-pointer -fsanitize=address -fsanitize-address-use-after-scope -fsanitize=fuzzer-no-link")
         ADD_CUSTOM_TARGET(libFuzzer ${CMAKE_CURRENT_SOURCE_DIR}/misc/build_libFuzzer.sh WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
         ADD_DEPENDENCIES(quicly-fuzzer-packet libFuzzer)
-        TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_LIBRARIES} ${CMAKE_DL_LIBS} ${LIB_FUZZER})
+        TARGET_LINK_LIBRARIES(quicly-fuzzer-packet quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS} ${LIB_FUZZER})
     ENDIF(OSS_FUZZ)
 ENDIF()

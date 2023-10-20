@@ -46,6 +46,8 @@ provider quicly {
     probe receive(struct st_quicly_conn_t *conn, int64_t at, const char *dcid, const void *bytes, size_t bytes_len);
     probe version_switch(struct st_quicly_conn_t *conn, int64_t at, uint32_t new_version);
     probe idle_timeout(struct st_quicly_conn_t *conn, int64_t at);
+    probe handshake_timeout(struct st_quicly_conn_t *conn, int64_t at, int64_t elapsed, uint32_t rtt_smoothed);
+    probe initial_handshake_packet_exceed(struct st_quicly_conn_t *conn, int64_t at, uint64_t num_packets);
     probe stateless_reset_receive(struct st_quicly_conn_t *conn, int64_t at);
 
     probe crypto_handshake(struct st_quicly_conn_t *conn, int64_t at, int ret);
@@ -68,7 +70,7 @@ provider quicly {
     probe cc_congestion(struct st_quicly_conn_t *conn, int64_t at, uint64_t max_lost_pn, size_t inflight, uint32_t cwnd);
 
     probe ack_block_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t ack_block_begin, uint64_t ack_block_end);
-    probe ack_delay_received(struct st_quicly_conn_t *conn, int64_t at, int64_t ack_delay);
+    probe ack_delay_received(struct st_quicly_conn_t *conn, int64_t at, uint64_t ack_delay);
     probe ack_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t largest_acked, uint64_t ack_delay);
 
     probe ping_send(struct st_quicly_conn_t *conn, int64_t at);
@@ -86,6 +88,12 @@ provider quicly {
     probe stream_receive(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off, size_t len);
     probe stream_acked(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t off, size_t len);
     probe stream_lost(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t off, size_t len);
+
+    probe reset_stream_send(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint16_t error_code, uint64_t final_size);
+    probe reset_stream_receive(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint16_t error_code, uint64_t final_size);
+
+    probe stop_sending_send(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint16_t error_code);
+    probe stop_sending_receive(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint16_t error_code);
 
     probe max_data_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t maximum);
     probe max_data_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t maximum);
@@ -118,11 +126,14 @@ provider quicly {
     probe stream_data_blocked_send(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t maximum);
     probe stream_data_blocked_receive(struct st_quicly_conn_t *conn, int64_t at, int64_t stream_id, uint64_t maximum);
 
+    probe ecn_validation(struct st_quicly_conn_t *conn, int64_t at, int ecn_state);
+    probe ecn_congestion(struct st_quicly_conn_t *conn, int64_t at, uint64_t ce_count);
+
     probe datagram_send(struct st_quicly_conn_t *conn, int64_t at, const void *payload, size_t payload_len);
     probe datagram_receive(struct st_quicly_conn_t *conn, int64_t at, const void *payload, size_t payload_len);
 
     probe ack_frequency_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence, uint64_t packet_tolerance,
-                                uint64_t max_ack_delay, int ignore_order);
+                                uint64_t max_ack_delay, int ignore_order, int ignore_ce);
 
     probe quictrace_send_stream(struct st_quicly_conn_t *conn, int64_t at, struct st_quicly_stream_t *stream, uint64_t off,
                                 size_t len, int fin);

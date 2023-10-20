@@ -36,27 +36,19 @@ extern "C" {
 #include "quicly/constants.h"
 #include "quicly/loss.h"
 
-typedef enum {
-    /**
-     * Reno, with 0.7 beta reduction
-     */
-    CC_RENO_MODIFIED,
-    /**
-     * CUBIC (RFC 8312)
-     */
-    CC_CUBIC
-} quicly_cc_type_t;
+#define QUICLY_MIN_CWND 2
+#define QUICLY_RENO_BETA 0.7
 
 /**
  * Holds pointers to concrete congestion control implementation functions.
  */
-struct st_quicly_cc_impl_t;
+typedef const struct st_quicly_cc_type_t quicly_cc_type_t;
 
 typedef struct st_quicly_cc_t {
     /**
-     * Congestion controller implementation.
+     * Congestion controller type.
      */
-    const struct st_quicly_cc_impl_t *impl;
+    quicly_cc_type_t *type;
     /**
      * Current congestion window.
      */
@@ -74,6 +66,10 @@ typedef struct st_quicly_cc_t {
      */
     uint32_t pacer_multiplier;
     /**
+     * If the most recent loss episode was signalled by ECN only (i.e., no packet loss).
+     */
+    unsigned episode_by_ecn : 1;
+    /**
      * State information specific to the congestion controller implementation.
      */
     union {
@@ -86,6 +82,19 @@ typedef struct st_quicly_cc_t {
              */
             uint32_t stash;
         } reno;
+        /**
+         * State information for Pico.
+         */
+        struct {
+            /**
+             * Stash of acknowledged bytes, used during congestion avoidance.
+             */
+            uint32_t stash;
+            /**
+             * Number of bytes required to be acked in order to increase CWND by 1 MTU.
+             */
+            uint32_t bytes_per_mtu_increase;
+        } pico;
         /**
          * State information for CUBIC congestion control.
          */
@@ -129,24 +138,33 @@ typedef struct st_quicly_cc_t {
      */
     uint32_t cwnd_maximum;
     /**
-     * Total number of number of loss episodes (congestion window reductions).
+     * Total number of loss episodes (congestion window reductions).
      */
     uint32_t num_loss_episodes;
+    /**
+     * Total number of loss episodes that was reported only by ECN (hence no packet loss).
+     */
+    uint32_t num_ecn_loss_episodes;
 } quicly_cc_t;
 
-struct st_quicly_cc_impl_t {
+struct st_quicly_cc_type_t {
     /**
-     * Congestion controller type.
+     * name (e.g., "reno")
      */
-    quicly_cc_type_t type;
+    const char *name;
+    /**
+     * Corresponding default init_cc.
+     */
+    struct st_quicly_init_cc_t *cc_init;
     /**
      * Called when a packet is newly acknowledged.
      */
     void (*cc_on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                        int64_t now, uint32_t max_udp_payload_size);
+                        uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size);
     /**
-     * Called when a packet is detected as lost. |next_pn| is the next unsent packet number,
-     * used for setting the recovery window.
+     * Called when a packet is detected as lost.
+     * @param bytes    bytes declared lost, or zero iff ECN_CE is observed
+     * @param next_pn  the next unsent packet number, used for setting the recovery window
      */
     void (*cc_on_lost)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, int64_t now,
                        uint32_t max_udp_payload_size);
@@ -158,21 +176,56 @@ struct st_quicly_cc_impl_t {
      * Called after a packet is sent.
      */
     void (*cc_on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
+    /**
+     * Switches the underlying algorithm of `cc` to that of `cc_switch`, returning a boolean if the operation was successful.
+     */
+    int (*cc_switch)(quicly_cc_t *cc);
 };
 
 /**
- * The factory method for the modified Reno congestion controller.
+ * The type objects for each CC. These can be used for testing the type of each `quicly_cc_t`.
  */
-extern struct st_quicly_init_cc_t quicly_cc_reno_init;
+extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_pico;
 /**
- * The factory method for the modified Reno congestion controller.
+ * The factory methods for each CC.
  */
-extern struct st_quicly_init_cc_t quicly_cc_cubic_init;
+extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_pico_init;
+
+/**
+ * A null-terminated list of all CC types.
+ */
+extern quicly_cc_type_t *quicly_cc_all_types[];
 
 /**
  * Calculates the initial congestion window size given the maximum UDP payload size.
  */
 uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size);
+
+void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
+                            int64_t now, uint32_t max_udp_payload_size);
+void quicly_cc_reno_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
+void quicly_cc_reno_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
+/**
+ * Updates ECN counter when loss is observed.
+ */
+static void quicly_cc__update_ecn_episodes(quicly_cc_t *cc, uint32_t lost_bytes, uint64_t lost_pn);
+
+/* inline definitions */
+
+inline void quicly_cc__update_ecn_episodes(quicly_cc_t *cc, uint32_t lost_bytes, uint64_t lost_pn)
+{
+    /* when it is a new loss episode, initially assume that all losses are due to ECN signalling ... */
+    if (lost_pn >= cc->recovery_end) {
+        ++cc->num_ecn_loss_episodes;
+        cc->episode_by_ecn = 1;
+    }
+
+    /* ... but if a loss is observed, decrement the ECN loss episode counter */
+    if (lost_bytes != 0 && cc->episode_by_ecn) {
+        --cc->num_ecn_loss_episodes;
+        cc->episode_by_ecn = 0;
+    }
+}
 
 #ifdef __cplusplus
 }

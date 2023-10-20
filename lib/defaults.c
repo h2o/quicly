@@ -28,6 +28,8 @@
 #define DEFAULT_MAX_CRYPTO_BYTES 65536
 #define DEFAULT_INITCWND_PACKETS 10
 #define DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT 3
+#define DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER 400
+#define DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS 1000
 
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {NULL,                                                 /* tls */
@@ -42,9 +44,13 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               DEFAULT_MAX_PACKETS_PER_KEY,
                                               DEFAULT_MAX_CRYPTO_BYTES,
                                               DEFAULT_INITCWND_PACKETS,
-                                              QUICLY_PROTOCOL_VERSION_CURRENT,
+                                              QUICLY_PROTOCOL_VERSION_1,
                                               DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
+                                              0, /* ack_frequency */
+                                              DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
+                                              DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                               0, /* enlarge_client_hello */
+                                              1, /* enable_ecn */
                                               0, /* use_pacing */
                                               NULL,
                                               NULL, /* on_stream_open */
@@ -70,9 +76,13 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     DEFAULT_MAX_PACKETS_PER_KEY,
                                                     DEFAULT_MAX_CRYPTO_BYTES,
                                                     DEFAULT_INITCWND_PACKETS,
-                                                    QUICLY_PROTOCOL_VERSION_CURRENT,
+                                                    QUICLY_PROTOCOL_VERSION_1,
                                                     DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
+                                                    0, /* ack_frequency */
+                                                    DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
+                                                    DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                                     0, /* enlarge_client_hello */
+                                                    1, /* enable_ecn */
                                                     0, /* use_pacing */
                                                     NULL,
                                                     NULL, /* on_stream_open */
@@ -307,7 +317,7 @@ static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, qui
         }
         /* send! */
         if ((ret = quicly_send_stream(stream, s)) != 0) {
-            /* FIXME Stop quicly_send_stream emitting SENDBUF_FULL (happpens when CWND is congested). Otherwise, we need to make
+            /* FIXME Stop quicly_send_stream emitting SENDBUF_FULL (happens when CWND is congested). Otherwise, we need to make
              * adjustments to the scheduler after popping a stream */
             if (ret == QUICLY_ERROR_SENDBUF_FULL) {
                 assert(quicly_stream_can_send(stream, 1));
@@ -335,7 +345,7 @@ static int default_stream_scheduler_update_state(quicly_stream_scheduler_t *self
         /* activate if not */
         link_stream(sched, stream, quicly_is_blocked(stream->conn));
     } else {
-        /* disactivate if active */
+        /* deactivate if active */
         if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler))
             quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
     }
@@ -397,13 +407,6 @@ static int default_setup_cipher(quicly_crypto_engine_t *engine, quicly_conn_t *c
     if ((*aead_ctx = ptls_aead_new(aead, hash, is_enc, secret, QUICLY_AEAD_BASE_LABEL)) == NULL) {
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
-    }
-    if (QUICLY_DEBUG) {
-        char *secret_hex = quicly_hexdump(secret, hash->digest_size, SIZE_MAX),
-             *hpkey_hex = quicly_hexdump(hpkey, aead->ctr_cipher->key_size, SIZE_MAX);
-        fprintf(stderr, "%s:\n  aead-secret: %s\n  hp-key: %s\n", __FUNCTION__, secret_hex, hpkey_hex);
-        free(secret_hex);
-        free(hpkey_hex);
     }
 
     ret = 0;
