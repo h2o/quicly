@@ -5696,7 +5696,6 @@ static int compare_socket_address(struct sockaddr *x, struct sockaddr *y)
         if (r != 0)
             return r;
         CMP(ntohs(xin6->sin6_port), ntohs(yin6->sin6_port));
-        CMP(xin6->sin6_flowinfo, yin6->sin6_flowinfo);
         CMP(xin6->sin6_scope_id, yin6->sin6_scope_id);
     } else if (x->sa_family == AF_UNSPEC) {
         return 1;
