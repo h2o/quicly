@@ -6842,7 +6842,7 @@ int quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_address_token
                 portaddr = &plaintext->remote.sin.sin_port;
                 break;
             case 16: /* ipv6 */
-                plaintext->remote.sin6.sin6_family = AF_INET6;
+                plaintext->remote.sin6 = (struct sockaddr_in6){.sin6_family = AF_INET6};
                 memcpy(&plaintext->remote.sin6.sin6_addr, src, 16);
                 portaddr = &plaintext->remote.sin6.sin6_port;
                 break;
