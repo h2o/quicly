@@ -35,6 +35,7 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (cc->state.reno.jumpstart.enter_pn <= largest_acked) {
         assert(cc->cwnd < cc->ssthresh);
         cc->state.reno.jumpstart.enter_pn = UINT64_MAX;
+        cc->state.reno.jumpstart.exit_pn = next_pn;
         cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2); /* revert to pacing of slow start */
     }
 
@@ -69,10 +70,12 @@ void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t
     cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
 
     /* if detected loss during jumpstart, restore original CWND */
-    if (lost_pn >= cc->state.reno.jumpstart.enter_pn) {
+    if (lost_pn < cc->state.reno.jumpstart.exit_pn) {
         assert(cc->cwnd < cc->ssthresh);
         cc->state.reno.jumpstart.enter_pn = UINT64_MAX;
-        cc->cwnd = cc->state.reno.jumpstart.orig_cwnd;
+        cc->state.reno.jumpstart.exit_pn = 0;
+        /* before applying BETA, CWND is set to amount of bytes ACKed during the jump start phase */
+        cc->cwnd = cc->cwnd - cc->state.reno.jumpstart.jump_cwnd + cc->state.reno.jumpstart.orig_cwnd;
     }
 
     ++cc->num_loss_episodes;
@@ -107,6 +110,7 @@ static void reno_enter_jumpstart(quicly_cc_t *cc, uint32_t jump_cwnd, uint64_t n
     /* retain state to be restored upon loss */
     cc->state.reno.jumpstart.enter_pn = next_pn;
     cc->state.reno.jumpstart.orig_cwnd = cc->cwnd;
+    cc->state.reno.jumpstart.jump_cwnd = jump_cwnd;
 
     /* adjust */
     cc->cwnd = jump_cwnd;
@@ -120,6 +124,7 @@ static void reno_reset(quicly_cc_t *cc, uint32_t initcwnd)
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
     cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
+    cc->state.reno.jumpstart.enter_pn = UINT64_MAX;
 }
 
 static int reno_on_switch(quicly_cc_t *cc)

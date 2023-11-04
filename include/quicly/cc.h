@@ -90,9 +90,17 @@ typedef struct st_quicly_cc_t {
                  */
                 uint64_t enter_pn;
                 /**
+                 * packet number following the last packet in jumpstart
+                 */
+                uint64_t exit_pn;
+                /**
                  * original CWND
                  */
                 uint32_t orig_cwnd;
+                /**
+                 * cwnd at start of jumpstart
+                 */
+                uint32_t jump_cwnd;
             } jumpstart;
         } reno;
         /**
