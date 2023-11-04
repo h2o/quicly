@@ -1204,7 +1204,7 @@ int main(int argc, char **argv)
             /* CC name */
             token = strsep(&buf, ":");
             for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
-                if (strcmp((*cc)->name, optarg) == 0)
+                if (strcmp((*cc)->name, token) == 0)
                     break;
             if (*cc != NULL) {
                 ctx.init_cc = (*cc)->cc_init;
