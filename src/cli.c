@@ -1166,6 +1166,7 @@ int main(int argc, char **argv)
     static const struct option longopts[] = {{"ech-key", required_argument, NULL, 0},
                                              {"ech-configs", required_argument, NULL, 0},
                                              {"disable-ecn", no_argument, NULL, 0},
+                                             {"max-jumpstart", required_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1177,6 +1178,11 @@ int main(int argc, char **argv)
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ecn = 0;
+            } else if (strcmp(longopts[opt_index].name, "max-jumpstart") == 0) {
+                if (sscanf(optarg, "%" SCNu32, &ctx.max_jumpstart_cwnd) != 1) {
+                    fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
+                    exit(1);
+                }
             } else {
                 assert(!"unexpected longname");
             }
