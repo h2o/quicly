@@ -6505,6 +6505,9 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 goto Exit;
             setup_next_send(conn);
             conn->super.remote.address_validation.validated = 1;
+            if (conn->super.ctx->max_jumpstart_cwnd != 0 && conn->egress.cc.type->cc_jumpstart != NULL)
+                conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, conn->super.ctx->max_jumpstart_cwnd,
+                                                   conn->egress.packet_number);
         }
         break;
     default:

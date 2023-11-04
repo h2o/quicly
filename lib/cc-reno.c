@@ -32,6 +32,12 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (largest_acked < cc->recovery_end)
         return;
 
+    if (cc->state.reno.jumpstart.enter_pn <= largest_acked) {
+        assert(cc->cwnd < cc->ssthresh);
+        cc->state.reno.jumpstart.enter_pn = UINT64_MAX;
+        cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2); /* revert to pacing of slow start */
+    }
+
     /* Slow start. */
     if (cc->cwnd < cc->ssthresh) {
         cc->cwnd += bytes;
@@ -40,7 +46,6 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         return;
     }
     /* Congestion avoidance. */
-    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
     cc->state.reno.stash += bytes;
     if (cc->state.reno.stash < cc->cwnd)
         return;
@@ -61,6 +66,14 @@ void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t
     if (lost_pn < cc->recovery_end)
         return;
     cc->recovery_end = next_pn;
+    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
+
+    /* if detected loss during jumpstart, restore original CWND */
+    if (lost_pn >= cc->state.reno.jumpstart.enter_pn) {
+        assert(cc->cwnd < cc->ssthresh);
+        cc->state.reno.jumpstart.enter_pn = UINT64_MAX;
+        cc->cwnd = cc->state.reno.jumpstart.orig_cwnd;
+    }
 
     ++cc->num_loss_episodes;
     if (cc->cwnd_exiting_slow_start == 0)
@@ -84,6 +97,20 @@ void quicly_cc_reno_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_
 void quicly_cc_reno_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now)
 {
     /* Unused */
+}
+
+static void reno_enter_jumpstart(quicly_cc_t *cc, uint32_t jump_cwnd, uint64_t next_pn)
+{
+    if (cc->cwnd * 2 >= jump_cwnd)
+        return;
+
+    /* retain state to be restored upon loss */
+    cc->state.reno.jumpstart.enter_pn = next_pn;
+    cc->state.reno.jumpstart.orig_cwnd = cc->cwnd;
+
+    /* adjust */
+    cc->cwnd = jump_cwnd;
+    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1);
 }
 
 static void reno_reset(quicly_cc_t *cc, uint32_t initcwnd)
@@ -127,7 +154,8 @@ quicly_cc_type_t quicly_cc_type_reno = {"reno",
                                         quicly_cc_reno_on_lost,
                                         quicly_cc_reno_on_persistent_congestion,
                                         quicly_cc_reno_on_sent,
-                                        reno_on_switch};
+                                        reno_on_switch,
+                                        reno_enter_jumpstart};
 quicly_init_cc_t quicly_cc_reno_init = {reno_init};
 
 quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno, &quicly_cc_type_cubic, &quicly_cc_type_pico, NULL};

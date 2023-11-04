@@ -327,6 +327,10 @@ struct st_quicly_context_t {
      */
     uint64_t max_initial_handshake_packets;
     /**
+     * maximum CWND to be used by jumpstart
+     */
+    uint32_t max_jumpstart_cwnd;
+    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;

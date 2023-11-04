@@ -81,6 +81,19 @@ typedef struct st_quicly_cc_t {
              * Stash of acknowledged bytes, used during congestion avoidance.
              */
             uint32_t stash;
+            /**
+             *
+             */
+            struct {
+                /**
+                 * first packet number in jumpstart
+                 */
+                uint64_t enter_pn;
+                /**
+                 * original CWND
+                 */
+                uint32_t orig_cwnd;
+            } jumpstart;
         } reno;
         /**
          * State information for Pico.
@@ -180,6 +193,10 @@ struct st_quicly_cc_type_t {
      * Switches the underlying algorithm of `cc` to that of `cc_switch`, returning a boolean if the operation was successful.
      */
     int (*cc_switch)(quicly_cc_t *cc);
+    /**
+     *
+     */
+    void (*cc_jumpstart)(quicly_cc_t *cc, uint32_t cwnd, uint64_t next_pn);
 };
 
 /**

@@ -49,6 +49,7 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               0, /* ack_frequency */
                                               DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
                                               DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
+                                              0, /* max_jumpstart_cwnd */
                                               0, /* enlarge_client_hello */
                                               1, /* enable_ecn */
                                               0, /* use_pacing */
@@ -81,6 +82,7 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     0, /* ack_frequency */
                                                     DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
                                                     DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
+                                                    0, /* max_jumpstart_cwnd */
                                                     0, /* enlarge_client_hello */
                                                     1, /* enable_ecn */
                                                     0, /* use_pacing */
