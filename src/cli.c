@@ -705,39 +705,16 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
                           quicly_address_token_plaintext_t *token, const char **err_desc)
 {
     int64_t age;
-    int port_is_equal;
 
     /* calculate and normalize age */
     if ((age = ctx.now->cb(ctx.now) - token->issued_at) < 0)
         age = 0;
-
-    /* check address, deferring the use of port number match to type-specific checks */
-    if (remote->sa_family != token->remote.sa.sa_family)
-        goto AddressMismatch;
-    switch (remote->sa_family) {
-    case AF_INET: {
-        struct sockaddr_in *sin = (struct sockaddr_in *)remote;
-        if (sin->sin_addr.s_addr != token->remote.sin.sin_addr.s_addr)
-            goto AddressMismatch;
-        port_is_equal = sin->sin_port == token->remote.sin.sin_port;
-    } break;
-    case AF_INET6: {
-        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)remote;
-        if (memcmp(&sin6->sin6_addr, &token->remote.sin6.sin6_addr, sizeof(sin6->sin6_addr)) != 0)
-            goto AddressMismatch;
-        port_is_equal = sin6->sin6_port == token->remote.sin6.sin6_port;
-    } break;
-    default:
-        goto UnknownAddressType;
-    }
 
     /* type-specific checks */
     switch (token->type) {
     case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
         if (age > 30000)
             goto Expired;
-        if (!port_is_equal)
-            goto AddressMismatch;
         if (!quicly_cid_is_equal(&token->retry.client_cid, client_cid))
             goto CIDMismatch;
         if (!quicly_cid_is_equal(&token->retry.server_cid, server_cid))
@@ -753,13 +730,38 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
         break;
     }
 
+    /* check address, deferring the use of port number match to type-specific checks */
+    if (remote->sa_family != token->remote.sa.sa_family)
+        goto AddressMismatch;
+    switch (remote->sa_family) {
+    case AF_INET: {
+        struct sockaddr_in *sin = (struct sockaddr_in *)remote;
+        if (sin->sin_addr.s_addr != token->remote.sin.sin_addr.s_addr)
+            goto AddressMismatch;
+        if (token->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY && sin->sin_port != token->remote.sin.sin_port)
+            goto AddressMismatch;
+    } break;
+    case AF_INET6: {
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)remote;
+        if (memcmp(&sin6->sin6_addr, &token->remote.sin6.sin6_addr, sizeof(sin6->sin6_addr)) != 0)
+            goto AddressMismatch;
+        if (token->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY && sin6->sin6_port != token->remote.sin6.sin6_port)
+            goto AddressMismatch;
+    } break;
+    default:
+        goto UnknownAddressType;
+    }
+
     /* success */
     *err_desc = NULL;
+    token->address_mismatch = 0;
     return 1;
 
 AddressMismatch:
-    *err_desc = "token address mismatch";
-    return 0;
+    token->address_mismatch = 1;
+    *err_desc = NULL;
+    return 1;
+
 UnknownAddressType:
     *err_desc = "unknown address type";
     return 0;
@@ -869,7 +871,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                 send_one_packet(fd, &remote.sa, payload, payload_len);
                             }
                         }
-                        if (enforce_retry && token == NULL && packet.cid.dest.encrypted.len >= 8) {
+                        if (enforce_retry && (token == NULL || token->address_mismatch) && packet.cid.dest.encrypted.len >= 8) {
                             /* unbound connection; send a retry token unless the client has supplied the correct one, but not too
                              * many
                              */
