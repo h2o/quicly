@@ -83,9 +83,11 @@ void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t
     /* if detected loss before receiving all acks for jumpstart, restore original CWND */
     if (cc->ssthresh == UINT32_MAX && lost_pn < cc->state.reno.jumpstart.exit_pn) {
         assert(cc->cwnd < cc->ssthresh);
-        /* CWND is set to the amount of bytes ACKed during the jump start phase plus the value before jump start. As we multiply by
-         * beta below, we compensate for that by dividing by beta here. */
-        cc->cwnd = cc->state.reno.jumpstart.bytes_acked / QUICLY_RENO_BETA;
+        /* CWND is set to the amount of bytes ACKed during the jump start phase plus the value before jump start */
+        cc->cwnd = cc->state.reno.jumpstart.bytes_acked;
+        if (cc->cwnd < cc->cwnd_initial)
+            cc->cwnd = cc->cwnd_initial;
+        cc->cwnd /= QUICLY_RENO_BETA; /* compensate for the multiplification below */
     }
 
     ++cc->num_loss_episodes;
