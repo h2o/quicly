@@ -365,6 +365,10 @@ struct st_quicly_conn_t {
          * delivery rate estimator
          */
         quicly_ratemeter_t ratemeter;
+        /**
+         * delivery rate to be used for jumpstart (unit is bytes / sec)
+         */
+        uint64_t jumpstart_rate;
     } egress;
     /**
      * crypto data
@@ -4171,6 +4175,68 @@ Exit:
     return ret;
 }
 
+#define QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME 0
+
+static int decode_resumption_info(const uint8_t *src, size_t len, uint64_t *rate)
+{
+    const uint8_t *end = src + len;
+    int ret = 0;
+
+    *rate = 0;
+
+    while (src < end) {
+        uint64_t id;
+        if ((id = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+            ret = PTLS_ALERT_DECODE_ERROR;
+            goto Exit;
+        }
+        ptls_decode_open_block(src, end, -1, {
+            switch (id) {
+            case QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME:
+                if ((*rate = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+                    ret = PTLS_ALERT_DECODE_ERROR;
+                    goto Exit;
+                }
+                break;
+            default:
+                /* ignore unknown types */
+                src = end;
+                break;
+            }
+        });
+    }
+
+Exit:
+    return ret;
+}
+
+static size_t encode_resumption_info(quicly_conn_t *conn, uint8_t *dst, size_t capacity)
+{
+    ptls_buffer_t buf;
+    int ret;
+
+    ptls_buffer_init(&buf, dst, capacity);
+
+#define PUSH_ENTRY(id, block) \
+    do { \
+        ptls_buffer_push_quicint(&buf, (id)); \
+        ptls_buffer_push_block(&buf, -1, block); \
+    } while (0)
+
+    /* emit delivery rate for Careful Resume */
+    PUSH_ENTRY(QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME, {
+        quicly_rate_t rate;
+        quicly_ratemeter_report(&conn->egress.ratemeter, &rate);
+        ptls_buffer_push_quicint(&buf, rate.smoothed);
+    });
+
+#undef PUSH_ENTRY
+
+Exit:
+    assert(!buf.is_allocated);
+    return buf.off;
+}
+
 static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     quicly_address_token_plaintext_t token;
@@ -4185,7 +4251,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
     token =
         (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION, conn->super.ctx->now->cb(conn->super.ctx->now)};
     token.remote = conn->super.remote.address;
-    /* TODO fill token.resumption */
+    token.resumption.len = encode_resumption_info(conn, token.resumption.bytes, sizeof(token.resumption.bytes));
 
     /* encrypt */
     if ((ret = conn->super.ctx->generate_resumption_token->cb(conn->super.ctx->generate_resumption_token, conn, &tokenbuf,
@@ -6240,10 +6306,23 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     (*conn)->super.state = QUICLY_STATE_ACCEPTING;
     quicly_set_cid(&(*conn)->super.original_dcid, packet->cid.dest.encrypted);
     if (address_token != NULL) {
-        (*conn)->super.remote.address_validation.validated = 1;
-        if (address_token->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY) {
-            (*conn)->retry_scid = (*conn)->super.original_dcid;
-            (*conn)->super.original_dcid = address_token->retry.original_dcid;
+        (*conn)->super.remote.address_validation.validated = !address_token->address_mismatch;
+        switch (address_token->type) {
+        case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
+            if (!address_token->address_mismatch) {
+                (*conn)->retry_scid = (*conn)->super.original_dcid;
+                (*conn)->super.original_dcid = address_token->retry.original_dcid;
+            }
+            break;
+        case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
+            if (decode_resumption_info(address_token->resumption.bytes, address_token->resumption.len,
+                                       &(*conn)->egress.jumpstart_rate) != 0)
+                (*conn)->egress.jumpstart_rate = 0;
+            break;
+        default:
+            /* We might not get here as tokens are integrity-protected, but as this is information supplied via network, potentially
+             * from broken quicly instances, we drop anything unexpected rather than calling abort(). */
+            break;
         }
     }
     if ((ret = setup_handshake_space_and_flow(*conn, QUICLY_EPOCH_INITIAL)) != 0)
@@ -6505,9 +6584,22 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 goto Exit;
             setup_next_send(conn);
             conn->super.remote.address_validation.validated = 1;
-            if (conn->super.ctx->max_jumpstart_cwnd != 0 && conn->egress.cc.type->cc_jumpstart != NULL)
-                conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, conn->super.ctx->max_jumpstart_cwnd,
-                                                   conn->egress.packet_number);
+            /* jumpstart if possible */
+            if (conn->super.ctx->max_jumpstart_cwnd != 0 && conn->egress.cc.type->cc_jumpstart != NULL &&
+                conn->super.ctx->use_pacing && conn->egress.jumpstart_rate != 0) {
+                /* For the purpose of calculating jumpstart CWND, we use minRTT if available. There could be cases where we do not
+                 * have an RTT estimate (i.e., we receive no ACKs but handshake messages that pushes the handshake forward. If that
+                 * is the case, we estimate the RTT based on the connection lifetime. This value might become larger than necessary
+                 * but that is fine because that would reduce our send rate (really?? FIXME). */
+                uint64_t rtt = conn->egress.loss.rtt.minimum;
+                if (rtt == UINT32_MAX)
+                    rtt = conn->stash.now - conn->created_at;
+                uint64_t jumpstart_cwnd = conn->egress.jumpstart_rate * rtt / 1000;
+                if (jumpstart_cwnd > conn->super.ctx->max_jumpstart_cwnd)
+                    jumpstart_cwnd = conn->super.ctx->max_jumpstart_cwnd;
+                if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2)
+                    conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, (uint32_t)jumpstart_cwnd, conn->egress.packet_number);
+            }
         }
         break;
     default:

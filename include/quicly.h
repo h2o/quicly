@@ -866,6 +866,7 @@ struct st_quicly_address_token_plaintext_t {
     enum { QUICLY_ADDRESS_TOKEN_TYPE_RETRY, QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION } type;
     uint64_t issued_at;
     quicly_address_t local, remote;
+    unsigned address_mismatch : 1;
     union {
         struct {
             quicly_cid_t original_dcid;
