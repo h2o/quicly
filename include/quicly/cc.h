@@ -94,13 +94,9 @@ typedef struct st_quicly_cc_t {
                  */
                 uint64_t exit_pn;
                 /**
-                 * original CWND
+                 * amount of bytes acked for packets sent in jumpstart
                  */
-                uint32_t orig_cwnd;
-                /**
-                 * cwnd at start of jumpstart
-                 */
-                uint32_t jump_cwnd;
+                uint32_t bytes_acked;
             } jumpstart;
         } reno;
         /**
