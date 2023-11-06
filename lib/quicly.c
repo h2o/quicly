@@ -4941,6 +4941,12 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
                 conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_OTHERS_BIT;
             }
+            /* stream operations might have requested emission of NEW_TOKEN at the tail; if so, try to bundle it */
+            if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_NEW_TOKEN_BIT) != 0) {
+                assert(conn->application->one_rtt_writable);
+                if ((ret = send_resumption_token(conn, s)) != 0)
+                    goto Exit;
+            }
         }
     }
 
