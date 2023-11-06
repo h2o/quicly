@@ -261,7 +261,7 @@ inline void quicly_cc__update_ecn_episodes(quicly_cc_t *cc, uint32_t lost_bytes,
 
 inline void quicly_cc_jumpstart_reset(quicly_cc_t *cc)
 {
-    cc->jumpstart = (struct st_quicly_cc_jumpstart_t){.enter_pn = UINT64_MAX};
+    cc->jumpstart = (struct st_quicly_cc_jumpstart_t){.enter_pn = UINT64_MAX, .exit_pn = UINT64_MAX};
 }
 
 inline void quicly_cc_jumpstart_enter(quicly_cc_t *cc, uint32_t jump_cwnd, uint64_t next_pn)
@@ -292,7 +292,7 @@ inline void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint3
         cc->jumpstart.bytes_acked += bytes;
 
     /* when receiving the first ack for jumpstart, stop jumpstart and go back to slow start, adopting current inflight as cwnd */
-    if (cc->pacer_multiplier == QUICLY_PACER_CALC_MULTIPLIER(1) && cc->jumpstart.enter_pn <= largest_acked) {
+    if (cc->jumpstart.exit_pn == UINT64_MAX && cc->jumpstart.enter_pn <= largest_acked) {
         assert(cc->cwnd < cc->ssthresh);
         cc->cwnd = inflight;
         cc->cwnd_exiting_jumpstart = cc->cwnd;
@@ -303,12 +303,14 @@ inline void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint3
 
 inline void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn, double *beta)
 {
-    if (lost_pn < cc->jumpstart.exit_pn) {
+    if (cc->jumpstart.enter_pn != UINT64_MAX && lost_pn < cc->jumpstart.exit_pn) {
         assert(cc->cwnd < cc->ssthresh);
         /* CWND is set to the amount of bytes ACKed during the jump start phase plus the value before jump start */
         cc->cwnd = cc->jumpstart.bytes_acked;
         if (cc->cwnd < cc->cwnd_initial)
             cc->cwnd = cc->cwnd_initial;
+        if (cc->jumpstart.exit_pn == UINT64_MAX)
+            cc->jumpstart.exit_pn = lost_pn;
         *beta = 1; /* jumpstart makes accurate guess of CWND - there is no need to reduce CWND */
     }
 }
