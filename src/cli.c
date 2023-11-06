@@ -79,6 +79,7 @@ static quicly_cid_plaintext_t next_cid;
 static struct {
     ptls_aead_context_t *enc, *dec;
 } address_token_aead;
+static quicly_stream_scheduler_t stream_scheduler;
 static ptls_save_ticket_t save_session_ticket = {save_session_ticket_cb};
 static ptls_on_client_hello_t on_client_hello = {on_client_hello_cb};
 static int enforce_retry;
@@ -369,16 +370,6 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
         if (stream_data->outfp != NULL)
             fclose(stream_data->outfp);
-        static size_t num_resp_received;
-        ++num_resp_received;
-        if (reqs[num_resp_received].path == NULL) {
-            if (request_interval != 0) {
-                enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
-            } else {
-                dump_stats(stderr, stream->conn);
-                quicly_close(stream->conn, 0, "");
-            }
-        }
     }
 }
 
@@ -665,6 +656,18 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                         ptls_iovec_t datagram = ptls_iovec_init(message, strlen(message));
                         quicly_send_datagram_frames(conn, &datagram, 1);
                         send_datagram_frame = 0;
+                    }
+                    if (quicly_num_streams(conn) == 0) {
+                        if (request_interval != 0 && enqueue_requests_at == INT64_MAX) {
+                            enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
+                        } else {
+                            static int close_called;
+                            if (!close_called) {
+                                dump_stats(stderr, conn);
+                                quicly_close(conn, 0, "");
+                                close_called = 1;
+                            }
+                        }
                     }
                 }
             }
@@ -1057,6 +1060,32 @@ static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_o
     return 0;
 }
 
+static int stream_has_more_to_send(void *unused, quicly_stream_t *stream)
+{
+    int is_fully_inflight =
+        !quicly_stream_has_send_side(0, stream->stream_id) || quicly_sendstate_is_fully_inflight(&stream->sendstate);
+    return is_fully_inflight ? 0 : 1;
+}
+
+static int conn_has_more_to_send(quicly_conn_t *conn)
+{
+    return quicly_foreach_stream(conn, NULL, stream_has_more_to_send) != 0;
+}
+
+static int scheduler_do_send(quicly_stream_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    int ret, had_more_to_send = conn_has_more_to_send(conn);
+
+    /* call the default scheduler */
+    if ((ret = quicly_default_stream_scheduler.do_send(&quicly_default_stream_scheduler, conn, s)) != 0)
+        return ret;
+
+    if (!quicly_is_client(conn) && had_more_to_send && !conn_has_more_to_send(conn))
+        quicly_send_resumption_token(conn);
+
+    return 0;
+}
+
 static void usage(const char *cmd)
 {
     printf("Usage: %s [options] host port\n"
@@ -1154,6 +1183,9 @@ int main(int argc, char **argv)
     ctx.closed_by_remote = &closed_by_remote;
     ctx.save_resumption_token = &save_resumption_token;
     ctx.generate_resumption_token = &generate_resumption_token;
+    stream_scheduler = quicly_default_stream_scheduler;
+    stream_scheduler.do_send = scheduler_do_send;
+    ctx.stream_scheduler = &stream_scheduler;
 
     setup_session_cache(ctx.tls);
     quicly_amend_ptls_context(ctx.tls);
