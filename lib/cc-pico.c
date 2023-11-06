@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include <math.h>
+#include "quicly/pacer.h"
 #include "quicly/cc.h"
 #include "quicly.h"
 
@@ -102,6 +103,9 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         return;
     cc->recovery_end = next_pn;
 
+    /* switch pacer to congestion avoidance mode the moment loss is observed */
+    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
+
     ++cc->num_loss_episodes;
     if (cc->cwnd_exiting_slow_start == 0)
         cc->cwnd_exiting_slow_start = cc->cwnd;
@@ -144,6 +148,7 @@ static void pico_reset(quicly_cc_t *cc, uint32_t initcwnd)
         .cwnd_maximum = initcwnd,
         .cwnd_minimum = UINT32_MAX,
         .ssthresh = UINT32_MAX,
+        .pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2),
     };
     pico_init_pico_state(cc, 0);
 }
