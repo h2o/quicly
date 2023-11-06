@@ -4245,10 +4245,10 @@ static size_t encode_resumption_info(quicly_conn_t *conn, uint8_t *dst, size_t c
 
     ptls_buffer_init(&buf, dst, capacity);
 
-#define PUSH_ENTRY(id, block) \
-    do { \
-        ptls_buffer_push_quicint(&buf, (id)); \
-        ptls_buffer_push_block(&buf, -1, block); \
+#define PUSH_ENTRY(id, block)                                                                                                      \
+    do {                                                                                                                           \
+        ptls_buffer_push_quicint(&buf, (id));                                                                                      \
+        ptls_buffer_push_block(&buf, -1, block);                                                                                   \
     } while (0)
 
     /* emit delivery rate for Careful Resume */
