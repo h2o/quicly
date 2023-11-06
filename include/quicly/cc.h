@@ -282,7 +282,7 @@ inline void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint3
     if (in_recovery) {
         /* if a loss is observed due to jumpstart, CWND is adjusted so that it would become bytes that passed through to the client
          * during the jumpstart phase of exactly 1 RTT, when the last ACK for the jumpstart phase is received */
-        if (largest_acked < cc->jumpstart.exit_pn)
+        if (cc->jumpstart.enter_pn <= largest_acked && largest_acked < cc->jumpstart.exit_pn)
             cc->cwnd += bytes;
         return;
     }
