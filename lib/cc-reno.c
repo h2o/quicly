@@ -46,6 +46,7 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (cc->pacer_multiplier == QUICLY_PACER_CALC_MULTIPLIER(1) && cc->state.reno.jumpstart.enter_pn <= largest_acked) {
         assert(cc->cwnd < cc->ssthresh);
         cc->cwnd = inflight;
+        cc->cwnd_exiting_jumpstart = cc->cwnd;
         cc->state.reno.jumpstart.exit_pn = next_pn;
         cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2); /* revert to pacing of slow start */
     }

@@ -531,7 +531,16 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of events where `initial_handshake_sent` exceeds limit.                                                        \
      */                                                                                                                            \
-    uint64_t num_initial_handshake_exceeded
+    uint64_t num_initial_handshake_exceeded;                                                                                       \
+    /**                                                                                                                            \
+     * jumpstart parameters and the CWND being adopted (see also quicly_cc_t::cwnd_exiting_jumpstart)                              \
+     */                                                                                                                            \
+    struct {                                                                                                                       \
+        uint64_t prev_rate;                                                                                                        \
+        uint32_t prev_rtt;                                                                                                         \
+        uint32_t new_rtt;                                                                                                          \
+        uint32_t cwnd;                                                                                                             \
+    } jumpstart;
 
 typedef struct st_quicly_stats_t {
     /**

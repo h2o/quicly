@@ -147,6 +147,10 @@ typedef struct st_quicly_cc_t {
      */
     uint32_t cwnd_exiting_slow_start;
     /**
+     * Congestion window at the end of the unvalidated phase of jumpstart.
+     */
+    uint32_t cwnd_exiting_jumpstart;
+    /**
      * Minimum congestion window during the connection.
      */
     uint32_t cwnd_minimum;

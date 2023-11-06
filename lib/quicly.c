@@ -365,13 +365,6 @@ struct st_quicly_conn_t {
          * delivery rate estimator
          */
         quicly_ratemeter_t ratemeter;
-        /**
-         * delivery rate to be used for jumpstart (unit is bytes / sec)
-         */
-        struct {
-            uint64_t rate;
-            uint32_t min_rtt;
-        } jumpstart;
     } egress;
     /**
      * crypto data
@@ -6353,9 +6346,9 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
             break;
         case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
             if (decode_resumption_info(address_token->resumption.bytes, address_token->resumption.len,
-                                       &(*conn)->egress.jumpstart.rate, &(*conn)->egress.jumpstart.min_rtt) != 0) {
-                (*conn)->egress.jumpstart.rate = 0;
-                (*conn)->egress.jumpstart.min_rtt = 0;
+                                       &(*conn)->super.stats.jumpstart.prev_rate, &(*conn)->super.stats.jumpstart.prev_rtt) != 0) {
+                (*conn)->super.stats.jumpstart.prev_rtt = 0;
+                (*conn)->super.stats.jumpstart.prev_rtt = 0;
             }
             break;
         default:
@@ -6625,7 +6618,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             conn->super.remote.address_validation.validated = 1;
             /* jumpstart if possible */
             if (conn->super.ctx->max_jumpstart_cwnd != 0 && conn->egress.cc.type->cc_jumpstart != NULL &&
-                conn->super.ctx->use_pacing && conn->egress.jumpstart.rate != 0 && conn->egress.jumpstart.min_rtt != 0) {
+                conn->super.ctx->use_pacing && conn->super.stats.jumpstart.prev_rate != 0 &&
+                conn->super.stats.jumpstart.prev_rtt != 0) {
                 /* For the purpose of calculating jumpstart CWND, we use minRTT if available. There could be cases where we do not
                  * have an RTT estimate (i.e., we receive no ACKs but handshake messages that pushes the handshake forward. If that
                  * is the case, we estimate the RTT based on the connection lifetime. This value might become larger than necessary
@@ -6634,10 +6628,13 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 if (rtt == UINT32_MAX)
                     rtt = conn->stash.now - conn->created_at;
                 if (rtt <= UINT32_MAX) {
-                    uint32_t jumpstart_cwnd = derive_jumpstart_cwnd(conn->super.ctx, (uint32_t)rtt, conn->egress.jumpstart.rate,
-                                                                    conn->egress.jumpstart.min_rtt);
-                    if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2)
-                        conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, (uint32_t)jumpstart_cwnd, conn->egress.packet_number);
+                    double jumpstart_cwnd =
+                        derive_jumpstart_cwnd(conn->super.ctx, (uint32_t)rtt, conn->super.stats.jumpstart.prev_rate,
+                                              conn->super.stats.jumpstart.prev_rtt);
+                    if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2) {
+                        conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
+                        conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
+                    }
                 }
             }
         }
