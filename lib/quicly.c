@@ -368,7 +368,10 @@ struct st_quicly_conn_t {
         /**
          * delivery rate to be used for jumpstart (unit is bytes / sec)
          */
-        uint64_t jumpstart_rate;
+        struct {
+            uint64_t rate;
+            uint32_t min_rtt;
+        } jumpstart;
     } egress;
     /**
      * crypto data
@@ -4177,7 +4180,7 @@ Exit:
 
 #define QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME 0
 
-static int decode_resumption_info(const uint8_t *src, size_t len, uint64_t *rate)
+static int decode_resumption_info(const uint8_t *src, size_t len, uint64_t *rate, uint32_t *min_rtt)
 {
     const uint8_t *end = src + len;
     int ret = 0;
@@ -4192,12 +4195,18 @@ static int decode_resumption_info(const uint8_t *src, size_t len, uint64_t *rate
         }
         ptls_decode_open_block(src, end, -1, {
             switch (id) {
-            case QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME:
+            case QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME: {
                 if ((*rate = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = PTLS_ALERT_DECODE_ERROR;
                     goto Exit;
                 }
-                break;
+                uint64_t v;
+                if ((v = ptls_decode_quicint(&src, end)) > UINT32_MAX) {
+                    ret = PTLS_ALERT_DECODE_ERROR;
+                    goto Exit;
+                }
+                *min_rtt = (uint32_t)v;
+            } break;
             default:
                 /* ignore unknown types */
                 src = end;
@@ -4228,6 +4237,7 @@ static size_t encode_resumption_info(quicly_conn_t *conn, uint8_t *dst, size_t c
         quicly_rate_t rate;
         quicly_ratemeter_report(&conn->egress.ratemeter, &rate);
         ptls_buffer_push_quicint(&buf, rate.smoothed);
+        ptls_buffer_push_quicint(&buf, conn->egress.loss.rtt.minimum);
     });
 
 #undef PUSH_ENTRY
@@ -6324,8 +6334,10 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
             break;
         case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
             if (decode_resumption_info(address_token->resumption.bytes, address_token->resumption.len,
-                                       &(*conn)->egress.jumpstart_rate) != 0)
-                (*conn)->egress.jumpstart_rate = 0;
+                                       &(*conn)->egress.jumpstart.rate, &(*conn)->egress.jumpstart.min_rtt) != 0) {
+                (*conn)->egress.jumpstart.rate = 0;
+                (*conn)->egress.jumpstart.min_rtt = 0;
+            }
             break;
         default:
             /* We might not get here as tokens are integrity-protected, but as this is information supplied via network, potentially
@@ -6594,15 +6606,21 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             conn->super.remote.address_validation.validated = 1;
             /* jumpstart if possible */
             if (conn->super.ctx->max_jumpstart_cwnd != 0 && conn->egress.cc.type->cc_jumpstart != NULL &&
-                conn->super.ctx->use_pacing && conn->egress.jumpstart_rate != 0) {
+                conn->super.ctx->use_pacing && conn->egress.jumpstart.rate != 0 && conn->egress.jumpstart.min_rtt != 0) {
                 /* For the purpose of calculating jumpstart CWND, we use minRTT if available. There could be cases where we do not
                  * have an RTT estimate (i.e., we receive no ACKs but handshake messages that pushes the handshake forward. If that
                  * is the case, we estimate the RTT based on the connection lifetime. This value might become larger than necessary
-                 * but that is fine because that would reduce our send rate (really?? FIXME). */
+                 * but that is fine because that would reduce our send rate. */
                 uint64_t rtt = conn->egress.loss.rtt.minimum;
                 if (rtt == UINT32_MAX)
                     rtt = conn->stash.now - conn->created_at;
-                uint64_t jumpstart_cwnd = conn->egress.jumpstart_rate * rtt / 1000;
+                        rtt = UINT32_MAX;
+                /* convert previous rate to CWND size */
+                double jumpstart_cwnd = (double)conn->egress.jumpstart.rate * conn->egress.jumpstart.min_rtt / 1000;
+                /* if new RTT is smaller, reduce new CWND so that the rate does not become greater than the previous session */
+                if (rtt < conn->egress.jumpstart.min_rtt)
+                    jumpstart_cwnd = jumpstart_cwnd * rtt / conn->egress.jumpstart.min_rtt;
+                /* cap to the configured value */
                 if (jumpstart_cwnd > conn->super.ctx->max_jumpstart_cwnd)
                     jumpstart_cwnd = conn->super.ctx->max_jumpstart_cwnd;
                 if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2)
