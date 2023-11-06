@@ -58,7 +58,9 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
                             int64_t now, uint32_t max_udp_payload_size)
 {
-    double beta = QUICLY_RENO_BETA;
+    /* when exiting slow start, use inverse of exponential growth ratio, as loss is detected 1 RTT later, at which point CWND has
+     * overshot as much as the growth ratio */
+    double beta = cc->ssthresh == UINT32_MAX ? 0.5 : QUICLY_RENO_BETA;
 
     quicly_cc__update_ecn_episodes(cc, bytes, lost_pn);
 
