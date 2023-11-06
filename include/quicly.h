@@ -329,7 +329,7 @@ struct st_quicly_context_t {
     /**
      * maximum CWND to be used by jumpstart
      */
-    uint32_t max_jumpstart_cwnd;
+    uint32_t max_jumpstart_cwnd_bytes;
     /**
      * expand client hello so that it does not fit into one datagram
      */

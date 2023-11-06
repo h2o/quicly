@@ -1214,7 +1214,7 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ecn = 0;
             } else if (strcmp(longopts[opt_index].name, "max-jumpstart") == 0) {
-                if (sscanf(optarg, "%" SCNu32, &ctx.max_jumpstart_cwnd) != 1) {
+                if (sscanf(optarg, "%" SCNu32, &ctx.max_jumpstart_cwnd_bytes) != 1) {
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }

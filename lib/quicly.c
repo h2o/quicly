@@ -4186,8 +4186,8 @@ static uint32_t derive_jumpstart_cwnd(quicly_context_t *ctx, uint32_t new_rtt, u
         cwnd = cwnd * new_rtt / prev_rtt;
 
     /* cap to the configured value */
-    if (cwnd > ctx->max_jumpstart_cwnd)
-        cwnd = ctx->max_jumpstart_cwnd;
+    if (cwnd > ctx->max_jumpstart_cwnd_bytes)
+        cwnd = ctx->max_jumpstart_cwnd_bytes;
 
     return (uint32_t)cwnd;
 }
@@ -6617,7 +6617,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             setup_next_send(conn);
             conn->super.remote.address_validation.validated = 1;
             /* jumpstart if possible */
-            if (conn->super.ctx->max_jumpstart_cwnd != 0 && conn->egress.cc.type->cc_jumpstart != NULL &&
+            if (conn->super.ctx->max_jumpstart_cwnd_bytes != 0 && conn->egress.cc.type->cc_jumpstart != NULL &&
                 conn->super.ctx->use_pacing && conn->super.stats.jumpstart.prev_rate != 0 &&
                 conn->super.stats.jumpstart.prev_rtt != 0) {
                 /* For the purpose of calculating jumpstart CWND, we use minRTT if available. There could be cases where we do not
