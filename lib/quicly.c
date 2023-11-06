@@ -4180,6 +4180,25 @@ Exit:
 
 #define QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME 0
 
+/**
+ * derives size of the new CWND given previous delivery rate and min RTTs of the previous and the new session
+ */
+static uint32_t derive_jumpstart_cwnd(quicly_context_t *ctx, uint32_t new_rtt, uint64_t prev_rate, uint32_t prev_rtt)
+{
+    /* convert previous rate to CWND size */
+    double cwnd = (double)prev_rate * prev_rtt / 1000;
+
+    /* if new RTT is smaller, reduce new CWND so that the rate does not become greater than the previous session */
+    if (new_rtt < prev_rtt)
+        cwnd = cwnd * new_rtt / prev_rtt;
+
+    /* cap to the configured value */
+    if (cwnd > ctx->max_jumpstart_cwnd)
+        cwnd = ctx->max_jumpstart_cwnd;
+
+    return (uint32_t)cwnd;
+}
+
 static int decode_resumption_info(const uint8_t *src, size_t len, uint64_t *rate, uint32_t *min_rtt)
 {
     const uint8_t *end = src + len;
@@ -6614,17 +6633,12 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 uint64_t rtt = conn->egress.loss.rtt.minimum;
                 if (rtt == UINT32_MAX)
                     rtt = conn->stash.now - conn->created_at;
-                        rtt = UINT32_MAX;
-                /* convert previous rate to CWND size */
-                double jumpstart_cwnd = (double)conn->egress.jumpstart.rate * conn->egress.jumpstart.min_rtt / 1000;
-                /* if new RTT is smaller, reduce new CWND so that the rate does not become greater than the previous session */
-                if (rtt < conn->egress.jumpstart.min_rtt)
-                    jumpstart_cwnd = jumpstart_cwnd * rtt / conn->egress.jumpstart.min_rtt;
-                /* cap to the configured value */
-                if (jumpstart_cwnd > conn->super.ctx->max_jumpstart_cwnd)
-                    jumpstart_cwnd = conn->super.ctx->max_jumpstart_cwnd;
-                if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2)
-                    conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, (uint32_t)jumpstart_cwnd, conn->egress.packet_number);
+                if (rtt <= UINT32_MAX) {
+                    uint32_t jumpstart_cwnd = derive_jumpstart_cwnd(conn->super.ctx, (uint32_t)rtt, conn->egress.jumpstart.rate,
+                                                                    conn->egress.jumpstart.min_rtt);
+                    if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2)
+                        conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, (uint32_t)jumpstart_cwnd, conn->egress.packet_number);
+                }
             }
         }
         break;
