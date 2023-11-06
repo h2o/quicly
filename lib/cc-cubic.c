@@ -65,9 +65,13 @@ static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t 
                            uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
-    /* Do not increase congestion window while in recovery. */
-    if (largest_acked < cc->recovery_end)
+    /* Do not increase congestion window while in recovery (but jumpstart may do something different). */
+    if (largest_acked < cc->recovery_end) {
+        quicly_cc_jumpstart_on_acked(cc, 1, bytes, largest_acked, inflight, next_pn);
         return;
+    }
+
+    quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
     /* Slow start. */
     if (cc->cwnd < cc->ssthresh) {
@@ -113,6 +117,10 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (lost_pn < cc->recovery_end)
         return;
     cc->recovery_end = next_pn;
+
+    /* if detected loss before receiving all acks for jumpstart, restore original CWND */
+    if (cc->ssthresh == UINT32_MAX)
+        quicly_cc_jumpstart_on_first_loss(cc, lost_pn, NULL /* do we want to adopt beta == 1 as other CCs do? */);
 
     ++cc->num_loss_episodes;
     if (cc->cwnd_exiting_slow_start == 0)
@@ -168,6 +176,8 @@ static void cubic_reset(quicly_cc_t *cc, uint32_t initcwnd)
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
     cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
+
+    quicly_cc_jumpstart_reset(cc);
 }
 
 static int cubic_on_switch(quicly_cc_t *cc)
@@ -193,6 +203,7 @@ static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwn
     cubic_reset(cc, initcwnd);
 }
 
-quicly_cc_type_t quicly_cc_type_cubic = {
-    "cubic", &quicly_cc_cubic_init, cubic_on_acked, cubic_on_lost, cubic_on_persistent_congestion, cubic_on_sent, cubic_on_switch};
+quicly_cc_type_t quicly_cc_type_cubic = {"cubic",         &quicly_cc_cubic_init,          cubic_on_acked,
+                                         cubic_on_lost,   cubic_on_persistent_congestion, cubic_on_sent,
+                                         cubic_on_switch, quicly_cc_jumpstart_enter};
 quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};

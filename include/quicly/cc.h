@@ -313,7 +313,8 @@ inline void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn,
             cc->cwnd = cc->cwnd_initial;
         if (cc->jumpstart.exit_pn == UINT64_MAX)
             cc->jumpstart.exit_pn = lost_pn;
-        *beta = 1; /* jumpstart makes accurate guess of CWND - there is no need to reduce CWND */
+        if (beta != NULL)
+            *beta = 1; /* jumpstart makes accurate guess of CWND - there is no need to reduce CWND */
     }
 }
 
