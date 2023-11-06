@@ -6618,23 +6618,29 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
             conn->super.remote.address_validation.validated = 1;
             /* jumpstart if possible */
             if (conn->super.ctx->max_jumpstart_cwnd_bytes != 0 && conn->egress.cc.type->cc_jumpstart != NULL &&
-                conn->super.ctx->use_pacing && conn->super.stats.jumpstart.prev_rate != 0 &&
-                conn->super.stats.jumpstart.prev_rtt != 0) {
-                /* For the purpose of calculating jumpstart CWND, we use minRTT if available. There could be cases where we do not
-                 * have an RTT estimate (i.e., we receive no ACKs but handshake messages that pushes the handshake forward. If that
-                 * is the case, we estimate the RTT based on the connection lifetime. This value might become larger than necessary
-                 * but that is fine because that would reduce our send rate. */
-                uint64_t rtt = conn->egress.loss.rtt.minimum;
-                if (rtt == UINT32_MAX)
-                    rtt = conn->stash.now - conn->created_at;
-                if (rtt <= UINT32_MAX) {
-                    double jumpstart_cwnd =
-                        derive_jumpstart_cwnd(conn->super.ctx, (uint32_t)rtt, conn->super.stats.jumpstart.prev_rate,
-                                              conn->super.stats.jumpstart.prev_rtt);
-                    if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2) {
-                        conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
-                        conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
+                conn->super.ctx->use_pacing) {
+                uint32_t jumpstart_cwnd = 0;
+                if (conn->super.stats.jumpstart.prev_rate != 0 && conn->super.stats.jumpstart.prev_rtt != 0) {
+                    /* Careful Resume: for the purpose of calculating jumpstart CWND, we use minRTT if available. There could be
+                     * cases where we do not have an RTT estimate (i.e., we receive no ACKs but handshake messages that pushes the
+                     * handshake forward. If that is the case, we estimate the RTT based on the connection lifetime. This value
+                     * might become larger than necessary but that is fine because that would reduce our send rate. */
+                    uint64_t rtt = conn->egress.loss.rtt.minimum;
+                    if (rtt == UINT32_MAX)
+                        rtt = conn->stash.now - conn->created_at;
+                    if (rtt <= UINT32_MAX) {
+                        jumpstart_cwnd =
+                            derive_jumpstart_cwnd(conn->super.ctx, (uint32_t)rtt, conn->super.stats.jumpstart.prev_rate,
+                                                  conn->super.stats.jumpstart.prev_rtt);
                     }
+                } else {
+                    /* jumpstart without previous information */
+                    jumpstart_cwnd = conn->super.ctx->default_jumpstart_cwnd_bytes;
+                }
+                /* jumpstart when it is likely to make difference */
+                if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2) {
+                    conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
+                    conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
                 }
             }
         }

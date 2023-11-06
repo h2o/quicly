@@ -327,6 +327,10 @@ struct st_quicly_context_t {
      */
     uint64_t max_initial_handshake_packets;
     /**
+     * jumpstart delivery rate to be used when there is no previous information
+     */
+    uint32_t default_jumpstart_cwnd_bytes;
+    /**
      * maximum CWND to be used by jumpstart
      */
     uint32_t max_jumpstart_cwnd_bytes;
