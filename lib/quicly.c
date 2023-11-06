@@ -5147,6 +5147,8 @@ size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, v
 
 int quicly_send_resumption_token(quicly_conn_t *conn)
 {
+    assert(!quicly_is_client(conn));
+
     if (conn->super.state <= QUICLY_STATE_CONNECTED) {
         ++conn->egress.new_token.generation;
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
