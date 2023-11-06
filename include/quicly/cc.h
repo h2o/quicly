@@ -125,7 +125,7 @@ typedef struct st_quicly_cc_t {
     /**
      * jumpstart state
      */
-    struct st_quicly_cc_jumpstart_t {
+    struct {
         /**
          * first packet number in jumpstart
          */
@@ -261,7 +261,9 @@ inline void quicly_cc__update_ecn_episodes(quicly_cc_t *cc, uint32_t lost_bytes,
 
 inline void quicly_cc_jumpstart_reset(quicly_cc_t *cc)
 {
-    cc->jumpstart = (struct st_quicly_cc_jumpstart_t){.enter_pn = UINT64_MAX, .exit_pn = UINT64_MAX};
+    cc->jumpstart.enter_pn = UINT64_MAX;
+    cc->jumpstart.exit_pn = UINT64_MAX;
+    cc->jumpstart.bytes_acked = 0;
 }
 
 inline void quicly_cc_jumpstart_enter(quicly_cc_t *cc, uint32_t jump_cwnd, uint64_t next_pn)
