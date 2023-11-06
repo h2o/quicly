@@ -351,6 +351,10 @@ struct st_quicly_conn_t {
  * false positives. The purpose of this bit is to consolidate information as an optimization. */
 #define QUICLY_PENDING_FLOW_OTHERS_BIT (1 << 6)
         /**
+         *
+         */
+        uint8_t try_jumpstart : 1;
+        /**
          * pending RETIRE_CONNECTION_ID frames to be sent
          */
         quicly_retire_cid_set_t retire_cid;
@@ -2274,6 +2278,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
     quicly_ratemeter_init(&conn->egress.ratemeter);
+    if (server_name == NULL && conn->super.ctx->use_pacing && conn->egress.cc.type->cc_jumpstart != NULL &&
+        (conn->super.ctx->default_jumpstart_cwnd_bytes != 0 || conn->super.ctx->max_jumpstart_cwnd_bytes != 0))
+        conn->egress.try_jumpstart = 1;
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -4973,8 +4980,30 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     }
 
 Exit:
-    if (ret == QUICLY_ERROR_SENDBUF_FULL)
+    if (ret == QUICLY_ERROR_SENDBUF_FULL) {
         ret = 0;
+        /* when the buffer becomes full for the first time, try to use jumpstart; acting after the buffer becomes full does not
+         * delay switch to jump start, assuming that the buffer provided by the caller of quicly_send is no greater than the burst
+         * size of the pacer (10 packets) */
+        if (conn->egress.try_jumpstart && conn->egress.loss.rtt.minimum != UINT32_MAX) {
+            conn->egress.try_jumpstart = 0;
+            uint32_t jumpstart_cwnd = 0;
+            if (conn->super.ctx->max_jumpstart_cwnd_bytes != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
+                conn->super.stats.jumpstart.prev_rtt != 0) {
+                /* Careful Resume */
+                jumpstart_cwnd = derive_jumpstart_cwnd(conn->super.ctx, conn->egress.loss.rtt.minimum,
+                                                       conn->super.stats.jumpstart.prev_rate, conn->super.stats.jumpstart.prev_rtt);
+            } else if (conn->super.ctx->default_jumpstart_cwnd_bytes != 0) {
+                /* jumpstart without previous information */
+                jumpstart_cwnd = conn->super.ctx->default_jumpstart_cwnd_bytes;
+            }
+            /* jumpstart when it is likely to make difference */
+            if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2) {
+                conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
+                conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
+            }
+        }
+    }
     if (ret == 0 && s->target.first_byte_at != NULL) {
         /* last packet can be small-sized, unless it is the first flight sent from the client */
         if ((s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
@@ -6616,33 +6645,6 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
                 goto Exit;
             setup_next_send(conn);
             conn->super.remote.address_validation.validated = 1;
-            /* jumpstart if possible */
-            if (conn->super.ctx->max_jumpstart_cwnd_bytes != 0 && conn->egress.cc.type->cc_jumpstart != NULL &&
-                conn->super.ctx->use_pacing) {
-                uint32_t jumpstart_cwnd = 0;
-                if (conn->super.stats.jumpstart.prev_rate != 0 && conn->super.stats.jumpstart.prev_rtt != 0) {
-                    /* Careful Resume: for the purpose of calculating jumpstart CWND, we use minRTT if available. There could be
-                     * cases where we do not have an RTT estimate (i.e., we receive no ACKs but handshake messages that pushes the
-                     * handshake forward. If that is the case, we estimate the RTT based on the connection lifetime. This value
-                     * might become larger than necessary but that is fine because that would reduce our send rate. */
-                    uint64_t rtt = conn->egress.loss.rtt.minimum;
-                    if (rtt == UINT32_MAX)
-                        rtt = conn->stash.now - conn->created_at;
-                    if (rtt <= UINT32_MAX) {
-                        jumpstart_cwnd =
-                            derive_jumpstart_cwnd(conn->super.ctx, (uint32_t)rtt, conn->super.stats.jumpstart.prev_rate,
-                                                  conn->super.stats.jumpstart.prev_rtt);
-                    }
-                } else {
-                    /* jumpstart without previous information */
-                    jumpstart_cwnd = conn->super.ctx->default_jumpstart_cwnd_bytes;
-                }
-                /* jumpstart when it is likely to make difference */
-                if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2) {
-                    conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
-                    conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
-                }
-            }
         }
         break;
     default:
