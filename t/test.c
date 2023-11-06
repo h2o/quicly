@@ -723,6 +723,18 @@ void test_ecn_index_from_bits(void)
     ok(get_ecn_index_from_bits(3) == 2);
 }
 
+/* at the moment only derivation is tested */
+static void test_jumpstart(void)
+{
+    quicly_context_t unbounded_max = {.max_jumpstart_cwnd_bytes = UINT32_MAX};
+    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 250) == 250000);
+    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 400) == 250000); /* if RTT increases, CWND stays same */
+    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
+
+    quicly_context_t bounded_max = {.max_jumpstart_cwnd_bytes = 80000};
+    ok(derive_jumpstart_cwnd(&bounded_max, 250, 1000000, 250) == 80000);
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -800,6 +812,7 @@ int main(int argc, char **argv)
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
+    subtest("jumpstart", test_jumpstart);
 
     return done_testing();
 }
