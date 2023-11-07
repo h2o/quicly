@@ -75,8 +75,10 @@ void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t
         quicly_cc_jumpstart_on_first_loss(cc, lost_pn, &beta);
 
     ++cc->num_loss_episodes;
-    if (cc->cwnd_exiting_slow_start == 0)
+    if (cc->cwnd_exiting_slow_start == 0) {
         cc->cwnd_exiting_slow_start = cc->cwnd;
+        cc->exit_slow_start_at = now;
+    }
 
     /* Reduce congestion window. */
     cc->cwnd *= beta;
@@ -103,6 +105,7 @@ static void reno_reset(quicly_cc_t *cc, uint32_t initcwnd)
     memset(cc, 0, sizeof(quicly_cc_t));
     cc->type = &quicly_cc_type_reno;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
+    cc->exit_slow_start_at = INT64_MAX;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
     cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
 

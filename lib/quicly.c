@@ -1302,6 +1302,11 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     stats->rtt = conn->egress.loss.rtt;
     stats->loss_thresholds = conn->egress.loss.thresholds;
     stats->cc = conn->egress.cc;
+    /* convert `exit_slow_start_at` to time spent since the connection was created */
+    if (stats->cc.exit_slow_start_at != INT64_MAX) {
+        assert(stats->cc.exit_slow_start_at >= conn->created_at);
+        stats->cc.exit_slow_start_at -= conn->created_at;
+    }
     quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate);
     stats->num_sentmap_packets_largest = conn->egress.loss.sentmap.num_packets_largest;
     stats->handshake_confirmed_msec = conn->super.stats.handshake_confirmed_msec;

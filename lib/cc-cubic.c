@@ -123,8 +123,10 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         quicly_cc_jumpstart_on_first_loss(cc, lost_pn, NULL /* do we want to adopt beta == 1 as other CCs do? */);
 
     ++cc->num_loss_episodes;
-    if (cc->cwnd_exiting_slow_start == 0)
+    if (cc->cwnd_exiting_slow_start == 0) {
         cc->cwnd_exiting_slow_start = cc->cwnd;
+        cc->exit_slow_start_at = now;
+    }
 
     cc->state.cubic.avoidance_start = now;
     cc->state.cubic.w_max = cc->cwnd;
@@ -175,6 +177,7 @@ static void cubic_reset(quicly_cc_t *cc, uint32_t initcwnd)
     cc->type = &quicly_cc_type_cubic;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
+    cc->exit_slow_start_at = INT64_MAX;
     cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
 
     quicly_cc_jumpstart_reset(cc);

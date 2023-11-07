@@ -148,6 +148,10 @@ typedef struct st_quicly_cc_t {
      */
     uint32_t cwnd_exiting_slow_start;
     /**
+     * the time at which we exitted slow start (or INT64_MAX)
+     */
+    int64_t exit_slow_start_at;
+    /**
      * Congestion window at the end of the unvalidated phase of jumpstart.
      */
     uint32_t cwnd_exiting_jumpstart;

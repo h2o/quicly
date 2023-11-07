@@ -119,8 +119,10 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         quicly_cc_jumpstart_on_first_loss(cc, lost_pn, &beta);
 
     ++cc->num_loss_episodes;
-    if (cc->cwnd_exiting_slow_start == 0)
+    if (cc->cwnd_exiting_slow_start == 0) {
         cc->cwnd_exiting_slow_start = cc->cwnd;
+        cc->exit_slow_start_at = now;
+    }
 
     /* Calculate increase rate. */
     cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, loss->rtt.smoothed, max_udp_payload_size);
@@ -159,6 +161,7 @@ static void pico_reset(quicly_cc_t *cc, uint32_t initcwnd)
         .cwnd_initial = initcwnd,
         .cwnd_maximum = initcwnd,
         .cwnd_minimum = UINT32_MAX,
+        .exit_slow_start_at = INT64_MAX,
         .ssthresh = UINT32_MAX,
         .pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2),
     };
