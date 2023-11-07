@@ -4993,10 +4993,11 @@ Exit:
         if (conn->egress.try_jumpstart && conn->egress.loss.rtt.minimum != UINT32_MAX) {
             conn->egress.try_jumpstart = 0;
             uint32_t jumpstart_cwnd = 0;
+            conn->super.stats.jumpstart.new_rtt = conn->egress.loss.rtt.minimum;
             if (conn->super.ctx->max_jumpstart_cwnd_bytes != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
                 conn->super.stats.jumpstart.prev_rtt != 0) {
                 /* Careful Resume */
-                jumpstart_cwnd = derive_jumpstart_cwnd(conn->super.ctx, conn->egress.loss.rtt.minimum,
+                jumpstart_cwnd = derive_jumpstart_cwnd(conn->super.ctx, conn->super.stats.jumpstart.new_rtt,
                                                        conn->super.stats.jumpstart.prev_rate, conn->super.stats.jumpstart.prev_rtt);
             } else if (conn->super.ctx->default_jumpstart_cwnd_bytes != 0) {
                 /* jumpstart without previous information */
