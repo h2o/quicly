@@ -6382,7 +6382,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
             if (decode_resumption_info(address_token->resumption.bytes, address_token->resumption.len,
                                        &(*conn)->super.stats.jumpstart.prev_rate, &(*conn)->super.stats.jumpstart.prev_rtt) != 0) {
-                (*conn)->super.stats.jumpstart.prev_rtt = 0;
+                (*conn)->super.stats.jumpstart.prev_rate = 0;
                 (*conn)->super.stats.jumpstart.prev_rtt = 0;
             }
             break;
