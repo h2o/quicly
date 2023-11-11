@@ -3112,6 +3112,15 @@ static int is_point5rtt_with_no_handshake_data_to_send(quicly_conn_t *conn)
     return stream->sendstate.pending.num_ranges == 0 && stream->sendstate.acked.ranges[0].end == stream->sendstate.size_inflight;
 }
 
+static int64_t pacer_can_send_at(quicly_conn_t *conn)
+{
+    if (conn->egress.pacer == NULL)
+        return 0;
+
+    uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
+    return quicly_pacer_can_send_at(conn->egress.pacer, bytes_per_msec, conn->egress.max_udp_payload_size);
+}
+
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
     if (conn->super.state >= QUICLY_STATE_CLOSING)
@@ -3121,25 +3130,19 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         return 0;
 
     uint64_t amp_window = calc_amplification_limit_allowance(conn);
-    int64_t at = conn->idle_timeout.at, pacer_can_send_at = 0;
-
-    if (conn->egress.pacer != NULL) {
-        uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
-        pacer_can_send_at = quicly_pacer_can_send_at(conn->egress.pacer, bytes_per_msec, conn->egress.max_udp_payload_size);
-    }
+    int64_t at = conn->idle_timeout.at, pacer_at = pacer_can_send_at(conn);
 
     /* reduce at to the moment pacer provides credit, if we are not CC-limited and there's something to be sent over CC */
-    if (pacer_can_send_at < at && calc_send_window(conn, 0, amp_window, UINT64_MAX, 0) > 0) {
+    if (pacer_at < at && calc_send_window(conn, 0, amp_window, UINT64_MAX, 0) > 0) {
         if (conn->egress.pending_flows != 0) {
             /* crypto streams (as indicated by lower 4 bits) can be sent whenever CWND is available; other flows need application
              * packet number space */
             if ((conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL) ||
                 (conn->egress.pending_flows & 0xf) != 0)
-                at = pacer_can_send_at;
+                at = pacer_at;
         }
-        if (pacer_can_send_at < at &&
-            (quicly_linklist_is_linked(&conn->egress.pending_streams.control) || scheduler_can_send(conn)))
-            at = pacer_can_send_at;
+        if (pacer_at < at && (quicly_linklist_is_linked(&conn->egress.pending_streams.control) || scheduler_can_send(conn)))
+            at = pacer_at;
     }
 
     /* if something can be sent, return the earliest timeout. Otherwise return the idle timeout. */
@@ -4895,7 +4898,8 @@ Exit:
         int can_send_stream_data = scheduler_can_send(conn);
         update_send_alarm(conn, can_send_stream_data, 1);
         if (can_send_stream_data &&
-            (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
+            (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd ||
+             pacer_can_send_at(conn) > conn->stash.now)) {
             /* as the flow is CWND-limited, start delivery rate estimator */
             quicly_ratemeter_in_cc_limited(&conn->egress.ratemeter, s->first_packet_number);
         } else {
