@@ -50,7 +50,7 @@ void quicly_ratemeter_init(quicly_ratemeter_t *meter)
     };
 }
 
-void quicly_ratemeter_in_cwnd_limited(quicly_ratemeter_t *meter, uint64_t pn)
+void quicly_ratemeter_in_cc_limited(quicly_ratemeter_t *meter, uint64_t pn)
 {
     /* bail out if already in cwnd-limited phase */
     if (meter->pn_cwnd_limited.start != UINT64_MAX && meter->pn_cwnd_limited.end == UINT64_MAX)
@@ -64,7 +64,7 @@ void quicly_ratemeter_in_cwnd_limited(quicly_ratemeter_t *meter, uint64_t pn)
     meter->pn_cwnd_limited = (quicly_range_t){.start = pn, .end = UINT64_MAX};
 }
 
-void quicly_ratemeter_not_cwnd_limited(quicly_ratemeter_t *meter, uint64_t pn)
+void quicly_ratemeter_not_cc_limited(quicly_ratemeter_t *meter, uint64_t pn)
 {
     if (meter->pn_cwnd_limited.start != UINT64_MAX && meter->pn_cwnd_limited.end == UINT64_MAX)
         meter->pn_cwnd_limited.end = pn;

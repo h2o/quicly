@@ -1388,7 +1388,7 @@ static void setup_next_send(quicly_conn_t *conn)
 
     /* When the flow becomes application-limited due to receiving some information, stop collecting delivery rate samples. */
     if (!can_send_stream_data)
-        quicly_ratemeter_not_cwnd_limited(&conn->egress.ratemeter, conn->egress.packet_number);
+        quicly_ratemeter_not_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -4897,9 +4897,9 @@ Exit:
         if (can_send_stream_data &&
             (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
             /* as the flow is CWND-limited, start delivery rate estimator */
-            quicly_ratemeter_in_cwnd_limited(&conn->egress.ratemeter, s->first_packet_number);
+            quicly_ratemeter_in_cc_limited(&conn->egress.ratemeter, s->first_packet_number);
         } else {
-            quicly_ratemeter_not_cwnd_limited(&conn->egress.ratemeter, conn->egress.packet_number);
+            quicly_ratemeter_not_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
         }
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);

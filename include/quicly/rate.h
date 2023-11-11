@@ -93,11 +93,11 @@ void quicly_ratemeter_init(quicly_ratemeter_t *meter);
 /**
  * Notifies the estimator that the flow is CWND-limited at the point of sending packets *starting* from packet number `pn`.
  */
-void quicly_ratemeter_in_cwnd_limited(quicly_ratemeter_t *meter, uint64_t pn);
+void quicly_ratemeter_in_cc_limited(quicly_ratemeter_t *meter, uint64_t pn);
 /**
  * Notifies that the estimator that the flow is not CWND-limited when the packet number of the next packet will be `pn`.
  */
-void quicly_ratemeter_not_cwnd_limited(quicly_ratemeter_t *meter, uint64_t pn);
+void quicly_ratemeter_not_cc_limited(quicly_ratemeter_t *meter, uint64_t pn);
 /**
  * Given three values, update the estimation.
  * @param bytes_acked  total number of bytes being acked from the beginning of the connection; i.e.,
