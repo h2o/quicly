@@ -160,7 +160,7 @@ struct st_quicly_cc_type_t {
      * Called when a packet is newly acknowledged.
      */
     void (*cc_on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                        uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size);
+                        int cc_limited, uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size);
     /**
      * Called when a packet is detected as lost.
      * @param bytes    bytes declared lost, or zero iff ECN_CE is observed

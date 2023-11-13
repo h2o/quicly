@@ -339,6 +339,10 @@ struct st_quicly_context_t {
      */
     unsigned use_pacing : 1;
     /**
+     * if CC should take app-limited into consideration
+     */
+    unsigned cc_recognize_app_limited : 1;
+    /**
      *
      */
     quicly_cid_encryptor_t *cid_encryptor;
