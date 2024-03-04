@@ -22,20 +22,22 @@
 #include "quicly/pacer.h"
 #include "test.h"
 
-static const uint32_t multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
-
 static void test_calc_rate(void)
 {
     uint64_t bytes_per_msec;
 
-    bytes_per_msec = quicly_pacer_calc_send_rate(multiplier, 50 * 1200, 10);
+    bytes_per_msec = quicly_pacer_calc_send_rate(2, 50 * 1200, 10);
     ok(bytes_per_msec == 12000); /* send 60KB packets in 5ms */
 
-    bytes_per_msec = quicly_pacer_calc_send_rate(multiplier, 100 * 1200, 10);
+    bytes_per_msec = quicly_pacer_calc_send_rate(2, 100 * 1200, 10);
     ok(bytes_per_msec == 24000); /* 2x CWND, 2x flow rate */
 
-    bytes_per_msec = quicly_pacer_calc_send_rate(multiplier, 50 * 1200, 100);
+    bytes_per_msec = quicly_pacer_calc_send_rate(2, 50 * 1200, 100);
     ok(bytes_per_msec == 1200); /* 10x RTT, 1/10 flow rate */
+
+    /* half the rate as above, due to multiplier being 1x */
+    bytes_per_msec = quicly_pacer_calc_send_rate(1, 50 * 1200, 100);
+    ok(bytes_per_msec == 600);
 }
 
 static const uint16_t mtu = 1200;

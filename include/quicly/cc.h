@@ -38,6 +38,7 @@ extern "C" {
 
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
+#define QUICLY_PACER_MULTIPLIER 2
 
 /**
  * Holds pointers to concrete congestion control implementation functions.
@@ -61,10 +62,6 @@ typedef struct st_quicly_cc_t {
      * Packet number indicating end of recovery period, if in recovery.
      */
     uint64_t recovery_end;
-    /**
-     * multiplier to be applied for pacing, in 1/16 (e.g., 32 to send at twice CWND/RTT)
-     */
-    uint32_t pacer_multiplier;
     /**
      * If the most recent loss episode was signalled by ECN only (i.e., no packet loss).
      */

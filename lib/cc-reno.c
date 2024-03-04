@@ -42,7 +42,6 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         return;
     }
     /* Congestion avoidance. */
-    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
     if (!cc_limited)
         return;
     cc->state.reno.stash += bytes;
@@ -96,7 +95,6 @@ static void reno_reset(quicly_cc_t *cc, uint32_t initcwnd)
     cc->type = &quicly_cc_type_reno;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
-    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
 }
 
 static int reno_on_switch(quicly_cc_t *cc)

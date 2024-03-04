@@ -53,8 +53,6 @@ typedef struct st_quicly_pacer_t {
 } quicly_pacer_t;
 
 #define QUICLY_PACER_CALC_BURST_BYTES(mtu) ((size_t)(mtu)*9 + 1)
-#define QUICLY_PACER_SEND_RATE_MULTIPLIER 16
-#define QUICLY_PACER_CALC_MULTIPLIER(x) ((uint32_t)((x)*QUICLY_PACER_SEND_RATE_MULTIPLIER + 0.99)) /* round-up */
 
 /**
  * resets the pacer
@@ -74,7 +72,6 @@ static uint64_t quicly_pacer_get_window(quicly_pacer_t *pacer, int64_t now, uint
 static void quicly_pacer_consume_window(quicly_pacer_t *pacer, size_t delta);
 /**
  * Calculates the flow rate as `bytes_per_msec`. The returned value is no less than 1.
- * @param multiplier multiplier applied to `cwnd / rtt` in permil
  */
 static uint32_t quicly_pacer_calc_send_rate(uint32_t multiplier, uint32_t cwnd, uint32_t rtt);
 
@@ -139,7 +136,7 @@ inline void quicly_pacer_consume_window(quicly_pacer_t *pacer, size_t delta)
 
 inline uint32_t quicly_pacer_calc_send_rate(uint32_t multiplier, uint32_t cwnd, uint32_t rtt)
 {
-    return ((cwnd + QUICLY_PACER_SEND_RATE_MULTIPLIER - 1) / QUICLY_PACER_SEND_RATE_MULTIPLIER * multiplier + rtt - 1) / rtt;
+    return (cwnd * multiplier + rtt - 1) / rtt;
 }
 
 #ifdef __cplusplus
