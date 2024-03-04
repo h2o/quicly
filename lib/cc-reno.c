@@ -24,7 +24,7 @@
 
 /* TODO: Avoid increase if sender was application limited. */
 static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                          uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
+                          int cc_limited, uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
 
@@ -38,12 +38,16 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     /* Slow start. */
     if (cc->cwnd < cc->ssthresh) {
-        cc->cwnd += bytes;
-        if (cc->cwnd_maximum < cc->cwnd)
-            cc->cwnd_maximum = cc->cwnd;
+        if (cc_limited) {
+            cc->cwnd += bytes;
+            if (cc->cwnd_maximum < cc->cwnd)
+                cc->cwnd_maximum = cc->cwnd;
+        }
         return;
     }
     /* Congestion avoidance. */
+    if (!cc_limited)
+        return;
     cc->state.reno.stash += bytes;
     if (cc->state.reno.stash < cc->cwnd)
         return;

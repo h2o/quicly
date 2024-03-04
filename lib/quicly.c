@@ -21,6 +21,7 @@
  */
 #include <assert.h>
 #include <inttypes.h>
+#include <sys/types.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <pthread.h>
@@ -107,12 +108,6 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 struct st_quicly_cipher_context_t {
     ptls_aead_context_t *aead;
     ptls_cipher_context_t *header_protection;
-};
-
-struct st_quicly_pending_path_challenge_t {
-    struct st_quicly_pending_path_challenge_t *next;
-    uint8_t is_response;
-    uint8_t data[QUICLY_PATH_CHALLENGE_DATA_LEN];
 };
 
 struct st_quicly_pn_space_t {
@@ -279,8 +274,9 @@ struct st_quicly_conn_t {
          *
          */
         struct {
-            struct st_quicly_pending_path_challenge_t *head, **tail_ref;
-        } path_challenge;
+            uint8_t send_;
+            uint8_t data[QUICLY_PATH_CHALLENGE_DATA_LEN];
+        } path_response;
         /**
          *
          */
@@ -350,6 +346,10 @@ struct st_quicly_conn_t {
  * have to be sent. There could be false positives; logic for sending each of these frames have the capability of detecting such
  * false positives. The purpose of this bit is to consolidate information as an optimization. */
 #define QUICLY_PENDING_FLOW_OTHERS_BIT (1 << 6)
+        /**
+         * if the most recent call to `quicly_send` ended in CC-limited state
+         */
+        uint8_t cc_limited : 1;
         /**
          *
          */
@@ -944,25 +944,6 @@ void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
     }
 }
 
-static int schedule_path_challenge_frame(quicly_conn_t *conn, int is_response, const uint8_t *data)
-{
-    struct st_quicly_pending_path_challenge_t *pending;
-
-    if ((pending = malloc(sizeof(struct st_quicly_pending_path_challenge_t))) == NULL)
-        return PTLS_ERROR_NO_MEMORY;
-
-    pending->next = NULL;
-    pending->is_response = is_response;
-    memcpy(pending->data, data, QUICLY_PATH_CHALLENGE_DATA_LEN);
-
-    *conn->egress.path_challenge.tail_ref = pending;
-    conn->egress.path_challenge.tail_ref = &pending->next;
-
-    conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
-
-    return 0;
-}
-
 /**
  * calculate how many CIDs we provide to the remote peer
  */
@@ -1387,6 +1368,8 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int
 
 static void update_cc_limited(quicly_conn_t *conn, int is_cc_limited)
 {
+    conn->egress.cc_limited = is_cc_limited;
+
     if (quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter) != is_cc_limited) {
         if (is_cc_limited) {
             quicly_ratemeter_enter_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
@@ -1727,11 +1710,6 @@ void quicly_free(quicly_conn_t *conn)
     quicly_maxsender_dispose(&conn->ingress.max_data.sender);
     quicly_maxsender_dispose(&conn->ingress.max_streams.uni);
     quicly_maxsender_dispose(&conn->ingress.max_streams.bidi);
-    while (conn->egress.path_challenge.head != NULL) {
-        struct st_quicly_pending_path_challenge_t *pending = conn->egress.path_challenge.head;
-        conn->egress.path_challenge.head = pending->next;
-        free(pending);
-    }
     quicly_loss_dispose(&conn->egress.loss);
 
     kh_destroy(quicly_stream_t, conn->streams);
@@ -2284,7 +2262,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.max_udp_payload_size = conn->super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->egress.max_streams.uni);
     init_max_streams(&conn->egress.max_streams.bidi);
-    conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
     conn->egress.ack_frequency.update_at = INT64_MAX;
     conn->egress.send_ack_at = INT64_MAX;
     conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->stash.now);
@@ -4649,6 +4626,25 @@ static int send_retire_connection_id(quicly_conn_t *conn, quicly_send_context_t 
     return 0;
 }
 
+static int send_path_challenge(quicly_conn_t *conn, quicly_send_context_t *s, int is_response, const uint8_t *data)
+{
+    int ret;
+
+    if ((ret = do_allocate_frame(conn, s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY, ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC)) != 0)
+        return ret;
+
+    s->dst = quicly_encode_path_challenge_frame(s->dst, is_response, data);
+    s->target.full_size = 1; /* ensure that the path can transfer full-size packets */
+
+    if (!is_response) {
+        ++conn->super.stats.num_frames_sent.path_challenge;
+    } else {
+        ++conn->super.stats.num_frames_sent.path_response;
+    }
+
+    return 0;
+}
+
 static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, int is_enc, size_t epoch, const void *secret)
 {
     quicly_conn_t *conn = *ptls_get_data_ptr(tls);
@@ -4754,23 +4750,10 @@ static int send_other_control_frames(quicly_conn_t *conn, quicly_send_context_t 
     int ret;
 
     /* respond to all pending received PATH_CHALLENGE frames */
-    if (conn->egress.path_challenge.head != NULL) {
-        do {
-            struct st_quicly_pending_path_challenge_t *c = conn->egress.path_challenge.head;
-            if ((ret = do_allocate_frame(conn, s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY, ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING)) !=
-                0)
-                return ret;
-            s->dst = quicly_encode_path_challenge_frame(s->dst, c->is_response, c->data);
-            if (c->is_response) {
-                ++conn->super.stats.num_frames_sent.path_response;
-            } else {
-                ++conn->super.stats.num_frames_sent.path_challenge;
-            }
-            conn->egress.path_challenge.head = c->next;
-            free(c);
-        } while (conn->egress.path_challenge.head != NULL);
-        conn->egress.path_challenge.tail_ref = &conn->egress.path_challenge.head;
-        s->target.full_size = 1; /* datagrams carrying PATH_CHALLENGE / PATH_RESPONSE have to be full-sized */
+    if (conn->egress.path_response.send_) {
+        if ((ret = send_path_challenge(conn, s, 1, conn->egress.path_response.data)) != 0)
+            return ret;
+        conn->egress.path_response.send_ = 0;
     }
 
     /* MAX_STREAMS */
@@ -5048,15 +5031,14 @@ Exit:
         commit_send_packet(conn, s, 0);
     }
     if (ret == 0) {
-        /* update timers, start / stop delivery rate estimator */
+        /* update timers, cc and delivery rate estimator states */
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         int can_send_stream_data = scheduler_can_send(conn);
         update_send_alarm(conn, can_send_stream_data, 1);
-        int is_cc_limited = can_send_stream_data && (s->num_datagrams == s->max_datagrams ||
-                                                     conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd ||
-                                                     pacer_can_send_at(conn) > conn->stash.now);
-        update_cc_limited(conn, is_cc_limited);
+        update_cc_limited(conn, can_send_stream_data && (s->num_datagrams == s->max_datagrams ||
+                                                         conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd ||
+                                                         pacer_can_send_at(conn) > conn->stash.now));
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
@@ -5554,9 +5536,16 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
+        /* Here, we pass `conn->egress.cc_limited` - a boolean flag indicating if last the last call to `quicly_send` ended with
+         * data being throttled by CC or pacer - to CC to determine if CWND can be grown.
+         * This might not be the best way to do this, but would likely be sufficient, as the flag being passed would be true only if
+         * the connection was CC-limited for at least one RTT. Hopefully, itwould also be aggressive enough during the slow start
+         * phase. */
+        int cc_limited = conn->super.ctx->cc_recognize_app_limited ? conn->egress.cc_limited : 1;
         conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame.largest_acknowledged,
                                           (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked),
-                                          conn->egress.packet_number, conn->stash.now, conn->egress.max_udp_payload_size);
+                                          cc_limited, conn->egress.packet_number, conn->stash.now,
+                                          conn->egress.max_udp_payload_size);
         QUICLY_PROBE(QUICTRACE_CC_ACK, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                      conn->egress.loss.sentmap.bytes_in_flight);
     }
@@ -5751,7 +5740,13 @@ static int handle_path_challenge_frame(quicly_conn_t *conn, struct st_quicly_han
 
     if ((ret = quicly_decode_path_challenge_frame(&state->src, state->end, &frame)) != 0)
         return ret;
-    return schedule_path_challenge_frame(conn, 1, frame.data);
+
+    /* schedule the emission of PATH_RESPONSE frame */
+    memcpy(conn->egress.path_response.data, frame.data, QUICLY_PATH_CHALLENGE_DATA_LEN);
+    conn->egress.path_response.send_ = 1;
+    conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+
+    return 0;
 }
 
 static int handle_path_response_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)

@@ -62,7 +62,7 @@ static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
 
 /* TODO: Avoid increase if sender was application limited. */
 static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                          uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
+                          int cc_limited, uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
 
@@ -74,7 +74,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
-    cc->state.pico.stash += bytes;
+    if (!cc_limited)
+        return;
 
     /* Calculate the amount of bytes required to be acked for incrementing CWND by one MTU. */
     uint32_t bytes_per_mtu_increase;
