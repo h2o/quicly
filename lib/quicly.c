@@ -3048,7 +3048,15 @@ static int on_ack_retire_connection_id(quicly_sentmap_t *map, const quicly_sent_
 
 static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
 {
-    return quicly_pacer_calc_send_rate(conn->egress.cc.pacer_multiplier, conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed);
+    /* The multiplier uses a hard-coded value of 2x in both the slow start and the congestion avoidance phases. This differs from
+     * Linux, which uses 1.25x for the latter. The rationale behind this choice is that 1.25x is not sufficiently aggressive
+     * immediately after a loss event. Following a loss event, the congestion window (CWND) is halved (i.e., beta), but the RTT
+     * remains high for one RTT and SRTT can remain high even loger, since it is a moving average adjusted with each ACK received.
+     * Consequently, if the multiplier is set to 1.25x, the calculated send rate could drop to as low as 1.25 * 1/2 = 0.625. By
+     * using a 2x multiplier, the send rate is guaranteed to become no less than that immediately before the loss event, which would
+     * have been the link throughput. */
+    return quicly_pacer_calc_send_rate(quicly_cc_in_jumpstart(&conn->egress.cc) ? 1 : 2, conn->egress.cc.cwnd,
+                                       conn->egress.loss.rtt.smoothed);
 }
 
 static int should_send_datagram_frame(quicly_conn_t *conn)

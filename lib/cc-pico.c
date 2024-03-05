@@ -112,9 +112,6 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         return;
     cc->recovery_end = next_pn;
 
-    /* switch pacer to congestion avoidance mode the moment loss is observed */
-    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
-
     /* if detected loss before receiving all acks for jumpstart, restore original CWND */
     if (cc->ssthresh == UINT32_MAX)
         quicly_cc_jumpstart_on_first_loss(cc, lost_pn, &beta);
@@ -164,7 +161,6 @@ static void pico_reset(quicly_cc_t *cc, uint32_t initcwnd)
         .cwnd_minimum = UINT32_MAX,
         .exit_slow_start_at = INT64_MAX,
         .ssthresh = UINT32_MAX,
-        .pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2),
     };
     pico_init_pico_state(cc, 0);
 

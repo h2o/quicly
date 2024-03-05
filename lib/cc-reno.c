@@ -72,7 +72,6 @@ void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t
     if (lost_pn < cc->recovery_end)
         return;
     cc->recovery_end = next_pn;
-    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(1.2);
 
     /* if detected loss before receiving all acks for jumpstart, restore original CWND */
     if (cc->ssthresh == UINT32_MAX)
@@ -111,7 +110,6 @@ static void reno_reset(quicly_cc_t *cc, uint32_t initcwnd)
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->exit_slow_start_at = INT64_MAX;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
-    cc->pacer_multiplier = QUICLY_PACER_CALC_MULTIPLIER(2);
 
     quicly_cc_jumpstart_reset(cc);
 }
