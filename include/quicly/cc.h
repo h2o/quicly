@@ -38,7 +38,6 @@ extern "C" {
 
 #define QUICLY_MIN_CWND 2
 #define QUICLY_RENO_BETA 0.7
-#define QUICLY_PACER_MULTIPLIER 2
 
 /**
  * Holds pointers to concrete congestion control implementation functions.
