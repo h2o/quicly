@@ -663,8 +663,9 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                         send_datagram_frame = 0;
                     }
                     if (quicly_num_streams(conn) == 0) {
-                        if (request_interval != 0 && enqueue_requests_at == INT64_MAX) {
-                            enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
+                        if (request_interval != 0) {
+                            if (enqueue_requests_at == INT64_MAX)
+                                enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
                         } else {
                             static int close_called;
                             if (!close_called) {
