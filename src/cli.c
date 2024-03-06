@@ -1074,6 +1074,7 @@ static void usage(const char *cmd)
            "                            (default), \"cubic\", or \"pico\"\n"
            "  -d draft-number           specifies the draft version number to be used (e.g.,\n"
            "                            29)\n"
+           "  --disable-ecn             turns off ECN support (default is on)\n"
            "  -e event-log-file         file to log events\n"
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
            "  --ech-config <file>       file that contains ECHConfigList or an empty file to\n"
