@@ -327,11 +327,13 @@ struct st_quicly_context_t {
      */
     uint64_t max_initial_handshake_packets;
     /**
-     * jumpstart delivery rate to be used when there is no previous information
+     * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
+     * possible only when the use_pacing flag is set.
      */
     uint32_t default_jumpstart_cwnd_bytes;
     /**
-     * maximum CWND to be used by jumpstart
+     * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections). If
+     * set to zero, slow start is used.
      */
     uint32_t max_jumpstart_cwnd_bytes;
     /**

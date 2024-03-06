@@ -1124,6 +1124,8 @@ static void usage(const char *cmd)
            "                            fraction of CWND (default: 0)\n"
            "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
+           "  --jumpstart-default <wnd> jumpstart CWND size for new connections, in bytes\n"
+           "  --jumpstart-max <wnd>     maximum jumpstart CWND size for resuming connections\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
            "  -K num-packets            perform key update every num-packets packets\n"
            "  -l log-file               file to log traffic secrets\n"
@@ -1207,8 +1209,8 @@ int main(int argc, char **argv)
     static const struct option longopts[] = {{"ech-key", required_argument, NULL, 0},
                                              {"ech-configs", required_argument, NULL, 0},
                                              {"disable-ecn", no_argument, NULL, 0},
-                                             {"default-jumpstart", required_argument, NULL, 0},
-                                             {"max-jumpstart", required_argument, NULL, 0},
+                                             {"jumpstart-default", required_argument, NULL, 0},
+                                             {"jumpstart-max", required_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1220,12 +1222,12 @@ int main(int argc, char **argv)
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ecn = 0;
-            } else if (strcmp(longopts[opt_index].name, "default-jumpstart") == 0) {
+            } else if (strcmp(longopts[opt_index].name, "jumpstart-default") == 0) {
                 if (sscanf(optarg, "%" SCNu32, &ctx.default_jumpstart_cwnd_bytes) != 1) {
                     fprintf(stderr, "failed to parse default jumpstart size: %s\n", optarg);
                     exit(1);
                 }
-            } else if (strcmp(longopts[opt_index].name, "max-jumpstart") == 0) {
+            } else if (strcmp(longopts[opt_index].name, "jumpstart-max") == 0) {
                 if (sscanf(optarg, "%" SCNu32, &ctx.max_jumpstart_cwnd_bytes) != 1) {
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
