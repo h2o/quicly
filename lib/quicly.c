@@ -4826,7 +4826,7 @@ static int send_other_control_frames(quicly_conn_t *conn, quicly_send_context_t 
 static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     int restrict_sending = 0, ack_only = 0, ret;
-    size_t min_packets_to_send = 0;
+    size_t min_packets_to_send = 0, orig_bytes_inflight = 0;
 
     /* handle timeouts */
     if (conn->idle_timeout.at <= conn->stash.now) {
@@ -4902,6 +4902,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size,
                                           calc_amplification_limit_allowance(conn), pacer_window, restrict_sending);
     }
+
+    orig_bytes_inflight = conn->egress.loss.sentmap.bytes_in_flight;
 
     if (s->send_window == 0)
         ack_only = 1;
@@ -5024,8 +5026,9 @@ Exit:
                 /* jumpstart without previous information */
                 jumpstart_cwnd = conn->super.ctx->default_jumpstart_cwnd_bytes;
             }
-            /* jumpstart when it is likely to make difference */
-            if (jumpstart_cwnd >= conn->egress.cc.cwnd * 2) {
+            /* Jumpstart if the flow rate would be higher. Comparison target is CWND + inflight bytes in 1/2 RTT, as that is the
+             * amount that can be sent at most, with pacer controlling the send rate. */
+            if (jumpstart_cwnd >= (conn->egress.cc.cwnd + orig_bytes_inflight) * 2) {
                 conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
                 conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
             }
