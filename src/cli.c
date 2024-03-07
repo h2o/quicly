@@ -1077,6 +1077,8 @@ static void usage(const char *cmd)
            "  -d draft-number           specifies the draft version number to be used (e.g.,\n"
            "                            29)\n"
            "  --disable-ecn             turns off ECN support (default is on)\n"
+           "  --disregard-app-limited   instructs CC to increase CWND even when the flow is\n"
+           "                            application limited\n"
            "  -e event-log-file         file to log events\n"
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
            "  --ech-config <file>       file that contains ECHConfigList or an empty file to\n"
@@ -1168,6 +1170,7 @@ int main(int argc, char **argv)
     static const struct option longopts[] = {{"ech-key", required_argument, NULL, 0},
                                              {"ech-configs", required_argument, NULL, 0},
                                              {"disable-ecn", no_argument, NULL, 0},
+                                             {"disregard-app-limited", no_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1179,6 +1182,8 @@ int main(int argc, char **argv)
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ecn = 0;
+            } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
+                ctx.cc_recognize_app_limited = 0;
             } else {
                 assert(!"unexpected longname");
             }
