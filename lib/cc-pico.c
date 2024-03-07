@@ -73,6 +73,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (!cc_limited)
         return;
 
+    cc->state.pico.stash += bytes;
+
     /* Calculate the amount of bytes required to be acked for incrementing CWND by one MTU. */
     uint32_t bytes_per_mtu_increase;
     if (cc->cwnd < cc->ssthresh) {
