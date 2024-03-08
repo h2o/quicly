@@ -4902,9 +4902,10 @@ Exit:
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         int can_send_stream_data = scheduler_can_send(conn);
         update_send_alarm(conn, can_send_stream_data, 1);
-        update_cc_limited(conn, can_send_stream_data && (s->num_datagrams == s->max_datagrams ||
-                                                         conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd ||
-                                                         pacer_can_send_at(conn) > conn->stash.now));
+        update_cc_limited(conn, can_send_stream_data && conn->super.remote.address_validation.validated &&
+                                    (s->num_datagrams == s->max_datagrams ||
+                                     conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd ||
+                                     pacer_can_send_at(conn) > conn->stash.now));
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
