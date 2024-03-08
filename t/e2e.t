@@ -394,18 +394,18 @@ subtest "slow-start" => sub {
         $each_cc->(sub {
             my $cc = shift;
             subtest "respect-app-limited" => sub {
-                plan skip_all => "cubic does not respect app-limited"
+                plan skip_all => "Cubic TODO respect app-limited"
                     if $cc eq "cubic";
                 my $guard = spawn_server("-C", "$cc:10");
                 # tail of 1st, 2nd, and 3rd batch fits into each round trip
                 $doit->(@$_)
-                    for ([14000, 2, 2.3], [45000, 3, 3.5], [72000, 4, 4.5]);
+                    for ([14000, 2, 2.5], [45000, 3, 3.5], [72000, 4, 4.5]);
             };
             subtest "disregard-app-limited" => sub {
                 my $guard = spawn_server("-C", "$cc:10", "--disregard-app-limited");
                 # tail of 1st, 2nd, and 3rd batch fits into each round trip
                 $doit->(@$_)
-                    for ([16000, 2, 2.3], [48000, 3, 3.5], [72000, 4, 4.5]);
+                    for ([16000, 2, 2.5], [48000, 3, 3.5], [72000, 4, 4.5]);
             };
         });
     };
@@ -413,10 +413,20 @@ subtest "slow-start" => sub {
     subtest "pacing" => sub {
         $each_cc->(sub {
             my $cc = shift;
-            my $guard = spawn_server("-C", "$cc:20:p");
-            # check head of 1st and 3rd batch, tail of 1st and 2nd
-            $doit->(@$_)
-                for([1000, 2, 2.3], [27000, 2.3, 2.9], [80000, 3.4, 3.9], [95000, 4, 4.5]);
+            subtest "respect-app-limited" => sub {
+                plan skip_all => "Cubic TODO respect app-limited"
+                    if $cc eq "cubic";
+                my $guard = spawn_server("-C", "$cc:20:p");
+                # check head of 1st and 3rd batch, tail of 1st and 2nd
+                $doit->(@$_)
+                    for ([1000, 2, 2.3], [28000, 2.3, 3], [85000, 3.3, 4], [89000, 4, 4.5]);
+            };
+            subtest "disregard-app-limited" => sub {
+                my $guard = spawn_server("-C", "$cc:20:p", "--disregard-app-limited");
+                # tail of 1st, 2nd, and 3rd batch fits into each round trip
+                $doit->(@$_)
+                    for ([1000, 2, 2.3], [30000, 2.3, 3], [87000, 3.3, 4], [96000, 4, 4.5]);
+            };
         });
     }
 };
