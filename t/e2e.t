@@ -393,10 +393,20 @@ subtest "slow-start" => sub {
     subtest "no-pacing" => sub {
         $each_cc->(sub {
             my $cc = shift;
-            my $guard = spawn_server("-C", "$cc:10");
-            # tail of 1st, 2nd, and 3rd batch fits into each round trip
-            $doit->(@$_)
-                for ([12000, 2, 2.3], [36000, 3, 3.5], [72000, 4, 4.5]);
+            subtest "respect-app-limited" => sub {
+                plan skip_all => "cubic does not respect app-limited"
+                    if $cc eq "cubic";
+                my $guard = spawn_server("-C", "$cc:10");
+                # tail of 1st, 2nd, and 3rd batch fits into each round trip
+                $doit->(@$_)
+                    for ([14000, 2, 2.3], [45000, 3, 3.5], [72000, 4, 4.5]);
+            };
+            subtest "disregard-app-limited" => sub {
+                my $guard = spawn_server("-C", "$cc:10", "--disregard-app-limited");
+                # tail of 1st, 2nd, and 3rd batch fits into each round trip
+                $doit->(@$_)
+                    for ([16000, 2, 2.3], [48000, 3, 3.5], [72000, 4, 4.5]);
+            };
         });
     };
 
