@@ -5029,9 +5029,10 @@ Exit:
                 jumpstart_cwnd = quicly_cc_calc_initial_cwnd(conn->super.ctx->default_jumpstart_cwnd_packets,
                                                              conn->super.ctx->transport_params.max_udp_payload_size);
             }
-            /* Jumpstart if the flow rate would be higher. Comparison target is CWND + inflight bytes in 1/2 RTT, as that is the
-             * amount that can be sent at most, with pacer controlling the send rate. */
-            if (jumpstart_cwnd >= (conn->egress.cc.cwnd + orig_bytes_inflight) * 2) {
+            /* Jumpstart if the amount that can be sent in 1 RTT would be higher than without. Comparison target is CWND + inflight,
+             * as that is the amount that can be sent at most. Note the flow rate can become smaller due to packets paced across
+             * the entire RTT during jumpstart. */
+            if (jumpstart_cwnd >= conn->egress.cc.cwnd + orig_bytes_inflight) {
                 conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
                 conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
             }
