@@ -2276,7 +2276,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_linklist_init(&conn->egress.pending_streams.control);
     quicly_ratemeter_init(&conn->egress.ratemeter);
     if (server_name == NULL && conn->super.ctx->use_pacing && conn->egress.cc.type->cc_jumpstart != NULL &&
-        (conn->super.ctx->default_jumpstart_cwnd_bytes != 0 || conn->super.ctx->max_jumpstart_cwnd_bytes != 0))
+        (conn->super.ctx->default_jumpstart_cwnd_packets != 0 || conn->super.ctx->max_jumpstart_cwnd_packets != 0))
         conn->egress.try_jumpstart = 1;
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
@@ -4201,8 +4201,10 @@ static uint32_t derive_jumpstart_cwnd(quicly_context_t *ctx, uint32_t new_rtt, u
         cwnd = cwnd * new_rtt / prev_rtt;
 
     /* cap to the configured value */
-    if (cwnd > ctx->max_jumpstart_cwnd_bytes)
-        cwnd = ctx->max_jumpstart_cwnd_bytes;
+    size_t jumpstart_cwnd =
+        quicly_cc_calc_initial_cwnd(ctx->max_jumpstart_cwnd_packets, ctx->transport_params.max_udp_payload_size);
+    if (cwnd > jumpstart_cwnd)
+        cwnd = jumpstart_cwnd;
 
     return (uint32_t)cwnd;
 }
@@ -5017,14 +5019,15 @@ Exit:
             conn->egress.try_jumpstart = 0;
             uint32_t jumpstart_cwnd = 0;
             conn->super.stats.jumpstart.new_rtt = conn->egress.loss.rtt.minimum;
-            if (conn->super.ctx->max_jumpstart_cwnd_bytes != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
+            if (conn->super.ctx->max_jumpstart_cwnd_packets != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
                 conn->super.stats.jumpstart.prev_rtt != 0) {
                 /* Careful Resume */
                 jumpstart_cwnd = derive_jumpstart_cwnd(conn->super.ctx, conn->super.stats.jumpstart.new_rtt,
                                                        conn->super.stats.jumpstart.prev_rate, conn->super.stats.jumpstart.prev_rtt);
-            } else if (conn->super.ctx->default_jumpstart_cwnd_bytes != 0) {
+            } else if (conn->super.ctx->default_jumpstart_cwnd_packets != 0) {
                 /* jumpstart without previous information */
-                jumpstart_cwnd = conn->super.ctx->default_jumpstart_cwnd_bytes;
+                jumpstart_cwnd = quicly_cc_calc_initial_cwnd(conn->super.ctx->default_jumpstart_cwnd_packets,
+                                                             conn->super.ctx->transport_params.max_udp_payload_size);
             }
             /* Jumpstart if the flow rate would be higher. Comparison target is CWND + inflight bytes in 1/2 RTT, as that is the
              * amount that can be sent at most, with pacer controlling the send rate. */

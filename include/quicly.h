@@ -330,12 +330,12 @@ struct st_quicly_context_t {
      * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
      * possible only when the use_pacing flag is set.
      */
-    uint32_t default_jumpstart_cwnd_bytes;
+    uint32_t default_jumpstart_cwnd_packets;
     /**
      * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections). If
      * set to zero, slow start is used.
      */
-    uint32_t max_jumpstart_cwnd_bytes;
+    uint32_t max_jumpstart_cwnd_packets;
     /**
      * expand client hello so that it does not fit into one datagram
      */

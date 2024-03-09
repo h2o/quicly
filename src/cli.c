@@ -1126,7 +1126,7 @@ static void usage(const char *cmd)
            "                            fraction of CWND (default: 0)\n"
            "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
-           "  --jumpstart-default <wnd> jumpstart CWND size for new connections, in bytes\n"
+           "  --jumpstart-default <wnd> jumpstart CWND size for new connections, in packets\n"
            "  --jumpstart-max <wnd>     maximum jumpstart CWND size for resuming connections\n"
            "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
            "  -K num-packets            perform key update every num-packets packets\n"
@@ -1228,12 +1228,12 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
                 ctx.cc_recognize_app_limited = 0;
             } else if (strcmp(longopts[opt_index].name, "jumpstart-default") == 0) {
-                if (sscanf(optarg, "%" SCNu32, &ctx.default_jumpstart_cwnd_bytes) != 1) {
+                if (sscanf(optarg, "%" SCNu32, &ctx.default_jumpstart_cwnd_packets) != 1) {
                     fprintf(stderr, "failed to parse default jumpstart size: %s\n", optarg);
                     exit(1);
                 }
             } else if (strcmp(longopts[opt_index].name, "jumpstart-max") == 0) {
-                if (sscanf(optarg, "%" SCNu32, &ctx.max_jumpstart_cwnd_bytes) != 1) {
+                if (sscanf(optarg, "%" SCNu32, &ctx.max_jumpstart_cwnd_packets) != 1) {
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }

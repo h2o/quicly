@@ -162,5 +162,6 @@ uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payl
     if (max_udp_payload_size > mtu_max)
         max_udp_payload_size = mtu_max;
 
-    return max_packets * max_udp_payload_size;
+    uint64_t cwnd_bytes = (uint64_t)max_packets * max_udp_payload_size;
+    return cwnd_bytes <= UINT32_MAX ? (uint32_t)cwnd_bytes : UINT32_MAX;
 }
