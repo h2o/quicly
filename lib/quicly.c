@@ -2562,7 +2562,7 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
 
     /* prepare key, when not available (yet) */
     if (space->cipher.ingress.aead[aead_index] == NULL) {
-    Retry_1RTT : {
+    Retry_1RTT: {
         /* Replace the AEAD key at the alternative slot (note: decryption key slots are shared by 0-RTT and 1-RTT), at the same time
          * dropping 0-RTT header protection key. */
         if (conn->application->cipher.ingress.header_protection.zero_rtt != NULL) {

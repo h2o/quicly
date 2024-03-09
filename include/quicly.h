@@ -59,7 +59,7 @@ extern "C" {
 #define QUICLY_PACKET_TYPE_RETRY (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x30)
 #define QUICLY_PACKET_TYPE_BITMASK 0xf0
 
-#define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
+#define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte) & QUICLY_LONG_HEADER_BIT) != 0)
 
 /**
  * Version 1.
@@ -74,7 +74,7 @@ extern "C" {
  */
 #define QUICLY_PROTOCOL_VERSION_DRAFT27 0xff00001b
 
-#define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte)&0xf0) == 0xc0)
+#define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte) & 0xf0) == 0xc0)
 
 #define QUICLY_STATELESS_RESET_PACKET_MIN_LEN 39
 
@@ -1121,8 +1121,8 @@ int quicly_decode_transport_parameter_list(quicly_transport_parameters_t *params
  */
 int quicly_connect(quicly_conn_t **conn, quicly_context_t *ctx, const char *server_name, struct sockaddr *dest_addr,
                    struct sockaddr *src_addr, const quicly_cid_plaintext_t *new_cid, ptls_iovec_t address_token,
-                   ptls_handshake_properties_t *handshake_properties,
-                   const quicly_transport_parameters_t *resumed_transport_params, void *appdata);
+                   ptls_handshake_properties_t *handshake_properties, const quicly_transport_parameters_t *resumed_transport_params,
+                   void *appdata);
 /**
  * accepts a new connection
  * @param new_cid        The CID to be used for the connection. When an error is being returned, the application can reuse the CID
