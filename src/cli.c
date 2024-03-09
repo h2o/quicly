@@ -112,7 +112,7 @@ static struct {
 struct {
     const char *path;
     int to_file;
-} * reqs;
+} *reqs;
 
 struct st_stream_data_t {
     quicly_streambuf_t streambuf;
@@ -447,11 +447,11 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_
 #ifdef IP_RECVTOS
             if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type ==
 #ifdef __APPLE__
-                IP_RECVTOS
+                                                      IP_RECVTOS
 #else
-                IP_TOS
+                                                      IP_TOS
 #endif
-                ) {
+            ) {
                 assert((char *)CMSG_DATA(cmsg) - (char *)cmsg + 1 == cmsg->cmsg_len);
                 *ecn = *(uint8_t *)CMSG_DATA(cmsg) & IPTOS_ECN_MASK;
             }

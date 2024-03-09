@@ -2574,7 +2574,7 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
 
     /* prepare key, when not available (yet) */
     if (space->cipher.ingress.aead[aead_index] == NULL) {
-    Retry_1RTT : {
+    Retry_1RTT: {
         /* Replace the AEAD key at the alternative slot (note: decryption key slots are shared by 0-RTT and 1-RTT), at the same time
          * dropping 0-RTT header protection key. */
         if (conn->application->cipher.ingress.header_protection.zero_rtt != NULL) {
@@ -5558,9 +5558,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
          * phase. */
         int cc_limited = conn->super.ctx->cc_recognize_app_limited ? conn->egress.cc_limited : 1;
         conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame.largest_acknowledged,
-                                          (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked),
-                                          cc_limited, conn->egress.packet_number, conn->stash.now,
-                                          conn->egress.max_udp_payload_size);
+                                          (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked), cc_limited,
+                                          conn->egress.packet_number, conn->stash.now, conn->egress.max_udp_payload_size);
         QUICLY_PROBE(QUICTRACE_CC_ACK, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                      conn->egress.loss.sentmap.bytes_in_flight);
     }
