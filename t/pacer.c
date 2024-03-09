@@ -140,13 +140,12 @@ static void test_fast(void)
     now = test_pattern(&pacer, now, bytes_per_msec,
                        (const struct pattern[]){
                            {1, 84 * mtu, 84 * mtu}, /* borrow 800 bytes */
-                           {2, 83 * mtu, 83 * mtu},   /* borrowing 400 bytes */
-                           {3, 83 * mtu, 83 * mtu},   /* borrowing 0 bytes */
-                           {4, 84 * mtu, 84 * mtu},   /* borrowing 800 bytes */
+                           {2, 83 * mtu, 83 * mtu}, /* borrowing 400 bytes */
+                           {3, 83 * mtu, 83 * mtu}, /* borrowing 0 bytes */
+                           {4, 84 * mtu, 84 * mtu}, /* borrowing 800 bytes */
                            {0},
                        });
 }
-
 
 void test_pacer(void)
 {
