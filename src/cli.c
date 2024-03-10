@@ -1183,7 +1183,7 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ecn = 0;
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
-                ctx.cc_recognize_app_limited = 0;
+                ctx.respect_app_limited = 0;
             } else {
                 assert(!"unexpected longname");
             }
