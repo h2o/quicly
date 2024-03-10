@@ -5034,7 +5034,7 @@ Exit:
                 /* Jumpstart if the amount that can be sent in 1 RTT would be higher than without. Comparison target is CWND +
                  * inflight, as that is the amount that can be sent at most. Note the flow rate can become smaller due to packets
                  * paced across the entire RTT during jumpstart. */
-                if (jumpstart_cwnd >= conn->egress.cc.cwnd + orig_bytes_inflight) {
+                if (jumpstart_cwnd > conn->egress.cc.cwnd + orig_bytes_inflight) {
                     conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
                     conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
                 }
