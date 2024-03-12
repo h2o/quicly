@@ -351,6 +351,10 @@ struct st_quicly_conn_t {
          */
         uint8_t cc_limited : 1;
         /**
+         *
+         */
+        uint8_t try_jumpstart : 1;
+        /**
          * pending RETIRE_CONNECTION_ID frames to be sent
          */
         quicly_retire_cid_set_t retire_cid;
@@ -1279,6 +1283,11 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     stats->rtt = conn->egress.loss.rtt;
     stats->loss_thresholds = conn->egress.loss.thresholds;
     stats->cc = conn->egress.cc;
+    /* convert `exit_slow_start_at` to time spent since the connection was created */
+    if (stats->cc.exit_slow_start_at != INT64_MAX) {
+        assert(stats->cc.exit_slow_start_at >= conn->created_at);
+        stats->cc.exit_slow_start_at -= conn->created_at;
+    }
     quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate);
     stats->num_sentmap_packets_largest = conn->egress.loss.sentmap.num_packets_largest;
     stats->handshake_confirmed_msec = conn->super.stats.handshake_confirmed_msec;
@@ -2266,6 +2275,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
     quicly_ratemeter_init(&conn->egress.ratemeter);
+    if (server_name == NULL && conn->super.ctx->use_pacing && conn->egress.cc.type->cc_jumpstart != NULL &&
+        (conn->super.ctx->default_jumpstart_cwnd_packets != 0 || conn->super.ctx->max_jumpstart_cwnd_packets != 0))
+        conn->egress.try_jumpstart = 1;
     conn->crypto.tls = tls;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
@@ -3043,7 +3055,8 @@ static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
      * Consequently, if the multiplier is set to 1.25x, the calculated send rate could drop to as low as 1.25 * 1/2 = 0.625. By
      * using a 2x multiplier, the send rate is guaranteed to become no less than that immediately before the loss event, which would
      * have been the link throughput. */
-    return quicly_pacer_calc_send_rate(2, conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed);
+    return quicly_pacer_calc_send_rate(quicly_cc_in_jumpstart(&conn->egress.cc) ? 1 : 2, conn->egress.cc.cwnd,
+                                       conn->egress.loss.rtt.smoothed);
 }
 
 static int should_send_datagram_frame(quicly_conn_t *conn)
@@ -4173,8 +4186,110 @@ Exit:
     return ret;
 }
 
+#define QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME 0
+
+/**
+ * derives size of the new CWND given previous delivery rate and min RTTs of the previous and the new session
+ */
+static uint32_t derive_jumpstart_cwnd(quicly_context_t *ctx, uint32_t new_rtt, uint64_t prev_rate, uint32_t prev_rtt)
+{
+    /* convert previous rate to CWND size */
+    double cwnd = (double)prev_rate * prev_rtt / 1000;
+
+    /* if new RTT is smaller, reduce new CWND so that the rate does not become greater than the previous session */
+    if (new_rtt < prev_rtt)
+        cwnd = cwnd * new_rtt / prev_rtt;
+
+    /* cap to the configured value */
+    size_t jumpstart_cwnd =
+        quicly_cc_calc_initial_cwnd(ctx->max_jumpstart_cwnd_packets, ctx->transport_params.max_udp_payload_size);
+    if (cwnd > jumpstart_cwnd)
+        cwnd = jumpstart_cwnd;
+
+    return (uint32_t)cwnd;
+}
+
+static int decode_resumption_info(const uint8_t *src, size_t len, uint64_t *rate, uint32_t *min_rtt)
+{
+    const uint8_t *end = src + len;
+    int ret = 0;
+
+    *rate = 0;
+
+    while (src < end) {
+        uint64_t id;
+        if ((id = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+            ret = PTLS_ALERT_DECODE_ERROR;
+            goto Exit;
+        }
+        ptls_decode_open_block(src, end, -1, {
+            switch (id) {
+            case QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME: {
+                if ((*rate = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+                    ret = PTLS_ALERT_DECODE_ERROR;
+                    goto Exit;
+                }
+                uint64_t v;
+                if ((v = ptls_decode_quicint(&src, end)) > UINT32_MAX) {
+                    ret = PTLS_ALERT_DECODE_ERROR;
+                    goto Exit;
+                }
+                *min_rtt = (uint32_t)v;
+            } break;
+            default:
+                /* ignore unknown types */
+                src = end;
+                break;
+            }
+        });
+    }
+
+Exit:
+    return ret;
+}
+
+static size_t encode_resumption_info(quicly_conn_t *conn, uint8_t *dst, size_t capacity)
+{
+    ptls_buffer_t buf;
+    int ret;
+
+    ptls_buffer_init(&buf, dst, capacity);
+
+#define PUSH_ENTRY(id, block)                                                                                                      \
+    do {                                                                                                                           \
+        ptls_buffer_push_quicint(&buf, (id));                                                                                      \
+        ptls_buffer_push_block(&buf, -1, block);                                                                                   \
+    } while (0)
+
+    /* emit delivery rate for Careful Resume */
+    if (conn->super.stats.token_sent.rate != 0 && conn->super.stats.token_sent.rtt != 0) {
+        PUSH_ENTRY(QUICLY_RESUMPTION_ENTRY_TYPE_CAREFUL_RESUME, {
+            ptls_buffer_push_quicint(&buf, conn->super.stats.token_sent.rate);
+            ptls_buffer_push_quicint(&buf, conn->super.stats.token_sent.rtt);
+        });
+    }
+
+#undef PUSH_ENTRY
+
+Exit:
+    assert(!buf.is_allocated);
+    return buf.off;
+}
+
 static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
 {
+    { /* fill conn->super.stats.token_sent the information we are sending now */
+        quicly_rate_t rate;
+        conn->super.stats.token_sent.at = conn->stash.now - conn->created_at;
+        if (conn->egress.loss.rtt.minimum != 0 && (quicly_ratemeter_report(&conn->egress.ratemeter, &rate), rate.smoothed != 0)) {
+            conn->super.stats.token_sent.rate = rate.smoothed;
+            conn->super.stats.token_sent.rtt = conn->egress.loss.rtt.minimum;
+        } else {
+            conn->super.stats.token_sent.rate = 0;
+            conn->super.stats.token_sent.rtt = 0;
+        }
+    }
+
     quicly_address_token_plaintext_t token;
     ptls_buffer_t tokenbuf;
     uint8_t tokenbuf_small[128];
@@ -4187,7 +4302,7 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
     token =
         (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION, conn->super.ctx->now->cb(conn->super.ctx->now)};
     token.remote = conn->super.remote.address;
-    /* TODO fill token.resumption */
+    token.resumption.len = encode_resumption_info(conn, token.resumption.bytes, sizeof(token.resumption.bytes));
 
     /* encrypt */
     if ((ret = conn->super.ctx->generate_resumption_token->cb(conn->super.ctx->generate_resumption_token, conn, &tokenbuf,
@@ -4713,7 +4828,7 @@ static int send_other_control_frames(quicly_conn_t *conn, quicly_send_context_t 
 static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     int restrict_sending = 0, ack_only = 0, ret;
-    size_t min_packets_to_send = 0;
+    size_t min_packets_to_send = 0, orig_bytes_inflight = 0;
 
     /* handle timeouts */
     if (conn->idle_timeout.at <= conn->stash.now) {
@@ -4789,6 +4904,8 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size,
                                           calc_amplification_limit_allowance(conn), pacer_window, restrict_sending);
     }
+
+    orig_bytes_inflight = conn->egress.loss.sentmap.bytes_in_flight;
 
     if (s->send_window == 0)
         ack_only = 1;
@@ -4883,12 +5000,47 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
                 conn->egress.pending_flows &= ~QUICLY_PENDING_FLOW_OTHERS_BIT;
             }
+            /* stream operations might have requested emission of NEW_TOKEN at the tail; if so, try to bundle it */
+            if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_NEW_TOKEN_BIT) != 0) {
+                assert(conn->application->one_rtt_writable);
+                if ((ret = send_resumption_token(conn, s)) != 0)
+                    goto Exit;
+            }
         }
     }
 
 Exit:
-    if (ret == QUICLY_ERROR_SENDBUF_FULL)
+    if (ret == QUICLY_ERROR_SENDBUF_FULL) {
         ret = 0;
+        /* when the buffer becomes full for the first time, try to use jumpstart; acting after the buffer becomes full does not
+         * delay switch to jump start, assuming that the buffer provided by the caller of quicly_send is no greater than the burst
+         * size of the pacer (10 packets) */
+        if (conn->egress.try_jumpstart && conn->egress.loss.rtt.minimum != UINT32_MAX) {
+            conn->egress.try_jumpstart = 0;
+            if (conn->egress.cc.num_loss_episodes == 0) {
+                uint32_t jumpstart_cwnd = 0;
+                conn->super.stats.jumpstart.new_rtt = conn->egress.loss.rtt.minimum;
+                if (conn->super.ctx->max_jumpstart_cwnd_packets != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
+                    conn->super.stats.jumpstart.prev_rtt != 0) {
+                    /* Careful Resume */
+                    jumpstart_cwnd =
+                        derive_jumpstart_cwnd(conn->super.ctx, conn->super.stats.jumpstart.new_rtt,
+                                              conn->super.stats.jumpstart.prev_rate, conn->super.stats.jumpstart.prev_rtt);
+                } else if (conn->super.ctx->default_jumpstart_cwnd_packets != 0) {
+                    /* jumpstart without previous information */
+                    jumpstart_cwnd = quicly_cc_calc_initial_cwnd(conn->super.ctx->default_jumpstart_cwnd_packets,
+                                                                 conn->super.ctx->transport_params.max_udp_payload_size);
+                }
+                /* Jumpstart if the amount that can be sent in 1 RTT would be higher than without. Comparison target is CWND +
+                 * inflight, as that is the amount that can be sent at most. Note the flow rate can become smaller due to packets
+                 * paced across the entire RTT during jumpstart. */
+                if (jumpstart_cwnd > conn->egress.cc.cwnd + orig_bytes_inflight) {
+                    conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
+                    conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
+                }
+            }
+        }
+    }
     if (ret == 0 && s->target.first_byte_at != NULL) {
         /* last packet can be small-sized, unless it is the first flight sent from the client */
         if ((s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
@@ -5080,6 +5232,8 @@ size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, v
 
 int quicly_send_resumption_token(quicly_conn_t *conn)
 {
+    assert(!quicly_is_client(conn));
+
     if (conn->super.state <= QUICLY_STATE_CONNECTED) {
         ++conn->egress.new_token.generation;
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
@@ -6258,10 +6412,25 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
     (*conn)->super.state = QUICLY_STATE_ACCEPTING;
     quicly_set_cid(&(*conn)->super.original_dcid, packet->cid.dest.encrypted);
     if (address_token != NULL) {
-        (*conn)->super.remote.address_validation.validated = 1;
-        if (address_token->type == QUICLY_ADDRESS_TOKEN_TYPE_RETRY) {
-            (*conn)->retry_scid = (*conn)->super.original_dcid;
-            (*conn)->super.original_dcid = address_token->retry.original_dcid;
+        (*conn)->super.remote.address_validation.validated = !address_token->address_mismatch;
+        switch (address_token->type) {
+        case QUICLY_ADDRESS_TOKEN_TYPE_RETRY:
+            if (!address_token->address_mismatch) {
+                (*conn)->retry_scid = (*conn)->super.original_dcid;
+                (*conn)->super.original_dcid = address_token->retry.original_dcid;
+            }
+            break;
+        case QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION:
+            if (decode_resumption_info(address_token->resumption.bytes, address_token->resumption.len,
+                                       &(*conn)->super.stats.jumpstart.prev_rate, &(*conn)->super.stats.jumpstart.prev_rtt) != 0) {
+                (*conn)->super.stats.jumpstart.prev_rate = 0;
+                (*conn)->super.stats.jumpstart.prev_rtt = 0;
+            }
+            break;
+        default:
+            /* We might not get here as tokens are integrity-protected, but as this is information supplied via network, potentially
+             * from broken quicly instances, we drop anything unexpected rather than calling abort(). */
+            break;
         }
     }
     if ((ret = setup_handshake_space_and_flow(*conn, QUICLY_EPOCH_INITIAL)) != 0)
