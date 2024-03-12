@@ -335,6 +335,14 @@ struct st_quicly_context_t {
      */
     unsigned enable_ecn : 1;
     /**
+     * if pacing should be used
+     */
+    unsigned use_pacing : 1;
+    /**
+     * if CC should take app-limited into consideration
+     */
+    unsigned respect_app_limited : 1;
+    /**
      *
      */
     quicly_cid_encryptor_t *cid_encryptor;

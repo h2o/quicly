@@ -34,6 +34,7 @@
 #include "quicly.h"
 #include "quicly/defaults.h"
 #include "quicly/sentmap.h"
+#include "quicly/pacer.h"
 #include "quicly/frame.h"
 #include "quicly/streambuf.h"
 #include "quicly/cc.h"
@@ -304,6 +305,10 @@ struct st_quicly_conn_t {
          */
         quicly_cc_t cc;
         /**
+         * pacer
+         */
+        quicly_pacer_t *pacer;
+        /**
          * ECN
          */
         struct {
@@ -341,6 +346,10 @@ struct st_quicly_conn_t {
  * have to be sent. There could be false positives; logic for sending each of these frames have the capability of detecting such
  * false positives. The purpose of this bit is to consolidate information as an optimization. */
 #define QUICLY_PENDING_FLOW_OTHERS_BIT (1 << 6)
+        /**
+         * if the most recent call to `quicly_send` ended in CC-limited state
+         */
+        uint8_t cc_limited : 1;
         /**
          * pending RETIRE_CONNECTION_ID frames to be sent
          */
@@ -1348,6 +1357,23 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int
                              can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
 }
 
+static void update_cc_limited(quicly_conn_t *conn, int is_cc_limited)
+{
+    conn->egress.cc_limited = is_cc_limited;
+
+    if (quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter) != is_cc_limited) {
+        if (is_cc_limited) {
+            quicly_ratemeter_enter_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
+            QUICLY_PROBE(ENTER_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
+            QUICLY_LOG_CONN(enter_cc_limited, conn, { PTLS_LOG_ELEMENT_UNSIGNED(pn, conn->egress.packet_number); });
+        } else {
+            quicly_ratemeter_exit_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
+            QUICLY_PROBE(EXIT_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
+            QUICLY_LOG_CONN(exit_cc_limited, conn, { PTLS_LOG_ELEMENT_UNSIGNED(pn, conn->egress.packet_number); });
+        }
+    }
+}
+
 /**
  * Updates the send alarm and adjusts the delivery rate estimator. This function is called from the receive path. From the sendp
  * path, `update_send_alarm` is called directly.
@@ -1360,7 +1386,7 @@ static void setup_next_send(quicly_conn_t *conn)
 
     /* When the flow becomes application-limited due to receiving some information, stop collecting delivery rate samples. */
     if (!can_send_stream_data)
-        quicly_ratemeter_not_cwnd_limited(&conn->egress.ratemeter, conn->egress.packet_number);
+        update_cc_limited(conn, 0);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -1699,6 +1725,8 @@ void quicly_free(quicly_conn_t *conn)
 
     unlock_now(conn);
 
+    if (conn->egress.pacer != NULL)
+        free(conn->egress.pacer);
     free(conn->token.base);
     free(conn);
 }
@@ -2158,8 +2186,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
                                         const quicly_cid_plaintext_t *local_cid, ptls_handshake_properties_t *handshake_properties,
                                         void *appdata, uint32_t initcwnd)
 {
-    ptls_t *tls = NULL;
+    ptls_t *tls;
     quicly_conn_t *conn;
+    quicly_pacer_t *pacer = NULL;
 
     /* consistency checks */
     assert(remote_addr != NULL && remote_addr->sa_family != AF_UNSPEC);
@@ -2177,6 +2206,11 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     /* allocate memory and start creating QUIC context */
     if ((conn = malloc(sizeof(*conn))) == NULL) {
         ptls_free(tls);
+        return NULL;
+    }
+    if (ctx->use_pacing && (pacer = malloc(sizeof(*pacer))) == NULL) {
+        ptls_free(tls);
+        free(conn);
         return NULL;
     }
     memset(conn, 0, sizeof(*conn));
@@ -2222,6 +2256,10 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.ack_frequency.update_at = INT64_MAX;
     conn->egress.send_ack_at = INT64_MAX;
     conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->stash.now);
+    if (pacer != NULL) {
+        conn->egress.pacer = pacer;
+        quicly_pacer_reset(conn->egress.pacer);
+    }
     conn->egress.ecn.state = conn->super.ctx->enable_ecn ? QUICLY_ECN_PROBING : QUICLY_ECN_OFF;
     quicly_retire_cid_init(&conn->egress.retire_cid);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
@@ -2996,6 +3034,18 @@ static int on_ack_retire_connection_id(quicly_sentmap_t *map, const quicly_sent_
     return 0;
 }
 
+static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
+{
+    /* The multiplier uses a hard-coded value of 2x in both the slow start and the congestion avoidance phases. This differs from
+     * Linux, which uses 1.25x for the latter. The rationale behind this choice is that 1.25x is not sufficiently aggressive
+     * immediately after a loss event. Following a loss event, the congestion window (CWND) is halved (i.e., beta), but the RTT
+     * remains high for one RTT and SRTT can remain high even loger, since it is a moving average adjusted with each ACK received.
+     * Consequently, if the multiplier is set to 1.25x, the calculated send rate could drop to as low as 1.25 * 1/2 = 0.625. By
+     * using a 2x multiplier, the send rate is guaranteed to become no less than that immediately before the loss event, which would
+     * have been the link throughput. */
+    return quicly_pacer_calc_send_rate(2, conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed);
+}
+
 static int should_send_datagram_frame(quicly_conn_t *conn)
 {
     if (conn->egress.datagram_frame_payloads.count == 0)
@@ -3023,7 +3073,8 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
  * * minimum send requirements in |min_bytes_to_send|, and
  * * if sending is to be restricted to the minimum, indicated in |restrict_sending|
  */
-static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, uint64_t amp_window, int restrict_sending)
+static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, uint64_t amp_window, uint64_t pacer_window,
+                               int restrict_sending)
 {
     uint64_t window = 0;
     if (restrict_sending) {
@@ -3031,8 +3082,11 @@ static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, ui
         window = min_bytes_to_send;
     } else {
         /* Limit to cwnd */
-        if (conn->egress.cc.cwnd > conn->egress.loss.sentmap.bytes_in_flight)
+        if (conn->egress.cc.cwnd > conn->egress.loss.sentmap.bytes_in_flight) {
             window = conn->egress.cc.cwnd - conn->egress.loss.sentmap.bytes_in_flight;
+            if (window > pacer_window)
+                window = pacer_window;
+        }
         /* Allow at least one packet on time-threshold loss detection */
         window = window > min_bytes_to_send ? window : min_bytes_to_send;
     }
@@ -3057,6 +3111,15 @@ static int is_point5rtt_with_no_handshake_data_to_send(quicly_conn_t *conn)
     return stream->sendstate.pending.num_ranges == 0 && stream->sendstate.acked.ranges[0].end == stream->sendstate.size_inflight;
 }
 
+static int64_t pacer_can_send_at(quicly_conn_t *conn)
+{
+    if (conn->egress.pacer == NULL)
+        return 0;
+
+    uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
+    return quicly_pacer_can_send_at(conn->egress.pacer, bytes_per_msec, conn->egress.max_udp_payload_size);
+}
+
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 {
     if (conn->super.state >= QUICLY_STATE_CLOSING)
@@ -3066,24 +3129,22 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         return 0;
 
     uint64_t amp_window = calc_amplification_limit_allowance(conn);
+    int64_t at = conn->idle_timeout.at, pacer_at = pacer_can_send_at(conn);
 
-    if (calc_send_window(conn, 0, amp_window, 0) > 0) {
+    /* reduce at to the moment pacer provides credit, if we are not CC-limited and there's something to be sent over CC */
+    if (pacer_at < at && calc_send_window(conn, 0, amp_window, UINT64_MAX, 0) > 0) {
         if (conn->egress.pending_flows != 0) {
             /* crypto streams (as indicated by lower 4 bits) can be sent whenever CWND is available; other flows need application
              * packet number space */
-            if (conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL)
-                return 0;
-            if ((conn->egress.pending_flows & 0xf) != 0)
-                return 0;
+            if ((conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL) ||
+                (conn->egress.pending_flows & 0xf) != 0)
+                at = pacer_at;
         }
-        if (quicly_linklist_is_linked(&conn->egress.pending_streams.control))
-            return 0;
-        if (scheduler_can_send(conn))
-            return 0;
+        if (pacer_at < at && (quicly_linklist_is_linked(&conn->egress.pending_streams.control) || scheduler_can_send(conn)))
+            at = pacer_at;
     }
 
     /* if something can be sent, return the earliest timeout. Otherwise return the idle timeout. */
-    int64_t at = conn->idle_timeout.at;
     if (amp_window > 0) {
         if (conn->egress.loss.alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
             at = conn->egress.loss.alarm_at;
@@ -3244,6 +3305,9 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         quicly_sentmap_commit(&conn->egress.loss.sentmap, (uint16_t)packet_bytes_in_flight);
 
     conn->egress.cc.type->cc_on_sent(&conn->egress.cc, &conn->egress.loss, (uint32_t)packet_bytes_in_flight, conn->stash.now);
+    if (conn->egress.pacer != NULL)
+        quicly_pacer_consume_window(conn->egress.pacer, packet_bytes_in_flight);
+
     QUICLY_PROBE(PACKET_SENT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  get_epoch(*s->target.first_byte_at), !s->target.ack_eliciting);
     QUICLY_LOG_CONN(packet_sent, conn, {
@@ -4715,8 +4779,17 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         /* TODO reset CC? */
     }
 
-    s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size,
-                                      calc_amplification_limit_allowance(conn), restrict_sending);
+    { /* calculate send window */
+        uint64_t pacer_window = SIZE_MAX;
+        if (conn->egress.pacer != NULL) {
+            uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
+            pacer_window =
+                quicly_pacer_get_window(conn->egress.pacer, conn->stash.now, bytes_per_msec, conn->egress.max_udp_payload_size);
+        }
+        s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size,
+                                          calc_amplification_limit_allowance(conn), pacer_window, restrict_sending);
+    }
+
     if (s->send_window == 0)
         ack_only = 1;
 
@@ -4824,18 +4897,15 @@ Exit:
         commit_send_packet(conn, s, 0);
     }
     if (ret == 0) {
-        /* update timers, start / stop delivery rate estimator */
+        /* update timers, cc and delivery rate estimator states */
         if (conn->application == NULL || conn->application->super.unacked_count == 0)
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         int can_send_stream_data = scheduler_can_send(conn);
         update_send_alarm(conn, can_send_stream_data, 1);
-        if (can_send_stream_data &&
-            (s->num_datagrams == s->max_datagrams || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd)) {
-            /* as the flow is CWND-limited, start delivery rate estimator */
-            quicly_ratemeter_in_cwnd_limited(&conn->egress.ratemeter, s->first_packet_number);
-        } else {
-            quicly_ratemeter_not_cwnd_limited(&conn->egress.ratemeter, conn->egress.packet_number);
-        }
+        update_cc_limited(conn, can_send_stream_data && conn->super.remote.address_validation.validated &&
+                                    (s->num_datagrams == s->max_datagrams ||
+                                     conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd ||
+                                     pacer_can_send_at(conn) > conn->stash.now));
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
@@ -5331,8 +5401,14 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
 
     /* OnPacketAcked and OnPacketAckedCC */
     if (bytes_acked > 0) {
+        /* Here, we pass `conn->egress.cc_limited` - a boolean flag indicating if last the last call to `quicly_send` ended with
+         * data being throttled by CC or pacer - to CC to determine if CWND can be grown.
+         * This might not be the best way to do this, but would likely be sufficient, as the flag being passed would be true only if
+         * the connection was CC-limited for at least one RTT. Hopefully, itwould also be aggressive enough during the slow start
+         * phase. */
+        int cc_limited = conn->super.ctx->respect_app_limited ? conn->egress.cc_limited : 1;
         conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame.largest_acknowledged,
-                                          (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked),
+                                          (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked), cc_limited,
                                           conn->egress.packet_number, conn->stash.now, conn->egress.max_udp_payload_size);
         QUICLY_PROBE(QUICTRACE_CC_ACK, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                      conn->egress.loss.sentmap.bytes_in_flight);

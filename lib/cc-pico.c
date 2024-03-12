@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include <math.h>
+#include "quicly/pacer.h"
 #include "quicly/cc.h"
 #include "quicly.h"
 
@@ -61,12 +62,15 @@ static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
 
 /* TODO: Avoid increase if sender was application limited. */
 static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                          uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
+                          int cc_limited, uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
 
     /* Do not increase congestion window while in recovery. */
     if (largest_acked < cc->recovery_end)
+        return;
+
+    if (!cc_limited)
         return;
 
     cc->state.pico.stash += bytes;

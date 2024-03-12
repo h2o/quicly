@@ -23,6 +23,7 @@
 #include <math.h>
 #include "quicly/cc.h"
 #include "quicly.h"
+#include "quicly/pacer.h"
 
 #define QUICLY_MIN_CWND 2
 
@@ -61,12 +62,14 @@ static uint32_t calc_w_est(const quicly_cc_t *cc, cubic_float_t t_sec, cubic_flo
 
 /* TODO: Avoid increase if sender was application limited. */
 static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                           uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
+                           int cc_limited, uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
     /* Do not increase congestion window while in recovery. */
     if (largest_acked < cc->recovery_end)
         return;
+
+    /* TODO: respect cc_limited */
 
     /* Slow start. */
     if (cc->cwnd < cc->ssthresh) {

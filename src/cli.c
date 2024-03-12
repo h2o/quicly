@@ -1070,11 +1070,15 @@ static void usage(const char *cmd)
            "  -c certificate-file\n"
            "  -k key-file               specifies the credentials to be used for running the\n"
            "                            server. If omitted, the command runs as a client.\n"
-           "  -C <algorithm>            the congestion control algorithm; either \"reno\"\n"
-           "                            (default), \"cubic\", or \"pico\"\n"
+           "  -C <algo>[:<iw>[:<p>]]    specifies the congestion control algorithm (\"reno\"\n"
+           "                            (default), \"cubic\", or \"pico\"), as well as\n"
+           "                            initial congestion window size (in packets, default:\n"
+           "                            10) and use of pacing.\n"
            "  -d draft-number           specifies the draft version number to be used (e.g.,\n"
            "                            29)\n"
            "  --disable-ecn             turns off ECN support (default is on)\n"
+           "  --disregard-app-limited   instructs CC to increase CWND even when the flow is\n"
+           "                            application limited\n"
            "  -e event-log-file         file to log events\n"
            "  -E                        expand Client Hello (sends multiple client Initials)\n"
            "  --ech-config <file>       file that contains ECHConfigList or an empty file to\n"
@@ -1105,7 +1109,6 @@ static void usage(const char *cmd)
            "  -U size                   maximum size of UDP datagram payload\n"
            "  -V                        verify peer using the default certificates\n"
            "  -v                        verbose mode (-vv emits packet dumps as well)\n"
-           "  -w packets                initial congestion window (default: 10)\n"
            "  -W public-key-file        use raw public keys (RFC 7250). When set and running\n"
            "                            as a client, the argument specifies the public keys\n"
            "                            that the server is expected to use. When running as\n"
@@ -1167,6 +1170,7 @@ int main(int argc, char **argv)
     static const struct option longopts[] = {{"ech-key", required_argument, NULL, 0},
                                              {"ech-configs", required_argument, NULL, 0},
                                              {"disable-ecn", no_argument, NULL, 0},
+                                             {"disregard-app-limited", no_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1178,6 +1182,8 @@ int main(int argc, char **argv)
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ecn = 0;
+            } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
+                ctx.respect_app_limited = 0;
             } else {
                 assert(!"unexpected longname");
             }
@@ -1200,14 +1206,34 @@ int main(int argc, char **argv)
             break;
         case 'C': {
             quicly_cc_type_t **cc;
+            char *token, *buf = alloca(strlen(optarg) + 1);
+            strcpy(buf, optarg);
+            /* CC name */
+            token = strsep(&buf, ":");
             for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
-                if (strcmp((*cc)->name, optarg) == 0)
+                if (strcmp((*cc)->name, token) == 0)
                     break;
             if (*cc != NULL) {
                 ctx.init_cc = (*cc)->cc_init;
             } else {
-                fprintf(stderr, "unknown congestion controller: %s\n", optarg);
+                fprintf(stderr, "unknown congestion controller: %s\n", token);
                 exit(1);
+            }
+            /* initcwnd */
+            if ((token = strsep(&buf, ":")) != NULL) {
+                if (sscanf(token, "%" SCNu32, &ctx.initcwnd_packets) != 1) {
+                    fprintf(stderr, "invalid initcwnd value: %s\n", token);
+                    exit(1);
+                }
+            }
+            /* pacing */
+            if ((token = strsep(&buf, ":")) != NULL) {
+                if (strcmp(token, "p") == 0) {
+                    ctx.use_pacing = 1;
+                } else {
+                    fprintf(stderr, "invalid pacing value: %s\n", token);
+                    exit(1);
+                }
             }
         } break;
         case 'G':
@@ -1340,12 +1366,6 @@ int main(int argc, char **argv)
             break;
         case 'v':
             ++verbosity;
-            break;
-        case 'w':
-            if (sscanf(optarg, "%" SCNu32, &ctx.initcwnd_packets) != 1) {
-                fprintf(stderr, "invalid argument passed to `-w`\n");
-                exit(1);
-            }
             break;
         case 'W':
             raw_pubkey_file = optarg;
