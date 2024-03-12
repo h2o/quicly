@@ -143,7 +143,7 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     update_cubic_k(cc, max_udp_payload_size);
 
     /* RFC 8312, Section 4.5; Multiplicative Decrease */
-    cc->cwnd *= QUICLY_CUBIC_BETA;
+    cc->cwnd *= cc->ssthresh == UINT32_MAX ? 0.5 : QUICLY_CUBIC_BETA; /* without HyStart++, we overshoot by 2x in slowstart */
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
     cc->ssthresh = cc->cwnd;
