@@ -33,8 +33,8 @@ static void test_jumpstart_pattern(quicly_init_cc_t *init, const struct test_jum
     quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
     quicly_cc_t cc;
     int64_t now = 1;
-    uint32_t inflight = 0;
-    uint64_t next_pn = 0, packets_acked = 0;
+    uint64_t next_pn = 0;
+    uint32_t packets_acked = 0, packets_inflight = 0;
     size_t ackcnt = 0;
 
     init->cb(init, &cc, 10 * mtu, now);
@@ -45,13 +45,13 @@ static void test_jumpstart_pattern(quicly_init_cc_t *init, const struct test_jum
         switch (action->action) {
         case TEST_JUMPSTART_ACTION_SEND:
             cc.type->cc_on_sent(&cc, &loss, action->packets * mtu, action->now);
-            inflight += action->packets * mtu;
+            packets_inflight += action->packets;
             next_pn += action->packets;
             break;
         case TEST_JUMPSTART_ACTION_ACKED:
-            cc.type->cc_on_acked(&cc, &loss, action->packets * mtu, packets_acked + action->packets - 1, action->packets * mtu, 1,
+            cc.type->cc_on_acked(&cc, &loss, action->packets * mtu, packets_acked + action->packets - 1, packets_inflight * mtu, 1,
                                  next_pn, action->now, mtu);
-            inflight -= action->packets * mtu;
+            packets_inflight -= action->packets;
             packets_acked += action->packets;
             ++ackcnt;
             /* enter jumpstart upon receiving the first ack */
@@ -62,7 +62,7 @@ static void test_jumpstart_pattern(quicly_init_cc_t *init, const struct test_jum
             break;
         case TEST_JUMPSTART_ACTION_LOST:
             cc.type->cc_on_lost(&cc, &loss, action->packets * mtu, packets_acked + action->packets - 1, next_pn, action->now, mtu);
-            inflight -= action->packets * mtu;
+            packets_inflight -= action->packets;
             packets_acked += action->packets;
             ok(!quicly_cc_in_jumpstart(&cc));
             ok(cc.ssthresh < UINT32_MAX);
@@ -126,6 +126,20 @@ static void do_test_jumpstart(quicly_init_cc_t *init)
                 {TEST_JUMPSTART_ACTION_END},
             },
             5);
+
+    /* When receiving ACK early in the reconnaisance phase before sending entire batch, CWND doubles per each RT from bytes_inflight
+     * (of 10 packets, in the test case below). */
+    subtest("simple", test_jumpstart_pattern, init,
+            (struct test_jumpstart_action[]){
+                {TEST_JUMPSTART_ACTION_SEND, 1000, 2},  /* send 2 packets */
+                {TEST_JUMPSTART_ACTION_ACKED, 1100, 2}, /* 2 packet acked, entering jumpstart */
+                {TEST_JUMPSTART_ACTION_SEND, 1100, 10}, /* use full jumpstart window */
+                {TEST_JUMPSTART_ACTION_ACKED, 1200, 2}, /* receive acks for all packets send in jumpstart */
+                {TEST_JUMPSTART_ACTION_SEND, 1200, 4},  /* use full jumpstart window */
+                {TEST_JUMPSTART_ACTION_ACKED, 1200, 8}, /* receive acks for all packets send in jumpstart */
+                {TEST_JUMPSTART_ACTION_END},
+            },
+            20);
 }
 
 void test_jumpstart(void)
