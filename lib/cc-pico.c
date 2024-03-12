@@ -116,7 +116,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     /* if detected loss before receiving all acks for jumpstart, restore original CWND */
     if (cc->ssthresh == UINT32_MAX)
-        quicly_cc_jumpstart_on_first_loss(cc, lost_pn, &beta);
+        quicly_cc_jumpstart_on_first_loss(cc, lost_pn);
 
     ++cc->num_loss_episodes;
     if (cc->cwnd_exiting_slow_start == 0) {
