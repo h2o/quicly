@@ -313,8 +313,6 @@ inline void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn,
         assert(cc->cwnd < cc->ssthresh);
         /* CWND is set to the amount of bytes ACKed during the jump start phase plus the value before jump start */
         cc->cwnd = cc->jumpstart.bytes_acked;
-        if (cc->cwnd < cc->cwnd_initial)
-            cc->cwnd = cc->cwnd_initial;
         if (cc->jumpstart.exit_pn == UINT64_MAX)
             cc->jumpstart.exit_pn = lost_pn;
         if (beta != NULL)
