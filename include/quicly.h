@@ -59,7 +59,7 @@ extern "C" {
 #define QUICLY_PACKET_TYPE_RETRY (QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x30)
 #define QUICLY_PACKET_TYPE_BITMASK 0xf0
 
-#define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte)&QUICLY_LONG_HEADER_BIT) != 0)
+#define QUICLY_PACKET_IS_LONG_HEADER(first_byte) (((first_byte) & QUICLY_LONG_HEADER_BIT) != 0)
 
 /**
  * Version 1.
@@ -74,7 +74,7 @@ extern "C" {
  */
 #define QUICLY_PROTOCOL_VERSION_DRAFT27 0xff00001b
 
-#define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte)&0xf0) == 0xc0)
+#define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte) & 0xf0) == 0xc0)
 
 #define QUICLY_STATELESS_RESET_PACKET_MIN_LEN 39
 
@@ -335,9 +335,31 @@ struct st_quicly_context_t {
      */
     uint64_t max_path_validation_failures;
     /**
+     * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
+     * possible only when the use_pacing flag is set.
+     */
+    uint32_t default_jumpstart_cwnd_packets;
+    /**
+     * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections). If
+     * set to zero, slow start is used.
+     */
+    uint32_t max_jumpstart_cwnd_packets;
+    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
+    /**
+     * whether to use ECN on the send side; ECN is always on on the receive side
+     */
+    unsigned enable_ecn : 1;
+    /**
+     * if pacing should be used
+     */
+    unsigned use_pacing : 1;
+    /**
+     * if CC should take app-limited into consideration
+     */
+    unsigned respect_app_limited : 1;
     /**
      *
      */
@@ -463,6 +485,14 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t received_out_of_order;                                                                                            \
         /**                                                                                                                        \
+         * connection-wide counters for ECT(0), ECT(1), CE                                                                         \
+         */                                                                                                                        \
+        uint64_t received_ecn_counts[3];                                                                                           \
+        /**                                                                                                                        \
+         * connection-wide ack-received counters for ECT(0), ECT(1), CE                                                            \
+         */                                                                                                                        \
+        uint64_t acked_ecn_counts[3];                                                                                              \
+        /**                                                                                                                        \
          * Total number of packets sent on promoted paths.                                                                         \
          */                                                                                                                        \
         uint64_t sent_promoted_paths;                                                                                              \
@@ -522,6 +552,14 @@ struct st_quicly_conn_streamgroup_state_t {
          * number of alternate paths that were closed due to Connection ID being unavailable                                       \
          */                                                                                                                        \
         uint64_t closed_no_dcid;                                                                                                   \
+        /**                                                                                                                        \
+         * number of paths that were ECN-capable                                                                                   \
+         */                                                                                                                        \
+        uint64_t ecn_validated;                                                                                                    \
+        /**                                                                                                                        \
+         * number of paths that were deemed as ECN black holes                                                                     \
+         */                                                                                                                        \
+        uint64_t ecn_failed;                                                                                                       \
     } num_paths;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of each frame being sent / received.                                                                           \
@@ -543,7 +581,33 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of events where `initial_handshake_sent` exceeds limit.                                                        \
      */                                                                                                                            \
-    uint64_t num_initial_handshake_exceeded
+    uint64_t num_initial_handshake_exceeded;                                                                                       \
+    /**                                                                                                                            \
+     * jumpstart parameters and the CWND being adopted (see also quicly_cc_t::cwnd_exiting_jumpstart)                              \
+     */                                                                                                                            \
+    struct {                                                                                                                       \
+        uint64_t prev_rate;                                                                                                        \
+        uint32_t prev_rtt;                                                                                                         \
+        uint32_t new_rtt;                                                                                                          \
+        uint32_t cwnd;                                                                                                             \
+    } jumpstart;                                                                                                                   \
+    /**                                                                                                                            \
+     * some contents of the last token sent                                                                                        \
+     */                                                                                                                            \
+    struct {                                                                                                                       \
+        /**                                                                                                                        \
+         * when sent, relative to the creation time of the connection                                                              \
+         */                                                                                                                        \
+        int64_t at;                                                                                                                \
+        /**                                                                                                                        \
+         * delivery rate                                                                                                           \
+         */                                                                                                                        \
+        uint64_t rate;                                                                                                             \
+        /**                                                                                                                        \
+         * rtt                                                                                                                     \
+         */                                                                                                                        \
+        uint32_t rtt;                                                                                                              \
+    } token_sent
 
 typedef struct st_quicly_stats_t {
     /**
@@ -849,6 +913,10 @@ typedef struct st_quicly_decoded_packet_t {
         uint64_t key_phase;
     } decrypted;
     /**
+     * ECN bits
+     */
+    uint8_t ecn : 2;
+    /**
      *
      */
     enum {
@@ -862,6 +930,7 @@ struct st_quicly_address_token_plaintext_t {
     enum { QUICLY_ADDRESS_TOKEN_TYPE_RETRY, QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION } type;
     uint64_t issued_at;
     quicly_address_t local, remote;
+    unsigned address_mismatch : 1;
     union {
         struct {
             quicly_cid_t original_dcid;
@@ -1065,6 +1134,10 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
  */
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize);
+/**
+ * returns ECN bits to be set for the packets built by the last invocation of `quicly_send`
+ */
+uint8_t quicly_send_get_ecn_bits(quicly_conn_t *conn);
 /**
  *
  */

@@ -53,7 +53,12 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                               DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                               DEFAULT_MAX_PROBE_PACKETS,
                                               DEFAULT_MAX_PATH_VALIDATION_FAILURES,
+                                              0, /* default_jumpstart_cwnd_bytes */
+                                              0, /* max_jumpstart_cwnd_bytes */
                                               0, /* enlarge_client_hello */
+                                              1, /* enable_ecn */
+                                              0, /* use_pacing */
+                                              1, /* cc_recognize_app_limited */
                                               NULL,
                                               NULL, /* on_stream_open */
                                               &quicly_default_stream_scheduler,
@@ -85,7 +90,12 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                     DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
                                                     DEFAULT_MAX_PROBE_PACKETS,
                                                     DEFAULT_MAX_PATH_VALIDATION_FAILURES,
+                                                    0, /* default_jumpstart_cwnd_bytes */
+                                                    0, /* max_jumpstart_cwnd_bytes */
                                                     0, /* enlarge_client_hello */
+                                                    1, /* enable_ecn */
+                                                    0, /* use_pacing */
+                                                    1, /* cc_recognize_app_limited */
                                                     NULL,
                                                     NULL, /* on_stream_open */
                                                     &quicly_default_stream_scheduler,

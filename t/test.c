@@ -520,15 +520,15 @@ static void do_test_record_receipt(size_t epoch)
 
     if (epoch == QUICLY_EPOCH_1RTT) {
         /* 2nd packet triggers an ack */
-        ok(record_receipt(space, pn++, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
+        ok(record_receipt(space, pn++, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
         ok(send_ack_at == now + QUICLY_DELAYED_ACK_TIMEOUT);
         now += 1;
-        ok(record_receipt(space, pn++, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
+        ok(record_receipt(space, pn++, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
         ok(send_ack_at == now);
         now += 1;
     } else {
         /* every packet triggers an ack */
-        ok(record_receipt(space, pn++, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
+        ok(record_receipt(space, pn++, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
         ok(send_ack_at == now);
         now += 1;
     }
@@ -538,23 +538,23 @@ static void do_test_record_receipt(size_t epoch)
     send_ack_at = INT64_MAX;
 
     /* ack-only packets do not elicit an ack */
-    ok(record_receipt(space, pn++, 1, now, &send_ack_at, &out_of_order_cnt) == 0);
+    ok(record_receipt(space, pn++, 0, 1, now, &send_ack_at, &out_of_order_cnt) == 0);
     ok(send_ack_at == INT64_MAX);
     now += 1;
-    ok(record_receipt(space, pn++, 1, now, &send_ack_at, &out_of_order_cnt) == 0);
+    ok(record_receipt(space, pn++, 0, 1, now, &send_ack_at, &out_of_order_cnt) == 0);
     ok(send_ack_at == INT64_MAX);
     now += 1;
     pn++; /* gap */
-    ok(record_receipt(space, pn++, 1, now, &send_ack_at, &out_of_order_cnt) == 0);
+    ok(record_receipt(space, pn++, 0, 1, now, &send_ack_at, &out_of_order_cnt) == 0);
     ok(send_ack_at == INT64_MAX);
     now += 1;
-    ok(record_receipt(space, pn++, 1, now, &send_ack_at, &out_of_order_cnt) == 0);
+    ok(record_receipt(space, pn++, 0, 1, now, &send_ack_at, &out_of_order_cnt) == 0);
     ok(send_ack_at == INT64_MAX);
     now += 1;
 
     /* gap triggers an ack */
     pn += 1; /* gap */
-    ok(record_receipt(space, pn++, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
+    ok(record_receipt(space, pn++, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
     ok(send_ack_at == now);
     now += 1;
 
@@ -566,10 +566,10 @@ static void do_test_record_receipt(size_t epoch)
     if (epoch == QUICLY_EPOCH_1RTT) {
         space->ignore_order = 1;
         pn++; /* gap */
-        ok(record_receipt(space, pn++, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
+        ok(record_receipt(space, pn++, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
         ok(send_ack_at == now + QUICLY_DELAYED_ACK_TIMEOUT);
         now += 1;
-        ok(record_receipt(space, pn++, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
+        ok(record_receipt(space, pn++, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
         ok(send_ack_at == now);
         now += 1;
     }
@@ -716,6 +716,30 @@ static void test_set_cc(void)
     ok(strcmp(stats.cc.type->name, "reno") == 0);
 }
 
+void test_ecn_index_from_bits(void)
+{
+    ok(get_ecn_index_from_bits(1) == 1);
+    ok(get_ecn_index_from_bits(2) == 0);
+    ok(get_ecn_index_from_bits(3) == 2);
+}
+
+static void test_jumpstart_cwnd(void)
+{
+    quicly_context_t unbounded_max = {
+        .max_jumpstart_cwnd_packets = UINT32_MAX,
+        .transport_params.max_udp_payload_size = 1200,
+    };
+    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 250) == 250000);
+    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 400) == 250000); /* if RTT increases, CWND stays same */
+    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
+
+    quicly_context_t bounded_max = {
+        .max_jumpstart_cwnd_packets = 64,
+        .transport_params.max_udp_payload_size = 1250,
+    };
+    ok(derive_jumpstart_cwnd(&bounded_max, 250, 1000000, 250) == 80000);
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -779,6 +803,7 @@ int main(int argc, char **argv)
     subtest("record-receipt", test_record_receipt);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
+    subtest("pacer", test_pacer);
     subtest("sentmap", test_sentmap);
     subtest("loss", test_loss);
     subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
@@ -791,6 +816,9 @@ int main(int argc, char **argv)
     subtest("lossy", test_lossy);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
+    subtest("ecn-index-from-bits", test_ecn_index_from_bits);
+    subtest("jumpstart-cwnd", test_jumpstart_cwnd);
+    subtest("jumpstart", test_jumpstart);
 
     return done_testing();
 }
