@@ -123,6 +123,7 @@ static void on_stop_sending(quicly_stream_t *stream, int err);
 static void on_receive_reset(quicly_stream_t *stream, int err);
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+static void client_on_receive_reset(quicly_stream_t *stream, int err);
 
 static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streambuf_destroy,
                                                                   quicly_streambuf_egress_shift,
@@ -135,7 +136,7 @@ static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streamb
                                                                   quicly_streambuf_egress_emit,
                                                                   on_stop_sending,
                                                                   client_on_receive,
-                                                                  on_receive_reset};
+                                                                  client_on_receive_reset};
 
 static void dump_stats(FILE *fp, quicly_conn_t *conn)
 {
@@ -351,8 +352,28 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     send_header(stream, is_http1, 404, "text/plain; charset=utf-8");
     send_str(stream, "not found\n");
 Sent:
-    quicly_streambuf_egress_shutdown(stream);
+    if (ctx.transport_params.reliable_stream_reset && quicly_get_remote_transport_parameters(stream->conn)->reliable_stream_reset) {
+        quicly_streambuf_t *sbuf = stream->data;
+        quicly_streambuf_egress_reset(stream, sbuf->egress.bytes_written, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123));
+    } else {
+        quicly_streambuf_egress_shutdown(stream);
+    }
     quicly_streambuf_ingress_shift(stream, len);
+}
+
+static void client_on_receive_complete(quicly_stream_t *stream)
+{
+    struct st_stream_data_t *stream_data = stream->data;
+
+    if (stream_data->outfp != NULL)
+        fclose(stream_data->outfp);
+}
+
+static void client_on_receive_reset(quicly_stream_t *stream, int err)
+{
+    on_receive_reset(stream, err);
+    if (quicly_recvstate_transfer_complete(&stream->recvstate))
+        client_on_receive_complete(stream);
 }
 
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
@@ -372,10 +393,8 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
         quicly_streambuf_ingress_shift(stream, input.len);
     }
 
-    if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        if (stream_data->outfp != NULL)
-            fclose(stream_data->outfp);
-    }
+    if (quicly_recvstate_transfer_complete(&stream->recvstate))
+        client_on_receive_complete(stream);
 }
 
 static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
@@ -1214,6 +1233,7 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
+                                             {"reliable-reset", no_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1237,6 +1257,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "reliable-reset") == 0) {
+                ctx.transport_params.reliable_stream_reset = 1;
             } else {
                 assert(!"unexpected longname");
             }
