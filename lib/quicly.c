@@ -3641,6 +3641,7 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
 
     ++conn->egress.packet_number;
     ++conn->super.stats.num_packets.sent;
+    ++conn->paths[s->path_index]->num_packets.sent;
     if (on_promoted_path)
         ++conn->super.stats.num_packets.sent_promoted_paths;
 
@@ -5390,7 +5391,6 @@ Exit:
                                    (s->num_datagrams == s->max_datagrams ||
                                     conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd ||
                                     pacer_can_send_at(conn) > conn->stash.now));
-        conn->paths[s->path_index]->num_packets.sent += 1;
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
