@@ -331,7 +331,8 @@ struct st_quicly_context_t {
      */
     uint64_t max_probe_packets;
     /**
-     * once path validation fails for the specified number of times, packets arriving on new tuples will be dropped
+     * Once path validation fails for the specified number of paths, packets arriving on new tuples will be dropped. Setting this
+     * value to zero effectively disables the endpoint responding to path migration attempts.
      */
     uint64_t max_path_validation_failures;
     /**
