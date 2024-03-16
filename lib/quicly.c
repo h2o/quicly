@@ -1871,11 +1871,6 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
 {
     int ret;
 
-    /* packets arriving from new paths will start to get ignored once the number of paths that failed to validate reaches the
-     * defined threshold */
-    if (conn->super.stats.num_paths.validation_failed > conn->super.ctx->max_path_validation_failures)
-        return QUICLY_ERROR_PACKET_IGNORED;
-
     /* choose a slot that in unused or the least-recently-used one that has completed validation */
     *path_index = SIZE_MAX;
     for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
@@ -6925,6 +6920,15 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         goto Exit;
     }
 
+    /* Determine the incoming path. path_index may be set to PTLS_ELEMENTSOF(conn->paths), which indicates that a new path needs to
+     * be created once packet decryption succeeds. */
+    for (path_index = 0; path_index < PTLS_ELEMENTSOF(conn->paths); ++path_index)
+        if (conn->paths[path_index] != NULL && compare_socket_address(src_addr, &conn->paths[path_index]->address.remote.sa) == 0)
+            break;
+    if (path_index == PTLS_ELEMENTSOF(conn->paths) &&
+        conn->super.stats.num_paths.validation_failed >= conn->super.ctx->max_path_validation_failures)
+        return QUICLY_ERROR_PACKET_IGNORED;
+
     /* add unconditionally, as packet->datagram_size is set only for the first packet within the UDP datagram */
     conn->super.stats.num_bytes.received += packet->datagram_size;
 
@@ -7080,10 +7084,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
     });
 
-    /* determine the incoming path; if it is a new path, open a new one */
-    for (path_index = 0; path_index < PTLS_ELEMENTSOF(conn->paths); ++path_index)
-        if (conn->paths[path_index] != NULL && compare_socket_address(src_addr, &conn->paths[path_index]->address.remote.sa) == 0)
-            break;
+    /* open a new path if necessary, now that decryption succeeded */
     if (path_index == PTLS_ELEMENTSOF(conn->paths) && (ret = open_path(conn, &path_index, src_addr, dest_addr)) != 0)
         goto Exit;
 
