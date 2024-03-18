@@ -7372,11 +7372,12 @@ int quicly_qos_receive(quicly_conn_t *conn, const void *src, size_t *len)
     size_t epoch = conn->super.stats.num_frames_received.qs_transport_parameters == 0 ? QUICLY_EPOCH_ON_STREAMS_TP
                                                                                       : QUICLY_EPOCH_ON_STREAMS_OTHER;
     uint64_t offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
-    int is_ack_only, ret;
+    int is_ack_only, ret = 0;
 
     lock_now(conn, 0);
 
-    ret = handle_payload(conn, epoch, src, *len, len, &offending_frame_type, &is_ack_only);
+    if (*len != 0)
+        ret = handle_payload(conn, epoch, src, *len, len, &offending_frame_type, &is_ack_only);
 
     unlock_now(conn);
 
