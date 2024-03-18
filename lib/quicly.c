@@ -2219,6 +2219,7 @@ static void init_connection_core(quicly_conn_t *conn, int is_client)
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
+    conn->idle_timeout.at = INT64_MAX;
     conn->stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
 }
 
@@ -2298,7 +2299,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     }
     conn->crypto.handshake_properties.collect_extension = collect_transport_parameters;
     conn->retry_scid.len = UINT8_MAX;
-    conn->idle_timeout.at = INT64_MAX;
     conn->idle_timeout.should_rearm_on_send = 1;
 
     *ptls_get_data_ptr(tls) = conn;
