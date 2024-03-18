@@ -7346,6 +7346,12 @@ int quicly_qos_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
 
     lock_now(conn, 0);
 
+    if (conn->idle_timeout.at <= conn->stash.now) {
+        conn->super.state = QUICLY_STATE_DRAINING;
+        destroy_all_streams(conn, 0, 0);
+        return QUICLY_ERROR_FREE_CONNECTION;
+    }
+
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
         if ((ret = emit_qs_transport_parameters(conn, &s)) != 0)
             goto Exit;
