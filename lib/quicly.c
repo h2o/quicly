@@ -1356,7 +1356,7 @@ static int scheduler_can_send(quicly_conn_t *conn)
     }
 
     /* scheduler would never have data to send, until application keys become available */
-    if (conn->application == NULL)
+    if (!quicly_is_on_streams(conn) && conn->application == NULL)
         return 0;
 
     int conn_is_saturated = !(conn->egress.max_data.sent < conn->egress.max_data.permitted);
