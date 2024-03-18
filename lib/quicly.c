@@ -351,10 +351,6 @@ struct st_quicly_conn_t {
          */
         uint8_t try_jumpstart : 1;
         /**
-         *
-         */
-        uint8_t is_on_streams : 1;
-        /**
          * pending RETIRE_CONNECTION_ID frames to be sent
          */
         quicly_retire_cid_set_t retire_cid;
