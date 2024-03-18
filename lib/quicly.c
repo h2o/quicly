@@ -1731,7 +1731,7 @@ void quicly_free(quicly_conn_t *conn)
     if (conn->crypto.async_in_progress) {
         /* When async signature generation is inflight, `ptls_free` will be called from `quicly_resume_handshake` laterwards. */
         *ptls_get_data_ptr(conn->crypto.tls) = NULL;
-    } else {
+    } else if (conn->crypto.tls != NULL) {
         ptls_free(conn->crypto.tls);
     }
 
