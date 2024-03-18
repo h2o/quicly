@@ -856,6 +856,11 @@ static int update_max_streams(struct st_quicly_max_streams_t *m, uint64_t count)
     return 0;
 }
 
+int quicly_is_on_streams(quicly_conn_t *conn)
+{
+    return conn->crypto.tls == NULL;
+}
+
 int quicly_connection_is_ready(quicly_conn_t *conn)
 {
     return conn->application != NULL;
@@ -3092,6 +3097,9 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
 static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, uint64_t amp_window, uint64_t pacer_window,
                                int restrict_sending)
 {
+    if (quicly_is_on_streams(conn))
+        return conn->super.ctx->qos_is_writing->cb(conn->super.ctx->qos_is_writing, conn) ? 0 : SIZE_MAX;
+
     uint64_t window = 0;
     if (restrict_sending) {
         /* Send min_bytes_to_send on PTO */
@@ -3152,7 +3160,8 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         if (conn->egress.pending_flows != 0) {
             /* crypto streams (as indicated by lower 4 bits) can be sent whenever CWND is available; other flows need application
              * packet number space */
-            if ((conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL) ||
+            if (quicly_is_on_streams(conn) ||
+                (conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL) ||
                 (conn->egress.pending_flows & 0xf) != 0)
                 at = pacer_at;
         }

@@ -166,6 +166,10 @@ QUICLY_CALLBACK_TYPE(void, update_open_count, ssize_t delta);
  * is complete.
  */
 QUICLY_CALLBACK_TYPE(void, async_handshake, ptls_t *tls);
+/**
+ *
+ */
+QUICLY_CALLBACK_TYPE(int, qos_is_writing, quicly_conn_t *conn);
 
 /**
  * crypto offload API
@@ -400,6 +404,10 @@ struct st_quicly_context_t {
      *
      */
     quicly_async_handshake_t *async_handshake;
+    /**
+     *
+     */
+    quicly_qos_is_writing_t *qos_is_writing;
 };
 
 /**
@@ -967,6 +975,10 @@ static const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn);
  *
  */
 static const quicly_transport_parameters_t *quicly_get_remote_transport_parameters(quicly_conn_t *conn);
+/**
+ *
+ */
+int quicly_is_on_streams(quicly_conn_t *conn);
 /**
  *
  */
