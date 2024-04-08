@@ -84,6 +84,13 @@ typedef struct st_quicly_remote_cid_set_t {
      * we expect to receive CIDs with sequence number smaller than or equal to this number
      */
     uint64_t _largest_sequence_expected;
+    /**
+     * queue containing CID sequence numbers that should be sent using RETIRE_CONNECTION_ID frames
+     */
+    struct {
+        uint64_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * 2];
+        size_t count;
+    } retired;
 } quicly_remote_cid_set_t;
 
 /**
@@ -93,16 +100,30 @@ typedef struct st_quicly_remote_cid_set_t {
  */
 void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *initial_cid, void (*random_bytes)(void *, size_t));
 /**
- * registers received connection ID
+ * registers received connection ID at the same time pushing CIDs to the retired queue, if any
  * returns 0 if successful (registered or ignored because of duplication/stale information), transport error code otherwise
  */
 int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to,
-                               uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT], size_t *num_unregistered_seqs);
+                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to);
 /**
- * unregisters specified CID from the store
+ * unregisters specified CID from the store; the unregistered CID is pushed onto the retired queue
  */
-void quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence);
+int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence);
+/**
+ * pushes a CID sequence number to the retired queue
+ */
+int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequence);
+/**
+ * flushes the retire queue
+ */
+static void quicly_remote_cid_clear_retired(quicly_remote_cid_set_t *set);
+
+/* inline definitions */
+
+inline void quicly_remote_cid_clear_retired(quicly_remote_cid_set_t *set)
+{
+    set->retired.count = 0;
+}
 
 #ifdef __cplusplus
 }

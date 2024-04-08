@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 #include <assert.h>
+#include <string.h>
 #include "quicly/constants.h"
 #include "quicly/remote_cid.h"
 
@@ -44,6 +45,7 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
         };
 
     set->_largest_sequence_expected = PTLS_ELEMENTSOF(set->cids) - 1;
+    memset(&set->retired, 0, sizeof(set->retired));
 }
 
 static int do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
@@ -91,41 +93,44 @@ static int do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const ui
     return 0;
 }
 
-static void do_unregister(quicly_remote_cid_set_t *set, size_t idx_to_unreg)
+static int do_unregister(quicly_remote_cid_set_t *set, size_t idx_to_unreg)
 {
+    int ret;
+
+    if ((ret = quicly_remote_cid_push_retired(set, set->cids[idx_to_unreg].sequence)) != 0)
+        return ret;
+
     set->cids[idx_to_unreg].state = QUICLY_REMOTE_CID_UNAVAILABLE;
     set->cids[idx_to_unreg].sequence = ++set->_largest_sequence_expected;
+
+    return 0;
 }
 
-void quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence)
+int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence)
 {
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        if (sequence == set->cids[i].sequence) {
-            do_unregister(set, i);
-            return;
-        }
+        if (sequence == set->cids[i].sequence)
+            return do_unregister(set, i);
     }
     assert(!"invalid CID sequence number");
 }
 
-static size_t unregister_prior_to(quicly_remote_cid_set_t *set, uint64_t seq_unreg_prior_to,
-                                  uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT])
+static int unregister_prior_to(quicly_remote_cid_set_t *set, uint64_t seq_unreg_prior_to)
 {
-    size_t num_unregistered = 0;
+    int ret;
 
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        if (set->cids[i].sequence < seq_unreg_prior_to) {
-            unregistered_seqs[num_unregistered++] = set->cids[i].sequence;
-            do_unregister(set, i);
+        while (set->cids[i].sequence < seq_unreg_prior_to) {
+            if ((ret = do_unregister(set, i)) != 0)
+                return ret;
         }
     }
 
-    return num_unregistered;
+    return 0;
 }
 
 int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to,
-                               uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT], size_t *num_unregistered_seqs)
+                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to)
 {
     quicly_remote_cid_set_t backup = *set; /* preserve current state so that it can be restored to notify protocol violation */
     int ret;
@@ -134,7 +139,8 @@ int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, 
 
     /* First, handle retire_prior_to. This order is important as it is possible to receive a NEW_CONNECTION_ID frame such that it
      * retires active_connection_id_limit CIDs and then installs one new CID. */
-    *num_unregistered_seqs = unregister_prior_to(set, retire_prior_to, unregistered_seqs);
+    if ((ret = unregister_prior_to(set, retire_prior_to)) != 0)
+        return ret;
 
     /* Then, register given value. If an error occurs, restore the backup and send the error. */
     if ((ret = do_register(set, sequence, cid, cid_len, srt)) != 0) {
@@ -143,4 +149,27 @@ int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, 
     }
 
     return ret;
+}
+
+int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequence)
+{
+    /* do nothing if given sequence is already registered */
+    for (size_t i = 0; i < set->retired.count; ++i) {
+        if (set->retired.cids[i] == sequence)
+            return 0;
+    }
+
+    if (set->retired.count >= PTLS_ELEMENTSOF(set->retired.cids))
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+    set->retired.cids[set->retired.count++] = sequence;
+    return 0;
+}
+
+void quicly_remote_cid_shift_retired(quicly_remote_cid_set_t *set, size_t count)
+{
+    assert(count <= set->retired.count);
+
+    set->retired.count -= count;
+    for (size_t i = 0; i < count; ++i)
+        set->retired.cids[i] = set->retired.cids[i + count];
 }

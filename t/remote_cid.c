@@ -60,8 +60,6 @@ static uint8_t srts[][QUICLY_STATELESS_RESET_TOKEN_LEN] = {
 void test_received_cid(void)
 {
     quicly_remote_cid_set_t set;
-    uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
-    size_t num_unregistered;
 
 #define TEST_SET(...)                                                                                                              \
     do {                                                                                                                           \
@@ -84,90 +82,97 @@ void test_received_cid(void)
     } while (0)
 
     quicly_remote_cid_init_set(&set, NULL, quic_ctx.tls->random_bytes);
+    ok(set._largest_sequence_expected == QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1);
+
     /* fill CIDs */
     for (int i = 1; i < 4; i++) {
-        ok(quicly_remote_cid_register(&set, i, cids[i], CID_LEN, srts[i], 0, unregistered_seqs, &num_unregistered) == 0);
-        ok(num_unregistered == 0);
+        ok(quicly_remote_cid_register(&set, i, cids[i], CID_LEN, srts[i], 0) == 0);
+        ok(set.retired.count == 0);
     }
     /* CIDs = {0, 1, 2, 3} */
 
     /* dup */
-    ok(quicly_remote_cid_register(&set, 1, cids[1], CID_LEN, srts[1], 0, unregistered_seqs, &num_unregistered) == 0);
-    ok(num_unregistered == 0);
+    ok(quicly_remote_cid_register(&set, 1, cids[1], CID_LEN, srts[1], 0) == 0);
+    ok(set.retired.count == 0);
     /* same CID with different sequence number */
-    ok(quicly_remote_cid_register(&set, 0, cids[1], CID_LEN, srts[1], 0, unregistered_seqs, &num_unregistered) != 0);
-    ok(num_unregistered == 0);
+    ok(quicly_remote_cid_register(&set, 0, cids[1], CID_LEN, srts[1], 0) != 0);
+    ok(set.retired.count == 0);
     /* already full */
-    ok(quicly_remote_cid_register(&set, 4, cids[4], CID_LEN, srts[4], 0, unregistered_seqs, &num_unregistered) ==
-       QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT);
+    ok(quicly_remote_cid_register(&set, 4, cids[4], CID_LEN, srts[4], 0) == QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT);
     TEST_SET({0, QUICLY_REMOTE_CID_IN_USE}, /* we have CID to send error */
              {1, QUICLY_REMOTE_CID_AVAILABLE}, {2, QUICLY_REMOTE_CID_AVAILABLE}, {3, QUICLY_REMOTE_CID_AVAILABLE});
 
     /* retire seq=0 */
     quicly_remote_cid_unregister(&set, 0);
+    ok(set.retired.count == 1);
+    ok(set.retired.cids[0] == 0);
+
     /* CIDs = {(4), 1, 2, 3} */
     TEST_SET({4, QUICLY_REMOTE_CID_UNAVAILABLE}, {1, QUICLY_REMOTE_CID_AVAILABLE}, {2, QUICLY_REMOTE_CID_AVAILABLE},
              {3, QUICLY_REMOTE_CID_AVAILABLE});
+    ok(set._largest_sequence_expected == 4);
     /* sequence number out of current acceptable window */
-    ok(quicly_remote_cid_register(&set, 255, cids[4], CID_LEN, srts[4], 0, unregistered_seqs, &num_unregistered) ==
-       QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT);
+    ok(quicly_remote_cid_register(&set, 255, cids[4], CID_LEN, srts[4], 0) == QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT);
     ok(set.cids[1].state == QUICLY_REMOTE_CID_AVAILABLE && "we have CID to send error");
 
     /* ignore already retired CID */
-    ok(quicly_remote_cid_register(&set, 0, cids[0], CID_LEN, srts[0], 0, unregistered_seqs, &num_unregistered) == 0);
-    ok(num_unregistered == 0);
+    ok(quicly_remote_cid_register(&set, 0, cids[0], CID_LEN, srts[0], 0) == 0);
+    ok(set.retired.count == 1);
 
     /* register 5th CID */
-    ok(quicly_remote_cid_register(&set, 4, cids[4], CID_LEN, srts[4], 0, unregistered_seqs, &num_unregistered) == 0);
-    ok(num_unregistered == 0);
+    ok(quicly_remote_cid_register(&set, 4, cids[4], CID_LEN, srts[4], 0) == 0);
     /* active CIDs = {4, 1, 2, 3} */
     TEST_SET({4, QUICLY_REMOTE_CID_AVAILABLE}, {1, QUICLY_REMOTE_CID_AVAILABLE}, {2, QUICLY_REMOTE_CID_AVAILABLE},
              {3, QUICLY_REMOTE_CID_AVAILABLE});
+    ok(set.retired.count == 1);
 
     /* unregister seq=2 */
     quicly_remote_cid_unregister(&set, 2);
     /* active CIDs = {4, 1, (5), 3} */
     TEST_SET({4, QUICLY_REMOTE_CID_AVAILABLE}, {1, QUICLY_REMOTE_CID_AVAILABLE}, {5, QUICLY_REMOTE_CID_UNAVAILABLE},
              {3, QUICLY_REMOTE_CID_AVAILABLE});
+    ok(set.retired.count == 2);
+    ok(set.retired.cids[1] == 2);
 
     /* register 5, unregister prior to 5 -- seq=1,3,4 should be unregistered at this moment */
-    ok(quicly_remote_cid_register(&set, 5, cids[5], CID_LEN, srts[5], 5, unregistered_seqs, &num_unregistered) == 0);
-    ok(num_unregistered == 3);
-    /* check unregistered_seqs */
-    ok(unregistered_seqs[0] == 4);
-    ok(unregistered_seqs[1] == 1);
-    ok(unregistered_seqs[2] == 3);
+    ok(quicly_remote_cid_register(&set, 5, cids[5], CID_LEN, srts[5], 5) == 0);
     /* active CIDs = {(6), (7), 5, (8)} */
     TEST_SET({6, QUICLY_REMOTE_CID_UNAVAILABLE}, {7, QUICLY_REMOTE_CID_UNAVAILABLE}, {5, QUICLY_REMOTE_CID_AVAILABLE},
              {8, QUICLY_REMOTE_CID_UNAVAILABLE});
+    ok(set.retired.count == 5);
+    ok(set.retired.cids[2] == 4);
+    ok(set.retired.cids[3] == 1);
+    ok(set.retired.cids[4] == 3);
 
     /* install CID with out-of-order sequence */
-    ok(quicly_remote_cid_register(&set, 8, cids[8], CID_LEN, srts[8], 5, unregistered_seqs, &num_unregistered) == 0);
-    ok(num_unregistered == 0);
+    ok(quicly_remote_cid_register(&set, 8, cids[8], CID_LEN, srts[8], 5) == 0);
+    ok(set.retired.count == 5);
     /* active CIDs = {(6), (7), 5, 8} */
     TEST_SET({6, QUICLY_REMOTE_CID_UNAVAILABLE}, {7, QUICLY_REMOTE_CID_UNAVAILABLE}, {5, QUICLY_REMOTE_CID_AVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
-    ok(quicly_remote_cid_register(&set, 7, cids[7], CID_LEN, srts[7], 5, unregistered_seqs, &num_unregistered) == 0);
+    ok(quicly_remote_cid_register(&set, 7, cids[7], CID_LEN, srts[7], 5) == 0);
+    ok(set.retired.count == 5);
     /* active CIDs = {(6), 7, 5, 8} */
     TEST_SET({6, QUICLY_REMOTE_CID_UNAVAILABLE}, {7, QUICLY_REMOTE_CID_AVAILABLE}, {5, QUICLY_REMOTE_CID_AVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
 
     /* unregister prior to 8 -- seq=5-7 should be unregistered at this moment */
-    ok(quicly_remote_cid_register(&set, 8, cids[8], CID_LEN, srts[8], 8, unregistered_seqs, &num_unregistered) == 0);
-    /* active CIDs = {*8} */
-    ok(num_unregistered == 3);
-    /* check unregistered_seqs */
-    ok(unregistered_seqs[0] == 6);
-    ok(unregistered_seqs[1] == 7);
-    ok(unregistered_seqs[2] == 5);
+    ok(quicly_remote_cid_register(&set, 8, cids[8], CID_LEN, srts[8], 8) == 0);
     /* active CIDs = {(9), (10), (11), 8} */
     TEST_SET({9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE}, {11, QUICLY_REMOTE_CID_UNAVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
+    ok(set.retired.count == 8);
+    ok(set.retired.cids[5] == 6);
+    ok(set.retired.cids[6] == 7);
+    ok(set.retired.cids[7] == 5);
 
     /* register 11 */
-    ok(quicly_remote_cid_register(&set, 11, cids[11], CID_LEN, srts[11], 8, unregistered_seqs, &num_unregistered) == 0);
-    ok(num_unregistered == 0);
+    ok(quicly_remote_cid_register(&set, 11, cids[11], CID_LEN, srts[11], 8) == 0);
+    ok(set.retired.count == 8);
     /* active CIDs = {(9), (10), (11), 8} */
     TEST_SET({9, QUICLY_REMOTE_CID_UNAVAILABLE}, {10, QUICLY_REMOTE_CID_UNAVAILABLE}, {11, QUICLY_REMOTE_CID_AVAILABLE},
              {8, QUICLY_REMOTE_CID_AVAILABLE});
+
+    /* too many outstanding CIDs in retire queue */
+    ok(quicly_remote_cid_register(&set, 11, cids[0], CID_LEN, srts[0], 9) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
 }

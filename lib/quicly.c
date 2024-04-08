@@ -42,7 +42,6 @@
 #if QUICLY_USE_DTRACE
 #include "quicly-probes.h"
 #endif
-#include "quicly/retire_cid.h"
 
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_FINAL 0x39
 #define QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_DRAFT 0xffa5
@@ -406,10 +405,6 @@ struct st_quicly_conn_t {
          *
          */
         uint8_t try_jumpstart : 1;
-        /**
-         * pending RETIRE_CONNECTION_ID frames to be sent
-         */
-        quicly_retire_cid_set_t retire_cid;
         /**
          * payload of DATAGRAM frames to be sent
          */
@@ -1015,27 +1010,17 @@ static size_t local_cid_size(const quicly_conn_t *conn)
 }
 
 /**
- * set up an internal record to send RETIRE_CONNECTION_ID frame later
+ * Resets CIDs associated to paths if they are being retired. To maximize the chance of having enough number of CIDs to run all
+ * paths when new CIDs are provided through multiple NCID frames possibly scattered over multiple packets, CIDs are reassigned to
+ * the paths lazily.
  */
-static void schedule_retire_connection_id_frame(quicly_conn_t *conn, uint64_t sequence)
+static void dissociate_cid(quicly_conn_t *conn, uint64_t sequence)
 {
-    quicly_retire_cid_push(&conn->egress.retire_cid, sequence);
-    conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
-}
-
-static void retire_connection_id(quicly_conn_t *conn, uint64_t sequence)
-{
-    /* Reset path CIDs that are being retired. To maximize the chance of having enough number of CIDs to run all paths when new CIDs
-     * are provided through multiple NCID frames possibly scattered over multiple packets, CIDs are reassigned to the paths lazily.
-     */
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
         struct st_quicly_conn_path_t *path = conn->paths[i];
         if (path != NULL && path->dcid == sequence)
             path->dcid = UINT64_MAX;
     }
-
-    quicly_remote_cid_unregister(&conn->super.remote.cid_set, sequence);
-    schedule_retire_connection_id_frame(conn, sequence);
 }
 
 static int write_crypto_data(quicly_conn_t *conn, ptls_buffer_t *tlsbuf, size_t epoch_offsets[5])
@@ -1840,9 +1825,10 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
  * if is_promote is set, paths[0] (the default path) is freed and the path specified by `path_index` is promoted
  * if is_promote is not_set, paths[path_index] is freed
  */
-static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
+static int delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
 {
     struct st_quicly_conn_path_t *path;
+    int ret;
 
     /* fetch and detatch the path object to be freed */
     if (is_promote) {
@@ -1862,9 +1848,18 @@ static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
     }
 
     /* deinstantiate */
-    if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0)
-        retire_connection_id(conn, path->dcid);
+    if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0) {
+        uint64_t cid = path->dcid;
+        dissociate_cid(conn, cid);
+        if ((ret = quicly_remote_cid_unregister(&conn->super.remote.cid_set, cid)) != 0)
+            return ret;
+        assert(conn->super.remote.cid_set.retired.count != 0);
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    }
+
     free(path);
+
+    return 0;
 }
 
 static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
@@ -1888,8 +1883,8 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
         return QUICLY_ERROR_PACKET_IGNORED;
 
     /* free existing path info */
-    if (conn->paths[*path_index] != NULL)
-        delete_path(conn, 0, *path_index);
+    if (conn->paths[*path_index] != NULL && (ret = delete_path(conn, 0, *path_index)) != 0)
+        return ret;
 
     /* initialize new path info */
     if ((ret = new_path(conn, *path_index, remote_addr, local_addr)) != 0)
@@ -2513,7 +2508,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         quicly_pacer_reset(conn->egress.pacer);
     }
     conn->egress.ecn.state = conn->super.ctx->enable_ecn ? QUICLY_ECN_PROBING : QUICLY_ECN_OFF;
-    quicly_retire_cid_init(&conn->egress.retire_cid);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
@@ -3281,9 +3275,13 @@ static int on_ack_retire_connection_id(quicly_sentmap_t *map, const quicly_sent_
 {
     quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
     uint64_t sequence = sent->data.retire_connection_id.sequence;
+    int ret;
 
-    if (!acked)
-        schedule_retire_connection_id_frame(conn, sequence);
+    if (!acked) {
+        if ((ret = quicly_remote_cid_push_retired(&conn->super.remote.cid_set, sequence)) != 0)
+            return ret;
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    }
 
     return 0;
 }
@@ -5115,15 +5113,12 @@ static int send_other_control_frames(quicly_conn_t *conn, quicly_send_context_t 
     }
 
     { /* RETIRE_CONNECTION_ID */
-        size_t i, size = quicly_retire_cid_get_num_pending(&conn->egress.retire_cid);
-        for (i = 0; i < size; i++) {
-            uint64_t sequence = conn->egress.retire_cid.sequences[i];
+        for (size_t i = 0; i < conn->super.remote.cid_set.retired.count; ++i) {
+            uint64_t sequence = conn->super.remote.cid_set.retired.cids[i];
             if ((ret = send_retire_connection_id(conn, s, sequence)) != 0)
-                break;
+                return ret;
         }
-        quicly_retire_cid_shift(&conn->egress.retire_cid, i);
-        if (ret != 0)
-            return ret;
+        quicly_remote_cid_clear_retired(&conn->super.remote.cid_set);
     }
 
     return 0;
@@ -6478,15 +6473,15 @@ static int handle_new_connection_id_frame(quicly_conn_t *conn, struct st_quicly_
         PTLS_LOG_ELEMENT_HEXDUMP(stateless_reset_token, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
     });
 
-    uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
-    size_t num_unregistered_seqs;
+    size_t orig_num_retired = conn->super.remote.cid_set.retired.count;
     if ((ret = quicly_remote_cid_register(&conn->super.remote.cid_set, frame.sequence, frame.cid.base, frame.cid.len,
-                                          frame.stateless_reset_token, frame.retire_prior_to, unregistered_seqs,
-                                          &num_unregistered_seqs)) != 0)
+                                          frame.stateless_reset_token, frame.retire_prior_to)) != 0)
         return ret;
-
-    for (size_t i = 0; i < num_unregistered_seqs; i++)
-        retire_connection_id(conn, unregistered_seqs[i]);
+    if (orig_num_retired != conn->super.remote.cid_set.retired.count) {
+        for (size_t i = orig_num_retired; i < conn->super.remote.cid_set.retired.count; ++i)
+            dissociate_cid(conn, conn->super.remote.cid_set.retired.cids[i]);
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    }
 
     return 0;
 }
