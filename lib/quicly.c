@@ -361,6 +361,10 @@ struct st_quicly_conn_t {
          */
         quicly_cc_t cc;
         /**
+         * min. PN recognized by CC; this property is used to protect CC becoming affected by old information after the CC is reset
+         */
+        uint64_t cc_pn_at_init;
+        /**
          * pacer
          */
         quicly_pacer_t *pacer;
@@ -1852,6 +1856,11 @@ static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
         conn->paths[0] = conn->paths[path_index];
         conn->paths[path_index] = NULL;
         conn->super.stats.num_paths.promoted += 1;
+        /* reset CC */
+        conn->egress.cc.type->cc_init->cb(
+            conn->egress.cc.type->cc_init, &conn->egress.cc,
+            quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size), conn->stash.now);
+        conn->egress.cc_pn_at_init = conn->egress.packet_number;
     } else {
         QUICLY_DELETE_PATH(conn, conn->stash.now, path_index);
         QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
@@ -3621,9 +3630,12 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         quicly_sentmap_commit(&conn->egress.loss.sentmap, (uint16_t)packet_bytes_in_flight, cc_limited, on_promoted_path);
     }
 
-    conn->egress.cc.type->cc_on_sent(&conn->egress.cc, &conn->egress.loss, (uint32_t)packet_bytes_in_flight, conn->stash.now);
-    if (conn->egress.pacer != NULL)
-        quicly_pacer_consume_window(conn->egress.pacer, packet_bytes_in_flight);
+    if (packet_bytes_in_flight != 0) {
+        assert(s->path_index == 0 && "CC governs path 0 and data is sent only on that path");
+        conn->egress.cc.type->cc_on_sent(&conn->egress.cc, &conn->egress.loss, (uint32_t)packet_bytes_in_flight, conn->stash.now);
+        if (conn->egress.pacer != NULL)
+            quicly_pacer_consume_window(conn->egress.pacer, packet_bytes_in_flight);
+    }
 
     QUICLY_PROBE(PACKET_SENT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
                  get_epoch(*s->target.first_byte_at), !s->target.ack_eliciting);
@@ -4323,15 +4335,17 @@ static int mark_frames_on_pto(quicly_conn_t *conn, uint8_t ack_epoch, size_t *by
 
 static void notify_congestion_to_cc(quicly_conn_t *conn, uint16_t lost_bytes, uint64_t lost_pn)
 {
-    conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_bytes, lost_pn, conn->egress.packet_number,
-                                     conn->stash.now, conn->egress.max_udp_payload_size);
-    QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, lost_pn + 1, conn->egress.loss.sentmap.bytes_in_flight,
-                 conn->egress.cc.cwnd);
-    QUICLY_LOG_CONN(cc_congestion, conn, {
-        PTLS_LOG_ELEMENT_UNSIGNED(max_lost_pn, lost_pn + 1);
-        PTLS_LOG_ELEMENT_UNSIGNED(flight, conn->egress.loss.sentmap.bytes_in_flight);
-        PTLS_LOG_ELEMENT_UNSIGNED(cwnd, conn->egress.cc.cwnd);
-    });
+    if (conn->egress.cc_pn_at_init <= lost_pn) {
+        conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_bytes, lost_pn, conn->egress.packet_number,
+                                         conn->stash.now, conn->egress.max_udp_payload_size);
+        QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, lost_pn + 1, conn->egress.loss.sentmap.bytes_in_flight,
+                     conn->egress.cc.cwnd);
+        QUICLY_LOG_CONN(cc_congestion, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(max_lost_pn, lost_pn + 1);
+            PTLS_LOG_ELEMENT_UNSIGNED(flight, conn->egress.loss.sentmap.bytes_in_flight);
+            PTLS_LOG_ELEMENT_UNSIGNED(cwnd, conn->egress.cc.cwnd);
+        });
+    }
 }
 
 static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold)
@@ -4944,7 +4958,7 @@ static int send_path_challenge(quicly_conn_t *conn, quicly_send_context_t *s, in
 {
     int ret;
 
-    if ((ret = do_allocate_frame(conn, s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY, ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC)) != 0)
+    if ((ret = do_allocate_frame(conn, s, QUICLY_PATH_CHALLENGE_FRAME_CAPACITY, ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING)) != 0)
         return ret;
 
     s->dst = quicly_encode_path_challenge_frame(s->dst, is_response, data);
@@ -5890,7 +5904,8 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
                 PTLS_LOG_ELEMENT_BOOL(is_late_ack, is_late_ack);
             });
             if (sent->cc_bytes_in_flight != 0) {
-                bytes_acked += sent->cc_bytes_in_flight;
+                if (conn->egress.cc_pn_at_init <= pn_acked)
+                    bytes_acked += sent->cc_bytes_in_flight;
                 conn->super.stats.num_bytes.ack_received += sent->cc_bytes_in_flight;
                 if (sent->cc_limited)
                     cc_limited = 1;
