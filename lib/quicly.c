@@ -361,9 +361,10 @@ struct st_quicly_conn_t {
          */
         quicly_cc_t cc;
         /**
-         * min. PN recognized by CC; this property is used to protect CC becoming affected by old information after the CC is reset
+         * Next PN to be used when the path is initialized or promoted. As loss recovery / CC is reset upon path promotion, ACKs for
+         * for packets with PN below this property are ignored.
          */
-        uint64_t cc_pn_at_init;
+        uint64_t pn_path_start;
         /**
          * pacer
          */
@@ -1856,11 +1857,11 @@ static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
         conn->paths[0] = conn->paths[path_index];
         conn->paths[path_index] = NULL;
         conn->super.stats.num_paths.promoted += 1;
-        /* reset CC */
+        /* reset CC (FIXME flush sentmap and reset loss recovery) */
         conn->egress.cc.type->cc_init->cb(
             conn->egress.cc.type->cc_init, &conn->egress.cc,
             quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size), conn->stash.now);
-        conn->egress.cc_pn_at_init = conn->egress.packet_number;
+        conn->egress.pn_path_start = conn->egress.packet_number;
     } else {
         QUICLY_DELETE_PATH(conn, conn->stash.now, path_index);
         QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
@@ -4335,7 +4336,7 @@ static int mark_frames_on_pto(quicly_conn_t *conn, uint8_t ack_epoch, size_t *by
 
 static void notify_congestion_to_cc(quicly_conn_t *conn, uint16_t lost_bytes, uint64_t lost_pn)
 {
-    if (conn->egress.cc_pn_at_init <= lost_pn) {
+    if (conn->egress.pn_path_start <= lost_pn) {
         conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_bytes, lost_pn, conn->egress.packet_number,
                                          conn->stash.now, conn->egress.max_udp_payload_size);
         QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, lost_pn + 1, conn->egress.loss.sentmap.bytes_in_flight,
@@ -5896,19 +5897,22 @@ static int handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload
             ++conn->super.stats.num_packets.ack_received;
             if (sent->promoted_path)
                 ++conn->super.stats.num_packets.ack_received_promoted_paths;
-            largest_newly_acked.pn = pn_acked;
-            largest_newly_acked.sent_at = sent->sent_at;
+            if (conn->egress.pn_path_start <= pn_acked) {
+                largest_newly_acked.pn = pn_acked;
+                largest_newly_acked.sent_at = sent->sent_at;
+            }
             QUICLY_PROBE(PACKET_ACKED, conn, conn->stash.now, pn_acked, is_late_ack);
             QUICLY_LOG_CONN(packet_acked, conn, {
                 PTLS_LOG_ELEMENT_UNSIGNED(pn, pn_acked);
                 PTLS_LOG_ELEMENT_BOOL(is_late_ack, is_late_ack);
             });
             if (sent->cc_bytes_in_flight != 0) {
-                if (conn->egress.cc_pn_at_init <= pn_acked)
+                if (conn->egress.pn_path_start <= pn_acked) {
                     bytes_acked += sent->cc_bytes_in_flight;
+                    if (sent->cc_limited)
+                        cc_limited = 1;
+                }
                 conn->super.stats.num_bytes.ack_received += sent->cc_bytes_in_flight;
-                if (sent->cc_limited)
-                    cc_limited = 1;
             }
             if ((ret = quicly_sentmap_update(&conn->egress.loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED)) != 0)
                 return ret;
