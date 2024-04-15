@@ -362,7 +362,7 @@ subtest "path-migration" => sub {
         die "fork failed:$!"
         unless defined $pid;
         if ($pid == 0) {
-            exec $cli, @client_opts, qw(-O -i 1000 127.0.0.1), $port;
+            exec $cli, @client_opts, qw(-O -i 1000 -p /10000 127.0.0.1), $port;
             die "exec $cli failed:$!";
         }
         # send two USR1 signals, each of them causing path migration between requests
@@ -372,7 +372,7 @@ subtest "path-migration" => sub {
         kill 'USR1', $pid;
         sleep 2;
         # kill the peers
-        kill 9, $pid;
+        kill 'TERM', $pid;
         while (waitpid($pid, 0) != $pid) {}
         undef $guard;
         # read the log

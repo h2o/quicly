@@ -752,11 +752,11 @@ static void enqueue_requests(quicly_conn_t *conn)
     enqueue_requests_at = INT64_MAX;
 }
 
-static volatile int got_sigusr1 = 0;
+static volatile int client_gotsig = 0;
 
-static void on_sigusr1(int unused)
+static void on_client_signal(int signo)
 {
-    got_sigusr1 = 1;
+    client_gotsig = signo;
 }
 
 static int run_client(int fd, struct sockaddr *sa, const char *host)
@@ -765,7 +765,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
     int ret;
     quicly_conn_t *conn = NULL;
 
-    signal(SIGUSR1, on_sigusr1);
+    signal(SIGUSR1, on_client_signal);
+    signal(SIGTERM, on_client_signal);
 
     memset(&local, 0, sizeof(local));
     local.sa.sa_family = sa->sa_family;
@@ -783,8 +784,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         fd_set readfds;
         struct timeval *tv, tvbuf;
         do {
-            if (got_sigusr1) {
-                got_sigusr1 = 0;
+            if (client_gotsig == SIGUSR1) {
+                client_gotsig = 0;
                 int newfd = new_socket(local.sa.sa_family);
                 if (newfd != -1) {
                     close(fd);
@@ -836,7 +837,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                         send_datagram_frame = 0;
                     }
                     if (quicly_num_streams(conn) == 0) {
-                        if (request_interval != 0) {
+                        if (request_interval != 0 && client_gotsig != SIGTERM) {
                             if (enqueue_requests_at == INT64_MAX)
                                 enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
                         } else {
@@ -871,7 +872,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
 static quicly_conn_t **conns;
 static size_t num_conns = 0;
 
-static void on_signal(int signo)
+static void on_server_signal(int signo)
 {
     size_t i;
     for (i = 0; i != num_conns; ++i) {
@@ -957,8 +958,8 @@ CIDMismatch:
 
 static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
 {
-    signal(SIGINT, on_signal);
-    signal(SIGHUP, on_signal);
+    signal(SIGINT, on_server_signal);
+    signal(SIGHUP, on_server_signal);
 
     if (bind(fd, sa, salen) != 0) {
         perror("bind(2) failed");
