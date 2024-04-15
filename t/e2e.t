@@ -9,7 +9,6 @@ use IO::Socket::INET;
 use JSON;
 use Net::EmptyPort qw(empty_port);
 use POSIX ":sys_wait_h";
-use Scope::Guard qw(scope_guard);
 use Test::More;
 use Time::HiRes qw(sleep time);
 
@@ -489,26 +488,64 @@ sub spawn_server {
     spawn_process(\@cmd, $port);
 }
 
-sub spawn_process {
-    my ($cmd, $listen_port) = @_;
+package SpawnedProcess {
+    sub new {
+        my ($klass, $cmd, $listen_port) = @_;
 
-    my $pid = fork;
-    die "fork failed:$!"
-        unless defined $pid;
-    if ($pid == 0) {
-        exec @$cmd;
-        die "failed to exec @{[$cmd->[0]]}:$?";
-    }
-    while (`netstat -na` !~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
-        if (waitpid($pid, WNOHANG) == $pid) {
-            die "failed to launch @{[$cmd->[0]]}:$?";
+        my $self = bless {
+            logfh => scalar File::Temp::tempfile(),
+            pid   => fork(),
+        }, $klass;
+
+        die "fork failed:$!"
+        unless defined $self->{pid};
+        if ($self->{pid} == 0) {
+            close STDOUT;
+            open STDOUT, ">&", $self->{logfh}
+                or die "failed to dup(2) log file to STDOUT:$!";
+            open STDERR, ">&", $self->{logfh}
+                or die "failed to dup(2) log file to STDERR:$!";
+            exec @$cmd;
+            die "failed to exec @{[$cmd->[0]]}:$?";
         }
-        sleep 0.1;
+        while (`netstat -na` !~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
+            if (waitpid($self->{pid}, POSIX::WNOHANG) == $self->{pid}) {
+                die "failed to launch @{[$cmd->[0]]}:$?";
+            }
+            sleep 0.1;
+        }
+
+        $self;
     }
-    return scope_guard(sub {
-        kill 9, $pid;
-        while (waitpid($pid, 0) != $pid) {}
-    });
+
+    sub DESTROY {
+        print shift->finalize();
+    }
+
+    sub finalize {
+        my $self = shift;
+
+        return unless $self->{pid};
+
+        # kill the process
+        kill 9, $self->{pid};
+        while (waitpid($self->{pid}, 0) != $self->{pid}) {}
+        undef $self->{pid};
+
+        # fetch and close the log file
+        seek $self->{logfh}, 0, 0;
+        my $log = do {
+            local $/;
+            readline $self->{logfh};
+        };
+        close $self->{logfh};
+
+        return $log;
+    }
+}
+
+sub spawn_process {
+    SpawnedProcess->new(@_);
 }
 
 sub slurp_file {
