@@ -359,7 +359,7 @@ subtest "path-migration" => sub {
         # spawn client that sends one request every second, recording events to file
         my $pid = fork;
         die "fork failed:$!"
-        unless defined $pid;
+            unless defined $pid;
         if ($pid == 0) {
             exec $cli, @client_opts, qw(-O -i 1000 -p /10000 127.0.0.1), $port;
             die "exec $cli failed:$!";
