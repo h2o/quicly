@@ -506,7 +506,7 @@ static quicly_generate_resumption_token_t generate_resumption_token = {&on_gener
 static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *dest, quicly_address_t *src, uint8_t *ecn)
 {
     struct iovec vec = {.iov_base = buf, .iov_len = ctx.transport_params.max_udp_payload_size};
-    char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo) + sizeof(int) /* == max(V4_TOS, V6_TCLASS) */)] = {};
+    char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo) /* == max(V4_TOS, V6_TCLASS) */) + CMSG_SPACE(1 /* TOS */)] = {};
     struct msghdr mess = {
         .msg_name = &src->sa,
         .msg_namelen = sizeof(*src),
