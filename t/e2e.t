@@ -519,7 +519,7 @@ package SpawnedProcess {
     }
 
     sub DESTROY {
-        print shift->finalize();
+        goto \&finalize;
     }
 
     sub finalize {
@@ -539,6 +539,8 @@ package SpawnedProcess {
             readline $self->{logfh};
         };
         close $self->{logfh};
+
+        print STDERR $log;
 
         return $log;
     }
