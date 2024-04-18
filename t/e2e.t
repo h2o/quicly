@@ -373,7 +373,7 @@ subtest "path-migration" => sub {
         # kill the peers
         kill 'TERM', $pid;
         while (waitpid($pid, 0) != $pid) {}
-        undef $guard;
+        my $server_output = $guard->finalize;
         # read the log
         my $log = slurp_file("$tempdir/events");
         # check that the path has migrated twice
@@ -389,6 +389,11 @@ subtest "path-migration" => sub {
                 $cid1 eq $cid_probe;
             };
         };
+        # check that packets are lost (or deemed lost), but that CC is in slow start
+        complex $server_output, sub {
+            /packets-lost:\s*(\d+).*num-loss-episodes:\s*(\d+)/ and $1 >= 2 and $2 == 0;
+        }, "packets-lost-but-cc-in-slow-start";
+
     };
     subtest "without-cid" => sub {
         $doit->();
