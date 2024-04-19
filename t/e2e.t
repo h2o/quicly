@@ -453,7 +453,10 @@ sub spawn_process {
         exec @$cmd;
         die "failed to exec @{[$cmd->[0]]}:$?";
     }
-    while (`netstat -na` !~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
+    for (1..10) {
+        if (`netstat -na` =~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
+            last;
+        }
         if (waitpid($pid, WNOHANG) == $pid) {
             die "failed to launch @{[$cmd->[0]]}:$?";
         }
