@@ -1841,40 +1841,63 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
     return 0;
 }
 
-/**
- * if is_promote is set, paths[0] (the default path) is freed and the path specified by `path_index` is promoted
- * if is_promote is not_set, paths[path_index] is freed
- */
-static void delete_path(quicly_conn_t *conn, int is_promote, size_t path_index)
+static void do_delete_path(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
-    struct st_quicly_conn_path_t *path;
-
-    /* fetch and detatch the path object to be freed */
-    if (is_promote) {
-        QUICLY_PROMOTE_PATH(conn, conn->stash.now, path_index);
-        QUICLY_LOG_CONN(promote_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
-        path = conn->paths[0];
-        conn->paths[0] = conn->paths[path_index];
-        conn->paths[path_index] = NULL;
-        conn->super.stats.num_paths.promoted += 1;
-        /* reset CC (FIXME flush sentmap and reset loss recovery) */
-        conn->egress.cc.type->cc_init->cb(
-            conn->egress.cc.type->cc_init, &conn->egress.cc,
-            quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size), conn->stash.now);
-        conn->egress.pn_path_start = conn->egress.packet_number;
-    } else {
-        QUICLY_DELETE_PATH(conn, conn->stash.now, path_index);
-        QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
-        path = conn->paths[path_index];
-        conn->paths[path_index] = NULL;
-        if (path->path_challenge.send_at != INT64_MAX)
-            conn->super.stats.num_paths.validation_failed += 1;
-    }
-
-    /* deinstantiate */
     if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0)
         retire_connection_id(conn, path->dcid);
     free(path);
+}
+
+static void delete_path(quicly_conn_t *conn, size_t path_index)
+{
+    QUICLY_DELETE_PATH(conn, conn->stash.now, path_index);
+    QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
+
+    struct st_quicly_conn_path_t *path = conn->paths[path_index];
+    conn->paths[path_index] = NULL;
+    if (path->path_challenge.send_at != INT64_MAX)
+        conn->super.stats.num_paths.validation_failed += 1;
+
+    do_delete_path(conn, path);
+}
+
+/**
+ * paths[0] (the default path) is freed and the path specified by `path_index` is promoted
+ */
+static int promote_path(quicly_conn_t *conn, size_t path_index)
+{
+    QUICLY_PROMOTE_PATH(conn, conn->stash.now, path_index);
+    QUICLY_LOG_CONN(promote_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
+
+    { /* mark all packets as lost, as it is unlikely that packets sent on the old path wound be acknowledged */
+        quicly_sentmap_iter_t iter;
+        int ret;
+        if ((ret = quicly_loss_init_sentmap_iter(&conn->egress.loss, &iter, conn->stash.now,
+                                                 conn->super.remote.transport_params.max_ack_delay, 0)) != 0)
+            return ret;
+        const quicly_sent_packet_t *sent;
+        while ((sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
+            if ((ret = quicly_sentmap_update(&conn->egress.loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_PTO)) != 0)
+                return ret;
+        }
+    }
+
+    /* reset CC (FIXME flush sentmap and reset loss recovery) */
+    conn->egress.cc.type->cc_init->cb(
+        conn->egress.cc.type->cc_init, &conn->egress.cc,
+        quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size), conn->stash.now);
+
+    conn->egress.pn_path_start = conn->egress.packet_number;
+
+    /* update path mapping */
+    struct st_quicly_conn_path_t *path = conn->paths[0];
+    conn->paths[0] = conn->paths[path_index];
+    conn->paths[path_index] = NULL;
+    conn->super.stats.num_paths.promoted += 1;
+
+    do_delete_path(conn, path);
+
+    return 0;
 }
 
 static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
@@ -1899,7 +1922,7 @@ static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *r
 
     /* free existing path info */
     if (conn->paths[*path_index] != NULL)
-        delete_path(conn, 0, *path_index);
+        delete_path(conn, *path_index);
 
     /* initialize new path info */
     if ((ret = new_path(conn, *path_index, remote_addr, local_addr)) != 0)
@@ -1967,7 +1990,7 @@ void quicly_free(quicly_conn_t *conn)
 
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
         if (conn->paths[i] != NULL)
-            delete_path(conn, 0, i);
+            delete_path(conn, i);
     }
 
     /* `crytpo.tls` is disposed late, because logging relies on `ptls_skip_tracing` */
@@ -5505,13 +5528,13 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             if (conn->paths[s.path_index] == NULL || conn->stash.now < conn->paths[s.path_index]->path_challenge.send_at)
                 continue;
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
-                delete_path(conn, 0, s.path_index);
+                delete_path(conn, s.path_index);
                 s.recalc_send_probe_at = 1;
                 continue;
             }
             /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
             if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
-                delete_path(conn, 0, s.path_index);
+                delete_path(conn, s.path_index);
                 s.recalc_send_probe_at = 1;
                 conn->super.stats.num_paths.closed_no_dcid += 1;
                 continue;
@@ -7189,7 +7212,8 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         /* switch active path to current path, if current path is validated and not probe-only */
         if (path_index != 0 && conn->paths[path_index]->path_challenge.send_at == INT64_MAX &&
             !conn->paths[path_index]->probe_only) {
-            delete_path(conn, 1 /* promote */, path_index);
+            if ((ret = promote_path(conn, path_index)) != 0)
+                goto Exit;
             recalc_send_probe_at(conn);
         }
         break;
