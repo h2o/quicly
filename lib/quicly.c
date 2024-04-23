@@ -1887,6 +1887,13 @@ static int promote_path(quicly_conn_t *conn, size_t path_index)
         conn->egress.cc.type->cc_init, &conn->egress.cc,
         quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size), conn->stash.now);
 
+    /* reset RTT estimate, adopting SRTT of the original path as initial RTT (TODO calculate RTT based on path challenge RT) */
+    quicly_rtt_init(&conn->egress.loss.rtt, &conn->super.ctx->loss,
+                    conn->egress.loss.rtt.smoothed < conn->super.ctx->loss.default_initial_rtt
+                        ? conn->egress.loss.rtt.smoothed
+                        : conn->super.ctx->loss.default_initial_rtt);
+
+    /* remember PN when the path was promoted */
     conn->egress.pn_path_start = conn->egress.packet_number;
 
     /* update path mapping */
