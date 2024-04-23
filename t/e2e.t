@@ -355,25 +355,34 @@ subtest "raw-certificates-ec" => sub {
 subtest "path-migration" => sub {
     my $doit = sub {
         my @client_opts = @_;
-        my $guard = spawn_server("-e", "$tempdir/events");
+        my $server_guard = spawn_server("-e", "$tempdir/events");
+        my $udpfw_guard = undef;
+        my $respawn_udpfw = sub {
+            $udpfw_guard = undef; # terminate existing process
+            $udpfw_guard = spawn_process(
+                ["sh", "-c", "exec $udpfw -b 100 -i 1 -p 0 -B 100 -I 1 -P 10000 -l $udpfw_port 127.0.0.1 $port > /dev/null 2>&1"],
+                $udpfw_port,
+            );
+        };
+        $respawn_udpfw->();
         # spawn client that sends one request every second, recording events to file
         my $pid = fork;
         die "fork failed:$!"
             unless defined $pid;
         if ($pid == 0) {
-            exec $cli, @client_opts, qw(-O -i 1000 -p /10000 127.0.0.1), $port;
+            exec $cli, @client_opts, qw(-O -i 1000 -p /10000 127.0.0.1), $udpfw_port;
             die "exec $cli failed:$!";
         }
         # send two USR1 signals, each of them causing path migration between requests
         sleep .5;
-        kill 'USR1', $pid;
+        $respawn_udpfw->();
         sleep 2;
-        kill 'USR1', $pid;
+        $respawn_udpfw->();
         sleep 2;
         # kill the peers
         kill 'TERM', $pid;
         while (waitpid($pid, 0) != $pid) {}
-        my $server_output = $guard->finalize;
+        my $server_output = $server_guard->finalize;
         # read the log
         my $log = slurp_file("$tempdir/events");
         # check that the path has migrated twice

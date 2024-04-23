@@ -765,7 +765,6 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
     int ret;
     quicly_conn_t *conn = NULL;
 
-    signal(SIGUSR1, on_client_signal);
     signal(SIGTERM, on_client_signal);
 
     memset(&local, 0, sizeof(local));
@@ -784,14 +783,6 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         fd_set readfds;
         struct timeval *tv, tvbuf;
         do {
-            if (client_gotsig == SIGUSR1) {
-                client_gotsig = 0;
-                int newfd = new_socket(local.sa.sa_family);
-                if (newfd != -1) {
-                    close(fd);
-                    fd = newfd;
-                }
-            }
             int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
             if (enqueue_requests_at < timeout_at)
                 timeout_at = enqueue_requests_at;
