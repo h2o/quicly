@@ -2559,9 +2559,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
     quicly_ratemeter_init(&conn->egress.ratemeter);
-    if (server_name == NULL && conn->super.ctx->use_pacing && conn->egress.cc.type->cc_jumpstart != NULL &&
-        (conn->super.ctx->default_jumpstart_cwnd_packets != 0 || conn->super.ctx->max_jumpstart_cwnd_packets != 0))
-        conn->egress.try_jumpstart = 1;
+    conn->egress.try_jumpstart = 1;
     if (handshake_properties != NULL) {
         assert(handshake_properties->additional_extensions == NULL);
         assert(handshake_properties->collect_extension == NULL);
@@ -5391,7 +5389,9 @@ Exit:
          * size of the pacer (10 packets) */
         if (conn->egress.try_jumpstart && conn->egress.loss.rtt.minimum != UINT32_MAX) {
             conn->egress.try_jumpstart = 0;
-            if (conn->egress.cc.num_loss_episodes == 0) {
+            if (conn->super.ctx->use_pacing && conn->egress.cc.type->cc_jumpstart != NULL &&
+                (conn->super.ctx->default_jumpstart_cwnd_packets != 0 || conn->super.ctx->max_jumpstart_cwnd_packets != 0) &&
+                conn->egress.cc.num_loss_episodes == 0) {
                 uint32_t jumpstart_cwnd = 0;
                 conn->super.stats.jumpstart.new_rtt = conn->egress.loss.rtt.minimum;
                 if (conn->super.ctx->max_jumpstart_cwnd_packets != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
