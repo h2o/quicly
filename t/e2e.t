@@ -382,6 +382,7 @@ subtest "path-migration" => sub {
         # kill the peers
         kill 'TERM', $pid;
         while (waitpid($pid, 0) != $pid) {}
+        sleep 0.5; # wait for server-side to close and emit stats
         my $server_output = $server_guard->finalize;
         # read the log
         my $log = slurp_file("$tempdir/events");
