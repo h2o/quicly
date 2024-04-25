@@ -92,8 +92,10 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
             QUICLY_##label(_conn, __VA_ARGS__);                                                                                    \
         QUICLY_TRACER(label, _conn, __VA_ARGS__);                                                                                  \
     } while (0)
+#define QUICLY_PROBE_ENABLED(label) QUICLY_##label##_ENABLED()
 #else
 #define QUICLY_PROBE(label, conn, ...) QUICLY_TRACER(label, conn, __VA_ARGS__)
+#define QUICLY_PROBE_ENABLED(label) 0
 #endif
 #define QUICLY_PROBE_HEXDUMP(s, l)                                                                                                 \
     ({                                                                                                                             \
@@ -1828,10 +1830,10 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
 
     conn->paths[path_index] = path;
 
-    if (QUICLY_NEW_PATH_ENABLED() || ptls_log.is_active) {
+    if (QUICLY_PROBE_ENABLED(NEW_PATH) || ptls_log.is_active) {
         char remote[sizeof(LONGEST_ADDRESS_STR)];
         stringify_address(remote, &path->address.remote.sa);
-        QUICLY_NEW_PATH(conn, conn->stash.now, path_index, remote);
+        QUICLY_PROBE(NEW_PATH, conn, conn->stash.now, path_index, remote);
         QUICLY_LOG_CONN(new_path, conn, {
             PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index);
             PTLS_LOG_ELEMENT_SAFESTR(remote, remote);
@@ -1850,7 +1852,7 @@ static void do_delete_path(quicly_conn_t *conn, struct st_quicly_conn_path_t *pa
 
 static void delete_path(quicly_conn_t *conn, size_t path_index)
 {
-    QUICLY_DELETE_PATH(conn, conn->stash.now, path_index);
+    QUICLY_PROBE(DELETE_PATH, conn, conn->stash.now, path_index);
     QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
 
     struct st_quicly_conn_path_t *path = conn->paths[path_index];
@@ -1866,7 +1868,7 @@ static void delete_path(quicly_conn_t *conn, size_t path_index)
  */
 static int promote_path(quicly_conn_t *conn, size_t path_index)
 {
-    QUICLY_PROMOTE_PATH(conn, conn->stash.now, path_index);
+    QUICLY_PROBE(PROMOTE_PATH, conn, conn->stash.now, path_index);
     QUICLY_LOG_CONN(promote_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
 
     { /* mark all packets as lost, as it is unlikely that packets sent on the old path wound be acknowledged */
@@ -1964,14 +1966,13 @@ void quicly_free(quicly_conn_t *conn)
     QUICLY_PROBE(FREE, conn, conn->stash.now);
     QUICLY_LOG_CONN(free, conn, {});
 
-#if QUICLY_USE_DTRACE
-    if (QUICLY_CONN_STATS_ENABLED()) {
+    if (QUICLY_PROBE_ENABLED(CONN_STATS)) {
         quicly_stats_t stats;
         quicly_get_stats(conn, &stats);
         QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
         // TODO: emit stats with QUICLY_LOG_CONN()
     }
-#endif
+
     destroy_all_streams(conn, 0, 1);
     update_open_count(conn->super.ctx, -1);
     clear_datagram_frame_payloads(conn);
@@ -5486,7 +5487,7 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
         assert(success);
     }
 
-    if ((QUICLY_SEND_ENABLED() || ptls_log.is_active) && !ptls_skip_tracing(conn->crypto.tls)) {
+    if ((QUICLY_PROBE_ENABLED(SEND) || ptls_log.is_active) && !ptls_skip_tracing(conn->crypto.tls)) {
         const quicly_cid_t *dcid = get_dcid(conn, 0);
         QUICLY_PROBE(SEND, conn, conn->stash.now, conn->super.state, QUICLY_PROBE_HEXDUMP(dcid->cid, dcid->len));
         QUICLY_LOG_CONN(send, conn, {
@@ -7175,7 +7176,7 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         assert(path_index != 0);
         conn->paths[path_index]->probe_only = 0;
         ++conn->super.stats.num_paths.migration_elicited;
-        QUICLY_ELICIT_PATH_MIGRATION(conn, conn->stash.now, path_index);
+        QUICLY_PROBE(ELICIT_PATH_MIGRATION, conn, conn->stash.now, path_index);
         QUICLY_LOG_CONN(elicit_path_migration, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
     }
     if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
@@ -7688,7 +7689,7 @@ const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {
 
 void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
 {
-    if (QUICLY_DEBUG_MESSAGE_ENABLED() || ptls_log.is_active) {
+    if (QUICLY_PROBE_ENABLED(DEBUG_MESSAGE) || ptls_log.is_active) {
         char buf[1024];
         va_list args;
 
@@ -7696,7 +7697,7 @@ void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, c
         vsnprintf(buf, sizeof(buf), fmt, args);
         va_end(args);
 
-        QUICLY_DEBUG_MESSAGE(conn, function, line, buf);
+        QUICLY_PROBE(DEBUG_MESSAGE, conn, function, line, buf);
         QUICLY_LOG_CONN(debug_message, conn, {
             PTLS_LOG_ELEMENT_UNSAFESTR(function, function, strlen(function));
             PTLS_LOG_ELEMENT_SIGNED(line, line);
