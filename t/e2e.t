@@ -503,6 +503,8 @@ sub spawn_server {
 }
 
 package SpawnedProcess {
+    use POSIX ":sys_wait_h";
+
     sub new {
         my ($klass, $cmd, $listen_port) = @_;
 
@@ -526,7 +528,7 @@ package SpawnedProcess {
             if (`netstat -na` =~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
                 last;
             }
-            if (waitpid($self->{pid}, POSIX::WNOHANG) == $self->{pid}) {
+            if (waitpid($self->{pid}, WNOHANG) == $self->{pid}) {
                 die "failed to launch @{[$cmd->[0]]}:$?";
             }
             sleep 0.1;
