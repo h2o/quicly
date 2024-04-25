@@ -5389,30 +5389,31 @@ Exit:
          * size of the pacer (10 packets) */
         if (conn->egress.try_jumpstart && conn->egress.loss.rtt.minimum != UINT32_MAX) {
             conn->egress.try_jumpstart = 0;
+            conn->super.stats.jumpstart.new_rtt = 0;
+            conn->super.stats.jumpstart.cwnd = 0;
             if (conn->super.ctx->use_pacing && conn->egress.cc.type->cc_jumpstart != NULL &&
                 (conn->super.ctx->default_jumpstart_cwnd_packets != 0 || conn->super.ctx->max_jumpstart_cwnd_packets != 0) &&
                 conn->egress.cc.num_loss_episodes == 0) {
-                uint32_t jumpstart_cwnd = 0;
                 conn->super.stats.jumpstart.new_rtt = conn->egress.loss.rtt.minimum;
                 if (conn->super.ctx->max_jumpstart_cwnd_packets != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
                     conn->super.stats.jumpstart.prev_rtt != 0) {
                     /* Careful Resume */
-                    jumpstart_cwnd =
+                    conn->super.stats.jumpstart.cwnd =
                         derive_jumpstart_cwnd(conn->super.ctx, conn->super.stats.jumpstart.new_rtt,
                                               conn->super.stats.jumpstart.prev_rate, conn->super.stats.jumpstart.prev_rtt);
                 } else if (conn->super.ctx->default_jumpstart_cwnd_packets != 0) {
                     /* jumpstart without previous information */
-                    jumpstart_cwnd = quicly_cc_calc_initial_cwnd(conn->super.ctx->default_jumpstart_cwnd_packets,
-                                                                 conn->super.ctx->transport_params.max_udp_payload_size);
+                    conn->super.stats.jumpstart.cwnd = quicly_cc_calc_initial_cwnd(
+                        conn->super.ctx->default_jumpstart_cwnd_packets, conn->super.ctx->transport_params.max_udp_payload_size);
                 }
-                /* Jumpstart if the amount that can be sent in 1 RTT would be higher than without. Comparison target is CWND +
+                /* Jumpstart only if the amount that can be sent in 1 RTT would be higher than without. Comparison target is CWND +
                  * inflight, as that is the amount that can be sent at most. Note the flow rate can become smaller due to packets
                  * paced across the entire RTT during jumpstart. */
-                if (jumpstart_cwnd > conn->egress.cc.cwnd + orig_bytes_inflight) {
-                    conn->super.stats.jumpstart.cwnd = (uint32_t)jumpstart_cwnd;
-                    conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, jumpstart_cwnd, conn->egress.packet_number);
-                }
+                if (conn->super.stats.jumpstart.cwnd <= conn->egress.cc.cwnd + orig_bytes_inflight)
+                    conn->super.stats.jumpstart.cwnd = 0;
             }
+            if (conn->super.stats.jumpstart.cwnd > 0)
+                conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, conn->super.stats.jumpstart.cwnd, conn->egress.packet_number);
         }
     }
     if (ret == 0 && s->target.first_byte_at != NULL) {
