@@ -1765,6 +1765,21 @@ static int received_key_update(quicly_conn_t *conn, uint64_t newly_decrypted_key
     }
 }
 
+static void calc_resume_sendrate(quicly_conn_t *conn, uint64_t *rate, uint32_t *rtt)
+{
+    quicly_rate_t reported;
+
+    quicly_ratemeter_report(&conn->egress.ratemeter, &reported);
+
+    if (reported.smoothed != 0) {
+        *rate = reported.smoothed;
+        *rtt = conn->egress.loss.rtt.minimum;
+    } else {
+        *rate = 0;
+        *rtt = 0;
+    }
+}
+
 static inline void update_open_count(quicly_context_t *ctx, ssize_t delta)
 {
     if (ctx->update_open_count != NULL)
@@ -1888,6 +1903,9 @@ static int promote_path(quicly_conn_t *conn, size_t path_index)
     conn->egress.cc.type->cc_init->cb(
         conn->egress.cc.type->cc_init, &conn->egress.cc,
         quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size), conn->stash.now);
+
+    /* set jumpstart target */
+    calc_resume_sendrate(conn, &conn->super.stats.jumpstart.prev_rate, &conn->super.stats.jumpstart.prev_rtt);
 
     /* reset RTT estimate, adopting SRTT of the original path as initial RTT (TODO calculate RTT based on path challenge RT) */
     quicly_rtt_init(&conn->egress.loss.rtt, &conn->super.ctx->loss,
@@ -4626,17 +4644,8 @@ Exit:
 
 static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
 {
-    { /* fill conn->super.stats.token_sent the information we are sending now */
-        quicly_rate_t rate;
-        conn->super.stats.token_sent.at = conn->stash.now - conn->created_at;
-        if (conn->egress.loss.rtt.minimum != 0 && (quicly_ratemeter_report(&conn->egress.ratemeter, &rate), rate.smoothed != 0)) {
-            conn->super.stats.token_sent.rate = rate.smoothed;
-            conn->super.stats.token_sent.rtt = conn->egress.loss.rtt.minimum;
-        } else {
-            conn->super.stats.token_sent.rate = 0;
-            conn->super.stats.token_sent.rtt = 0;
-        }
-    }
+    /* fill conn->super.stats.token_sent the information we are sending now */
+    calc_resume_sendrate(conn, &conn->super.stats.token_sent.rate, &conn->super.stats.token_sent.rtt);
 
     quicly_address_token_plaintext_t token;
     ptls_buffer_t tokenbuf;
