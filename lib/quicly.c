@@ -1913,6 +1913,9 @@ static int promote_path(quicly_conn_t *conn, size_t path_index)
                         ? conn->egress.loss.rtt.smoothed
                         : conn->super.ctx->loss.default_initial_rtt);
 
+    /* reset ratemeter */
+    quicly_ratemeter_init(&conn->egress.ratemeter);
+
     /* remember PN when the path was promoted */
     conn->egress.pn_path_start = conn->egress.packet_number;
 
