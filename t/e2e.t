@@ -428,7 +428,18 @@ subtest "slow-start" => sub {
                     for ([1000, 2, 2.3], [30000, 2.3, 3], [87000, 3.3, 4], [96000, 4, 4.5]);
             };
         });
-    }
+    };
+
+    subtest "jumpstart" => sub {
+        $each_cc->(sub {
+            my $cc = shift;
+            plan skip_all => "Cubic TODO respect app-limited (mandatory for jumpstart)"
+                if $cc eq "cubic";
+            my $guard = spawn_server("-C", "$cc:20:p", "--jumpstart-default", "80");
+            $doit->(@$_)
+                for ([1440 * 45, 2.5, 2.8], [1440 * 90, 3.0, 3.3]);
+        });
+    };
 };
 
 done_testing;
