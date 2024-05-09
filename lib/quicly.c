@@ -4278,8 +4278,9 @@ static int send_resumption_token(quicly_conn_t *conn, quicly_send_context_t *s)
     { /* fill conn->super.stats.token_sent the information we are sending now */
         quicly_rate_t rate;
         conn->super.stats.token_sent.at = conn->stash.now - conn->created_at;
-        if (conn->egress.loss.rtt.minimum != 0 && (quicly_ratemeter_report(&conn->egress.ratemeter, &rate), rate.smoothed != 0)) {
-            conn->super.stats.token_sent.rate = rate.smoothed;
+        if (conn->egress.loss.rtt.minimum != 0 &&
+            (quicly_ratemeter_report(&conn->egress.ratemeter, &rate), rate.smoothed != 0 || rate.latest != 0)) {
+            conn->super.stats.token_sent.rate = rate.smoothed > rate.latest ? rate.smoothed : rate.latest;
             conn->super.stats.token_sent.rtt = conn->egress.loss.rtt.minimum;
         } else {
             conn->super.stats.token_sent.rate = 0;
