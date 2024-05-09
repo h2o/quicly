@@ -437,7 +437,7 @@ subtest "slow-start" => sub {
                 if $cc eq "cubic";
             my $guard = spawn_server("-C", "$cc:20:p", "--jumpstart-default", "80");
             $doit->(@$_)
-                for ([1440 * 45, 2.5, 2.8], [1440 * 90, 3.0, 3.3]);
+                for ([1450 * 45, 2.5, 2.8], [1450 * 90, 3.0, 3.3]);
         });
     };
 };
