@@ -362,10 +362,10 @@ subtest "slow-start" => sub {
 
     # read first $size bytes from client $cli (which would be the payload received) and check RT
     my $doit = sub {
-        my ($size, $rt_min, $rt_max) = @_;
+        my ($size, $rt_min, $rt_max, @cli_args) = @_;
         subtest "${size}B" => sub {
             my $start_at = time;
-            open my $fh, "-|", "$cli -p /$size 127.0.0.1 $udpfw_port 2>&1"
+            open my $fh, "-|", "$cli -p /$size @{[ join ' ', @cli_args ]} 127.0.0.1 $udpfw_port 2>&1"
                 or die "failed to launch $cli:$!";
             for (my $total_read = 0; $total_read < $size;) {
                 IO::Select->new($fh)->can_read(); # block until the command writes something
@@ -428,7 +428,45 @@ subtest "slow-start" => sub {
                     for ([1000, 2, 2.3], [30000, 2.3, 3], [87000, 3.3, 4], [96000, 4, 4.5]);
             };
         });
-    }
+    };
+
+    subtest "jumpstart" => sub {
+        $each_cc->(sub {
+            my $cc = shift;
+            plan skip_all => "Cubic TODO respect app-limited (mandatory for jumpstart)"
+                if $cc eq "cubic";
+            my $guard = spawn_server("-C", "$cc:20:p", "--jumpstart-default", "80");
+            $doit->(@$_)
+                for ([1450 * 45, 2.45, 2.8], [1450 * 90, 3.0, 3.3]);
+        });
+    };
+
+    subtest "jumpstart-resume" => sub {
+        $each_cc->(sub {
+            my $cc = shift;
+            plan skip_all => "Cubic TODO respect app-limited (mandatory for jumpstart)"
+                if $cc eq "cubic";
+            unlink "$tempdir/session";
+            my $guard = spawn_server("-C", "$cc:10:p", "--jumpstart-max", "80");
+            # test RT without jumpstart
+            $doit->(100000, 4, 5);
+            # train
+            my $pid = fork;
+            die "fork failed:$!"
+                unless defined $pid;
+            if ($pid == 0) {
+                open STDOUT, ">", "/dev/null"
+                    or die "failed to redirect STDOUT to /dev/null:$!";
+                exec $cli, qw(-p /1000000 -i 5000 -s), "$tempdir/session", "127.0.0.1", $udpfw_port;
+                die "failed to exec $cli:$!";
+            }
+            sleep 2; # wait until the connection becomes idle, at which point the token will be sent
+            kill 'KILL', $pid;
+            while (waitpid($pid, 0) != $pid) {}
+            # test RT using the obtained session information
+            $doit->(100000, 2, 2.999, "-s", "$tempdir/session");
+        });
+    };
 };
 
 done_testing;
