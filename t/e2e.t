@@ -9,7 +9,6 @@ use IO::Socket::INET;
 use JSON;
 use Net::EmptyPort qw(empty_port);
 use POSIX ":sys_wait_h";
-use Scope::Guard qw(scope_guard);
 use Test::More;
 use Time::HiRes qw(sleep time);
 
@@ -353,6 +352,67 @@ subtest "raw-certificates-ec" => sub {
     is $resp, "hello world\n";
 };
 
+subtest "path-migration" => sub {
+    my $doit = sub {
+        my @client_opts = @_;
+        my $server_guard = spawn_server("-e", "$tempdir/events");
+        my $udpfw_guard = undef;
+        my $respawn_udpfw = sub {
+            $udpfw_guard = undef; # terminate existing process
+            $udpfw_guard = spawn_process(
+                ["sh", "-c", "exec $udpfw -b 100 -i 1 -p 0 -B 100 -I 1 -P 10000 -l $udpfw_port 127.0.0.1 $port > /dev/null 2>&1"],
+                $udpfw_port,
+            );
+        };
+        $respawn_udpfw->();
+        # spawn client that sends one request every second, recording events to file
+        my $pid = fork;
+        die "fork failed:$!"
+            unless defined $pid;
+        if ($pid == 0) {
+            exec $cli, @client_opts, qw(-O -i 1000 -p /10000 127.0.0.1), $udpfw_port;
+            die "exec $cli failed:$!";
+        }
+        # send two USR1 signals, each of them causing path migration between requests
+        sleep .5;
+        $respawn_udpfw->();
+        sleep 2;
+        $respawn_udpfw->();
+        sleep 2;
+        # kill the peers
+        kill 'TERM', $pid;
+        while (waitpid($pid, 0) != $pid) {}
+        sleep 0.5; # wait for server-side to close and emit stats
+        my $server_output = $server_guard->finalize;
+        # read the log
+        my $log = slurp_file("$tempdir/events");
+        # check that the path has migrated twice
+        like $log, qr{"type":"promote_path".*\n.*"type":"promote_path"}s;
+        subtest "CID seq 1 is used for 1st path probe" => sub {
+            plan skip_all => "zero-length CID"
+                unless @client_opts;
+            complex $log, sub {
+                /"type":"new_connection_id_receive",[^\n]*"sequence":1,[^\n]*"cid":"(.*?)"/s;
+                my $cid1 = $1;
+                /"type":"packet_prepare",[^\n]*"dcid":"([^\"]*)"[^\n]*\n[^\n]*"type":"path_challenge_send",/s;
+                my $cid_probe = $1;
+                $cid1 eq $cid_probe;
+            };
+        };
+        # check that packets are lost (or deemed lost), but that CC is in slow start
+        complex $server_output, sub {
+            /packets-lost:\s*(\d+).*num-loss-episodes:\s*(\d+)/ and $1 >= 2 and $2 == 0;
+        }, "packets-lost-but-cc-in-slow-start";
+
+    };
+    subtest "without-cid" => sub {
+        $doit->();
+    };
+    subtest "with-cid" => sub {
+        $doit->(qw(-B 01234567));
+    };
+};
+
 subtest "slow-start" => sub {
     # spawn udpfw that applies 100ms RTT but otherwise nothing
     my $udpfw_guard = spawn_process(
@@ -481,29 +541,71 @@ sub spawn_server {
     spawn_process(\@cmd, $port);
 }
 
-sub spawn_process {
-    my ($cmd, $listen_port) = @_;
+package SpawnedProcess {
+    use POSIX ":sys_wait_h";
 
-    my $pid = fork;
-    die "fork failed:$!"
-        unless defined $pid;
-    if ($pid == 0) {
-        exec @$cmd;
-        die "failed to exec @{[$cmd->[0]]}:$?";
-    }
-    for (1..10) {
-        if (`netstat -na` =~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
-            last;
+    sub new {
+        my ($klass, $cmd, $listen_port) = @_;
+
+        my $self = bless {
+            logfh => scalar File::Temp::tempfile(),
+            pid   => fork(),
+        }, $klass;
+
+        die "fork failed:$!"
+        unless defined $self->{pid};
+        if ($self->{pid} == 0) {
+            close STDOUT;
+            open STDOUT, ">&", $self->{logfh}
+                or die "failed to dup(2) log file to STDOUT:$!";
+            open STDERR, ">&", $self->{logfh}
+                or die "failed to dup(2) log file to STDERR:$!";
+            exec @$cmd;
+            die "failed to exec @{[$cmd->[0]]}:$?";
         }
-        if (waitpid($pid, WNOHANG) == $pid) {
-            die "failed to launch @{[$cmd->[0]]}:$?";
+        for (1..10) {
+            if (`netstat -na` =~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
+                last;
+            }
+            if (waitpid($self->{pid}, WNOHANG) == $self->{pid}) {
+                die "failed to launch @{[$cmd->[0]]}:$?";
+            }
+            sleep 0.1;
         }
-        sleep 0.1;
+
+        $self;
     }
-    return scope_guard(sub {
-        kill 9, $pid;
-        while (waitpid($pid, 0) != $pid) {}
-    });
+
+    sub DESTROY {
+        goto \&finalize;
+    }
+
+    sub finalize {
+        my $self = shift;
+
+        return unless $self->{pid};
+
+        # kill the process
+        kill 9, $self->{pid};
+        while (waitpid($self->{pid}, 0) != $self->{pid}) {}
+        undef $self->{pid};
+
+        # fetch and close the log file
+        seek $self->{logfh}, 0, 0;
+        my $log = do {
+            local $/;
+            readline $self->{logfh};
+        };
+        close $self->{logfh};
+
+        print STDERR $log;
+
+        return $log;
+    }
+}
+
+sub spawn_process {
+    SpawnedProcess->new(@_);
 }
 
 sub slurp_file {
