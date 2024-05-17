@@ -118,9 +118,14 @@ struct {
     int to_file;
 } *reqs;
 
+static int h3;
+static int h3_num_streams;
+static int websocket;
+
 struct st_stream_data_t {
     quicly_streambuf_t streambuf;
     FILE *outfp;
+    size_t header_length;
 };
 
 static void on_stop_sending(quicly_stream_t *stream, int err);
@@ -361,6 +366,82 @@ Sent:
     quicly_streambuf_ingress_shift(stream, len);
 }
 
+static void skip_h3_headers(quicly_stream_t *stream, ptls_iovec_t *input)
+{
+    struct st_stream_data_t *stream_data = stream->data;
+    uint16_t length;
+    uint8_t type = input->base[1] >> 0x6;
+    if (type > 1) {
+        fprintf(stderr, "stream %u header size too large\n", (unsigned) stream->stream_id);
+        fflush(stderr);
+        quicly_reset_stream(stream, 0);
+        return;
+    }
+    length = input->base[1] & 0x3f;
+    if (type == 1) {
+        length = (length << 8) | input->base[2];
+    }
+    stream_data->header_length = length;
+    input->base += (1 + (1 << type));
+    input->len -= (1 + (1 << type));
+    if (input->len > length) {
+        input->base += length;
+        input->len -= length;
+    }
+    if (input->len < 2 || input->base[0] != 0) {
+        // shouldn't happen
+        return;
+    }
+    type = input->base[1] >> 0x6;
+    input->base += (1 + (1 << type));
+    input->len -= (1 + (1 << type));
+}
+
+static size_t build_h3_headers(char *req, const char *path, const char *host) {
+    uint8_t *buffer;
+    size_t length;
+    buffer = (uint8_t *)req;
+    *buffer++ = 0x01; // headers frame
+    buffer += 2;      // reserve for length
+    *buffer++ = 0;
+    *buffer++ = 0;
+    // :method = CONNECT or GET
+    *buffer++ = 0xc0 | (websocket ? 15 : 17);
+    if (websocket) {
+        // :protocol = websocket
+        memcpy(buffer, "\x27\x02:protocol\x09websocket", 21);
+        buffer += 21;
+    }
+    // :scheme = https
+    *buffer++ = 0xc0 | 23;
+#define min(a, b) ((a > b) ? (b) : (a))
+    // :path = ..., max 127
+    buffer += snprintf((char *)buffer, 0x7f + 2, "\x51%c%s", (char)min(strlen(path), 0x7f), path);
+    // :authority = ..., max 127
+    buffer += snprintf((char *)buffer, 0x7f + 2, "\x50%c%s", (char)min(strlen(host), 0x7f), host);
+    if (websocket) {
+        // sec-websocket-version = 13
+        memcpy(buffer, "\x27\x0esec-websocket-version\x02\x31\x33", 26);
+        buffer += 26;
+    }
+#ifndef USER_AGENT
+#define USER_AGENT "quicly-cli-h3"
+#endif
+    // user-agent = ..., max 127
+    buffer += snprintf((char *)buffer, 0x7f + 3, "\x5f\x50%c%s", (char)min(strlen(USER_AGENT), 0x7f), USER_AGENT);
+    length = (char *)buffer - req - 3;
+    if (length < 64) {
+        req[1] = (char)length;
+        memmove(&req[2], &req[3], length);
+        length += 2;
+    } else {
+        req[1] = (char)(length >> 8 | 0x40);
+        req[2] = (char)(length & 0xff);
+        length += 3;
+    }
+    return length;
+}
+
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
     struct st_stream_data_t *stream_data = stream->data;
@@ -370,17 +451,31 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
         return;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
+        size_t old_len = input.len;
+        int old_suppress_output = suppress_output;
+        if (h3) {
+            if ((stream->stream_id & 0x3) != 0) {
+                // skip control frame
+                suppress_output = 1;
+            } else if (stream_data->header_length == 0 && input.base[0] == 0x1) {
+                skip_h3_headers(stream, &input);
+            }
+        }
         if (!suppress_output) {
             FILE *out = (stream_data->outfp == NULL) ? stdout : stream_data->outfp;
             fwrite(input.base, 1, input.len, out);
             fflush(out);
         }
-        quicly_streambuf_ingress_shift(stream, input.len);
+        suppress_output = old_suppress_output;
+        quicly_streambuf_ingress_shift(stream, old_len);
     }
 
     if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
         if (stream_data->outfp != NULL)
             fclose(stream_data->outfp);
+        if (h3) {
+            h3_num_streams--;
+        }
     }
 }
 
@@ -647,7 +742,7 @@ static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, qui
         quicly_send_datagram_frames(conn, &payload, 1);
 }
 
-static void enqueue_requests(quicly_conn_t *conn)
+static void enqueue_requests(quicly_conn_t *conn, const char *host)
 {
     size_t i;
     int ret;
@@ -657,9 +752,19 @@ static void enqueue_requests(quicly_conn_t *conn)
         quicly_stream_t *stream;
         ret = quicly_open_stream(conn, &stream, 0);
         assert(ret == 0);
-        sprintf(req, "GET %s\r\n", reqs[i].path);
-        send_str(stream, req);
-        quicly_streambuf_egress_shutdown(stream);
+        if (!h3) {
+            sprintf(req, "GET %s\r\n", reqs[i].path);
+            send_str(stream, req);
+            quicly_streambuf_egress_shutdown(stream);
+        } else {
+            size_t length = build_h3_headers(req, reqs[i].path, host);
+            ((struct st_stream_data_t *)stream->data)->header_length = 0;
+            quicly_streambuf_egress_write(stream, req, length);
+            if (!websocket) {
+                quicly_streambuf_egress_shutdown(stream);
+            }
+            h3_num_streams++;
+        }
 
         if (reqs[i].to_file && !suppress_output) {
             struct st_stream_data_t *stream_data = stream->data;
@@ -698,7 +803,15 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
     ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params, NULL);
     assert(ret == 0);
     ++next_cid.master_id;
-    enqueue_requests(conn);
+    if (h3) {
+        char req[128];
+        quicly_stream_t *stream;
+        // settings
+        quicly_open_stream(conn, &stream, 1);
+        memcpy(req, "\x00\x04\x00", 3);
+        quicly_streambuf_egress_write(stream, req, 3);
+    }
+    enqueue_requests(conn, host);
     send_pending(fd, conn);
 
     while (1) {
@@ -726,7 +839,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             FD_SET(fd, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (enqueue_requests_at <= ctx.now->cb(ctx.now))
-            enqueue_requests(conn);
+            enqueue_requests(conn, host);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
                 uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
@@ -749,7 +862,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                         quicly_send_datagram_frames(conn, &datagram, 1);
                         send_datagram_frame = 0;
                     }
-                    if (quicly_num_streams(conn) == 0) {
+                    // h3 always have uni streams
+                    if ((h3 && h3_num_streams == 0) || quicly_num_streams(conn) == 0) {
                         if (request_interval != 0 && client_gotsig != SIGTERM) {
                             if (enqueue_requests_at == INT64_MAX)
                                 enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
@@ -1301,6 +1415,7 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
+                                             {"websocket", no_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1324,6 +1439,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "websocket") == 0) {
+                websocket = 1;
             } else {
                 assert(!"unexpected longname");
             }
@@ -1331,6 +1448,9 @@ int main(int argc, char **argv)
         case 'a':
             assert(negotiated_protocols.count < PTLS_ELEMENTSOF(negotiated_protocols.list));
             negotiated_protocols.list[negotiated_protocols.count++] = ptls_iovec_init(optarg, strlen(optarg));
+            if (strcmp(optarg, "h3") == 0) {
+                h3 = 1;
+            }
             break;
         case 'b':
             if (sscanf(optarg, "%u", &udpbufsize) != 1) {

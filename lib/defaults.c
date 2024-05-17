@@ -41,7 +41,7 @@ const quicly_context_t quicly_spec_context = {NULL,                             
                                                16 * 1024 * 1024,                                    /* max_data */
                                                30 * 1000,                                           /* idle_timeout (30 seconds) */
                                                100, /* max_concurrent_streams_bidi */
-                                               0,   /* max_concurrent_streams_uni */
+                                               100, /* max_concurrent_streams_uni */
                                                DEFAULT_MAX_UDP_PAYLOAD_SIZE},
                                               DEFAULT_MAX_PACKETS_PER_KEY,
                                               DEFAULT_MAX_CRYPTO_BYTES,
@@ -78,7 +78,7 @@ const quicly_context_t quicly_performant_context = {NULL,                       
                                                      16 * 1024 * 1024,                                    /* max_data */
                                                      30 * 1000, /* idle_timeout (30 seconds) */
                                                      100,       /* max_concurrent_streams_bidi */
-                                                     0,         /* max_concurrent_streams_uni */
+                                                     100,       /* max_concurrent_streams_uni */
                                                      DEFAULT_MAX_UDP_PAYLOAD_SIZE},
                                                     DEFAULT_MAX_PACKETS_PER_KEY,
                                                     DEFAULT_MAX_CRYPTO_BYTES,
