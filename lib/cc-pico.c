@@ -194,5 +194,6 @@ static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd
 
 quicly_cc_type_t quicly_cc_type_pico = {"pico",         &quicly_cc_pico_init,          pico_on_acked,
                                         pico_on_lost,   pico_on_persistent_congestion, pico_on_sent,
-                                        pico_on_switch, quicly_cc_jumpstart_enter};
+                                        pico_on_switch, &quicly_ss_type_disabled,
+                                        quicly_cc_jumpstart_enter};
 quicly_init_cc_t quicly_cc_pico_init = {pico_init};

@@ -1230,6 +1230,8 @@ static void usage(const char *cmd)
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
+           "  --slowstart <algo>        slowstart algorithm to use; \"rfc2001\" (default),\n"
+           "                            \"disabled\", \"search\"\n"
            "  -u size                   initial size of UDP datagram payload\n"
            "  -U size                   maximum size of UDP datagram payload\n"
            "  -V                        verify peer using the default certificates\n"
@@ -1298,6 +1300,7 @@ int main(int argc, char **argv)
     static const struct option longopts[] = {{"ech-key", required_argument, NULL, 0},
                                              {"ech-configs", required_argument, NULL, 0},
                                              {"disable-ecn", no_argument, NULL, 0},
+                                             {"slowstart", required_argument, NULL, 0},
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
@@ -1312,6 +1315,16 @@ int main(int argc, char **argv)
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ecn = 0;
+            } else if (strcmp(longopts[opt_index].name, "slowstart") == 0) {
+                quicly_ss_type_t **ss;
+                for (ss = quicly_ss_all_types; *ss != NULL; ++ss)
+                    if (strcmp((*ss)->name, optarg) == 0)
+                        break;
+                if (*ss != NULL) {
+                    ctx.cc_slowstart = (*ss);
+                } else {
+                    fprintf(stderr, "unknown slowstart algorithm: %s\n", optarg);
+                }
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
                 ctx.respect_app_limited = 0;
             } else if (strcmp(longopts[opt_index].name, "jumpstart-default") == 0) {

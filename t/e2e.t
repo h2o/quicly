@@ -529,6 +529,66 @@ subtest "slow-start" => sub {
     };
 };
 
+subtest "slow-start-search" => sub {
+    # spawn udpfw that applies 100ms RTT but otherwise nothing
+    my $udpfw_guard = spawn_process(
+        ["sh", "-c", "exec $udpfw -b 100 -i 1 -p 0 -B 100 -I 1 -P 100000 -l $udpfw_port 127.0.0.1 $port > /dev/null 2>&1"],
+        $udpfw_port,
+    );
+
+    # read first $size bytes from client $cli (which would be the payload received) and check RT
+    my $doit = sub {
+        my ($size, $rt_min, $rt_max) = @_;
+        subtest "${size}B" => sub {
+            my $start_at = time;
+            open my $fh, "-|", "$cli -p /$size 127.0.0.1 $udpfw_port 2>&1"
+                or die "failed to launch $cli:$!";
+            for (my $total_read = 0; $total_read < $size;) {
+                IO::Select->new($fh)->can_read(); # block until the command writes something
+                my $nread = sysread $fh, my $buf, 65536;
+                die "failed to read from pipe, got $nread:$!"
+                    unless $nread > 0;
+                $total_read += $nread;
+            }
+            my $elapsed = time - $start_at;
+            diag $elapsed;
+            cmp_ok $rt_min * 0.1, '<=', $elapsed, "RT >= $rt_min";
+            cmp_ok $rt_max * 0.1, '>=', $elapsed, "RT <= $rt_max";
+        };
+    };
+
+    my $each_cc = sub {
+        my $cb = shift;
+        for my $cc (qw(cubic reno pico)) {
+            subtest $cc => sub {
+                $cb->($cc);
+            };
+        }
+    };
+
+    subtest "search-test" => sub {
+        $each_cc->(sub {
+            my $cc = shift;
+            subtest "search-ss-enabled" => sub {
+	        #test with slow start algorithm SEARCH
+                my $guard = spawn_server("-C", "$cc:10", "--slowstart", "search");
+                # tail of 1st, and 2nd batch fits into both round trip
+                $doit->(@$_)
+                    for ([14000, 2, 2.5], [45000, 3, 3.5], [72000, 4, 4.5]);
+            };
+            subtest "search-ss-disable" => sub { 
+	        #test with SEARCH disabled using the default slow start algorithm defined in RFC 2001
+                my $guard = spawn_server("-C", "$cc:10", "--slowstart", "rfc2001");
+                # tail of 1st, 2nd, and 3rd batch fits into each round trip
+                $doit->(@$_)
+                    for ([14000, 2, 2.5], [45000, 3, 3.5], [72000, 4, 4.5]);
+            };
+
+        });
+    };
+
+};
+
 done_testing;
 
 sub spawn_server {

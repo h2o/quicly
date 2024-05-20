@@ -38,6 +38,7 @@ extern "C" {
 #include "quicly/local_cid.h"
 #include "quicly/linklist.h"
 #include "quicly/loss.h"
+#include "quicly/ss.h"
 #include "quicly/cc.h"
 #include "quicly/rate.h"
 #include "quicly/recvstate.h"
@@ -401,6 +402,10 @@ struct st_quicly_context_t {
      * initializes a congestion controller for given connection.
      */
     quicly_init_cc_t *init_cc;
+    /**
+     * set the slowstart function for the connection
+     */
+    quicly_ss_type_t *cc_slowstart;
     /**
      * optional refcount callback
      */

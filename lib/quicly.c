@@ -37,6 +37,7 @@
 #include "quicly/sentmap.h"
 #include "quicly/pacer.h"
 #include "quicly/frame.h"
+#include "quicly/ss.h"
 #include "quicly/streambuf.h"
 #include "quicly/cc.h"
 #if QUICLY_USE_DTRACE
@@ -2570,6 +2571,10 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.send_ack_at = INT64_MAX;
     conn->egress.send_probe_at = INT64_MAX;
     conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->stash.now);
+    if (conn->super.ctx->cc_slowstart != NULL) {
+        conn->egress.cc.type->cc_slowstart->name = conn->super.ctx->cc_slowstart->name;
+        conn->egress.cc.type->cc_slowstart->ss = conn->super.ctx->cc_slowstart->ss;
+    }
     if (pacer != NULL) {
         conn->egress.pacer = pacer;
         quicly_pacer_reset(conn->egress.pacer);
