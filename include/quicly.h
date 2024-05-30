@@ -271,6 +271,19 @@ typedef struct st_quicly_transport_parameters_t {
     uint16_t max_datagram_frame_size;
 } quicly_transport_parameters_t;
 
+typedef struct st_quicly_salt_t {
+    uint8_t initial[20];
+    struct {
+        uint8_t key[PTLS_AES128_KEY_SIZE];
+        uint8_t iv[PTLS_AESGCM_IV_SIZE];
+    } retry;
+} quicly_salt_t;
+
+typedef struct st_quicly_cipher_context_t {
+    ptls_aead_context_t *aead;
+    ptls_cipher_context_t *header_protection;
+} quicly_cipher_context_t;
+
 struct st_quicly_context_t {
     /**
      * tls context to use
@@ -1161,6 +1174,16 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
  */
 int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                           quicly_decoded_packet_t *decoded);
+/**
+ * returns salts given version
+ */
+const quicly_salt_t *quicly_get_salt(uint32_t protocol_version);
+/**
+ * initializes the cipher contexts given cid and salt
+ * @param conn maybe NULL when called by quicly_accept; if so, the default crypto engine will be used
+ */
+int quicly_setup_initial_encryption(ptls_cipher_suite_t *cs, quicly_cipher_context_t *ingress, quicly_cipher_context_t *egress,
+                                    ptls_iovec_t cid, int is_client, ptls_iovec_t salt, quicly_conn_t *conn);
 /**
  *
  */
