@@ -1241,9 +1241,64 @@ static void usage(const char *cmd)
            "  -x named-group            named group to be used (default: secp256r1)\n"
            "  -X                        max bidirectional stream count (default: 100)\n"
            "  -y cipher-suite           cipher-suite to be used (default: all)\n"
+           "\n"
+           "Miscellaneous Options:\n"
            "  -h                        print this help\n"
+           "  --encrypt-packet          given an Initial packet without encryption applied,\n"
+           "                            emits an encrypted packet\n"
            "\n",
            cmd);
+}
+
+static int cmd_encrypt_packet(void)
+{
+    uint8_t buf[1500] = {};
+    size_t inlen;
+    const quicly_salt_t *salt = quicly_get_salt(QUICLY_PROTOCOL_VERSION_1);
+    quicly_cipher_context_t ingress = {}, egress = {};
+    static const size_t dcidlen_at = 5;
+
+    inlen = fread(buf, 1, sizeof(buf) - ptls_openssl_aes128gcm.tag_size, stdin);
+    if (ferror(stdin)) {
+        perror("I/O error");
+        return 1;
+    } else if (!feof(stdin)) {
+        fprintf(stderr, "Unexpected amount of input.\n");
+        return 1;
+    }
+
+    if ((buf[0] & QUICLY_PACKET_TYPE_BITMASK) != QUICLY_PACKET_TYPE_INITIAL) {
+        fprintf(stderr, "Unexpected QUIC packet type.\n");
+        return 1;
+    }
+    if ((buf[0] & 3) + 1 != QUICLY_SEND_PN_SIZE) {
+        fprintf(stderr, "Unexpected packet number size\n");
+        return 1;
+    }
+
+    /* payload starts after three lenghth-value structures following VERSION, followed by length and packet number */
+    const uint8_t *payload_from = buf + dcidlen_at;
+    for (int i = 0; i < 3; ++i) {
+        uint64_t blocklen = i < 2 ? *payload_from++ : quicly_decodev(&payload_from, buf + sizeof(buf));
+        payload_from += blocklen;
+    }
+    quicly_decodev(&payload_from, buf + sizeof(buf)); /* skip length */
+    payload_from += QUICLY_SEND_PN_SIZE;
+
+    if (quicly_setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress,
+                                        ptls_iovec_init(buf + dcidlen_at + 1, buf[dcidlen_at]), 1,
+                                        ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL) != 0) {
+        fprintf(stderr, "Failed to setup crypto.\n");
+        return 1;
+    }
+
+    quicly_default_crypto_engine.encrypt_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
+                                                ptls_iovec_init(buf, inlen + ptls_openssl_aes128gcm.tag_size), 0,
+                                                payload_from - buf, payload_from[-2] * 256 + payload_from[-1], 0);
+
+    fwrite(buf, 1, inlen + ptls_openssl_aes128gcm.tag_size, stdout);
+
+    return 0;
 }
 
 static void push_req(const char *path, int to_file)
@@ -1301,6 +1356,7 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
+                                             {"encrypt-packet", no_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1324,6 +1380,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "encrypt-packet") == 0) {
+                return cmd_encrypt_packet();
             } else {
                 assert(!"unexpected longname");
             }
