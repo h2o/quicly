@@ -2025,22 +2025,31 @@ void quicly_free(quicly_conn_t *conn)
     free(conn);
 }
 
-static int setup_initial_key(quicly_cipher_context_t *ctx, ptls_cipher_suite_t *cs, const void *master_secret, const char *label,
-                             int is_enc, quicly_conn_t *conn)
+static int calc_initial_key(ptls_cipher_suite_t *cs, uint8_t *traffic_secret, const void *master_secret, const char *label)
 {
-    uint8_t aead_secret[PTLS_MAX_DIGEST_SIZE];
+    return ptls_hkdf_expand_label(cs->hash, traffic_secret, cs->hash->digest_size,
+                                  ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0), NULL);
+}
+
+int quicly_calc_initial_keys(ptls_cipher_suite_t *cs, uint8_t *ingress, uint8_t *egress, ptls_iovec_t cid, int is_client,
+                             ptls_iovec_t salt)
+{
+    static const char *labels[2] = {"client in", "server in"};
+    uint8_t master_secret[PTLS_MAX_DIGEST_SIZE];
     int ret;
 
-    if ((ret = ptls_hkdf_expand_label(cs->hash, aead_secret, cs->hash->digest_size,
-                                      ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0),
-                                      NULL)) != 0)
+    /* extract master secret */
+    if ((ret = ptls_hkdf_extract(cs->hash, master_secret, salt, cid)) != 0)
         goto Exit;
-    if ((ret = setup_cipher(conn, QUICLY_EPOCH_INITIAL, is_enc, &ctx->header_protection, &ctx->aead, cs->aead, cs->hash,
-                            aead_secret)) != 0)
+
+    /* calc secrets */
+    if (ingress != NULL && (ret = calc_initial_key(cs, ingress, master_secret, labels[is_client])) != 0)
+        goto Exit;
+    if (egress != NULL && (ret = calc_initial_key(cs, egress, master_secret, labels[!is_client])) != 0)
         goto Exit;
 
 Exit:
-    ptls_clear_memory(aead_secret, sizeof(aead_secret));
+    ptls_clear_memory(master_secret, sizeof(master_secret));
     return ret;
 }
 
@@ -2050,25 +2059,25 @@ Exit:
 int quicly_setup_initial_encryption(ptls_cipher_suite_t *cs, quicly_cipher_context_t *ingress, quicly_cipher_context_t *egress,
                                     ptls_iovec_t cid, int is_client, ptls_iovec_t salt, quicly_conn_t *conn)
 {
-    static const char *labels[2] = {"client in", "server in"};
-    uint8_t secret[PTLS_MAX_DIGEST_SIZE];
+    struct {
+        uint8_t ingress[PTLS_MAX_DIGEST_SIZE];
+        uint8_t egress[PTLS_MAX_DIGEST_SIZE];
+    } secrets;
     int ret;
 
-    /* extract master secret */
-    if ((ret = ptls_hkdf_extract(cs->hash, secret, salt, cid)) != 0)
+    if ((ret = quicly_calc_initial_keys(cs, ingress != NULL ? secrets.ingress : NULL, egress != NULL ? secrets.egress : NULL, cid,
+                                        is_client, salt)) != 0)
         goto Exit;
 
-    /* create aead contexts */
-    if (ingress != NULL && (ret = setup_initial_key(ingress, cs, secret, labels[is_client], 0, conn)) != 0)
+    if (ingress != NULL && (ret = setup_cipher(conn, QUICLY_EPOCH_INITIAL, 0, &ingress->header_protection, &ingress->aead, cs->aead,
+                                               cs->hash, secrets.ingress)) != 0)
         goto Exit;
-    if (egress != NULL && (ret = setup_initial_key(egress, cs, secret, labels[!is_client], 1, conn)) != 0) {
-        if (ingress != NULL)
-            dispose_cipher(ingress);
+    if (egress != NULL && (ret = setup_cipher(conn, QUICLY_EPOCH_INITIAL, 1, &egress->header_protection, &egress->aead, cs->aead,
+                                              cs->hash, secrets.egress)) != 0)
         goto Exit;
-    }
 
 Exit:
-    ptls_clear_memory(secret, sizeof(secret));
+    ptls_clear_memory(&secrets, sizeof(secrets));
     return ret;
 }
 

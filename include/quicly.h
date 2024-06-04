@@ -1179,6 +1179,11 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
  */
 const quicly_salt_t *quicly_get_salt(uint32_t protocol_version);
 /**
+ *
+ */
+int quicly_calc_initial_keys(ptls_cipher_suite_t *cs, uint8_t *ingress, uint8_t *egress, ptls_iovec_t cid, int is_client,
+                             ptls_iovec_t salt);
+/**
  * initializes the cipher contexts given cid and salt
  * @param conn maybe NULL when called by quicly_accept; if so, the default crypto engine will be used
  */
