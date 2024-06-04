@@ -1244,19 +1244,73 @@ static void usage(const char *cmd)
            "\n"
            "Miscellaneous Options:\n"
            "  -h                        print this help\n"
-           "  --encrypt-packet          given an Initial packet without encryption applied,\n"
-           "                            emits an encrypted packet\n"
+           "  --print-initial-secret    print Initial client traffic secret given DCID\n"
+           "  --encrypt-packet secret   given a packet without encryption applied, emits a\n"
+           "                            packet encrypted using given traffic key\n"
            "\n",
            cmd);
 }
 
-static int cmd_encrypt_packet(void)
+static int decode_hex(int ch)
 {
-    uint8_t buf[1500] = {};
-    size_t inlen;
+    if ('0' <= ch && ch <= '9') {
+        return ch - '0';
+    } else if ('A' <= ch && ch <= 'F') {
+        return ch - 'A' + 0xa;
+    } else if ('a' <= ch && ch <= 'f') {
+        return ch - 'a' + 0xa;
+    }
+    return -1;
+}
+
+static size_t decode_hexstring(uint8_t *dst, size_t capacity, const char *src)
+{
+    size_t dst_off = 0;
+    int hi, lo;
+
+    while (*src != '\0') {
+        if (dst_off >= capacity)
+            return SIZE_MAX;
+        if ((hi = decode_hex(*src++)) == -1 || (lo = decode_hex(*src++)) == -1)
+            return SIZE_MAX;
+        dst[dst_off++] = (uint8_t)(hi * 16 + lo);
+    }
+
+    return dst_off;
+}
+
+static int cmd_print_initial_secret(const char *dcid_hex)
+{
+    uint8_t dcid[QUICLY_MAX_CID_LEN_V1], secret[PTLS_MAX_DIGEST_SIZE];
+    size_t dcid_len;
+
+    /* decode dcid_hex */
+    if ((dcid_len = decode_hexstring(dcid, sizeof(dcid), dcid_hex)) == SIZE_MAX) {
+        fprintf(stderr, "Invalid DCID: %s\n", dcid_hex);
+        return 1;
+    }
+
+    /* calc initial key */
     const quicly_salt_t *salt = quicly_get_salt(QUICLY_PROTOCOL_VERSION_1);
-    quicly_cipher_context_t ingress = {}, egress = {};
-    static const size_t dcidlen_at = 5;
+    if (quicly_calc_initial_keys(&ptls_openssl_aes128gcmsha256, NULL, secret, ptls_iovec_init(dcid, dcid_len), 1,
+                                 ptls_iovec_init(salt->initial, sizeof(salt->initial))) != 0) {
+        fprintf(stderr, "Crypto failure.\n");
+        return 1;
+    }
+
+    printf("%s\n", quicly_hexdump(secret, ptls_openssl_aes128gcmsha256.hash->digest_size, SIZE_MAX));
+
+    return 0;
+}
+
+static int cmd_encrypt_packet(const char *secret_hex)
+{
+    uint8_t buf[1500] = {}, secret[PTLS_MAX_DIGEST_SIZE];
+    size_t inlen;
+    quicly_crypto_engine_t *engine = &quicly_default_crypto_engine;
+    ptls_cipher_suite_t *cs = &ptls_openssl_aes128gcmsha256;
+    ptls_cipher_context_t *header_protect;
+    ptls_aead_context_t *packet_protect;
 
     inlen = fread(buf, 1, sizeof(buf) - ptls_openssl_aes128gcm.tag_size, stdin);
     if (ferror(stdin)) {
@@ -1277,7 +1331,7 @@ static int cmd_encrypt_packet(void)
     }
 
     /* payload starts after three lenghth-value structures following VERSION, followed by length and packet number */
-    const uint8_t *payload_from = buf + dcidlen_at;
+    const uint8_t *payload_from = buf + 5;
     for (int i = 0; i < 3; ++i) {
         uint64_t blocklen = i < 2 ? *payload_from++ : quicly_decodev(&payload_from, buf + sizeof(buf));
         payload_from += blocklen;
@@ -1285,18 +1339,21 @@ static int cmd_encrypt_packet(void)
     quicly_decodev(&payload_from, buf + sizeof(buf)); /* skip length */
     payload_from += QUICLY_SEND_PN_SIZE;
 
-    if (quicly_setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress,
-                                        ptls_iovec_init(buf + dcidlen_at + 1, buf[dcidlen_at]), 1,
-                                        ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL) != 0) {
-        fprintf(stderr, "Failed to setup crypto.\n");
+    /* setup crypto */
+    if (decode_hexstring(secret, cs->hash->digest_size, secret_hex) != cs->hash->digest_size) {
+        fprintf(stderr, "Invalid secret (must be of %zu bytes in hex)\n", cs->hash->digest_size);
+        return 1;
+    }
+    if (engine->setup_cipher(engine, NULL, QUICLY_EPOCH_INITIAL, 1, &header_protect, &packet_protect, cs->aead, cs->hash, secret) !=
+        0) {
+        fprintf(stderr, "Crypto faiure.\n");
         return 1;
     }
 
-    quicly_default_crypto_engine.encrypt_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
-                                                ptls_iovec_init(buf, inlen + ptls_openssl_aes128gcm.tag_size), 0,
-                                                payload_from - buf, payload_from[-2] * 256 + payload_from[-1], 0);
+    engine->encrypt_packet(engine, NULL, header_protect, packet_protect, ptls_iovec_init(buf, inlen + cs->aead->tag_size), 0,
+                           payload_from - buf, payload_from[-2] * 256 + payload_from[-1], 0);
 
-    fwrite(buf, 1, inlen + ptls_openssl_aes128gcm.tag_size, stdout);
+    fwrite(buf, 1, inlen + cs->aead->tag_size, stdout);
 
     return 0;
 }
@@ -1356,7 +1413,8 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
-                                             {"encrypt-packet", no_argument, NULL, 0},
+                                             {"print-initial-secret", required_argument, NULL, 0},
+                                             {"encrypt-packet", required_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1380,8 +1438,10 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "print-initial-secret") == 0) {
+                return cmd_print_initial_secret(optarg);
             } else if (strcmp(longopts[opt_index].name, "encrypt-packet") == 0) {
-                return cmd_encrypt_packet();
+                return cmd_encrypt_packet(optarg);
             } else {
                 assert(!"unexpected longname");
             }
