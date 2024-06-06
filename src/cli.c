@@ -1244,7 +1244,7 @@ static void usage(const char *cmd)
            "\n"
            "Miscellaneous Options:\n"
            "  -h                        print this help\n"
-           "  --print-initial-secret    print Initial client traffic secret given DCID\n"
+           "  --calc-initial-secret     calculate Initial client traffic secret given DCID\n"
            "  --encrypt-packet secret   given a packet without encryption applied, emits a\n"
            "                            packet encrypted using given traffic key\n"
            "\n",
@@ -1279,7 +1279,7 @@ static size_t decode_hexstring(uint8_t *dst, size_t capacity, const char *src)
     return dst_off;
 }
 
-static int cmd_print_initial_secret(const char *dcid_hex)
+static int cmd_calc_initial_secret(const char *dcid_hex)
 {
     uint8_t dcid[QUICLY_MAX_CID_LEN_V1], secret[PTLS_MAX_DIGEST_SIZE];
     size_t dcid_len;
@@ -1413,7 +1413,7 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
-                                             {"print-initial-secret", required_argument, NULL, 0},
+                                             {"calc-initial-secret", required_argument, NULL, 0},
                                              {"encrypt-packet", required_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
@@ -1438,8 +1438,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
-            } else if (strcmp(longopts[opt_index].name, "print-initial-secret") == 0) {
-                return cmd_print_initial_secret(optarg);
+            } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
+                return cmd_calc_initial_secret(optarg);
             } else if (strcmp(longopts[opt_index].name, "encrypt-packet") == 0) {
                 return cmd_encrypt_packet(optarg);
             } else {
