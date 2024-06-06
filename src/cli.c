@@ -1281,7 +1281,8 @@ static size_t decode_hexstring(uint8_t *dst, size_t capacity, const char *src)
 
 static int cmd_calc_initial_secret(const char *dcid_hex)
 {
-    uint8_t dcid[QUICLY_MAX_CID_LEN_V1], secret[PTLS_MAX_DIGEST_SIZE];
+    static const ptls_cipher_suite_t *cs = &ptls_openssl_aes128gcmsha256;
+    uint8_t dcid[QUICLY_MAX_CID_LEN_V1], server_secret[PTLS_MAX_DIGEST_SIZE], client_secret[PTLS_MAX_DIGEST_SIZE];
     size_t dcid_len;
 
     /* decode dcid_hex */
@@ -1292,13 +1293,14 @@ static int cmd_calc_initial_secret(const char *dcid_hex)
 
     /* calc initial key */
     const quicly_salt_t *salt = quicly_get_salt(QUICLY_PROTOCOL_VERSION_1);
-    if (quicly_calc_initial_keys(&ptls_openssl_aes128gcmsha256, NULL, secret, ptls_iovec_init(dcid, dcid_len), 1,
+    if (quicly_calc_initial_keys(cs, server_secret, client_secret, ptls_iovec_init(dcid, dcid_len), 1,
                                  ptls_iovec_init(salt->initial, sizeof(salt->initial))) != 0) {
         fprintf(stderr, "Crypto failure.\n");
         return 1;
     }
 
-    printf("%s\n", quicly_hexdump(secret, ptls_openssl_aes128gcmsha256.hash->digest_size, SIZE_MAX));
+    printf("client: %s\nserver: %s\n", quicly_hexdump(client_secret, cs->hash->digest_size, SIZE_MAX),
+           quicly_hexdump(server_secret, cs->hash->digest_size, SIZE_MAX));
 
     return 0;
 }
