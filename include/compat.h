@@ -56,3 +56,7 @@ static inline int popcountl(uint64_t x)
     return (x * 0x01010101) >> 24;
 }
 #endif
+
+#ifndef IPTOS_ECN_CE
+# define	IPTOS_ECN_CE		0x03
+#endif
