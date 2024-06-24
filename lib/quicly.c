@@ -25,6 +25,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#if !defined(_WIN32)
+# include <netinet/ip.h>
+#endif
 #include "khash.h"
 #include "quicly.h"
 #include "quicly/defaults.h"
