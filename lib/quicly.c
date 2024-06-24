@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #if !defined(_WIN32)
 # include <netinet/ip.h>
+# include <arpa/inet.h> // inet_pton for apple
 #endif
 #include "khash.h"
 #include "quicly.h"
