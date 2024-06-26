@@ -1244,21 +1244,133 @@ static void usage(const char *cmd)
            "\n"
            "Miscellaneous Options:\n"
            "  -h                        print this help\n"
-           "  --encrypt-packet          given an Initial packet without encryption applied,\n"
-           "                            emits an encrypted packet\n"
+           "  --calc-initial-secret     calculate Initial client traffic secret given DCID\n"
+           "  --decrypt-packet secret   given a QUIC packet and traffic key, decrypts and\n"
+           "                            prints the packet payload\n"
+           "  --encrypt-packet secret   given a packet without encryption applied, emits a\n"
+           "                            packet encrypted using given traffic key\n"
            "\n",
            cmd);
 }
 
-static int cmd_encrypt_packet(void)
+static int decode_hex(int ch)
 {
-    uint8_t buf[1500] = {};
-    size_t inlen;
-    const quicly_salt_t *salt = quicly_get_salt(QUICLY_PROTOCOL_VERSION_1);
-    quicly_cipher_context_t ingress = {}, egress = {};
-    static const size_t dcidlen_at = 5;
+    if ('0' <= ch && ch <= '9') {
+        return ch - '0';
+    } else if ('A' <= ch && ch <= 'F') {
+        return ch - 'A' + 0xa;
+    } else if ('a' <= ch && ch <= 'f') {
+        return ch - 'a' + 0xa;
+    }
+    return -1;
+}
 
-    inlen = fread(buf, 1, sizeof(buf) - ptls_openssl_aes128gcm.tag_size, stdin);
+static size_t decode_hexstring(uint8_t *dst, size_t capacity, const char *src)
+{
+    size_t dst_off = 0;
+    int hi, lo;
+
+    while (*src != '\0') {
+        if (dst_off >= capacity)
+            return SIZE_MAX;
+        if ((hi = decode_hex(*src++)) == -1 || (lo = decode_hex(*src++)) == -1)
+            return SIZE_MAX;
+        dst[dst_off++] = (uint8_t)(hi * 16 + lo);
+    }
+
+    return dst_off;
+}
+
+static int cmd_calc_initial_secret(const char *dcid_hex)
+{
+    static const ptls_cipher_suite_t *cs = &ptls_openssl_aes128gcmsha256;
+    uint8_t dcid[QUICLY_MAX_CID_LEN_V1], server_secret[PTLS_MAX_DIGEST_SIZE], client_secret[PTLS_MAX_DIGEST_SIZE];
+    size_t dcid_len;
+
+    /* decode dcid_hex */
+    if ((dcid_len = decode_hexstring(dcid, sizeof(dcid), dcid_hex)) == SIZE_MAX) {
+        fprintf(stderr, "Invalid DCID: %s\n", dcid_hex);
+        return 1;
+    }
+
+    /* calc initial key */
+    const quicly_salt_t *salt = quicly_get_salt(QUICLY_PROTOCOL_VERSION_1);
+    if (quicly_calc_initial_keys(cs, server_secret, client_secret, ptls_iovec_init(dcid, dcid_len), 1,
+                                 ptls_iovec_init(salt->initial, sizeof(salt->initial))) != 0) {
+        fprintf(stderr, "Crypto failure.\n");
+        return 1;
+    }
+
+    printf("client: %s\nserver: %s\n", quicly_hexdump(client_secret, cs->hash->digest_size, SIZE_MAX),
+           quicly_hexdump(server_secret, cs->hash->digest_size, SIZE_MAX));
+
+    return 0;
+}
+
+static size_t determine_pn_offset(ptls_iovec_t input, size_t *packet_size)
+{
+    if (input.len < 5)
+        goto Broken;
+
+    if ((input.base[0] & QUICLY_PACKET_TYPE_BITMASK) != QUICLY_PACKET_TYPE_INITIAL)
+        goto UnexpectedType;
+
+    size_t off = 5;
+
+    /* skip CIDs */
+    for (int i = 0; i < 2; ++i) {
+        if (off >= input.len || (off += 1 + input.base[off]) > input.len)
+            goto Broken;
+    }
+
+    { /* skip token length */
+        const uint8_t *p = input.base + off;
+        uint64_t token_len = quicly_decodev(&p, input.base + input.len);
+        if (token_len == UINT64_MAX || (off = p - input.base + token_len) > input.len)
+            goto Broken;
+    }
+
+    { /* read packet length and adjust so that `*packet_size` contains  */
+        const uint8_t *p = input.base + off;
+        if ((*packet_size = quicly_decodev(&p, input.base + input.len)) == SIZE_MAX)
+            goto Broken;
+        off = p - input.base;
+        *packet_size += off;
+    }
+
+    return off;
+
+Broken:
+    fprintf(stderr, "Invalid or unsupported type of QUIC packet.\n");
+    return SIZE_MAX;
+
+UnexpectedType:
+    fprintf(stderr, "Unexpected QUIC packet type.\n"); /* TODO add support for other types */
+    return SIZE_MAX;
+}
+
+static int cmd_encrypt_packet(int is_enc, const char *secret_hex)
+{
+    quicly_crypto_engine_t *engine = &quicly_default_crypto_engine;
+    ptls_cipher_suite_t *cs = &ptls_openssl_aes128gcmsha256;
+    ptls_cipher_context_t *header_protect;
+    ptls_aead_context_t *packet_protect;
+    uint8_t buf[1500] = {}, secret[PTLS_MAX_DIGEST_SIZE];
+    size_t inlen, pn_off, packet_size;
+
+    /* setup crypto */
+    if (decode_hexstring(secret, cs->hash->digest_size, secret_hex) != cs->hash->digest_size) {
+        fprintf(stderr, "Invalid secret (must be of %zu bytes in hex)\n", cs->hash->digest_size);
+        return 1;
+    }
+    if (engine->setup_cipher(engine, NULL, QUICLY_EPOCH_INITIAL, is_enc, &header_protect, &packet_protect, cs->aead, cs->hash,
+                             secret) != 0) {
+        fprintf(stderr, "Crypto faiure.\n");
+        return 1;
+    }
+
+    /* read the packet */
+    inlen = fread(buf, 1, sizeof(buf) - cs->aead->tag_size, stdin);
     if (ferror(stdin)) {
         perror("I/O error");
         return 1;
@@ -1266,37 +1378,53 @@ static int cmd_encrypt_packet(void)
         fprintf(stderr, "Unexpected amount of input.\n");
         return 1;
     }
-
-    if ((buf[0] & QUICLY_PACKET_TYPE_BITMASK) != QUICLY_PACKET_TYPE_INITIAL) {
-        fprintf(stderr, "Unexpected QUIC packet type.\n");
+    if ((pn_off = determine_pn_offset(ptls_iovec_init(buf, inlen), &packet_size)) == SIZE_MAX)
         return 1;
-    }
-    if ((buf[0] & 3) + 1 != QUICLY_SEND_PN_SIZE) {
-        fprintf(stderr, "Unexpected packet number size\n");
+    if (packet_size - pn_off < QUICLY_MAX_PN_SIZE + cs->aead->tag_size) {
+        fprintf(stderr, "encrypted part of the packet is too small.\n");
         return 1;
     }
 
-    /* payload starts after three lenghth-value structures following VERSION, followed by length and packet number */
-    const uint8_t *payload_from = buf + dcidlen_at;
-    for (int i = 0; i < 3; ++i) {
-        uint64_t blocklen = i < 2 ? *payload_from++ : quicly_decodev(&payload_from, buf + sizeof(buf));
-        payload_from += blocklen;
+    if (is_enc) {
+        /* packet size can be greater than the input, in which case PADDING frames will be appended. However, it cannot exceed the
+         * size of the buffer. */
+        if (packet_size > sizeof(buf)) {
+            fprintf(stderr, "Length field value is too large.\n");
+            return 1;
+        }
+        if ((buf[0] & 3) + 1 != QUICLY_SEND_PN_SIZE) {
+            fprintf(stderr, "Unexpected packet number size\n");
+            return 1;
+        }
+        engine->encrypt_packet(engine, NULL, header_protect, packet_protect, ptls_iovec_init(buf, packet_size), 0,
+                               pn_off + QUICLY_SEND_PN_SIZE, buf[pn_off] * 256 + buf[pn_off + 1], 0);
+        fwrite(buf, 1, packet_size, stdout);
+    } else {
+        if (packet_size > inlen) {
+            fprintf(stderr, "Length field value is too large.\n");
+            return 1;
+        }
+        /* unprotect header protection */
+        uint8_t hpmask[5] = {};
+        ptls_cipher_init(header_protect, buf + pn_off + QUICLY_MAX_PN_SIZE);
+        ptls_cipher_encrypt(header_protect, hpmask, hpmask, sizeof(hpmask));
+        buf[0] ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(buf[0]) ? 0xf : 0x1f);
+        size_t pn_len = (buf[0] & 0x3) + 1;
+        uint64_t pn = 0;
+        for (int i = 0; i < pn_len; ++i) {
+            buf[pn_off + i] ^= hpmask[i + 1];
+            pn = (pn << 8) | buf[pn_off + i];
+        }
+        fprintf(stderr, "pn: %" PRIu64 "\n", pn);
+        /* decrypt */
+        if (ptls_aead_decrypt(packet_protect, buf + pn_off + pn_len, buf + pn_off + pn_len, packet_size - (pn_off + pn_len), pn,
+                              buf, pn_off + pn_len) == SIZE_MAX) {
+            fprintf(stderr, "AEAD decryption failed.\n");
+            return 1;
+        }
+        /* print */
+        fwrite(buf + pn_off + pn_len, 1, packet_size - (pn_off + pn_len + cs->aead->tag_size), stdout);
     }
-    quicly_decodev(&payload_from, buf + sizeof(buf)); /* skip length */
-    payload_from += QUICLY_SEND_PN_SIZE;
-
-    if (quicly_setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress,
-                                        ptls_iovec_init(buf + dcidlen_at + 1, buf[dcidlen_at]), 1,
-                                        ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL) != 0) {
-        fprintf(stderr, "Failed to setup crypto.\n");
-        return 1;
-    }
-
-    quicly_default_crypto_engine.encrypt_packet(&quicly_default_crypto_engine, NULL, egress.header_protection, egress.aead,
-                                                ptls_iovec_init(buf, inlen + ptls_openssl_aes128gcm.tag_size), 0,
-                                                payload_from - buf, payload_from[-2] * 256 + payload_from[-1], 0);
-
-    fwrite(buf, 1, inlen + ptls_openssl_aes128gcm.tag_size, stdout);
 
     return 0;
 }
@@ -1356,7 +1484,9 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
-                                             {"encrypt-packet", no_argument, NULL, 0},
+                                             {"calc-initial-secret", required_argument, NULL, 0},
+                                             {"decrypt-packet", required_argument, NULL, 0},
+                                             {"encrypt-packet", required_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1380,8 +1510,12 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
+                return cmd_calc_initial_secret(optarg);
+            } else if (strcmp(longopts[opt_index].name, "decrypt-packet") == 0) {
+                return cmd_encrypt_packet(0, optarg);
             } else if (strcmp(longopts[opt_index].name, "encrypt-packet") == 0) {
-                return cmd_encrypt_packet();
+                return cmd_encrypt_packet(1, optarg);
             } else {
                 assert(!"unexpected longname");
             }

@@ -108,6 +108,11 @@ KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
         quicly_escape_unsafe_string(alloca(_l * 4 + 1), (s), _l);                                                                  \
     })
 
+struct st_quicly_cipher_context_t {
+    ptls_aead_context_t *aead;
+    ptls_cipher_context_t *header_protection;
+};
+
 struct st_quicly_pn_space_t {
     /**
      * acks to be sent to remote peer
@@ -142,8 +147,8 @@ struct st_quicly_pn_space_t {
 struct st_quicly_handshake_space_t {
     struct st_quicly_pn_space_t super;
     struct {
-        quicly_cipher_context_t ingress;
-        quicly_cipher_context_t egress;
+        struct st_quicly_cipher_context_t ingress;
+        struct st_quicly_cipher_context_t egress;
     } cipher;
     uint16_t largest_ingress_udp_payload_size;
 };
@@ -163,7 +168,7 @@ struct st_quicly_application_space_t {
             } key_phase;
         } ingress;
         struct {
-            quicly_cipher_context_t key;
+            struct st_quicly_cipher_context_t key;
             uint8_t secret[PTLS_MAX_DIGEST_SIZE];
             uint64_t key_phase;
             struct {
@@ -638,7 +643,7 @@ static ptls_aead_context_t *create_retry_aead(quicly_context_t *ctx, uint32_t pr
     return aead;
 }
 
-static void dispose_cipher(quicly_cipher_context_t *ctx)
+static void dispose_cipher(struct st_quicly_cipher_context_t *ctx)
 {
     ptls_aead_free(ctx->aead);
     ptls_cipher_free(ctx->header_protection);
@@ -1088,7 +1093,7 @@ static void crypto_handshake(quicly_conn_t *conn, size_t in_epoch, ptls_iovec_t 
         assert(quicly_is_client(conn));
         if (conn->crypto.handshake_properties.client.early_data_acceptance == PTLS_EARLY_DATA_REJECTED) {
             dispose_cipher(&conn->application->cipher.egress.key);
-            conn->application->cipher.egress.key = (quicly_cipher_context_t){NULL};
+            conn->application->cipher.egress.key = (struct st_quicly_cipher_context_t){NULL};
             /* retire all packets with ack_epoch == 3; they are all 0-RTT packets */
             int ret;
             if ((ret = discard_sentmap_by_epoch(conn, 1u << QUICLY_EPOCH_1RTT)) != 0) {
@@ -2025,50 +2030,60 @@ void quicly_free(quicly_conn_t *conn)
     free(conn);
 }
 
-static int setup_initial_key(quicly_cipher_context_t *ctx, ptls_cipher_suite_t *cs, const void *master_secret, const char *label,
-                             int is_enc, quicly_conn_t *conn)
+static int calc_initial_key(ptls_cipher_suite_t *cs, uint8_t *traffic_secret, const void *master_secret, const char *label)
 {
-    uint8_t aead_secret[PTLS_MAX_DIGEST_SIZE];
+    return ptls_hkdf_expand_label(cs->hash, traffic_secret, cs->hash->digest_size,
+                                  ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0), NULL);
+}
+
+int quicly_calc_initial_keys(ptls_cipher_suite_t *cs, uint8_t *ingress, uint8_t *egress, ptls_iovec_t cid, int is_client,
+                             ptls_iovec_t salt)
+{
+    static const char *labels[2] = {"client in", "server in"};
+    uint8_t master_secret[PTLS_MAX_DIGEST_SIZE];
     int ret;
 
-    if ((ret = ptls_hkdf_expand_label(cs->hash, aead_secret, cs->hash->digest_size,
-                                      ptls_iovec_init(master_secret, cs->hash->digest_size), label, ptls_iovec_init(NULL, 0),
-                                      NULL)) != 0)
+    /* extract master secret */
+    if ((ret = ptls_hkdf_extract(cs->hash, master_secret, salt, cid)) != 0)
         goto Exit;
-    if ((ret = setup_cipher(conn, QUICLY_EPOCH_INITIAL, is_enc, &ctx->header_protection, &ctx->aead, cs->aead, cs->hash,
-                            aead_secret)) != 0)
+
+    /* calc secrets */
+    if (ingress != NULL && (ret = calc_initial_key(cs, ingress, master_secret, labels[is_client])) != 0)
+        goto Exit;
+    if (egress != NULL && (ret = calc_initial_key(cs, egress, master_secret, labels[!is_client])) != 0)
         goto Exit;
 
 Exit:
-    ptls_clear_memory(aead_secret, sizeof(aead_secret));
+    ptls_clear_memory(master_secret, sizeof(master_secret));
     return ret;
 }
 
 /**
  * @param conn maybe NULL when called by quicly_accept
  */
-int quicly_setup_initial_encryption(ptls_cipher_suite_t *cs, quicly_cipher_context_t *ingress, quicly_cipher_context_t *egress,
-                                    ptls_iovec_t cid, int is_client, ptls_iovec_t salt, quicly_conn_t *conn)
+static int setup_initial_encryption(ptls_cipher_suite_t *cs, struct st_quicly_cipher_context_t *ingress,
+                                    struct st_quicly_cipher_context_t *egress, ptls_iovec_t cid, int is_client, ptls_iovec_t salt,
+                                    quicly_conn_t *conn)
 {
-    static const char *labels[2] = {"client in", "server in"};
-    uint8_t secret[PTLS_MAX_DIGEST_SIZE];
+    struct {
+        uint8_t ingress[PTLS_MAX_DIGEST_SIZE];
+        uint8_t egress[PTLS_MAX_DIGEST_SIZE];
+    } secrets;
     int ret;
 
-    /* extract master secret */
-    if ((ret = ptls_hkdf_extract(cs->hash, secret, salt, cid)) != 0)
+    if ((ret = quicly_calc_initial_keys(cs, ingress != NULL ? secrets.ingress : NULL, egress != NULL ? secrets.egress : NULL, cid,
+                                        is_client, salt)) != 0)
         goto Exit;
 
-    /* create aead contexts */
-    if (ingress != NULL && (ret = setup_initial_key(ingress, cs, secret, labels[is_client], 0, conn)) != 0)
+    if (ingress != NULL && (ret = setup_cipher(conn, QUICLY_EPOCH_INITIAL, 0, &ingress->header_protection, &ingress->aead, cs->aead,
+                                               cs->hash, secrets.ingress)) != 0)
         goto Exit;
-    if (egress != NULL && (ret = setup_initial_key(egress, cs, secret, labels[!is_client], 1, conn)) != 0) {
-        if (ingress != NULL)
-            dispose_cipher(ingress);
+    if (egress != NULL && (ret = setup_cipher(conn, QUICLY_EPOCH_INITIAL, 1, &egress->header_protection, &egress->aead, cs->aead,
+                                              cs->hash, secrets.egress)) != 0)
         goto Exit;
-    }
 
 Exit:
-    ptls_clear_memory(secret, sizeof(secret));
+    ptls_clear_memory(&secrets, sizeof(secrets));
     return ret;
 }
 
@@ -2085,7 +2100,7 @@ static int reinstall_initial_encryption(quicly_conn_t *conn, int err_code_if_unk
     dispose_cipher(&conn->initial->cipher.egress);
 
     /* setup encryption context */
-    return quicly_setup_initial_encryption(
+    return setup_initial_encryption(
         get_aes128gcmsha256(conn->super.ctx), &conn->initial->cipher.ingress, &conn->initial->cipher.egress,
         ptls_iovec_init(conn->super.remote.cid_set.cids[0].cid.cid, conn->super.remote.cid_set.cids[0].cid.len), 1,
         ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL);
@@ -2710,9 +2725,9 @@ int quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, const char *ser
 
     if ((ret = setup_handshake_space_and_flow(conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
-    if ((ret = quicly_setup_initial_encryption(get_aes128gcmsha256(ctx), &conn->initial->cipher.ingress,
-                                               &conn->initial->cipher.egress, ptls_iovec_init(server_cid->cid, server_cid->len), 1,
-                                               ptls_iovec_init(salt->initial, sizeof(salt->initial)), conn)) != 0)
+    if ((ret = setup_initial_encryption(get_aes128gcmsha256(ctx), &conn->initial->cipher.ingress, &conn->initial->cipher.egress,
+                                        ptls_iovec_init(server_cid->cid, server_cid->len), 1,
+                                        ptls_iovec_init(salt->initial, sizeof(salt->initial)), conn)) != 0)
         goto Exit;
 
     /* handshake (we always encode authentication CIDs, as we do not (yet) regenerate ClientHello when receiving Retry) */
@@ -3517,14 +3532,14 @@ struct st_quicly_send_context_t {
      * current encryption context
      */
     struct {
-        quicly_cipher_context_t *cipher;
+        struct st_quicly_cipher_context_t *cipher;
         uint8_t first_byte;
     } current;
     /**
      * packet under construction
      */
     struct {
-        quicly_cipher_context_t *cipher;
+        struct st_quicly_cipher_context_t *cipher;
         /**
          * points to the first byte of the target QUIC packet. It will not point to packet->octets.base[0] when the datagram
          * contains multiple QUIC packet.
@@ -5584,14 +5599,14 @@ uint8_t quicly_send_get_ecn_bits(quicly_conn_t *conn)
 size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
                                        ptls_iovec_t src_cid, const char *err_desc, void *datagram)
 {
-    quicly_cipher_context_t egress = {};
+    struct st_quicly_cipher_context_t egress = {};
     const quicly_salt_t *salt;
 
     /* setup keys */
     if ((salt = quicly_get_salt(protocol_version)) == NULL)
         return SIZE_MAX;
-    if (quicly_setup_initial_encryption(get_aes128gcmsha256(ctx), NULL, &egress, src_cid, 0,
-                                        ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL) != 0)
+    if (setup_initial_encryption(get_aes128gcmsha256(ctx), NULL, &egress, src_cid, 0,
+                                 ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL) != 0)
         return SIZE_MAX;
 
     uint8_t *dst = datagram, *length_at;
@@ -6804,7 +6819,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 {
     const quicly_salt_t *salt;
     struct {
-        quicly_cipher_context_t ingress, egress;
+        struct st_quicly_cipher_context_t ingress, egress;
         int alive;
     } cipher = {};
     ptls_iovec_t payload;
@@ -6830,9 +6845,8 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
         ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         goto Exit;
     }
-    if ((ret =
-             quicly_setup_initial_encryption(get_aes128gcmsha256(ctx), &cipher.ingress, &cipher.egress, packet->cid.dest.encrypted,
-                                             0, ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL)) != 0)
+    if ((ret = setup_initial_encryption(get_aes128gcmsha256(ctx), &cipher.ingress, &cipher.egress, packet->cid.dest.encrypted, 0,
+                                        ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL)) != 0)
         goto Exit;
     cipher.alive = 1;
     next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
