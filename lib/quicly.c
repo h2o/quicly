@@ -3642,8 +3642,13 @@ static int commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int
         quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE - 2, length);
         switch (*s->target.first_byte_at & QUICLY_PACKET_TYPE_BITMASK) {
         case QUICLY_PACKET_TYPE_INITIAL:
+            conn->super.stats.num_packets.initial_sent++;
+            break;
+        case QUICLY_PACKET_TYPE_0RTT:
+            conn->super.stats.num_packets.zero_rtt_sent++;
+            break;
         case QUICLY_PACKET_TYPE_HANDSHAKE:
-            conn->super.stats.num_packets.initial_handshake_sent++;
+            conn->super.stats.num_packets.handshake_sent++;
             break;
         }
     } else {
@@ -5208,10 +5213,10 @@ static int do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         conn->super.stats.num_handshake_timeouts++;
         goto CloseNow;
     }
-    if (conn->super.stats.num_packets.initial_handshake_sent > conn->super.ctx->max_initial_handshake_packets) {
-        QUICLY_PROBE(INITIAL_HANDSHAKE_PACKET_EXCEED, conn, conn->stash.now, conn->super.stats.num_packets.initial_handshake_sent);
-        QUICLY_LOG_CONN(initial_handshake_packet_exceed, conn,
-                        { PTLS_LOG_ELEMENT_UNSIGNED(num_packets, conn->super.stats.num_packets.initial_handshake_sent); });
+    uint64_t initial_handshake_sent = conn->super.stats.num_packets.initial_sent + conn->super.stats.num_packets.handshake_sent;
+    if (initial_handshake_sent > conn->super.ctx->max_initial_handshake_packets) {
+        QUICLY_PROBE(INITIAL_HANDSHAKE_PACKET_EXCEED, conn, conn->stash.now, initial_handshake_sent);
+        QUICLY_LOG_CONN(initial_handshake_packet_exceed, conn, { PTLS_LOG_ELEMENT_UNSIGNED(num_packets, initial_handshake_sent); });
         conn->super.stats.num_initial_handshake_exceeded++;
         goto CloseNow;
     }
@@ -6911,6 +6916,7 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 
     /* handle the input; we ignore is_ack_only, we consult if there's any output from TLS in response to CH anyways */
     (*conn)->super.stats.num_packets.received += 1;
+    (*conn)->super.stats.num_packets.initial_received += 1;
     if (packet->ecn != 0)
         (*conn)->super.stats.num_packets.received_ecn_counts[get_ecn_index_from_bits(packet->ecn)] += 1;
     (*conn)->super.stats.num_bytes.received += packet->datagram_size;
@@ -7157,7 +7163,20 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
     conn->super.stats.num_packets.received += 1;
     conn->paths[path_index]->packet_last_received = conn->super.stats.num_packets.received;
     conn->paths[path_index]->num_packets.received += 1;
-    if (packet->ecn != 0)
+    if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
+        switch (packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) {
+        case QUICLY_PACKET_TYPE_INITIAL:
+            conn->super.stats.num_packets.initial_received += 1;
+            break;
+        case QUICLY_PACKET_TYPE_0RTT:
+            conn->super.stats.num_packets.zero_rtt_received += 1;
+            break;
+        case QUICLY_PACKET_TYPE_HANDSHAKE:
+            conn->super.stats.num_packets.handshake_received += 1;
+            break;
+        }
+    }
+     if (packet->ecn != 0)
         conn->super.stats.num_packets.received_ecn_counts[get_ecn_index_from_bits(packet->ecn)] += 1;
 
     /* state updates, that are triggered by the receipt of a packet */
