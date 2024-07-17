@@ -486,9 +486,29 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t late_acked;                                                                                                       \
         /**                                                                                                                        \
-         * Total number of Initial and Handshake packets sent.                                                                     \
+         * Total number of Initial packets received.                                                                               \
          */                                                                                                                        \
-        uint64_t initial_handshake_sent;                                                                                           \
+        uint64_t initial_received;                                                                                                 \
+        /**                                                                                                                        \
+         * Total number of 0-RTT packets received.                                                                                 \
+         */                                                                                                                        \
+        uint64_t zero_rtt_received;                                                                                                \
+        /**                                                                                                                        \
+         * Total number of Handshake packets received.                                                                             \
+         */                                                                                                                        \
+        uint64_t handshake_received;                                                                                               \
+        /**                                                                                                                        \
+         * Total number of Initial packets sent.                                                                                   \
+         */                                                                                                                        \
+        uint64_t initial_sent;                                                                                                     \
+        /**                                                                                                                        \
+         * Total number of 0-RTT packets sent.                                                                                     \
+         */                                                                                                                        \
+        uint64_t zero_rtt_sent;                                                                                                    \
+        /**                                                                                                                        \
+         * Total number of Handshake packets sent.                                                                                 \
+         */                                                                                                                        \
+        uint64_t handshake_sent;                                                                                                   \
         /**                                                                                                                        \
          * Total number of packets received out of order.                                                                          \
          */                                                                                                                        \
