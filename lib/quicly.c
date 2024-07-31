@@ -6201,8 +6201,8 @@ static int handle_path_challenge_frame(quicly_conn_t *conn, struct st_quicly_han
     if ((ret = quicly_decode_path_challenge_frame(&state->src, state->end, &frame)) != 0)
         return ret;
 
-    QUICLY_PROBE(PATH_CHALLENGE_RECEIVE, conn, conn->stash.now, frame.data, sizeof(frame.data));
-    QUICLY_LOG_CONN(path_challenge_receive, conn, { PTLS_LOG_ELEMENT_HEXDUMP(data, frame.data, sizeof(frame.data)); });
+    QUICLY_PROBE(PATH_CHALLENGE_RECEIVE, conn, conn->stash.now, frame.data, QUICLY_PATH_CHALLENGE_DATA_LEN);
+    QUICLY_LOG_CONN(path_challenge_receive, conn, { PTLS_LOG_ELEMENT_HEXDUMP(data, frame.data, QUICLY_PATH_CHALLENGE_DATA_LEN); });
 
     /* schedule the emission of PATH_RESPONSE frame */
     struct st_quicly_conn_path_t *path = conn->paths[state->path_index];
@@ -6221,8 +6221,8 @@ static int handle_path_response_frame(quicly_conn_t *conn, struct st_quicly_hand
     if ((ret = quicly_decode_path_challenge_frame(&state->src, state->end, &frame)) != 0)
         return ret;
 
-    QUICLY_PROBE(PATH_RESPONSE_RECEIVE, conn, conn->stash.now, frame.data, sizeof(frame.data));
-    QUICLY_LOG_CONN(path_response_receive, conn, { PTLS_LOG_ELEMENT_HEXDUMP(data, frame.data, sizeof(frame.data)); });
+    QUICLY_PROBE(PATH_RESPONSE_RECEIVE, conn, conn->stash.now, frame.data, QUICLY_PATH_CHALLENGE_DATA_LEN);
+    QUICLY_LOG_CONN(path_response_receive, conn, { PTLS_LOG_ELEMENT_HEXDUMP(data, frame.data, QUICLY_PATH_CHALLENGE_DATA_LEN); });
 
     struct st_quicly_conn_path_t *path = conn->paths[state->path_index];
 
