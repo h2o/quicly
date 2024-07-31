@@ -2530,6 +2530,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->crypto.tls = tls;
     if (new_path(conn, 0, remote_addr, local_addr) != 0) {
         unlock_now(conn);
+        if (pacer != NULL)
+            free(pacer);
         ptls_free(tls);
         free(conn);
         return NULL;
