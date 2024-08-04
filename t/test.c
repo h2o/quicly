@@ -742,37 +742,69 @@ static void test_jumpstart_cwnd(void)
 
 static void test_on_streams(void)
 {
-    quicly_conn_t *client_conn = quicly_qos_new(&quic_ctx, 1, NULL), *server_conn = quicly_qos_new(&quic_ctx, 0, NULL);
-    quicly_stream_t *client_stream = NULL, *server_stream;
-    quicly_streambuf_t *server_streambuf;
-    char buf[10480];
-    size_t bufsize;
+    static char message16k[16384];
+
+    if (message16k[0] == '\0') {
+        for (size_t i = 0; i < sizeof(message16k); i += 16)
+            memcpy(message16k + i, "helloworldhello\n", 16);
+    }
+
+    quicly_conn_t *cc = quicly_qos_new(&quic_ctx, 1, NULL), *sc = quicly_qos_new(&quic_ctx, 0, NULL);
+    quicly_stream_t *cs1 = NULL, *cs2 = NULL, *ss1, *ss2;
+    quicly_streambuf_t *ss1buf, *ss2buf;
+    char buf[16384];
+    size_t bufsize, decoded_len;
     int ret;
 
     bufsize = sizeof(buf);
-    ret = quicly_qos_send(server_conn, buf, &bufsize);
+    ret = quicly_qos_send(sc, buf, &bufsize);
     ok(ret == 0);
 
-    ret = quicly_qos_receive(client_conn, buf, &bufsize);
+    ret = quicly_qos_receive(cc, buf, &bufsize);
     ok(ret == 0);
 
-    ret = quicly_open_stream(client_conn, &client_stream, 0);
+    ret = quicly_open_stream(cc, &cs1, 0);
     ok(ret == 0);
-    ret = quicly_streambuf_egress_write(client_stream, "hello", 5);
+    ret = quicly_streambuf_egress_write(cs1, "hello", 5);
+    ok(ret == 0);
+    ret = quicly_open_stream(cc, &cs2, 0);
+    ok(ret == 0);
+    ret = quicly_streambuf_egress_write(cs2, message16k, sizeof(message16k));
     ok(ret == 0);
 
     bufsize = sizeof(buf);
-    ret = quicly_qos_send(client_conn, buf, &bufsize);
+    ret = quicly_qos_send(cc, buf, &bufsize);
     ok(ret == 0);
 
-    ret = quicly_qos_receive(server_conn, buf, &bufsize);
+    decoded_len = bufsize; /* TODO add test for partial frame receive */
+    ret = quicly_qos_receive(sc, buf, &decoded_len);
+    ok(ret == 0);
+    ok(decoded_len == bufsize);
+
+    ss1 = quicly_get_stream(sc, cs1->stream_id);
+    ok(ss1 != NULL);
+    ss1buf = ss1->data;
+    ok(ss1buf->ingress.off == 5);
+    ok(memcmp(ss1buf->ingress.base, "hello", 5) == 0);
+
+    ss2 = quicly_get_stream(sc, cs2->stream_id);
+    ok(ss2 != NULL);
+    ss2buf = ss2->data;
+    ok(ss2buf->ingress.off >= sizeof(message16k) - 400);
+    ok(ss2buf->ingress.off < sizeof(message16k));
+    ok(memcmp(ss2buf->ingress.base, message16k, ss2buf->ingress.off) == 0);
+
+    bufsize = sizeof(buf);
+    ret = quicly_qos_send(cc, buf, &bufsize);
     ok(ret == 0);
 
-    server_stream = quicly_get_stream(server_conn, client_stream->stream_id);
-    ok(server_stream != NULL);
-    server_streambuf = server_stream->data;
-    ok(server_streambuf->ingress.off == 5);
-    ok(memcmp(server_streambuf->ingress.base, "hello", 5) == 0);
+    decoded_len = bufsize;
+    ret = quicly_qos_receive(sc, buf, &decoded_len);
+    ok(ret == 0);
+    ok(decoded_len == bufsize);
+
+    ok(ss2buf->ingress.off == sizeof(message16k));
+    ok(memcmp(ss2buf->ingress.base, message16k, ss2buf->ingress.off) == 0);
 }
 
 int main(int argc, char **argv)
