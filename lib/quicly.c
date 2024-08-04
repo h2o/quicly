@@ -5881,7 +5881,10 @@ static int handle_stream_frame(quicly_conn_t *conn, struct st_quicly_handle_payl
     quicly_stream_t *stream;
     int ret;
 
-    if ((ret = quicly_decode_stream_frame(state->frame_type, &state->src, state->end, &frame)) != 0)
+    if ((ret = quicly_decode_stream_frame(
+             state->frame_type,
+             quicly_is_on_streams(conn) ? 16384 /* hard-coded, until TP ID of max_frame_size is defined */ : SIZE_MAX, &state->src,
+             state->end, &frame)) != 0)
         return ret;
     QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, conn->stash.now, frame.stream_id, frame.offset, frame.data.len, (int)frame.is_fin);
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
