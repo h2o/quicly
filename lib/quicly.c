@@ -4204,9 +4204,11 @@ static inline void adjust_stream_frame_layout(uint8_t **dst, uint8_t *const dst_
 {
     size_t space_left = (dst_end - *dst) - *len, len_of_len = quicly_encodev_capacity(*len);
 
-    if (**frame_at == QUICLY_FRAME_TYPE_CRYPTO) {
-        /* CRYPTO frame: adjust payload length to make space for the length field, if necessary. */
+    if (**frame_at == QUICLY_FRAME_TYPE_CRYPTO || (**frame_at & QUICLY_FRAME_TYPE_STREAM_BIT_LEN) != 0) {
+        /* CRYPTO frame or QoS, in which case we always prepend length: adjust payload length to make space for the length field, if
+         * necessary. */
         if (space_left < len_of_len) {
+            assert(dst_end - *dst >= len_of_len);
             *len = dst_end - *dst - len_of_len;
             *wrote_all = 0;
         }
@@ -4263,13 +4265,10 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
         if (off == stream->sendstate.final_size) {
             assert(!quicly_sendstate_is_open(&stream->sendstate));
             /* special case for emitting FIN only */
-            header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+            header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN | QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
+            hp = quicly_encodev(hp, 0); /* length=0 */
             if ((ret = allocate_ack_eliciting_frame(stream->conn, s, hp - header, &sent, on_ack_stream)) != 0)
                 return ret;
-            if (hp - header != s->dst_end - s->dst) {
-                header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
-                *hp++ = 0; /* empty length */
-            }
             memcpy(s->dst, header, hp - header);
             s->dst += hp - header;
             len = 0;
@@ -4277,6 +4276,8 @@ int quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
             is_fin = 1;
             goto UpdateState;
         }
+        if (quicly_is_on_streams(stream->conn))
+            header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
         if ((ret = allocate_ack_eliciting_frame(stream->conn, s, hp - header + 1, &sent, on_ack_stream)) != 0)
             return ret;
         dst = s->dst;
