@@ -403,7 +403,7 @@ inline int quicly_decode_stream_frame(uint8_t type_flags, uint64_t max_frame_siz
             *src = end;
         } else {
             /* QUIC on Streams */
-            if (end - *src < max_frame_size)
+            if ((uint64_t)(end - *src) < max_frame_size)
                 return QUICLY_ERROR_PARTIAL_FRAME;
             frame->data = ptls_iovec_init(*src, max_frame_size);
             *src += max_frame_size;
