@@ -6932,7 +6932,9 @@ int quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct sockaddr *
 Exit:
     if (*conn != NULL) {
         if (ret == 0) {
-            (*conn)->super.state = QUICLY_STATE_CONNECTED;
+            /* if CONNECTION_CLOSE was found and the state advanced to DRAINING, we need to retain that state */
+            if ((*conn)->super.state < QUICLY_STATE_CONNECTED)
+                (*conn)->super.state = QUICLY_STATE_CONNECTED;
         } else {
             initiate_close(*conn, ret, offending_frame_type, "");
             ret = 0;
@@ -6997,8 +6999,10 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
         if (conn->paths[path_index] != NULL && compare_socket_address(src_addr, &conn->paths[path_index]->address.remote.sa) == 0)
             break;
     if (path_index == PTLS_ELEMENTSOF(conn->paths) &&
-        conn->super.stats.num_paths.validation_failed >= conn->super.ctx->max_path_validation_failures)
-        return QUICLY_ERROR_PACKET_IGNORED;
+        conn->super.stats.num_paths.validation_failed >= conn->super.ctx->max_path_validation_failures) {
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
 
     /* add unconditionally, as packet->datagram_size is set only for the first packet within the UDP datagram */
     conn->super.stats.num_bytes.received += packet->datagram_size;
