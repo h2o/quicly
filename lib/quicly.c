@@ -6232,6 +6232,7 @@ static int handle_path_response_frame(quicly_conn_t *conn, struct st_quicly_hand
     if (ptls_mem_equal(path->path_challenge.data, frame.data, QUICLY_PATH_CHALLENGE_DATA_LEN)) {
         /* Path validation succeeded, stop sending PATH_CHALLENGEs. Active path might become changed in `quicly_receive`. */
         path->path_challenge.send_at = INT64_MAX;
+        recalc_send_probe_at(conn);
         conn->super.stats.num_paths.validated += 1;
     }
 
