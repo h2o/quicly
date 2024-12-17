@@ -1603,8 +1603,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "failed to open file:%s:%s\n", optarg, strerror(errno));
                 exit(1);
             }
-            ptls_log_add_fd(fd);
-            ptls_log.include_appdata = 1;
+            ptls_log_add_fd(fd, 1., NULL, NULL, NULL, 1);
+            ptls_log.may_include_appdata = 1;
         } break;
         case 'f': {
             double fraction;
