@@ -513,9 +513,9 @@ static void set_srcaddr(struct msghdr *mess, quicly_address_t *addr)
 #elif defined(IP_SENDSRCADDR)
         cmsg->cmsg_level = IPPROTO_IP;
         cmsg->cmsg_type = IP_SENDSRCADDR;
-        cmsg->cmsg_len = CMSG_LEN(sizeof(addr->sin));
-        memcpy(CMSG_DATA(cmsg), &addr->sin, sizeof(addr->sin));
-        mess->msg_controllen += CMSG_SPACE(sizeof(addr->sin));
+        cmsg->cmsg_len = CMSG_LEN(sizeof(addr->sin.sin_addr));
+        memcpy(CMSG_DATA(cmsg), &addr->sin.sin_addr, sizeof(addr->sin.sin_addr));
+        mess->msg_controllen += CMSG_SPACE(sizeof(addr->sin.sin_addr));
 #else
         assert(!"FIXME");
 #endif
