@@ -534,7 +534,7 @@ static void set_srcaddr(struct msghdr *mess, quicly_address_t *addr)
     }
 }
 
-static void set_ecn(struct msghdr *mess, int ecn)
+static void set_ecn(struct msghdr *mess, uint8_t ecn)
 {
     if (ecn == 0)
         return;
