@@ -511,6 +511,8 @@ static void set_srcaddr(struct msghdr *mess, quicly_address_t *addr)
         memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
         mess->msg_controllen += CMSG_SPACE(sizeof(info));
 #elif defined(IP_SENDSRCADDR)
+        /* TODO FreeBSD: skip setting IP_SENDSRCADDR if the socket is not bound to INADDR_ANY, as doing so results in sendmsg
+         * generating an error */
         cmsg->cmsg_level = IPPROTO_IP;
         cmsg->cmsg_type = IP_SENDSRCADDR;
         cmsg->cmsg_len = CMSG_LEN(sizeof(addr->sin.sin_addr));
