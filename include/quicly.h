@@ -271,6 +271,14 @@ typedef struct st_quicly_transport_parameters_t {
     uint16_t max_datagram_frame_size;
 } quicly_transport_parameters_t;
 
+typedef struct st_quicly_salt_t {
+    uint8_t initial[20];
+    struct {
+        uint8_t key[PTLS_AES128_KEY_SIZE];
+        uint8_t iv[PTLS_AESGCM_IV_SIZE];
+    } retry;
+} quicly_salt_t;
+
 struct st_quicly_context_t {
     /**
      * tls context to use
@@ -478,9 +486,29 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t late_acked;                                                                                                       \
         /**                                                                                                                        \
-         * Total number of Initial and Handshake packets sent.                                                                     \
+         * Total number of Initial packets received.                                                                               \
          */                                                                                                                        \
-        uint64_t initial_handshake_sent;                                                                                           \
+        uint64_t initial_received;                                                                                                 \
+        /**                                                                                                                        \
+         * Total number of 0-RTT packets received.                                                                                 \
+         */                                                                                                                        \
+        uint64_t zero_rtt_received;                                                                                                \
+        /**                                                                                                                        \
+         * Total number of Handshake packets received.                                                                             \
+         */                                                                                                                        \
+        uint64_t handshake_received;                                                                                               \
+        /**                                                                                                                        \
+         * Total number of Initial packets sent.                                                                                   \
+         */                                                                                                                        \
+        uint64_t initial_sent;                                                                                                     \
+        /**                                                                                                                        \
+         * Total number of 0-RTT packets sent.                                                                                     \
+         */                                                                                                                        \
+        uint64_t zero_rtt_sent;                                                                                                    \
+        /**                                                                                                                        \
+         * Total number of Handshake packets sent.                                                                                 \
+         */                                                                                                                        \
+        uint64_t handshake_sent;                                                                                                   \
         /**                                                                                                                        \
          * Total number of packets received out of order.                                                                          \
          */                                                                                                                        \
@@ -1162,6 +1190,15 @@ int quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct socka
 int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                           quicly_decoded_packet_t *decoded);
 /**
+ * returns salts given version
+ */
+const quicly_salt_t *quicly_get_salt(uint32_t protocol_version);
+/**
+ *
+ */
+int quicly_calc_initial_keys(ptls_cipher_suite_t *cs, uint8_t *ingress, uint8_t *egress, ptls_iovec_t cid, int is_client,
+                             ptls_iovec_t salt);
+/**
  *
  */
 int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_transport_parameters_t *params,
@@ -1368,16 +1405,22 @@ void quicly_stream_noop_on_receive_reset(quicly_stream_t *stream, int err);
 
 extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
 
-#define QUICLY_LOG_CONN(_type, _conn, _block)                                                                                      \
+#define QUICLY_LOG_CONN(_name, _conn, _block)                                                                                      \
     do {                                                                                                                           \
-        if (!ptls_log.is_active)                                                                                                   \
+        PTLS_LOG_DEFINE_POINT(quicly, _name, logpoint);                                                                            \
+        uint32_t active = ptls_log_point_maybe_active(&logpoint);                                                                  \
+        if (PTLS_LIKELY(active == 0))                                                                                              \
             break;                                                                                                                 \
         quicly_conn_t *_c = (_conn);                                                                                               \
-        if (ptls_skip_tracing(_c->crypto.tls))                                                                                     \
+        ptls_t *_tls = quicly_get_tls(_c);                                                                                         \
+        ptls_log_conn_state_t *conn_state = ptls_get_log_state(_tls);                                                              \
+        active &= ptls_log_conn_maybe_active(conn_state, (const char *(*)(void *))ptls_get_server_name, _tls);                     \
+        if (PTLS_LIKELY(active == 0))                                                                                              \
             break;                                                                                                                 \
-        PTLS_LOG__DO_LOG(quicly, _type, {                                                                                          \
+        PTLS_LOG__DO_LOG(quicly, _name, conn_state, (const char *(*)(void *))ptls_get_server_name, _tls, _c->stash.now == 0, {     \
+            if (_c->stash.now != 0)                                                                                                \
+                PTLS_LOG_ELEMENT_SIGNED(time, _c->stash.now);                                                                      \
             PTLS_LOG_ELEMENT_PTR(conn, _c);                                                                                        \
-            PTLS_LOG_ELEMENT_SIGNED(time, _c->stash.now);                                                                          \
             do {                                                                                                                   \
                 _block                                                                                                             \
             } while (0);                                                                                                           \
