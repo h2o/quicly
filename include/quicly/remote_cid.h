@@ -115,16 +115,9 @@ int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence
  */
 int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequence);
 /**
- * flushes the retire queue
+ * removed the first `count` sequence numbers from the retired queue
  */
-static void quicly_remote_cid_clear_retired(quicly_remote_cid_set_t *set);
-
-/* inline definitions */
-
-inline void quicly_remote_cid_clear_retired(quicly_remote_cid_set_t *set)
-{
-    set->retired.count = 0;
-}
+void quicly_remote_cid_shift_retired(quicly_remote_cid_set_t *set, size_t count);
 
 #ifdef __cplusplus
 }

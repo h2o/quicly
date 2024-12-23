@@ -5201,12 +5201,15 @@ static int send_other_control_frames(quicly_conn_t *conn, quicly_send_context_t 
     }
 
     { /* RETIRE_CONNECTION_ID */
-        for (size_t i = 0; i < conn->super.remote.cid_set.retired.count; ++i) {
+        size_t i;
+        for (i = 0; i < conn->super.remote.cid_set.retired.count; ++i) {
             uint64_t sequence = conn->super.remote.cid_set.retired.cids[i];
             if ((ret = send_retire_connection_id(conn, s, sequence)) != 0)
-                return ret;
+                break;
         }
-        quicly_remote_cid_clear_retired(&conn->super.remote.cid_set);
+        quicly_remote_cid_shift_retired(&conn->super.remote.cid_set, i);
+        if (ret != 0)
+            return ret;
     }
 
     return 0;
