@@ -5506,6 +5506,8 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
 
 static int do_send_closed(quicly_conn_t *conn, quicly_send_context_t *s)
 {
+    assert(s->path_index == 0);
+
     quicly_sentmap_iter_t iter;
     int ret;
 
@@ -5600,6 +5602,7 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
                 if ((ret = delete_path(conn, s.path_index)) != 0) {
                     initiate_close(conn, ret, QUICLY_FRAME_TYPE_PADDING, NULL);
                     assert(conn->super.state >= QUICLY_STATE_CLOSING);
+                    s.path_index = 0;
                     ret = do_send_closed(conn, &s);
                     goto Exit;
                 }
