@@ -5504,6 +5504,48 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
     return cc->cc_switch(&conn->egress.cc);
 }
 
+static int do_send_closed(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    quicly_sentmap_iter_t iter;
+    int ret;
+
+    if ((ret = init_acks_iter(conn, &iter)) != 0)
+        goto Exit;
+
+    /* check if the connection can be closed now (after 3 pto) */
+    if (conn->super.state == QUICLY_STATE_DRAINING ||
+        conn->super.stats.num_frames_sent.transport_close + conn->super.stats.num_frames_sent.application_close != 0) {
+        if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX) {
+            assert(quicly_num_streams(conn) == 0);
+            ret = QUICLY_ERROR_FREE_CONNECTION;
+            goto Exit;
+        }
+    }
+
+    if (conn->super.state == QUICLY_STATE_CLOSING && conn->egress.send_ack_at <= conn->stash.now) {
+        /* destroy all streams; doing so is delayed until the emission of CONNECTION_CLOSE frame to allow quicly_close to be called
+         * from a stream handler */
+        destroy_all_streams(conn, 0, 0);
+        /* send CONNECTION_CLOSE in all possible epochs */
+        s->dcid = get_dcid(conn, 0);
+        for (size_t epoch = 0; epoch < QUICLY_NUM_EPOCHS; ++epoch) {
+            if ((ret = send_connection_close(conn, epoch, s)) != 0)
+                goto Exit;
+        }
+        if ((ret = commit_send_packet(conn, s, 0)) != 0)
+            goto Exit;
+    }
+
+    /* wait at least 1ms */
+    if ((conn->egress.send_ack_at = quicly_sentmap_get(&iter)->sent_at + get_sentmap_expiration_time(conn)) <= conn->stash.now)
+        conn->egress.send_ack_at = conn->stash.now + 1;
+
+    ret = 0;
+
+Exit:
+    return ret;
+}
+
 int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams,
                 void *buf, size_t bufsize)
 {
@@ -5543,36 +5585,7 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
     }
 
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
-        quicly_sentmap_iter_t iter;
-    DoClose:
-        if ((ret = init_acks_iter(conn, &iter)) != 0)
-            goto Exit;
-        /* check if the connection can be closed now (after 3 pto) */
-        if (conn->super.state == QUICLY_STATE_DRAINING ||
-            conn->super.stats.num_frames_sent.transport_close + conn->super.stats.num_frames_sent.application_close != 0) {
-            if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX) {
-                assert(quicly_num_streams(conn) == 0);
-                ret = QUICLY_ERROR_FREE_CONNECTION;
-                goto Exit;
-            }
-        }
-        if (conn->super.state == QUICLY_STATE_CLOSING && conn->egress.send_ack_at <= conn->stash.now) {
-            /* destroy all streams; doing so is delayed until the emission of CONNECTION_CLOSE frame to allow quicly_close to be
-             * called from a stream handler */
-            destroy_all_streams(conn, 0, 0);
-            /* send CONNECTION_CLOSE in all possible epochs */
-            s.dcid = get_dcid(conn, 0);
-            for (size_t epoch = 0; epoch < QUICLY_NUM_EPOCHS; ++epoch) {
-                if ((ret = send_connection_close(conn, epoch, &s)) != 0)
-                    goto Exit;
-            }
-            if ((ret = commit_send_packet(conn, &s, 0)) != 0)
-                goto Exit;
-        }
-        /* wait at least 1ms */
-        if ((conn->egress.send_ack_at = quicly_sentmap_get(&iter)->sent_at + get_sentmap_expiration_time(conn)) <= conn->stash.now)
-            conn->egress.send_ack_at = conn->stash.now + 1;
-        ret = 0;
+        ret = do_send_closed(conn, &s);
         goto Exit;
     }
 
@@ -5586,7 +5599,9 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
                 if ((ret = delete_path(conn, s.path_index)) != 0) {
                     initiate_close(conn, ret, QUICLY_FRAME_TYPE_PADDING, NULL);
-                    goto DoClose;
+                    assert(conn->super.state >= QUICLY_STATE_CLOSING);
+                    ret = do_send_closed(conn, &s);
+                    goto Exit;
                 }
                 s.recalc_send_probe_at = 1;
                 continue;
