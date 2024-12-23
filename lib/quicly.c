@@ -5544,6 +5544,7 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
 
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
         quicly_sentmap_iter_t iter;
+    DoClose:
         if ((ret = init_acks_iter(conn, &iter)) != 0)
             goto Exit;
         /* check if the connection can be closed now (after 3 pto) */
@@ -5583,13 +5584,17 @@ int quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *s
                                                        conn->paths[s.path_index]->path_response.send_))
                 continue;
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
-                delete_path(conn, s.path_index);
+                if ((ret = delete_path(conn, s.path_index)) != 0) {
+                    initiate_close(conn, ret, QUICLY_FRAME_TYPE_PADDING, NULL);
+                    goto DoClose;
+                }
                 s.recalc_send_probe_at = 1;
                 continue;
             }
             /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
             if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
-                delete_path(conn, s.path_index);
+                ret = delete_path(conn, s.path_index);
+                assert(ret == 0 && "path->dcid is UINT64_MAX and therefore does not trigger an error");
                 s.recalc_send_probe_at = 1;
                 conn->super.stats.num_paths.closed_no_dcid += 1;
                 continue;
