@@ -95,15 +95,12 @@ static int do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const ui
 
 static int do_unregister(quicly_remote_cid_set_t *set, size_t idx_to_unreg)
 {
-    int ret;
-
-    if ((ret = quicly_remote_cid_push_retired(set, set->cids[idx_to_unreg].sequence)) != 0)
-        return ret;
+    uint64_t seq_to_unreg = set->cids[idx_to_unreg].sequence;
 
     set->cids[idx_to_unreg].state = QUICLY_REMOTE_CID_UNAVAILABLE;
     set->cids[idx_to_unreg].sequence = ++set->_largest_sequence_expected;
 
-    return 0;
+    return quicly_remote_cid_push_retired(set, seq_to_unreg);
 }
 
 int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence)

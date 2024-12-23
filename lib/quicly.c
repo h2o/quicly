@@ -1841,20 +1841,19 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
 
 static int do_delete_path(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
-    int ret;
+    int ret = 0;
 
     if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0) {
         uint64_t cid = path->dcid;
         dissociate_cid(conn, cid);
-        if ((ret = quicly_remote_cid_unregister(&conn->super.remote.cid_set, cid)) != 0)
-            return ret;
+        ret = quicly_remote_cid_unregister(&conn->super.remote.cid_set, cid);
         assert(conn->super.remote.cid_set.retired.count != 0);
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
 
     free(path);
 
-    return 0;
+    return ret;
 }
 
 static int delete_path(quicly_conn_t *conn, size_t path_index)

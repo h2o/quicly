@@ -106,7 +106,8 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
 int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
                                const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to);
 /**
- * unregisters specified CID from the store; the unregistered CID is pushed onto the retired queue
+ * Unregisters specified CID from the store, pushing the unregistered CID onto the retired queue. The former always succeeds, while
+ * the latter might fail due to overflow. In case of the latter, an error is returned.
  */
 int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence);
 /**
