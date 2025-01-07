@@ -5790,10 +5790,10 @@ int initiate_close(quicly_conn_t *conn, int err, uint64_t frame_type, const char
     } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_SELF_ALERT) {
         quic_error_code = QUICLY_TRANSPORT_ERROR_TLS_ALERT_BASE + PTLS_ERROR_TO_ALERT(err);
     } else if (err == QUICLY_ERROR_STATE_EXHAUSTION) {
-        /* State exhaution is an error induced by the peer, but we use the generic error code (PROTOCOL_VIOLATION) as there is not a
-         * error code specific for the purpose. The exact cause is communicated using the reason phrase field, as it is sometimes
-         * difficult for the peer to understand the cause; e.g., when an ACK triggering the loss of a RETIRE_CONNECTION_ID frame
-         * leading to the overflow of `quicly_conn_t::egress.retire_cid`. */
+        /* State exhaution is an error induced by the peer, but as there is no specific error code, the generic error code
+         * (PROTOCOL_VIOLATION) is used. The exact cause is communicated using the reason phrase field because it is sometimes
+         * difficult for the peer to understand the problem without; e.g., when an ACK triggering the loss of a RETIRE_CONNECTION_ID
+         * frame leading to the overflow of `quicly_conn_t::egress.retire_cid`. */
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
         if (reason_phrase == NULL)
             reason_phrase = "state exhaustion";
