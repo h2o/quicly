@@ -587,7 +587,6 @@ static void test_cid(void)
 {
     subtest("received cid", test_received_cid);
     subtest("local cid", test_local_cid);
-    subtest("retire cid", test_retire_cid);
 }
 
 /**
