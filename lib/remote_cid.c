@@ -153,7 +153,7 @@ int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequen
     }
 
     if (set->retired.count >= PTLS_ELEMENTSOF(set->retired.cids))
-        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+        return QUICLY_ERROR_STATE_EXHAUSTION;
     set->retired.cids[set->retired.count++] = sequence;
     return 0;
 }
