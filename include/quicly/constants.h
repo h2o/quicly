@@ -66,13 +66,14 @@ extern "C" {
 #define QUICLY_EPOCH_1RTT 3
 #define QUICLY_NUM_EPOCHS 4
 
-/* coexists with picotls error codes, assuming that int is at least 32-bits */
-#define QUICLY_ERROR_IS_QUIC(e) (((e) & ~0x1ffff) == 0x20000)
-#define QUICLY_ERROR_IS_QUIC_TRANSPORT(e) (((e) & ~0xffff) == 0x20000)
-#define QUICLY_ERROR_IS_QUIC_APPLICATION(e) (((e) & ~0xffff) == 0x30000)
-#define QUICLY_ERROR_GET_ERROR_CODE(e) ((uint16_t)(e))
-#define QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(e) ((uint16_t)(e) + 0x20000)
-#define QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(e) ((uint16_t)(e) + 0x30000)
+/* picotls error codes (of type int) use 0x00000000xxxxxxxx, while QUIC application error codes use 0b01yyyy... and QUIC protocol
+ * error codes use 0b11yyyy..., where yyyy is a 62-bit QUIC integer */
+#define QUICLY_ERROR_IS_QUIC(e) (((int64_t)(e) & 0x4000000000000000) != 0)
+#define QUICLY_ERROR_IS_QUIC_TRANSPORT(e) (((uint64_t)(int64_t)(e) & (uint64_t)0xc000000000000000) == 0x8000000000000000)
+#define QUICLY_ERROR_IS_QUIC_APPLICATION(e) (((uint64_t)(int64_t)(e) & (uint64_t)0xc000000000000000) == 0x4000000000000000)
+#define QUICLY_ERROR_GET_ERROR_CODE(e) ((uint64_t)((int64_t)(e) & 0x3fffffffffffffff))
+#define QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(e) ((int64_t)((uint64_t)(int64_t)(e) | (uint64_t)0x8000000000000000))
+#define QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(e) ((int64_t)((int64_t)(e) | 0x4000000000000000))
 /**
  * PTLS_ERROR_NO_MEMORY and QUICLY_ERROR_STATE_EXHAUSTION are special error codes that are internal but can be passed to
  * quicly_close. These are converted to QUICLY_TRANSPORT_ERROR_INTERNAL when sent over the wire.

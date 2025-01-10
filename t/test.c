@@ -86,10 +86,10 @@
     "Vw6RN5S/14SQnMYWr7E=\n"                                                                                                       \
     "-----END CERTIFICATE-----\n"
 
-static void on_destroy(quicly_stream_t *stream, int err);
-static void on_egress_stop(quicly_stream_t *stream, int err);
+static void on_destroy(quicly_stream_t *stream, int64_t err);
+static void on_egress_stop(quicly_stream_t *stream, int64_t err);
 static void on_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
-static void on_ingress_reset(quicly_stream_t *stream, int err);
+static void on_ingress_reset(quicly_stream_t *stream, int64_t err);
 
 quicly_address_t fake_address;
 int64_t quic_now = 1;
@@ -169,14 +169,14 @@ static int64_t get_now_cb(quicly_now_t *self)
 
 static quicly_now_t get_now = {get_now_cb};
 
-void on_destroy(quicly_stream_t *stream, int err)
+void on_destroy(quicly_stream_t *stream, int64_t err)
 {
     test_streambuf_t *sbuf = stream->data;
     sbuf->is_detached = 1;
     ++on_destroy_callcnt;
 }
 
-void on_egress_stop(quicly_stream_t *stream, int err)
+void on_egress_stop(quicly_stream_t *stream, int64_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     test_streambuf_t *sbuf = stream->data;
@@ -188,7 +188,7 @@ void on_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, si
     quicly_streambuf_ingress_receive(stream, off, src, len);
 }
 
-void on_ingress_reset(quicly_stream_t *stream, int err)
+void on_ingress_reset(quicly_stream_t *stream, int64_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     test_streambuf_t *sbuf = stream->data;

@@ -309,10 +309,11 @@ static void link_stream(struct st_quicly_default_scheduler_state_t *sched, quicl
 /**
  * See doc-comment of `st_quicly_default_scheduler_state_t` to understand the logic.
  */
-static int default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, quicly_conn_t *conn, quicly_send_context_t *s)
+static int64_t default_stream_scheduler_do_send(quicly_stream_scheduler_t *self, quicly_conn_t *conn, quicly_send_context_t *s)
 {
     struct st_quicly_default_scheduler_state_t *sched = &((struct _st_quicly_conn_public_t *)conn)->_default_scheduler;
-    int conn_is_blocked = quicly_is_blocked(conn), ret = 0;
+    int conn_is_blocked = quicly_is_blocked(conn);
+    int64_t ret = 0;
 
     if (!conn_is_blocked)
         quicly_linklist_insert_list(&sched->active, &sched->blocked);
