@@ -43,8 +43,6 @@ void quicly_recvstate_dispose(quicly_recvstate_t *state)
 
 int64_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin, size_t max_ranges)
 {
-    int ret;
-
     assert(!quicly_recvstate_transfer_complete(state));
 
     /* eos handling */
@@ -76,6 +74,7 @@ int64_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t 
 
     /* update received range */
     if (*len != 0) {
+        int ret;
         if ((ret = quicly_ranges_add(&state->received, off, off + *len)) != 0)
             return ret;
         if (state->received.num_ranges > max_ranges)
