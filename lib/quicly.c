@@ -2981,7 +2981,6 @@ static int64_t do_decrypt_packet(ptls_cipher_context_t *header_protection,
     uint8_t hpmask[5] = {0};
     uint32_t pnbits = 0;
     size_t pnlen, ptlen, i;
-    int ret;
 
     /* decipher the header protection, as well as obtaining pnbits, pnlen */
     if (encrypted_len < header_protection->algo->iv_size + QUICLY_MAX_PN_SIZE) {
@@ -3001,6 +3000,7 @@ static int64_t do_decrypt_packet(ptls_cipher_context_t *header_protection,
     *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
 
     /* AEAD decryption */
+    int ret;
     if ((ret = (*aead_cb)(aead_ctx, *pn, packet, aead_off, &ptlen)) != 0) {
         return ret;
     }
