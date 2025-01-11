@@ -121,7 +121,7 @@ typedef struct st_quicly_stream_scheduler_t {
     /**
      *
      */
-    int (*update_state)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
+    void (*update_state)(struct st_quicly_stream_scheduler_t *sched, quicly_stream_t *stream);
 } quicly_stream_scheduler_t;
 
 /**

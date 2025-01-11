@@ -350,7 +350,7 @@ static int64_t default_stream_scheduler_do_send(quicly_stream_scheduler_t *self,
 /**
  * See doc-comment of `st_quicly_default_scheduler_state_t` to understand the logic.
  */
-static int default_stream_scheduler_update_state(quicly_stream_scheduler_t *self, quicly_stream_t *stream)
+static void default_stream_scheduler_update_state(quicly_stream_scheduler_t *self, quicly_stream_t *stream)
 {
     struct st_quicly_default_scheduler_state_t *sched = &((struct _st_quicly_conn_public_t *)stream->conn)->_default_scheduler;
 
@@ -362,8 +362,6 @@ static int default_stream_scheduler_update_state(quicly_stream_scheduler_t *self
         if (quicly_linklist_is_linked(&stream->_send_aux.pending_link.default_scheduler))
             quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
     }
-
-    return 0;
 }
 
 quicly_stream_scheduler_t quicly_default_stream_scheduler = {default_stream_scheduler_can_send, default_stream_scheduler_do_send,
