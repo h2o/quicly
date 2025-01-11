@@ -84,7 +84,7 @@ int quicly_sendstate_shutdown(quicly_sendstate_t *state, uint64_t final_size)
 
 void quicly_sendstate_reset(quicly_sendstate_t *state)
 {
-    int64_t ret;
+    int ret;
 
     if (state->final_size == UINT64_MAX)
         state->final_size = state->size_inflight;
