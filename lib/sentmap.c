@@ -92,7 +92,7 @@ void quicly_sentmap_dispose(quicly_sentmap_t *map)
     }
 }
 
-int quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_t now, uint8_t ack_epoch)
+int64_t quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_t now, uint8_t ack_epoch)
 {
     assert(map->_pending_packet == NULL);
 

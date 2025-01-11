@@ -256,7 +256,7 @@ static int quicly_sentmap_is_open(quicly_sentmap_t *map);
 /**
  * prepares a write
  */
-int quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_t now, uint8_t ack_epoch);
+int64_t quicly_sentmap_prepare(quicly_sentmap_t *map, uint64_t packet_number, int64_t now, uint8_t ack_epoch);
 /**
  * commits a write
  */

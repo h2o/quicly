@@ -127,7 +127,7 @@ typedef struct st_quicly_stream_scheduler_t {
 /**
  * called when stream is being open. Application is expected to create it's corresponding state and tie it to stream->data.
  */
-QUICLY_CALLBACK_TYPE(int, stream_open, quicly_stream_t *stream);
+QUICLY_CALLBACK_TYPE(int64_t, stream_open, quicly_stream_t *stream);
 /**
  *
  */
@@ -145,11 +145,11 @@ QUICLY_CALLBACK_TYPE0(int64_t, now);
 /**
  * called when a NEW_TOKEN token is received on a connection
  */
-QUICLY_CALLBACK_TYPE(int, save_resumption_token, quicly_conn_t *conn, ptls_iovec_t token);
+QUICLY_CALLBACK_TYPE(int64_t, save_resumption_token, quicly_conn_t *conn, ptls_iovec_t token);
 /**
  *
  */
-QUICLY_CALLBACK_TYPE(int, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
+QUICLY_CALLBACK_TYPE(int64_t, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
                      quicly_address_token_plaintext_t *token);
 /**
  * called to initialize a congestion controller for a new connection.
@@ -1063,11 +1063,11 @@ struct sockaddr *quicly_get_peername(quicly_conn_t *conn);
 /**
  *
  */
-int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats);
+int64_t quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats);
 /**
  *
  */
-int quicly_get_delivery_rate(quicly_conn_t *conn, quicly_rate_t *delivery_rate);
+int64_t quicly_get_delivery_rate(quicly_conn_t *conn, quicly_rate_t *delivery_rate);
 /**
  *
  */
@@ -1264,7 +1264,7 @@ quicly_stream_t *quicly_get_stream(quicly_conn_t *conn, quicly_stream_id_t strea
 /**
  *
  */
-int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream, int unidirectional);
+int64_t quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **stream, int unidirectional);
 /**
  * This function returns a stream that is already open, or if the given ID refers to a stream that can be opened by the peer but is
  * yet-to-be opened, the functions opens that stream and returns it. Otherwise, `*stream` is set to NULL.

@@ -1376,7 +1376,7 @@ struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
     return &conn->paths[0]->address.remote.sa;
 }
 
-int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
+int64_t quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
 {
     /* copy the pre-built stats fields */
     memcpy(stats, &conn->super.stats, sizeof(conn->super.stats));
@@ -1397,7 +1397,7 @@ int quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     return 0;
 }
 
-int quicly_get_delivery_rate(quicly_conn_t *conn, quicly_rate_t *delivery_rate)
+int64_t quicly_get_delivery_rate(quicly_conn_t *conn, quicly_rate_t *delivery_rate)
 {
     quicly_ratemeter_report(&conn->egress.ratemeter, delivery_rate);
     return 0;
@@ -2120,7 +2120,7 @@ Exit:
     return ret;
 }
 
-static int reinstall_initial_encryption(quicly_conn_t *conn, int err_code_if_unknown_version)
+static int64_t reinstall_initial_encryption(quicly_conn_t *conn, int64_t err_code_if_unknown_version)
 {
     const quicly_salt_t *salt;
 
@@ -3774,7 +3774,7 @@ static int64_t commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s,
      * an ACK for that gap. */
     if (conn->egress.packet_number >= conn->egress.next_pn_to_skip && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte) &&
         conn->super.state < QUICLY_STATE_CLOSING) {
-        int ret;
+        int64_t ret;
         if ((ret = quicly_sentmap_prepare(&conn->egress.loss.sentmap, conn->egress.packet_number, conn->stash.now,
                                           QUICLY_EPOCH_1RTT)) != 0)
             return ret;
@@ -7367,14 +7367,14 @@ Exit:
     return ret;
 }
 
-int quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
+int64_t quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream, int uni)
 {
     quicly_stream_t *stream;
     struct st_quicly_conn_streamgroup_state_t *group;
     uint64_t *max_stream_count;
     uint32_t max_stream_data_local;
     uint64_t max_stream_data_remote;
-    int ret;
+    int64_t ret;
 
     /* determine the states */
     if (uni) {

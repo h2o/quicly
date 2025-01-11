@@ -389,7 +389,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     }
 }
 
-static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+static int64_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     int ret;
 
@@ -421,8 +421,8 @@ static void on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *
 
 static quicly_closed_by_remote_t closed_by_remote = {&on_closed_by_remote};
 
-static int on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn, ptls_buffer_t *buf,
-                                        quicly_address_token_plaintext_t *token)
+static int64_t on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn, ptls_buffer_t *buf,
+                                            quicly_address_token_plaintext_t *token)
 {
     return quicly_encrypt_address_token(tlsctx.random_bytes, address_token_aead.enc, buf, buf->off, token);
 }
@@ -657,7 +657,7 @@ static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, qui
 static void enqueue_requests(quicly_conn_t *conn)
 {
     size_t i;
-    int ret;
+    int64_t ret;
 
     for (i = 0; reqs[i].path != NULL; ++i) {
         char req[1024], destfile[1024];
@@ -1125,7 +1125,7 @@ int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t 
     return save_session(quicly_get_remote_transport_parameters(conn));
 }
 
-static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
+static int64_t save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
 {
     free(session_info.address_token.base);
     session_info.address_token = ptls_iovec_init(malloc(token.len), token.len);
