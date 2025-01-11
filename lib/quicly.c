@@ -3144,12 +3144,10 @@ static int64_t on_ack_stream_ack_one(quicly_conn_t *conn, quicly_stream_id_t str
 
 static int64_t on_ack_stream_ack_cached(quicly_conn_t *conn)
 {
-    int64_t ret;
-
     if (conn->stash.on_ack_stream.active_acked_cache.stream_id == INT64_MIN)
         return 0;
-    ret = on_ack_stream_ack_one(conn, conn->stash.on_ack_stream.active_acked_cache.stream_id,
-                                &conn->stash.on_ack_stream.active_acked_cache.args);
+    int64_t ret = on_ack_stream_ack_one(conn, conn->stash.on_ack_stream.active_acked_cache.stream_id,
+                                        &conn->stash.on_ack_stream.active_acked_cache.args);
     conn->stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
     return ret;
 }
