@@ -5797,7 +5797,7 @@ int64_t initiate_close(quicly_conn_t *conn, int64_t err, uint64_t frame_type, co
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
         frame_type = UINT64_MAX;
     } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_SELF_ALERT) {
-        quic_error_code = QUICLY_TRANSPORT_ERROR_TLS_ALERT_BASE + PTLS_ERROR_TO_ALERT(err);
+        quic_error_code = QUICLY_TRANSPORT_ERROR_CRYPTO(PTLS_ERROR_TO_ALERT(err));
     } else {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INTERNAL);
     }
