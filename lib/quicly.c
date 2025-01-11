@@ -3069,7 +3069,7 @@ static int64_t do_on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *pa
     }
 
     /* subtract given ACK ranges */
-    int64_t ret;
+    int ret;
     uint64_t end = start + start_length;
     if ((ret = quicly_ranges_subtract(&space->ack_queue, start, end)) != 0)
         return ret;
@@ -3117,12 +3117,12 @@ static int64_t on_ack_ack_ranges8(quicly_sentmap_t *map, const quicly_sent_packe
 static int64_t on_ack_stream_ack_one(quicly_conn_t *conn, quicly_stream_id_t stream_id, quicly_sendstate_sent_t *sent)
 {
     quicly_stream_t *stream;
-    int64_t ret;
 
     if ((stream = quicly_get_stream(conn, stream_id)) == NULL)
         return 0;
 
     size_t bytes_to_shift;
+    int ret;
     if ((ret = quicly_sendstate_acked(&stream->sendstate, sent, &bytes_to_shift)) != 0)
         return ret;
     if (bytes_to_shift != 0) {
