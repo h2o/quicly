@@ -202,7 +202,7 @@ const quicly_cid_plaintext_t *new_master_id(void)
     return &master;
 }
 
-static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+static int64_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     test_streambuf_t *sbuf;
     int ret;
