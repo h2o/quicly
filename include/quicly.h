@@ -1133,7 +1133,7 @@ size_t quicly_send_version_negotiation(quicly_context_t *ctx, ptls_iovec_t dest_
 /**
  *
  */
-int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
+int64_t quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
                                    uint64_t *value);
 /**
  * Builds a UDP datagram containing a Retry packet.
@@ -1179,7 +1179,7 @@ size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, v
 /**
  *
  */
-int quicly_send_resumption_token(quicly_conn_t *conn);
+int64_t quicly_send_resumption_token(quicly_conn_t *conn);
 /**
  *
  */

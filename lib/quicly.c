@@ -4789,7 +4789,8 @@ size_t quicly_send_version_negotiation(quicly_context_t *ctx, ptls_iovec_t dest_
     return dst - (uint8_t *)payload;
 }
 
-int quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t client_cid, ptls_iovec_t server_cid, uint64_t *value)
+int64_t quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
+                                       uint64_t *value)
 {
     uint8_t digest[PTLS_SHA256_DIGEST_SIZE], buf[(QUICLY_MAX_CID_LEN_V1 + 1) * 2], *p = buf;
     int ret;
@@ -5728,7 +5729,7 @@ size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, v
     return QUICLY_STATELESS_RESET_PACKET_MIN_LEN;
 }
 
-int quicly_send_resumption_token(quicly_conn_t *conn)
+int64_t quicly_send_resumption_token(quicly_conn_t *conn)
 {
     assert(!quicly_is_client(conn));
 
