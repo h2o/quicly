@@ -1160,7 +1160,7 @@ static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_o
     return 0;
 }
 
-static int stream_has_more_to_send(void *unused, quicly_stream_t *stream)
+static int64_t stream_has_more_to_send(void *unused, quicly_stream_t *stream)
 {
     int is_fully_inflight =
         !quicly_stream_has_send_side(0, stream->stream_id) || quicly_sendstate_is_fully_inflight(&stream->sendstate);

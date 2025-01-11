@@ -1333,12 +1333,12 @@ static void destroy_all_streams(quicly_conn_t *conn, int64_t err, int including_
     assert(quicly_num_streams(conn) == 0);
 }
 
-int quicly_foreach_stream(quicly_conn_t *conn, void *thunk, int (*cb)(void *thunk, quicly_stream_t *stream))
+int64_t quicly_foreach_stream(quicly_conn_t *conn, void *thunk, int64_t (*cb)(void *thunk, quicly_stream_t *stream))
 {
     quicly_stream_t *stream;
     kh_foreach_value(conn->streams, stream, {
         if (stream->stream_id >= 0) {
-            int ret = cb(thunk, stream);
+            int64_t ret = cb(thunk, stream);
             if (ret != 0)
                 return ret;
         }

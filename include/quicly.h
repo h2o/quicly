@@ -1256,7 +1256,7 @@ quicly_stream_id_t quicly_get_ingress_max_streams(quicly_conn_t *conn, int uni);
  * Iterates through each stream. When the callback returns a non-zero value, bails out from the iteration, returning the returned
  * value.
  */
-int quicly_foreach_stream(quicly_conn_t *conn, void *thunk, int (*cb)(void *thunk, quicly_stream_t *stream));
+int64_t quicly_foreach_stream(quicly_conn_t *conn, void *thunk, int64_t (*cb)(void *thunk, quicly_stream_t *stream));
 /**
  *
  */
