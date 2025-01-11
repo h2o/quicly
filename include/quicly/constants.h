@@ -66,8 +66,17 @@ extern "C" {
 #define QUICLY_EPOCH_1RTT 3
 #define QUICLY_NUM_EPOCHS 4
 
-/* picotls error codes (of type int) use _INT_MIN ... INT_MAX, while QUIC application error codes use 0b01yyyy... and QUIC protocol
- * error codes use 0b10yyyy..., where yyyy is a 62-bit QUIC integer */
+/**
+ * Error code used by quicly. The code coalesces the following to an int64_t.
+ * * INT_MIN ... INT_MAX: picotls error codes (of type int)
+ * * 0b01xxxx...: QUIC application error codes
+ * * 0b10xxxx...: QUIC protocol error codes
+ * Internal error codes should be allocated from the unused space in the `int` space (i.e., unused space of picotls error codes);
+ * quicly itself uses 0xffxx. `quicly_error_t` is defined as a signed type so that the picotls error code space can be mapped
+ * without sign conversion.
+ */
+typedef int64_t quicly_error_t;
+
 #define QUICLY_ERROR_IS_QUIC(e) (((int64_t)(e) & 0x4000000000000000) != 0)
 #define QUICLY_ERROR_IS_QUIC_TRANSPORT(e) (((uint64_t)(int64_t)(e) & (uint64_t)0xc000000000000000) == 0x8000000000000000)
 #define QUICLY_ERROR_IS_QUIC_APPLICATION(e) (((uint64_t)(int64_t)(e) & (uint64_t)0xc000000000000000) == 0x4000000000000000)

@@ -124,8 +124,8 @@ struct st_stream_data_t {
     FILE *outfp;
 };
 
-static void on_stop_sending(quicly_stream_t *stream, int64_t err);
-static void on_receive_reset(quicly_stream_t *stream, int64_t err);
+static void on_stop_sending(quicly_stream_t *stream, quicly_error_t err);
+static void on_receive_reset(quicly_stream_t *stream, quicly_error_t err);
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
@@ -222,7 +222,7 @@ static void send_header(quicly_stream_t *stream, int is_http1, int status, const
     send_str(stream, buf);
 }
 
-static int64_t flatten_file_vec(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
+static quicly_error_t flatten_file_vec(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     int fd = (intptr_t)vec->cbdata;
     ssize_t rret;
@@ -263,7 +263,7 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
  * This function is an implementation of the quicly_sendbuf_flatten_vec_cb callback.  Refer to the doc-comments of the callback type
  * for the API.
  */
-static int64_t flatten_sized_text(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
+static quicly_error_t flatten_sized_text(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     static const char pattern[] =
         "hello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
@@ -316,13 +316,13 @@ static int send_sized_text(quicly_stream_t *stream, const char *path, int is_htt
     return 1;
 }
 
-static void on_stop_sending(quicly_stream_t *stream, int64_t err)
+static void on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     fprintf(stderr, "received STOP_SENDING: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
 }
 
-static void on_receive_reset(quicly_stream_t *stream, int64_t err)
+static void on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     fprintf(stderr, "received RESET_STREAM: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
@@ -389,7 +389,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
     }
 }
 
-static int64_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+static quicly_error_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     int ret;
 
@@ -401,7 +401,7 @@ static int64_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *strea
 
 static quicly_stream_open_t stream_open = {&on_stream_open};
 
-static void on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *conn, int64_t err, uint64_t frame_type,
+static void on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type,
                                 const char *reason, size_t reason_len)
 {
     if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
@@ -421,8 +421,8 @@ static void on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *
 
 static quicly_closed_by_remote_t closed_by_remote = {&on_closed_by_remote};
 
-static int64_t on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn, ptls_buffer_t *buf,
-                                            quicly_address_token_plaintext_t *token)
+static quicly_error_t on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn,
+                                                   ptls_buffer_t *buf, quicly_address_token_plaintext_t *token)
 {
     return quicly_encrypt_address_token(tlsctx.random_bytes, address_token_aead.enc, buf, buf->off, token);
 }
@@ -632,13 +632,13 @@ static void send_one_packet(int fd, quicly_address_t *dest, quicly_address_t *sr
     send_packets(fd, dest, src, &vec, 1, 0);
 }
 
-static int64_t send_pending(int fd, quicly_conn_t *conn)
+static quicly_error_t send_pending(int fd, quicly_conn_t *conn)
 {
     quicly_address_t dest, src;
     struct iovec packets[MAX_BURST_PACKETS];
     uint8_t buf[MAX_BURST_PACKETS * quicly_get_context(conn)->transport_params.max_udp_payload_size];
     size_t num_packets = MAX_BURST_PACKETS;
-    int64_t ret;
+    quicly_error_t ret;
 
     if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0)
         send_packets(fd, &dest, &src, packets, num_packets, quicly_send_get_ecn_bits(conn));
@@ -657,7 +657,7 @@ static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, qui
 static void enqueue_requests(quicly_conn_t *conn)
 {
     size_t i;
-    int64_t ret;
+    quicly_error_t ret;
 
     for (i = 0; reqs[i].path != NULL; ++i) {
         char req[1024], destfile[1024];
@@ -691,7 +691,7 @@ static void on_client_signal(int signo)
 static int run_client(int fd, struct sockaddr *sa, const char *host)
 {
     quicly_address_t local;
-    int64_t ret;
+    quicly_error_t ret;
     quicly_conn_t *conn = NULL;
 
     signal(SIGTERM, on_client_signal);
@@ -958,8 +958,8 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                         quicly_address_token_plaintext_t *token = NULL, token_buf;
                         if (packet.token.len != 0) {
                             const char *err_desc = NULL;
-                            int64_t ret = quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base,
-                                                                       packet.token.len, 0, &err_desc);
+                            quicly_error_t ret = quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base,
+                                                                              packet.token.len, 0, &err_desc);
                             if (ret == 0 &&
                                 validate_token(&remote.sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf, &err_desc)) {
                                 token = &token_buf;
@@ -990,7 +990,8 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             break;
                         } else {
                             /* new connection */
-                            int64_t ret = quicly_accept(&conn, &ctx, &local.sa, &remote.sa, &packet, token, &next_cid, NULL, NULL);
+                            quicly_error_t ret =
+                                quicly_accept(&conn, &ctx, &local.sa, &remote.sa, &packet, token, &next_cid, NULL, NULL);
                             if (ret == 0) {
                                 assert(conn != NULL);
                                 ++next_cid.master_id;
@@ -1036,7 +1037,7 @@ static void load_session(void)
 {
     static uint8_t buf[65536];
     size_t len;
-    int64_t ret;
+    quicly_error_t ret;
 
     {
         FILE *fp;
@@ -1125,7 +1126,7 @@ int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t 
     return save_session(quicly_get_remote_transport_parameters(conn));
 }
 
-static int64_t save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
+static quicly_error_t save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
 {
     free(session_info.address_token.base);
     session_info.address_token = ptls_iovec_init(malloc(token.len), token.len);
@@ -1172,10 +1173,10 @@ static int conn_has_more_to_send(quicly_conn_t *conn)
     return quicly_foreach_stream(conn, NULL, stream_has_more_to_send) != 0;
 }
 
-static int64_t scheduler_do_send(quicly_stream_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s)
+static quicly_error_t scheduler_do_send(quicly_stream_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s)
 {
     int had_more_to_send = conn_has_more_to_send(conn);
-    int64_t ret;
+    quicly_error_t ret;
 
     /* call the default scheduler */
     if ((ret = quicly_default_stream_scheduler.do_send(&quicly_default_stream_scheduler, conn, s)) != 0)
