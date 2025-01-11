@@ -66,8 +66,8 @@ extern "C" {
 #define QUICLY_EPOCH_1RTT 3
 #define QUICLY_NUM_EPOCHS 4
 
-/* picotls error codes (of type int) use 0x00000000xxxxxxxx, while QUIC application error codes use 0b01yyyy... and QUIC protocol
- * error codes use 0b11yyyy..., where yyyy is a 62-bit QUIC integer */
+/* picotls error codes (of type int) use _INT_MIN ... INT_MAX, while QUIC application error codes use 0b01yyyy... and QUIC protocol
+ * error codes use 0b10yyyy..., where yyyy is a 62-bit QUIC integer */
 #define QUICLY_ERROR_IS_QUIC(e) (((int64_t)(e) & 0x4000000000000000) != 0)
 #define QUICLY_ERROR_IS_QUIC_TRANSPORT(e) (((uint64_t)(int64_t)(e) & (uint64_t)0xc000000000000000) == 0x8000000000000000)
 #define QUICLY_ERROR_IS_QUIC_APPLICATION(e) (((uint64_t)(int64_t)(e) & (uint64_t)0xc000000000000000) == 0x4000000000000000)
