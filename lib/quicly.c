@@ -5170,8 +5170,8 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
             conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
         /* send the first resumption token using the 0.5 RTT window */
         if (!quicly_is_client(conn) && conn->super.ctx->generate_resumption_token != NULL) {
-            ret = quicly_send_resumption_token(conn);
-            assert(ret == 0);
+            int64_t ret64 = quicly_send_resumption_token(conn);
+            assert(ret64 == 0);
         }
 
         /* schedule NEW_CONNECTION_IDs */
