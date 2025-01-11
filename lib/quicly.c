@@ -3048,8 +3048,8 @@ static int64_t decrypt_packet(ptls_cipher_context_t *header_protection,
     return 0;
 }
 
-static uint64_t do_on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, uint64_t start, uint64_t start_length,
-                              struct st_quicly_sent_ack_additional_t *additional, size_t additional_capacity)
+static int64_t do_on_ack_ack(quicly_conn_t *conn, const quicly_sent_packet_t *packet, uint64_t start, uint64_t start_length,
+                             struct st_quicly_sent_ack_additional_t *additional, size_t additional_capacity)
 {
     /* find the pn space */
     struct st_quicly_pn_space_t *space;
