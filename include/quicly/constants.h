@@ -70,7 +70,7 @@ extern "C" {
  * Error code used by quicly. The code coalesces the following to an int64_t.
  * * 0..0x2ff: picotls error codes (of type int)
  * * 0x30000..0x400000000002ffff: QUIC application error codes
- * * 0x400000000002ffff..0x800000000002ffff...: QUIC protocol error codes
+ * * 0x4000000000030000..0x800000000002ffff...: QUIC protocol error codes
  * Internal error codes should be allocated from the unused space below 0x30000 (i.e., unused space of picotls error codes);
  * quicly itself uses 0xffxx. `quicly_error_t` is defined as a signed type so that the picotls error code space can be mapped
  * without sign conversion.
