@@ -78,10 +78,10 @@ extern "C" {
 typedef int64_t quicly_error_t;
 
 #define QUICLY_ERROR_IS_QUIC(e) (((int64_t)(e) & 0x4000000000000000) != 0)
-#define QUICLY_ERROR_IS_QUIC_TRANSPORT(e) (((uint64_t)(int64_t)(e) & (uint64_t)0xc000000000000000) == 0x8000000000000000)
-#define QUICLY_ERROR_IS_QUIC_APPLICATION(e) (((uint64_t)(int64_t)(e) & (uint64_t)0xc000000000000000) == 0x4000000000000000)
+#define QUICLY_ERROR_IS_QUIC_TRANSPORT(e) (((uint64_t)(int64_t)(e) & 0xc000000000000000u) == 0x8000000000000000u)
+#define QUICLY_ERROR_IS_QUIC_APPLICATION(e) (((uint64_t)(int64_t)(e) & 0xc000000000000000u) == 0x4000000000000000u)
 #define QUICLY_ERROR_GET_ERROR_CODE(e) ((uint64_t)((int64_t)(e) & 0x3fffffffffffffff))
-#define QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(e) ((int64_t)((uint64_t)(int64_t)(e) | (uint64_t)0x8000000000000000))
+#define QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(e) ((int64_t)((uint64_t)(int64_t)(e) | 0x8000000000000000u))
 #define QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(e) ((int64_t)((int64_t)(e) | 0x4000000000000000))
 /**
  * PTLS_ERROR_NO_MEMORY and QUICLY_ERROR_STATE_EXHAUSTION are special error codes that are internal but can be passed to
