@@ -7932,11 +7932,11 @@ void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, c
     }
 }
 
-static int emit_qs_transport_parameters(quicly_conn_t *conn, quicly_send_context_t *s)
+static quicly_error_t emit_qs_transport_parameters(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     quicly_sent_t *sent;
     ptls_buffer_t buf;
-    int ret;
+    quicly_error_t ret;
 
     if ((ret = allocate_ack_eliciting_frame(conn, s, 100, &sent, NULL)) != 0)
         return ret;
@@ -7956,10 +7956,10 @@ Exit:
     return ret;
 }
 
-int quicly_qos_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
+quicly_error_t quicly_qos_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
 {
     quicly_send_context_t s = {.dst = buf, .dst_end = (uint8_t *)buf + *bufsize, .max_datagrams = 1};
-    int ret;
+    quicly_error_t ret;
 
     lock_now(conn, 0);
 
@@ -7986,12 +7986,13 @@ Exit:
     return ret;
 }
 
-int quicly_qos_receive(quicly_conn_t *conn, const void *src, size_t *len)
+quicly_error_t quicly_qos_receive(quicly_conn_t *conn, const void *src, size_t *len)
 {
     size_t epoch = conn->super.stats.num_frames_received.qs_transport_parameters == 0 ? QUICLY_EPOCH_ON_STREAMS_TP
                                                                                       : QUICLY_EPOCH_ON_STREAMS_OTHER;
     uint64_t offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
-    int is_ack_only, is_probe_only, ret = 0;
+    int is_ack_only, is_probe_only;
+    quicly_error_t ret = 0;
 
     lock_now(conn, 0);
 
