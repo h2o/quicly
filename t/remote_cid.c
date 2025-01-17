@@ -181,7 +181,7 @@ void test_received_cid(void)
     TEST_RETIRED(0, 2, 4, 1, 3, 6, 7, 5);
 
     /* too many outstanding CIDs in retire queue */
-    ok(quicly_remote_cid_register(&set, 11, cids[11], CID_LEN, srts[11], 9) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    ok(quicly_remote_cid_register(&set, 11, cids[11], CID_LEN, srts[11], 9) == QUICLY_ERROR_STATE_EXHAUSTION);
 
     /* pretend as if RCID frames carrying the retired ones were sent and that all have been acked */
     set.retired.count = 0;
