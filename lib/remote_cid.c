@@ -137,8 +137,7 @@ quicly_error_t quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t
     /* First, handle retire_prior_to. This order is important as it is possible to receive a NEW_CONNECTION_ID frame such that it
      * retires active_connection_id_limit CIDs and then installs one new CID. Next, the new CID is registered. If either of the two
      * fails, the state is restored to the original so that we can send an error to the peer. */
-    if ((ret = unregister_prior_to(set, retire_prior_to)) != 0 ||
-        (ret = do_register(set, sequence, cid, cid_len, srt)) != 0)
+    if ((ret = unregister_prior_to(set, retire_prior_to)) != 0 || (ret = do_register(set, sequence, cid, cid_len, srt)) != 0)
         *set = backup;
 
     return ret;
