@@ -103,8 +103,8 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
  * Registers received connection ID at the same time pushing CIDs onto the retired queue, if any. Returns 0 if successful (CID set
  * is either updated or given information is ignored due to being state), or a transport error code if an error occurs.
  */
-int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to);
+quicly_error_t quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                                          const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to);
 /**
  * Unregisters specified CID from the store, pushing the unregistered CID onto the retired queue. The former always succeeds, while
  * the latter might fail due to state exhaustion, in which case an error is returned.

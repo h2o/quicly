@@ -48,8 +48,8 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
     memset(&set->retired, 0, sizeof(set->retired));
 }
 
-static int do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                       const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
+static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                                  const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
 {
     int was_stored = 0;
 
@@ -126,11 +126,11 @@ static int unregister_prior_to(quicly_remote_cid_set_t *set, uint64_t seq_unreg_
     return 0;
 }
 
-int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to)
+quicly_error_t quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                                          const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to)
 {
     quicly_remote_cid_set_t backup = *set; /* preserve current state so that it can be restored to notify protocol violation */
-    int ret;
+    quicly_error_t ret;
 
     assert(sequence >= retire_prior_to);
 
