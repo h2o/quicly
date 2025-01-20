@@ -5810,9 +5810,6 @@ quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t 
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         return 0;
 
-    if (reason_phrase == NULL)
-        reason_phrase = "";
-
     /* convert error code to QUIC error codes */
     if (err == 0) {
         quic_error_code = 0;
@@ -5835,6 +5832,10 @@ quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t 
     } else {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INTERNAL);
     }
+
+    if (reason_phrase == NULL)
+        reason_phrase = "";
+
 
     conn->egress.connection_close.error_code = quic_error_code;
     conn->egress.connection_close.frame_type = frame_type;
