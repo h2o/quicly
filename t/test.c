@@ -467,6 +467,23 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     return num_datagrams;
 }
 
+static void exchange_until_idle(quicly_conn_t *c1, quicly_conn_t *c2)
+{
+    while (1) {
+        int64_t t1 = quicly_get_first_timeout(c1), t2 = quicly_get_first_timeout(c2), tmin = t1 <= t2 ? t1 : t2;
+        if (tmin > quic_now) {
+            if (tmin - quic_now > QUICLY_DEFAULT_MAX_ACK_DELAY)
+                break;
+            quic_now = tmin;
+        }
+        if (t1 <= t2) {
+            transmit(c1, c2);
+        } else {
+            transmit(c2, c1);
+        }
+    }
+}
+
 int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
 {
     uint64_t client_sent, client_consumed;
@@ -794,6 +811,51 @@ static void test_jumpstart_cwnd(void)
         .transport_params.max_udp_payload_size = 1250,
     };
     ok(derive_jumpstart_cwnd(&bounded_max, 250, 1000000, 250) == 80000);
+}
+
+static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **server)
+{
+    quicly_address_t dest, src;
+    struct iovec datagrams[8];
+    uint8_t packetsbuf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 4];
+    size_t num_datagrams, num_decoded;
+    quicly_error_t ret;
+
+    ret = quicly_connect(client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                         NULL, NULL);
+    ok(ret == 0);
+    num_datagrams = sizeof(datagrams);
+    ret = quicly_send(*client, &dest, &src, datagrams, &num_datagrams, packetsbuf, sizeof(packetsbuf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    num_decoded = decode_packets(decoded, datagrams, 1);
+    ok(num_decoded == 1);
+    ret = quicly_accept(server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL);
+    ok(ret == 0);
+    num_datagrams = transmit(*server, *client);
+    ok(num_datagrams > 0);
+    ok(quicly_get_state(*client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(*server) == QUICLY_STATE_CONNECTED);
+    exchange_until_idle(*client, *server);
+}
+
+static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, struct iovec *datagram, void *buf,
+                                    size_t bufsize)
+{
+    assert(conn->application != NULL);
+
+    *s = (quicly_send_context_t){
+        .current.first_byte = -1,
+        .datagrams = datagram,
+        .max_datagrams = 1,
+        .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
+        .first_packet_number = conn->egress.packet_number,
+        .send_window = bufsize,
+        .dcid = get_dcid(conn, 0 /* path_index */),
+    };
+    lock_now(conn, 0);
+    setup_send_space(conn, QUICLY_EPOCH_1RTT, s);
 }
 
 static void do_test_migration_during_handshake(int second_flight_from_orig_address)
