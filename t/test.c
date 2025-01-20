@@ -908,7 +908,7 @@ static void test_state_exhaustion(void)
         s.dst = quicly_encodev(s.dst, 0);     /* stream id */
         s.dst = quicly_encodev(s.dst, i * 2); /* off */
         s.dst = quicly_encodev(s.dst, 1);     /* len */
-        *s.dst++ = (uint8_t)('a' + 26 % (i * 2));
+        *s.dst++ = (uint8_t)('a' + (i * 2) % 26);
         commit_send_packet(client, &s, 0);
         unlock_now(client);
 
