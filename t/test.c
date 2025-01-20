@@ -858,6 +858,90 @@ static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *
     setup_send_space(conn, QUICLY_EPOCH_1RTT, s);
 }
 
+static struct {
+    quicly_conn_t *conn;
+    quicly_error_t err;
+    char reason[64];
+} test_state_exhaustion_closed_by_remote;
+
+static void test_state_exhaustion_on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *conn, quicly_error_t err,
+                                                      uint64_t frame_type, const char *reason, size_t reason_len)
+{
+    if (test_state_exhaustion_closed_by_remote.conn == NULL) {
+        test_state_exhaustion_closed_by_remote.conn = conn;
+        test_state_exhaustion_closed_by_remote.err = err;
+        memcpy(test_state_exhaustion_closed_by_remote.reason, reason, reason_len);
+        test_state_exhaustion_closed_by_remote.reason[reason_len] = '\0';
+    }
+}
+
+/**
+ * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
+ * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
+ */
+static void test_state_exhaustion(void)
+{
+    static quicly_closed_by_remote_t closed_by_remote = {test_state_exhaustion_on_closed_by_remote};
+
+    assert(quic_ctx.closed_by_remote == NULL);
+    quic_ctx.closed_by_remote = &closed_by_remote;
+    memset(&test_state_exhaustion_closed_by_remote, 0, sizeof(test_state_exhaustion_closed_by_remote));
+    uint64_t orig_max_stream_data_bidi_remote = quic_ctx.transport_params.max_stream_data.bidi_remote;
+    quic_ctx.transport_params.max_stream_data.bidi_remote = 65536; /* shrink to reduce # of gaps permitted */
+
+    quicly_conn_t *client, *server;
+    quicly_send_context_t s;
+    struct iovec datagram;
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded;
+    size_t num_datagrams, num_decoded;
+    quicly_address_t dest, src;
+    quicly_error_t ret = 0;
+
+    test_setup_connected_peers(&client, &server);
+
+    /* send up to 200 packets with stream frame having gaps and check that the receiver raises state exhaustion */
+    for (size_t i = 0; i < 200; ++i) {
+        test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
+        do_allocate_frame(client, &s, 100, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
+        *s.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
+        s.dst = quicly_encodev(s.dst, 0);     /* stream id */
+        s.dst = quicly_encodev(s.dst, i * 2); /* off */
+        s.dst = quicly_encodev(s.dst, 1);     /* len */
+        *s.dst++ = (uint8_t)('a' + 26 % (i * 2));
+        commit_send_packet(client, &s, 0);
+        unlock_now(client);
+
+        num_decoded = decode_packets(&decoded, &datagram, 1);
+        ok(num_decoded == 1);
+        if ((ret = quicly_receive(server, NULL, &fake_address.sa, &decoded)) != 0)
+            break;
+    }
+    ok(ret == QUICLY_ERROR_STATE_EXHAUSTION);
+
+    /* upon state exhaustion, the receiving endpoint MAY send CONNECTION_CLOSE (in this test, state-exhaustion is sent) */
+    quicly_close(server, ret, NULL);
+    num_datagrams = 1;
+    ret = quicly_send(server, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    num_decoded = decode_packets(&decoded, &datagram, 1);
+    ret = quicly_receive(client, NULL, &fake_address.sa, &decoded);
+    ok(ret == 0);
+    ok(quicly_get_state(client) == QUICLY_STATE_DRAINING);
+
+    /* sender should have received PROTOCOL_VIOLATION with the special reason phrase */
+    ok(test_state_exhaustion_closed_by_remote.conn == client);
+    ok(test_state_exhaustion_closed_by_remote.err == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    ok(strcmp(test_state_exhaustion_closed_by_remote.reason, "state exhaustion") == 0);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quic_ctx.closed_by_remote = NULL;
+    quic_ctx.transport_params.max_stream_data.bidi_remote = orig_max_stream_data_bidi_remote;
+}
+
 static void do_test_migration_during_handshake(int second_flight_from_orig_address)
 {
     quicly_conn_t *client, *server;
@@ -1014,6 +1098,7 @@ int main(int argc, char **argv)
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
 
+    subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
     return done_testing();
