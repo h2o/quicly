@@ -4361,12 +4361,13 @@ UpdateState:
     if (off < stream->sendstate.size_inflight)
         stream->conn->super.stats.num_bytes.stream_data_resent +=
             (stream->sendstate.size_inflight < off + len ? stream->sendstate.size_inflight : off + len) - off;
-    QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, len, is_fin);
+    QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, s->dst - len, len, is_fin, wrote_all);
     QUICLY_LOG_CONN(stream_send, stream->conn, {
         PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
         PTLS_LOG_ELEMENT_UNSIGNED(off, off);
-        PTLS_LOG_ELEMENT_UNSIGNED(len, len);
+        PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(data, s->dst - len, len);
         PTLS_LOG_ELEMENT_BOOL(is_fin, is_fin);
+        PTLS_LOG_ELEMENT_BOOL(wrote_all, wrote_all);
     });
 
     QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, len, is_fin);
