@@ -2144,7 +2144,7 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
     quicly_error_t ret;
 
     QUICLY_PROBE(STREAM_RECEIVE, stream->conn, stream->conn->stash.now, stream, frame->offset, frame->data.base, frame->data.len,
-                 frame->is_fin);
+                 (int)frame->is_fin);
     QUICLY_LOG_CONN(stream_receive, stream->conn, {
         PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
         PTLS_LOG_ELEMENT_UNSIGNED(off, frame->offset);
