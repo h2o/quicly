@@ -2184,14 +2184,15 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
 
     if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t buf_offset = frame->offset + frame->data.len - apply_len - stream->recvstate.data_off;
-        const void *apply_src = frame->data.base + frame->data.len - apply_len;
-        QUICLY_PROBE(STREAM_ON_RECEIVE, stream->conn, stream->conn->stash.now, stream, (size_t)buf_offset, apply_src, apply_len);
+        size_t apply_off = frame->data.len - apply_len;
+        QUICLY_PROBE(STREAM_ON_RECEIVE, stream->conn, stream->conn->stash.now, stream, (size_t)buf_offset, apply_off, apply_len);
         QUICLY_LOG_CONN(stream_on_receive, stream->conn, {
             PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
-            PTLS_LOG_ELEMENT_UNSIGNED(off, buf_offset);
-            PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(src, apply_src, apply_len);
+            PTLS_LOG_ELEMENT_UNSIGNED(buf_off, buf_offset);
+            PTLS_LOG_ELEMENT_UNSIGNED(apply_off, apply_off);
+            PTLS_LOG_ELEMENT_UNSIGNED(apply_len, apply_len);
         });
-        stream->callbacks->on_receive(stream, (size_t)buf_offset, apply_src, apply_len);
+        stream->callbacks->on_receive(stream, (size_t)buf_offset, frame->data.base + apply_off, apply_len);
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
             return QUICLY_ERROR_IS_CLOSING;
     }
