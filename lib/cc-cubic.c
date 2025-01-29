@@ -22,8 +22,10 @@
  */
 #include <math.h>
 #include "quicly/cc.h"
+#include "quicly/defaults.h"
 #include "quicly.h"
 #include "quicly/pacer.h"
+#include "quicly/ss.h"
 
 #define QUICLY_MIN_CWND 2
 
@@ -73,13 +75,11 @@ static void cubic_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t 
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
-    /* TODO: respect cc_limited */
-
     /* Slow start. */
     if (cc->cwnd < cc->ssthresh) {
-        cc->cwnd += bytes;
-        if (cc->cwnd_maximum < cc->cwnd)
-            cc->cwnd_maximum = cc->cwnd;
+        if (cc_limited) {
+           cc->type->cc_slowstart->ss(cc, loss, bytes, largest_acked, inflight, next_pn, now, max_udp_payload_size);
+        }
         return;
     }
 
@@ -208,5 +208,5 @@ static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwn
 
 quicly_cc_type_t quicly_cc_type_cubic = {"cubic",         &quicly_cc_cubic_init,          cubic_on_acked,
                                          cubic_on_lost,   cubic_on_persistent_congestion, cubic_on_sent,
-                                         cubic_on_switch, quicly_cc_jumpstart_enter};
+                                         cubic_on_switch, &quicly_default_ss, quicly_cc_jumpstart_enter};
 quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};
