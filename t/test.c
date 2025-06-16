@@ -218,35 +218,31 @@ static void test_adjust_last_stream_frame(void)
 
 static void test_scatter_stream_payload(void)
 {
-#define INPUT                                                                                                                      \
-    "\x08\x04"                                                                                                                     \
-    "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she "  \
-    "had peeped into the book her sister was reading, but it had no pictures or conversations in it"
-
-    uint8_t buf[sizeof(INPUT) - 1];
-
     quicly_cid_t dcid = {.cid = {'C', 'I', 'D'}, .len = 3};
     ptls_aead_context_t aead = {.algo = &ptls_openssl_aes128gcm};
     struct st_quicly_cipher_context_t cipher = {.aead = &aead};
 
-#define TEST(_len, datagram_size, extra_datagrams, check) \
-    do { \
-        memcpy(buf, INPUT, sizeof(INPUT) - 1); \
-        quicly_send_context_t s = { \
-            .dcid = &dcid, \
-            .current.cipher = &cipher, \
-            .dst = buf, \
-            .dst_end = buf + 8, \
-        }; \
-        size_t len = (_len); \
-        int wrote_all = 1; \
-        uint16_t scattered_payload_lengths[11]; \
-        memset(scattered_payload_lengths, 0x55, sizeof(scattered_payload_lengths)); \
-        uint8_t *end_of_last_frame =  scatter_stream_payload(&s, datagram_size, 4, 0, buf + 2, &len, &wrote_all, \
-                                                             scattered_payload_lengths, (extra_datagrams)); \
-        do { \
-            check \
-        } while (0); \
+#define TEST(_len, datagram_size, extra_datagrams, check)                                                                          \
+    do {                                                                                                                           \
+        uint8_t buf[] = "\x08\x04"                                                                                                 \
+                        "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to "    \
+                        "do: once or twice she had peeped into the book her sister was reading, but it had no pictures or "        \
+                        "conversations in it";                                                                                     \
+        quicly_send_context_t s = {                                                                                                \
+            .dcid = &dcid,                                                                                                         \
+            .current.cipher = &cipher,                                                                                             \
+            .dst = buf,                                                                                                            \
+            .dst_end = buf + 8,                                                                                                    \
+        };                                                                                                                         \
+        size_t len = (_len);                                                                                                       \
+        int wrote_all = 1;                                                                                                         \
+        uint16_t scattered_payload_lengths[11];                                                                                    \
+        memset(scattered_payload_lengths, 0x55, sizeof(scattered_payload_lengths));                                                \
+        uint8_t *end_of_last_frame = scatter_stream_payload(&s, datagram_size, 4, 0, buf + 2, &len, &wrote_all,                    \
+                                                            scattered_payload_lengths, (extra_datagrams));                         \
+        do {                                                                                                                       \
+            check                                                                                                                  \
+        } while (0);                                                                                                               \
     } while (0)
 
     TEST(34 /* 6 (current) + 13 * 2 + 2 */, 38 /* 16 bytes frame space per datagram */, 2, {
@@ -299,7 +295,6 @@ static void test_scatter_stream_payload(void)
     });
 
 #undef TEST
-#undef INPUT
 }
 
 static int64_t get_now_cb(quicly_now_t *self)
