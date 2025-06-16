@@ -4482,6 +4482,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
     if (stream->stream_id < 0) {
         /* CRYPTO frame */
         s->dst = adjust_crypto_frame_layout(dst, s->dst_end, &len, &wrote_all);
+        commit_stream_frame(stream, sent, off, s->dst - len, len, wrote_all, 0);
         is_fin = 0;
     } else {
         /* STREAM frame; if the generated payload extends beyond the end of the current datagram,
