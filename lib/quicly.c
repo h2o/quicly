@@ -4312,7 +4312,7 @@ static size_t adjust_last_stream_frame(uint8_t *header, size_t header_len, uint1
  */
 static uint8_t *scatter_stream_payload(quicly_send_context_t *s, uint16_t datagram_size, quicly_stream_id_t stream_id,
                                        uint64_t stream_start, uint8_t *payload_start, size_t *len, int *wrote_all,
-                                       uint16_t *scattered_payload_lengths)
+                                       uint16_t *scattered_payload_lengths, size_t extra_datagrams)
 {
     /* fast path when no expansion is required; adjust the layout and return */
     if (*len <= s->dst_end - payload_start) {
@@ -4326,13 +4326,13 @@ static uint8_t *scatter_stream_payload(quicly_send_context_t *s, uint16_t datagr
     struct {
         uint8_t len;
         uint8_t bytes[1 + 8 + 8 + 2];
-    } frame_headers[10];
+    } frame_headers[extra_datagrams];
     size_t num_scattered, stream_offset = stream_start + (s->dst_end - payload_start), stream_end = stream_start + *len,
                           datagram_prefix_len = 1 /* header byte */ + s->dcid->len + QUICLY_SEND_PN_SIZE,
                           datagram_capacity = datagram_size - datagram_prefix_len - s->current.cipher->aead->algo->tag_size;
 
     /* build frame headers for the extra datagrams, calculating their offsets */
-    for (num_scattered = 0; num_scattered < PTLS_ELEMENTSOF(frame_headers) && stream_offset < stream_end; ++num_scattered) {
+    for (num_scattered = 0; num_scattered < extra_datagrams && stream_offset < stream_end; ++num_scattered) {
         uint8_t *hp = frame_headers[num_scattered].bytes;
         *hp++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF;
         hp = quicly_encodev(hp, stream_id);
@@ -4429,6 +4429,8 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
         if (get_epoch(s->current.first_byte) == QUICLY_EPOCH_1RTT) {
             size_t max_udp_payload_size = stream->conn->egress.max_udp_payload_size;
             extra_datagrams = (s->payload_buf.end - (s->dst_end + s->target.cipher->aead->algo->tag_size)) / max_udp_payload_size;
+            if (extra_datagrams > s->max_datagrams - s->num_datagrams - 1)
+                extra_datagrams = s->max_datagrams - s->num_datagrams - 1;
             if (extra_datagrams > PTLS_ELEMENTSOF(scattered_payload_lengths) - 1)
                 extra_datagrams = PTLS_ELEMENTSOF(scattered_payload_lengths) - 1;
             len += (max_udp_payload_size - (1 + s->dcid->len + QUICLY_SEND_PN_SIZE + 2)) * extra_datagrams;
@@ -4488,7 +4490,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
          * 2. Repeatedly commit the packets until we reach the last one, which might not be full-sized. */
         size_t capacity_of_first_packet = s->dst_end - dst;
         dst = scatter_stream_payload(s, stream->conn->egress.max_udp_payload_size, stream->stream_id, off, dst, &len, &wrote_all,
-                                     scattered_payload_lengths);
+                                     scattered_payload_lengths, extra_datagrams);
         uint64_t off_of_packet = off;
         if (scattered_payload_lengths[0] > 0) {
             s->dst = s->dst_end;

@@ -229,21 +229,49 @@ static void test_scatter_stream_payload(void)
     ptls_aead_context_t aead = {.algo = &ptls_openssl_aes128gcm};
     struct st_quicly_cipher_context_t cipher = {.aead = &aead};
 
-    {
-        static const uint16_t datagram_size = 38; /* 1 + 3 (dcid_len) + 2 (pn_size) + 16 (payload) + 16 (AEAD tag) */
-        memcpy(buf, INPUT, sizeof(INPUT) - 1);
-        quicly_send_context_t s = {
-            .dcid = &dcid,
-            .current.cipher = &cipher,
-            .dst = buf,
-            .dst_end = buf + 8,
-        };
-        size_t len = 34; /* 6 (current), 13+13+2 (extra) */
-        int wrote_all = 1;
-        uint16_t scattered_payload_lengths[11] = {99, 99, 99, 99, 99};
-        uint8_t *end_of_last_frame =
-            scatter_stream_payload(&s, datagram_size, 4, 0, buf + 2, &len, &wrote_all, scattered_payload_lengths);
+#define TEST(_len, datagram_size, extra_datagrams, check) \
+    do { \
+        memcpy(buf, INPUT, sizeof(INPUT) - 1); \
+        quicly_send_context_t s = { \
+            .dcid = &dcid, \
+            .current.cipher = &cipher, \
+            .dst = buf, \
+            .dst_end = buf + 8, \
+        }; \
+        size_t len = (_len); \
+        int wrote_all = 1; \
+        uint16_t scattered_payload_lengths[11]; \
+        memset(scattered_payload_lengths, 0x55, sizeof(scattered_payload_lengths)); \
+        uint8_t *end_of_last_frame =  scatter_stream_payload(&s, datagram_size, 4, 0, buf + 2, &len, &wrote_all, \
+                                                             scattered_payload_lengths, (extra_datagrams)); \
+        do { \
+            check \
+        } while (0); \
+    } while (0)
 
+    TEST(34 /* 6 (current) + 13 * 2 + 2 */, 38 /* 16 bytes frame space per datagram */, 2, {
+        ok(len == 32);
+        ok(wrote_all == 0);
+        ok(scattered_payload_lengths[0] == 13);
+        ok(scattered_payload_lengths[1] == 13);
+        ok(scattered_payload_lengths[2] == 0);
+        ok(memcmp(buf,
+                  "\x08\x04"
+                  "Alice ",
+                  8) == 0);
+        size_t payload_gap = aead.algo->tag_size + 1 + dcid.len + QUICLY_SEND_PN_SIZE;
+        ok(memcmp(buf + 8 + payload_gap,
+                  "\x0c\x04\x06"
+                  "was beginning",
+                  16) == 0);
+        ok(memcmp(buf + 24 + payload_gap * 2,
+                  "\x0c\x04\x13"
+                  " to get very ",
+                  16) == 0);
+        ok(buf + 24 + payload_gap * 2 + 16 == end_of_last_frame);
+    });
+
+    TEST(34 /* 6 (current) + 13 * 2 + 2 */, 38 /* 16 bytes frame space per datagram */, 3, {
         ok(len == 34);
         ok(wrote_all == 1);
         ok(scattered_payload_lengths[0] == 13);
@@ -268,8 +296,9 @@ static void test_scatter_stream_payload(void)
                   "ti",
                   6) == 0);
         ok(buf + 40 + payload_gap * 3 + 6 == end_of_last_frame);
-    }
+    });
 
+#undef TEST
 #undef INPUT
 }
 
