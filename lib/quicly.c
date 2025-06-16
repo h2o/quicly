@@ -4501,9 +4501,10 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
                 if ((ret = allocate_ack_eliciting_frame(stream->conn, s, 1, &sent, on_ack_stream)) != 0)
                     return ret;
                 assert(s->dst == s->dst_payload_from && "scatter does not expect other frames");
-                commit_stream_frame(stream, sent, off_of_packet, s->dst, scattered_payload_lengths[i], 0, 0);
-                off_of_packet += scattered_payload_lengths[i];
                 s->dst = s->dst_end;
+                commit_stream_frame(stream, sent, off_of_packet, s->dst - scattered_payload_lengths[i],
+                                    scattered_payload_lengths[i], 0, 0);
+                off_of_packet += scattered_payload_lengths[i];
             }
             if ((ret = allocate_ack_eliciting_frame(stream->conn, s, 1, &sent, on_ack_stream)) != 0)
                 return ret;
@@ -4523,7 +4524,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
         /* commit the last STREAM frame (without committing the packet, as there could be space left) */
         s->dst = dst;
         size_t data_len = (off + len) - off_of_packet;
-        commit_stream_frame(stream, sent, off_of_packet, dst - data_len, data_len, wrote_all, is_fin);
+        commit_stream_frame(stream, sent, off_of_packet, s->dst - data_len, data_len, wrote_all, is_fin);
     }
 
     /* update stream sendstate */
