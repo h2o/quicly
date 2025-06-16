@@ -4980,7 +4980,7 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
         switch (get_epoch(s->current.first_byte)) {
         case QUICLY_EPOCH_INITIAL:
         case QUICLY_EPOCH_HANDSHAKE:
-            error_code = QUICLY_TRANSPORT_ERROR_APPLICATION;
+            error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_APPLICATION);
             offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
             reason_phrase = "";
             break;
