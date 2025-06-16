@@ -4498,16 +4498,24 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
             commit_stream_frame(stream, sent, off_of_packet, s->dst - capacity_of_first_packet, capacity_of_first_packet, 0, 0);
             off_of_packet += capacity_of_first_packet;
             for (size_t i = 0; scattered_payload_lengths[i + 1] != 0; ++i) {
-                if ((ret = allocate_ack_eliciting_frame(stream->conn, s, 1, &sent, on_ack_stream)) != 0)
-                    return ret;
+                if ((ret = allocate_ack_eliciting_frame(stream->conn, s, 1, &sent, on_ack_stream)) != 0) {
+                    len = off_of_packet - off;
+                    wrote_all = 0;
+                    is_fin = 0;
+                    goto UpdateStreamState;
+                }
                 assert(s->dst == s->dst_payload_from && "scatter does not expect other frames");
                 s->dst = s->dst_end;
                 commit_stream_frame(stream, sent, off_of_packet, s->dst - scattered_payload_lengths[i],
                                     scattered_payload_lengths[i], 0, 0);
                 off_of_packet += scattered_payload_lengths[i];
             }
-            if ((ret = allocate_ack_eliciting_frame(stream->conn, s, 1, &sent, on_ack_stream)) != 0)
-                return ret;
+            if ((ret = allocate_ack_eliciting_frame(stream->conn, s, 1, &sent, on_ack_stream)) != 0) {
+                len = off_of_packet - off;
+                wrote_all = 0;
+                is_fin = 0;
+                goto UpdateStreamState;
+            }
             assert(s->dst == s->dst_payload_from && "scatter does not expect other frames");
         }
         /* determine if the frame incorporates FIN, set flags as necessary */
@@ -4527,10 +4535,11 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
         commit_stream_frame(stream, sent, off_of_packet, s->dst - data_len, data_len, wrote_all, is_fin);
     }
 
+UpdateStreamState:
     /* update stream sendstate */
     update_stream_sendstate(stream, off, len, is_fin, wrote_all);
 
-    return 0;
+    return ret;
 }
 
 static inline quicly_error_t init_acks_iter(quicly_conn_t *conn, quicly_sentmap_iter_t *iter)
