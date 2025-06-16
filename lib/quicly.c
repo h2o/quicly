@@ -4327,8 +4327,8 @@ static uint8_t *scatter_stream_payload(quicly_send_context_t *s, uint16_t datagr
         uint8_t len;
         uint8_t bytes[1 + 8 + 8 + 2];
     } frame_headers[extra_datagrams];
-    size_t num_scattered, stream_offset = stream_start + (s->dst_end - payload_start), stream_end = stream_start + *len,
-                          datagram_prefix_len = 1 /* header byte */ + s->dcid->len + QUICLY_SEND_PN_SIZE,
+    uint64_t stream_offset = stream_start + (s->dst_end - payload_start), stream_end = stream_start + *len;
+    size_t num_scattered, datagram_prefix_len = 1 /* header byte */ + s->dcid->len + QUICLY_SEND_PN_SIZE,
                           datagram_capacity = datagram_size - datagram_prefix_len - s->current.cipher->aead->algo->tag_size;
 
     /* build frame headers for the extra datagrams, calculating their offsets */
