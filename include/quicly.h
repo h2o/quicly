@@ -264,6 +264,10 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
+    uint8_t scone_supported : 1;
+    /**
+     *
+     */
     uint64_t active_connection_id_limit;
     /**
      *
