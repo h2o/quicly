@@ -73,6 +73,14 @@ extern "C" {
  * Draft-27 is also supported.
  */
 #define QUICLY_PROTOCOL_VERSION_DRAFT27 0xff00001b
+/**
+ *
+ */
+#define QUICLY_PROTOCOL_VERSION_SCONE1 0x53434f4e
+/**
+ *
+ */
+#define QUICLY_PROTOCOL_VERSION_SCONE2 0x4e4f4353
 
 #define QUICLY_PACKET_IS_INITIAL(first_byte) (((first_byte) & 0xf0) == 0xc0)
 

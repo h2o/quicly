@@ -415,6 +415,10 @@ struct st_quicly_conn_t {
          */
         uint8_t try_jumpstart : 1;
         /**
+         *
+         */
+        int64_t last_scone_sent_at;
+        /**
          * pending RETIRE_CONNECTION_ID frames to be sent
          */
         quicly_retire_cid_set_t retire_cid;
@@ -3879,6 +3883,17 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         PTLS_LOG_ELEMENT_UNSIGNED(first_octet, s->current.first_byte);
         PTLS_LOG_ELEMENT_HEXDUMP(dcid, s->dcid->cid, s->dcid->len);
     });
+
+    /* prepend a SCONE packet every 10 seconds, if the datagram being built is a short header packet */
+    if (!coalescible && !QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte) &&
+        conn->super.remote.transport_params.scone_supported && conn->egress.last_scone_sent_at + 10000 <= conn->stash.now) {
+        *s->dst++ = QUICLY_LONG_HEADER_BIT | QUICLY_QUIC_BIT | 0x3f;
+        s->dst = quicly_encode32(s->dst, QUICLY_PROTOCOL_VERSION_SCONE2);
+        *s->dst++ = s->dcid->len;
+        s->dst = emit_cid(s->dst, s->dcid);
+        *s->dst++ = conn->super.local.long_header_src_cid.len;
+        s->dst = emit_cid(s->dst, &conn->super.local.long_header_src_cid);
+    }
 
     /* emit header */
     s->target.first_byte_at = s->dst;
