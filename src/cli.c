@@ -1496,6 +1496,7 @@ int main(int argc, char **argv)
                                              {"calc-initial-secret", required_argument, NULL, 0},
                                              {"decrypt-packet", required_argument, NULL, 0},
                                              {"encrypt-packet", required_argument, NULL, 0},
+                                             {"scone", no_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1525,6 +1526,8 @@ int main(int argc, char **argv)
                 return cmd_encrypt_packet(0, optarg);
             } else if (strcmp(longopts[opt_index].name, "encrypt-packet") == 0) {
                 return cmd_encrypt_packet(1, optarg);
+            } else if (strcmp(longopts[opt_index].name, "scone") == 0) {
+                ctx.transport_params.scone_supported = 1;
             } else {
                 assert(!"unexpected longname");
             }
