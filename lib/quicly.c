@@ -721,10 +721,13 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
 
     assert(*off <= datagram_size);
 
-    packet->octets = ptls_iovec_init(src + *off, datagram_size - *off);
+    packet->scone = 127; /* initially, no limit */
+    packet->datagram_size = *off == 0 ? datagram_size : 0;
+
+ParseWithScone:
+    packet->octets = ptls_iovec_init(datagram + *off, datagram_size - *off);
     if (packet->octets.len < 2)
         goto Error;
-    packet->datagram_size = *off == 0 ? datagram_size : 0;
     packet->token = ptls_iovec_init(NULL, 0);
     packet->decrypted.pn = UINT64_MAX;
     packet->ecn = 0; /* non-ECT */
@@ -748,6 +751,13 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
             goto Error;
         packet->cid.src.base = (uint8_t *)src;
         src += packet->cid.src.len;
+        /* if the input is a SCONE packet, retain the values advance to the next packet */
+        if (ctx->transport_params.scone_supported && (packet->version == QUICLY_PROTOCOL_VERSION_SCONE1 ||
+                                                      packet->version == QUICLY_PROTOCOL_VERSION_SCONE2)) {
+            packet->scone = (packet->octets.base[0] & 0x3f) + 64 * (packet->version == QUICLY_PROTOCOL_VERSION_SCONE2);
+            *off = src - datagram;
+            goto ParseWithScone;
+        }
         switch (packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) {
         case QUICLY_PACKET_TYPE_INITIAL:
         case QUICLY_PACKET_TYPE_0RTT:

@@ -392,6 +392,35 @@ static void test_retry_aead(void)
     ptls_aead_free(retry_aead);
 }
 
+static void test_scone_decode(void)
+{
+    uint8_t datagram[] = {0xc5, 0x53, 0x43, 0x4f, 0x4e, 0x01, 0x02, 0x01, 0x03, 0x4f, 0xff};
+
+    int orig_scone_supported = quic_ctx.transport_params.scone_supported;
+    quic_ctx.transport_params.scone_supported = 1;
+
+    { /* when SCONE support is on, the decode function skips SCONE packets and returns the next QUIC packet, but reports the rate
+       * signal alongside that packet */
+        quicly_decoded_packet_t decoded;
+        size_t off = 0, decoded_len = quicly_decode_packet(&quic_ctx, &decoded, datagram, sizeof(datagram), &off);
+        ok(decoded_len == 2);
+        ok(decoded.scone == 0x05);
+        ok(decoded.octets.base == datagram + 9);
+        ok(decoded.octets.len == 2);
+    }
+
+    quic_ctx.transport_params.scone_supported = orig_scone_supported;
+
+    { /* when SCONE support is off, SCONE looks like a long header packet of unknown versions */
+        quicly_decoded_packet_t decoded;
+        size_t off = 0, decoded_len = quicly_decode_packet(&quic_ctx, &decoded, datagram, sizeof(datagram), &off);
+        ok(decoded_len == sizeof(datagram));
+        ok(decoded.scone == 127);
+        ok(decoded.octets.base == datagram);
+        ok(decoded.octets.len == sizeof(datagram));
+    }
+}
+
 static void test_transport_parameters(void)
 {
     quicly_transport_parameters_t decoded;
@@ -940,6 +969,7 @@ int main(int argc, char **argv)
     subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
+    subtest("decode-scone", test_scone_decode);
     subtest("transport-parameters", test_transport_parameters);
     subtest("cid", test_cid);
     subtest("simple", test_simple);

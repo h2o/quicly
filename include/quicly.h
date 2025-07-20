@@ -958,6 +958,10 @@ typedef struct st_quicly_decoded_packet_t {
      */
     uint8_t ecn : 2;
     /**
+     * scone bits
+     */
+    uint8_t scone : 7;
+    /**
      *
      */
     enum {
