@@ -3903,6 +3903,7 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         s->dst = emit_cid(s->dst, s->dcid);
         *s->dst++ = conn->super.local.long_header_src_cid.len;
         s->dst = emit_cid(s->dst, &conn->super.local.long_header_src_cid);
+        conn->egress.last_scone_sent_at = conn->stash.now;
     }
 
     /* emit header */
