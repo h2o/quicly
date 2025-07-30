@@ -732,10 +732,8 @@ ParseWithScone:
     packet->decrypted.pn = UINT64_MAX;
     packet->ecn = 0; /* non-ECT */
 
-    /* move the cursor to the second byte */
-    src += *off + 1;
-
-    if (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0])) {
+    src = packet->octets.base;
+    if (QUICLY_PACKET_IS_LONG_HEADER(*src++)) {
         /* long header */
         uint64_t rest_length;
         if (src_end - src < 5)
