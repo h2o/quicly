@@ -47,6 +47,7 @@ struct connection_t {
     } down_addr;
     uint64_t packet_num_up;
     uint64_t packet_num_down;
+    int64_t last_transmit_at;
 };
 
 struct queue_t {
@@ -156,7 +157,17 @@ static struct connection_t *find_or_create_connection(struct sockaddr *sa, sockl
     c->prev->next = c;
     c->packet_num_up = 0;
     c->packet_num_down = 0;
+    c->last_transmit_at = 0;
     return c;
+}
+
+static void destroy_connection(struct connection_t *c, int64_t now)
+{
+    fprintf(stderr, "%" PRId64 ":%zu:destroy\n", now, c->cid);
+    c->prev->next = c->next;
+    c->next->prev = c->prev;
+    close(c->up_fd);
+    free(c);
 }
 
 static void init_queue(struct queue_t *q)
@@ -174,14 +185,16 @@ static void dequeue(struct queue_t *q, int up, int64_t now)
         return;
     if (now < q->congested_until)
         return;
+
+    struct connection_t *conn = q->ring.elements[q->ring.head].conn;
     if (up) {
-        send(q->ring.elements[q->ring.head].conn->up_fd, q->ring.elements[q->ring.head].data, q->ring.elements[q->ring.head].len,
-             0);
+        send(conn->up_fd, q->ring.elements[q->ring.head].data, q->ring.elements[q->ring.head].len, 0);
     } else {
         sendto(listen_fd, q->ring.elements[q->ring.head].data, q->ring.elements[q->ring.head].len, 0,
                (void *)&q->ring.elements[q->ring.head].conn->down_addr.ss, q->ring.elements[q->ring.head].conn->down_addr.len);
     }
-    fprintf(stderr, "%" PRId64 ":%zu:%c:forward\n", now, q->ring.elements[q->ring.head].conn->cid, up ? 'u' : 'd');
+    conn->last_transmit_at = now;
+    fprintf(stderr, "%" PRId64 ":%zu:%c:forward\n", now, conn->cid, up ? 'u' : 'd');
     q->ring.head = (q->ring.head + 1) % q->ring.depth;
     if (q->ring.head == q->ring.tail) // empty queue
         return;
@@ -413,8 +426,8 @@ int main(int argc, char **argv)
             if (FD_ISSET(c->up_fd, &fds)) {
                 while (enqueue(&down, c, now))
                     ;
-            } else {
-                /* close idle connections */
+            } else if (c->last_transmit_at + 60 * 1000 < now) {
+                destroy_connection(c, now);
             }
         }
     }
