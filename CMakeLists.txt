@@ -61,6 +61,8 @@ SET(QUICLY_LIBRARY_FILES
     lib/remote_cid.c
     lib/retire_cid.c
     lib/sendstate.c
+    lib/ss-rfc2001.c
+    lib/ss-search.c
     lib/sentmap.c
     lib/streambuf.c
     ${CMAKE_CURRENT_BINARY_DIR}/quicly-tracer.h)

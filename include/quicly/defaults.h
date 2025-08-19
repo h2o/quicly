@@ -59,6 +59,7 @@ extern quicly_crypto_engine_t quicly_default_crypto_engine;
 
 #define quicly_default_cc quicly_cc_type_reno
 #define quicly_default_init_cc quicly_cc_reno_init
+#define quicly_default_ss quicly_ss_type_rfc2001
 
 #ifdef __cplusplus
 }
