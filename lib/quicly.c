@@ -139,9 +139,10 @@ struct st_quicly_pn_space_t {
      */
     uint32_t packet_tolerance;
     /**
-     * boolean indicating if reorder should NOT trigger an immediate ack
+     * maximum packet reordering before eliciting an immediate ACK.
+     * Zero disables immediate ACKS on out of order packets.
      */
-    uint8_t ignore_order;
+    uint32_t reordering_threshold;
 };
 
 struct st_quicly_handshake_space_t {
@@ -1535,7 +1536,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz, uint32_t packet_to
     for (size_t i = 0; i < PTLS_ELEMENTSOF(space->ecn_counts); ++i)
         space->ecn_counts[i] = 0;
     space->packet_tolerance = packet_tolerance;
-    space->ignore_order = 0;
+    space->reordering_threshold = 1;
     if (sz != sizeof(*space))
         memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
 
@@ -3924,7 +3925,7 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
                     if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
                         packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
                     s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
-                                                               conn->super.remote.transport_params.max_ack_delay * 1000, 0);
+                                                               conn->super.remote.transport_params.max_ack_delay * 1000, 1);
                     ++conn->super.stats.num_frames_sent.ack_frequency;
                 }
             }
@@ -6713,24 +6714,23 @@ static quicly_error_t handle_ack_frequency_frame(quicly_conn_t *conn, struct st_
         return ret;
 
     QUICLY_PROBE(ACK_FREQUENCY_RECEIVE, conn, conn->stash.now, frame.sequence, frame.packet_tolerance, frame.max_ack_delay,
-                 (int)frame.ignore_order, (int)frame.ignore_ce);
+                 frame.reordering_threshold);
     QUICLY_LOG_CONN(ack_frequency_receive, conn, {
         PTLS_LOG_ELEMENT_UNSIGNED(sequence, frame.sequence);
         PTLS_LOG_ELEMENT_UNSIGNED(packet_tolerance, frame.packet_tolerance);
         PTLS_LOG_ELEMENT_UNSIGNED(max_ack_delay, frame.max_ack_delay);
-        PTLS_LOG_ELEMENT_SIGNED(ignore_order, (int)frame.ignore_order);
-        PTLS_LOG_ELEMENT_SIGNED(ignore_ce, (int)frame.ignore_ce);
+        PTLS_LOG_ELEMENT_UNSIGNED(reordering_threshold, frame.reordering_threshold);
     });
 
     /* Reject Request Max Ack Delay below our TP.min_ack_delay (which is at the moment equal to LOCAL_MAX_ACK_DELAY). */
-    if (frame.max_ack_delay < QUICLY_LOCAL_MAX_ACK_DELAY * 1000)
+    if (frame.max_ack_delay < QUICLY_LOCAL_MAX_ACK_DELAY * 1000 || frame.max_ack_delay >= (1 << 14) * 1000)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     if (frame.sequence >= conn->ingress.ack_frequency.next_sequence) {
         conn->ingress.ack_frequency.next_sequence = frame.sequence + 1;
         conn->application->super.packet_tolerance =
             (uint32_t)(frame.packet_tolerance < QUICLY_MAX_PACKET_TOLERANCE ? frame.packet_tolerance : QUICLY_MAX_PACKET_TOLERANCE);
-        conn->application->super.ignore_order = frame.ignore_order;
+        conn->application->super.reordering_threshold = frame.reordering_threshold;
     }
 
     return 0;

@@ -60,6 +60,7 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_DATAGRAM_NOLEN 48
 #define QUICLY_FRAME_TYPE_DATAGRAM_WITHLEN 49
 #define QUICLY_FRAME_TYPE_ACK_FREQUENCY 0xaf
+#define QUICLY_FRAME_TYPE_IMMEDIATE_ACK 0x1f
 
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
 #define QUICLY_FRAME_TYPE_STREAM_BIT_OFF 0x4
@@ -278,16 +279,11 @@ typedef struct st_quicly_ack_frequency_frame_t {
     uint64_t sequence;
     uint64_t packet_tolerance;
     uint64_t max_ack_delay;
-    uint8_t ignore_order : 1;
-    uint8_t ignore_ce : 1;
+    uint64_t reordering_threshold;
 } quicly_ack_frequency_frame_t;
 
-#define QUICLY_ACK_FREQUENCY_IGNORE_ORDER_BIT 1
-#define QUICLY_ACK_FREQUENCY_IGNORE_CE_BIT 2
-#define QUICLY_ACK_FREQUENCY_ALL_BITS (QUICLY_ACK_FREQUENCY_IGNORE_ORDER_BIT | QUICLY_ACK_FREQUENCY_IGNORE_CE_BIT)
-
 static uint8_t *quicly_encode_ack_frequency_frame(uint8_t *dst, uint64_t sequence, uint64_t packet_tolerance,
-                                                  uint64_t max_ack_delay, int ignore_order);
+                                                  uint64_t max_ack_delay, uint64_t reordering_threshold);
 static quicly_error_t quicly_decode_ack_frequency_frame(const uint8_t **src, const uint8_t *end,
                                                         quicly_ack_frequency_frame_t *frame);
 
@@ -802,13 +798,13 @@ Error:
 }
 
 inline uint8_t *quicly_encode_ack_frequency_frame(uint8_t *dst, uint64_t sequence, uint64_t packet_tolerance,
-                                                  uint64_t max_ack_delay, int ignore_order)
+                                                  uint64_t max_ack_delay, uint64_t reordering_threshold)
 {
     dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_ACK_FREQUENCY);
     dst = quicly_encodev(dst, sequence);
     dst = quicly_encodev(dst, packet_tolerance);
     dst = quicly_encodev(dst, max_ack_delay);
-    *dst++ = ignore_order ? QUICLY_ACK_FREQUENCY_IGNORE_ORDER_BIT : 0;
+    dst = quicly_encodev(dst, reordering_threshold);
     return dst;
 }
 
@@ -821,13 +817,8 @@ inline quicly_error_t quicly_decode_ack_frequency_frame(const uint8_t **src, con
         goto Error;
     if ((frame->max_ack_delay = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if (*src == end)
+    if ((frame->reordering_threshold = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if ((**src & ~QUICLY_ACK_FREQUENCY_ALL_BITS) != 0)
-        goto Error;
-    frame->ignore_order = (**src & QUICLY_ACK_FREQUENCY_IGNORE_ORDER_BIT) != 0;
-    frame->ignore_ce = (**src & QUICLY_ACK_FREQUENCY_IGNORE_CE_BIT) != 0;
-    ++*src;
     return 0;
 
 Error:
