@@ -2450,10 +2450,6 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
-                if (params->min_ack_delay_usec >= 16777216) { /* "values of 2^24 or greater are invalid" */
-                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
-                    goto Exit;
-                }
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT, {
                 uint64_t v;
