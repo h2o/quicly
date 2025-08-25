@@ -6732,6 +6732,15 @@ static quicly_error_t handle_ack_frequency_frame(quicly_conn_t *conn, struct st_
     return 0;
 }
 
+static quicly_error_t handle_immediate_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    /* recognize the frame only when the support has been advertised */
+    if (conn->super.ctx->transport_params.min_ack_delay_usec == UINT64_MAX)
+        return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+    conn->egress.send_ack_at = conn->stash.now;
+    return 0;
+}
+
 static quicly_error_t handle_payload(quicly_conn_t *conn, size_t epoch, size_t path_index, const uint8_t *_src, size_t _len,
                                      uint64_t *offending_frame_type, int *is_ack_only, int *is_probe_only)
 {
@@ -6790,6 +6799,7 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t epoch, size_t p
         FRAME( transport_close      ,  1 ,  1 ,  1 ,  1 ,             0 ,       0 ),
         FRAME( application_close    ,  0 ,  1 ,  0 ,  1 ,             0 ,       0 ),
         FRAME( handshake_done       ,  0,   0 ,  0 ,  1 ,             1 ,       0 ),
+        FRAME( immediate_ack        ,  0,   0 ,  0 ,  1 ,             1 ,       0 ),
         /*   +----------------------+----+----+----+----+---------------+---------+ */
 #undef FRAME
     };
