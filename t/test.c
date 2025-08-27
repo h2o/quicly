@@ -27,6 +27,9 @@
 #include <openssl/engine.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/provider.h>
+#endif
 #include "picotls.h"
 #include "picotls/openssl.h"
 #include "quicly.h"
@@ -899,7 +902,10 @@ int main(int argc, char **argv)
 
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
-#if !defined(OPENSSL_NO_ENGINE)
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+    /* Explicitly load the legacy provider in addition to default, as we test Blowfish in one of the tests. */
+    OSSL_PROVIDER *dflt = OSSL_PROVIDER_load(NULL, "default");
+#elif !defined(OPENSSL_NO_ENGINE)
     /* Load all compiled-in ENGINEs */
     ENGINE_load_builtin_engines();
     ENGINE_register_all_ciphers();
@@ -953,5 +959,8 @@ int main(int argc, char **argv)
 
     subtest("migration-during-handshake", test_migration_during_handshake);
 
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+    OSSL_PROVIDER_unload(dflt);
+#endif
     return done_testing();
 }
