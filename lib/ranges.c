@@ -201,3 +201,18 @@ int quicly_ranges_subtract(quicly_ranges_t *ranges, uint64_t start, uint64_t end
 
     return 0;
 }
+
+uint64_t quicly_ranges_next_missing(quicly_ranges_t *ranges, uint64_t lower_bound)
+{
+    size_t slot;
+    for (slot = 0; slot < ranges->num_ranges; ++slot) {
+        if (slot != 0 && ranges->ranges[slot].start > lower_bound && lower_bound > ranges->ranges[slot - 1].end) {
+            return lower_bound;
+        }
+        if (ranges->ranges[slot].end >= lower_bound) {
+            return ranges->ranges[slot].end;
+        }
+    }
+
+    return lower_bound;
+}
