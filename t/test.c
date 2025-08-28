@@ -618,7 +618,7 @@ static void do_test_record_receipt(size_t epoch)
 
     /* if 1-RTT, test ignore-order */
     if (epoch == QUICLY_EPOCH_1RTT) {
-        space->ignore_order = 1;
+        space->reordering_threshold = 0;
         pn++; /* gap */
         ok(record_receipt(space, pn++, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
         ok(send_ack_at == now + QUICLY_DELAYED_ACK_TIMEOUT);
@@ -631,10 +631,227 @@ static void do_test_record_receipt(size_t epoch)
     do_free_pn_space(space);
 }
 
+static void do_test_ack_frequency_ack_logic()
+{
+    struct st_case_row_t {
+        uint64_t packet_number;
+        uint8_t send_ack;
+        uint64_t expected_smallest_unreported_missing_after_receipt;
+    };
+
+    struct st_test_case {
+        const struct st_case_row_t *rows;
+        size_t rows_count;
+        uint8_t reordering_threshold;
+        uint32_t packet_tolerance;
+    };
+
+    // From example 1 at https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.2.1
+    // clang-format off
+    const struct st_case_row_t example1_rows[] = {
+        {0,  0, 1},
+        {1,  0, 2},
+        {3,  0, 2},
+        {4,  0, 2},
+        {5,  1, 6},
+        {8,  0, 6},
+        {9,  1, 7},
+        {10, 1, 11},
+    };
+    // clang-format on
+    const struct st_test_case example1 = {
+        .rows = example1_rows,
+        .rows_count = PTLS_ELEMENTSOF(example1_rows),
+        .reordering_threshold = 3,
+        .packet_tolerance = 100,
+    };
+
+    // From example 1 at https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.2.1
+    // clang-format off
+    const struct st_case_row_t example2_rows[] = {
+        {0, 0, 1},
+        {1, 0, 2},
+        {3, 0, 2},
+        {5, 0, 2},
+        {6, 0, 2},
+        {7, 1, 4},
+        {8, 0, 4},
+        {9, 1, 10},
+    };
+    // clang-format on
+    const struct st_test_case example2 = {
+        .rows = example2_rows,
+        .rows_count = PTLS_ELEMENTSOF(example2_rows),
+        .reordering_threshold = 5,
+        .packet_tolerance = 100,
+    };
+
+    // Disable reorder threshold, test packet tolerance
+    // clang-format off
+    const struct st_case_row_t test_case_1_rows[] = {
+        // smallest unreported is 0 because reordering threshold is set to 0
+        {1,  0, 0},  // No ack yet (reordering_threshold = 0, so no immediate ack for reordering)
+        {2,  1, 0},  // Ack because we've seen 2 packets
+        {3,  0, 0},  // No ack yet
+        {4,  1, 0},  // Ack because we've seen 2 packets
+        {5,  0, 0},  // ...
+        {6,  1, 0},
+        {7,  0, 0},
+        {8,  1, 0},
+        {9,  0, 0},
+    };
+    // clang-format on
+    const struct st_test_case test_case_1 = {
+        .rows = test_case_1_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_1_rows),
+        .reordering_threshold = 0,
+        .packet_tolerance = 2,
+    };
+
+    // Test reordered packets
+    // clang-format off
+    const struct st_case_row_t test_case_2_rows[] = {
+        {0, 0, 1},
+        {1, 0, 2},
+        {3, 1, 2}, // Ack because we've seen 3 packets
+        {2, 0, 4}, // No ack because 2 was never considered lost
+        {4, 0, 5},
+        {5, 1, 6}, // Ack because we've seen 3 more packets
+    };
+    // clang-format on
+    const struct st_test_case test_case_2 = {
+        .rows = test_case_2_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_2_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 3,
+    };
+
+    // Test a declared lost packet is received
+    // clang-format off
+    const struct st_case_row_t test_case_3_rows[] = {
+        {0, 0, 1},
+        {1, 0, 2},
+        {3, 1, 2}, // Ack because we've seen 3 packets
+        {4, 1, 5}, // Ack because 2 is now declared lost
+        {2, 1, 5}, // Ack because 2 was received (change outside the reordering window)
+        {5, 0, 6},
+    };
+    // clang-format on
+    const struct st_test_case test_case_3 = {
+        .rows = test_case_3_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_3_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 3,
+    };
+
+    // Test 0 is lost
+    // clang-format off
+    const struct st_case_row_t test_case_4_rows[] = {
+        {1, 0, 0},
+        {2, 0, 0},
+        {3, 1, 4}, // Ack because 0 is now declared lost
+        {0, 1, 4}, // Ack because 0 was received (change outside the reordering window)
+    };
+    // clang-format on
+    const struct st_test_case test_case_4 = {
+        .rows = test_case_4_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_4_rows),
+        .reordering_threshold = 3,
+        .packet_tolerance = 100,
+    };
+
+    // Test larget packet tolerance and reordering threshold
+    // Skipped 0
+    // clang-format off
+    const struct st_case_row_t test_case_5_rows[] = {
+        {1, 0, 0},
+        {2, 0, 0},
+        {3, 0, 0},
+        {4, 0, 0},
+        {5, 0, 0},
+        {6, 0, 0},
+        {7, 0, 0},
+        {8, 0, 0},
+        {9, 0, 0},
+    };
+    // clang-format on
+    const struct st_test_case test_case_5 = {
+        .rows = test_case_5_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_5_rows),
+        .reordering_threshold = 20,
+        .packet_tolerance = 20,
+    };
+
+    // ack every packet
+    // clang-format off
+    const struct st_case_row_t test_case_6_rows[] = {
+        {0, 1, 0},
+        {1, 1, 0},
+        {2, 1, 0},
+        {3, 1, 0},
+        {4, 1, 0},
+        {5, 1, 0},
+        {6, 1, 0},
+        {7, 1, 0},
+        {8, 1, 0},
+        {9, 1, 0},
+    };
+    // clang-format on
+    const struct st_test_case test_case_6 = {
+        .rows = test_case_6_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_6_rows),
+        .reordering_threshold = 0,
+        .packet_tolerance = 0,
+    };
+
+    // clang-format off
+    struct st_test_case test_cases[] = {
+        example1,
+        example2,
+        test_case_1,
+        test_case_2,
+        test_case_3,
+        test_case_4,
+        test_case_5,
+        test_case_6,
+    };
+    // clang-format on
+
+    for (int i = 0; i < PTLS_ELEMENTSOF(test_cases); ++i) {
+        int64_t now = 12345;
+        uint64_t out_of_order_cnt = 0;
+        int64_t send_ack_at = INT64_MAX;
+
+        struct st_quicly_pn_space_t *space = alloc_pn_space(sizeof(*space), QUICLY_DEFAULT_PACKET_TOLERANCE);
+        space->reordering_threshold = test_cases[i].reordering_threshold;
+        space->packet_tolerance = test_cases[i].packet_tolerance;
+
+        for (int row_idx = 0; row_idx < test_cases[i].rows_count; ++row_idx) {
+            struct st_case_row_t row = test_cases[i].rows[row_idx];
+
+            ok(record_receipt(space, row.packet_number, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
+
+            if (row.send_ack) {
+                ok(send_ack_at == now);
+                now += 1;
+                send_ack_at = INT64_MAX;
+                space->unacked_count = 0;
+            } else {
+                ok(send_ack_at == now + QUICLY_DELAYED_ACK_TIMEOUT);
+            }
+
+            ok(row.expected_smallest_unreported_missing_after_receipt == space->smallest_unreported_missing);
+        }
+
+        do_free_pn_space(space);
+    }
+}
+
 static void test_record_receipt(void)
 {
     do_test_record_receipt(QUICLY_EPOCH_INITIAL);
     do_test_record_receipt(QUICLY_EPOCH_1RTT);
+    do_test_ack_frequency_ack_logic();
 }
 
 static void test_cid(void)
