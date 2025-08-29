@@ -5461,10 +5461,19 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if (min_packets_to_send != 0) {
                     if ((ret = do_allocate_frame(conn, s, 1, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
                         goto Exit;
-                    *s->dst++ = QUICLY_FRAME_TYPE_PING;
-                    ++conn->super.stats.num_frames_sent.ping;
-                    QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
-                    QUICLY_LOG_CONN(ping_send, conn, {});
+
+                    if (get_epoch(s->current.first_byte) != QUICLY_EPOCH_1RTT ||
+                        conn->super.remote.transport_params.min_ack_delay_usec == UINT64_MAX) {
+                        *s->dst++ = QUICLY_FRAME_TYPE_PING;
+                        ++conn->super.stats.num_frames_sent.ping;
+                        QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
+                        QUICLY_LOG_CONN(ping_send, conn, {});
+                    } else {
+                        *s->dst++ = QUICLY_FRAME_TYPE_IMMEDIATE_ACK;
+                        ++conn->super.stats.num_frames_sent.immediate_ack;
+                        QUICLY_PROBE(IMMEDIATE_ACK_SEND, conn, conn->stash.now);
+                        QUICLY_LOG_CONN(immediate_ack_send, conn, {});
+                    }
                 }
                 /* take actions only permitted for short header packets */
                 if (conn->application->one_rtt_writable) {
