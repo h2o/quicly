@@ -3968,8 +3968,15 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
                     uint32_t packet_tolerance = fraction_of_cwnd / conn->egress.max_udp_payload_size;
                     if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
                         packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
+
+                    uint64_t reordering_threshold = 1;
+                    if (conn->egress.loss.thresholds.use_packet_based) {
+                        reordering_threshold = QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD;
+                    }
+
                     s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
-                                                               conn->super.remote.transport_params.max_ack_delay * 1000, 1);
+                                                               conn->super.remote.transport_params.max_ack_delay * 1000,
+                                                               reordering_threshold);
                     ++conn->super.stats.num_frames_sent.ack_frequency;
                 }
             }
