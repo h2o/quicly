@@ -3966,6 +3966,7 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         if (frame_type == ALLOCATE_FRAME_TYPE_ACK_ELICITING && conn->stash.now >= conn->egress.ack_frequency.update_at &&
             s->dst_end - s->dst >= max_size_ack_frequency_frame + min_space) {
             assert(conn->super.remote.transport_params.min_ack_delay_usec != UINT64_MAX);
+            // Question: why do we only do this after QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE cw reductions?
             if (conn->egress.cc.num_loss_episodes >= QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE && conn->initial == NULL &&
                 conn->handshake == NULL) {
                 uint32_t fraction_of_cwnd = (uint32_t)((uint64_t)conn->egress.cc.cwnd * conn->super.ctx->ack_frequency / 1024);
@@ -3979,6 +3980,11 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
                         reordering_threshold = QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD;
                     }
 
+                    /* Question: Do we want to move scheduling/sending of ack frequency frames out of this function? */
+                    /* TODO: register an ack callback for the ack frequency frame.
+                     * We don't have a way to handle the ack of the ack_frequency frame */
+                    /* TODO: support sending a different max_ack_delay (change to <RTT). This requires updating the remote's
+                     * max_ack_delay everywhere. */
                     s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
                                                                conn->super.remote.transport_params.max_ack_delay * 1000,
                                                                reordering_threshold);
@@ -6790,6 +6796,10 @@ static quicly_error_t handle_ack_frequency_frame(quicly_conn_t *conn, struct st_
     /* Reject Request Max Ack Delay below our TP.min_ack_delay (which is at the moment equal to LOCAL_MAX_ACK_DELAY). */
     if (frame.max_ack_delay < QUICLY_LOCAL_MAX_ACK_DELAY * 1000 || frame.max_ack_delay >= (1 << 14) * 1000)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
+    // TODO: use received frame.max_ack_delay. We currently use a constant (25 ms) and
+    // ignore the value set our our transport parameter (see max_ack_delay field comment).
+    // Is there a reason for this?
 
     if (frame.sequence >= conn->ingress.ack_frequency.next_sequence) {
         conn->ingress.ack_frequency.next_sequence = frame.sequence + 1;
