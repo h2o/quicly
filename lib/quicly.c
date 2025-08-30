@@ -6821,6 +6821,9 @@ static quicly_error_t handle_ack_frequency_frame(quicly_conn_t *conn, struct st_
     if (frame.max_ack_delay < QUICLY_LOCAL_MAX_ACK_DELAY * 1000 || frame.max_ack_delay >= (1 << 14) * 1000)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
+    // TODO: use received frame.max_ack_delay. We currently use a constant (25 ms) and
+    // ignore the value set by our transport parameter (see max_ack_delay field comment).
+
     if (frame.sequence >= conn->ingress.ack_frequency.next_sequence) {
         conn->ingress.ack_frequency.next_sequence = frame.sequence + 1;
         conn->application->super.packet_tolerance =
