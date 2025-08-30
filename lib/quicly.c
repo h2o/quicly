@@ -130,6 +130,11 @@ struct st_quicly_pn_space_t {
      * number of ACK-eliciting packets that have not been ACKed yet
      */
     uint32_t unacked_count;
+
+    /**
+     * The previously received packet's ecn value
+     */
+    uint8_t prior_ecn : 2;
     /**
      * ECN in the order of ECT(0), ECT(1), CE
      */
@@ -1538,6 +1543,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz, uint32_t packet_to
     space->largest_pn_received_at = INT64_MAX;
     space->next_expected_packet_number = 0;
     space->unacked_count = 0;
+    space->prior_ecn = 0;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(space->ecn_counts); ++i)
         space->ecn_counts[i] = 0;
     space->packet_tolerance = packet_tolerance;
@@ -1630,8 +1636,10 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
         // Keep previous code paths when using RFC 9000 reordering_threshold.
         ack_now = !is_ack_only && (is_out_of_order || ecn == IPTOS_ECN_CE);
     } else {
-        ack_now = change_outside_reorder_window(&space->ack_queue, &space->smallest_unreported_missing, pn, space->reordering_threshold) ||
-            (!is_ack_only && ecn == IPTOS_ECN_CE);
+        ack_now =
+            change_outside_reorder_window(&space->ack_queue, &space->smallest_unreported_missing, pn, space->reordering_threshold);
+        // https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.4-1
+        ack_now = ack_now || (ecn == IPTOS_ECN_CE && space->prior_ecn != IPTOS_ECN_CE);
     }
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
@@ -1655,6 +1663,7 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
         *send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
+    space->prior_ecn = ecn;
     ret = 0;
 Exit:
     return ret;
