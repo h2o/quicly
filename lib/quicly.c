@@ -3149,7 +3149,7 @@ static quicly_error_t on_ack_stream_ack_cached(quicly_conn_t *conn)
     if (conn->stash.on_ack_stream.active_acked_cache.stream_id == INT64_MIN)
         return 0;
     quicly_error_t ret = on_ack_stream_ack_one(conn, conn->stash.on_ack_stream.active_acked_cache.stream_id,
-                                        &conn->stash.on_ack_stream.active_acked_cache.args);
+                                               &conn->stash.on_ack_stream.active_acked_cache.args);
     conn->stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
     return ret;
 }
