@@ -854,6 +854,83 @@ static void test_record_receipt(void)
     do_test_ack_frequency_ack_logic();
 }
 
+static void test_ack_frequency(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_stream_t *client_stream, *server_stream;
+    quicly_error_t ret;
+
+    quicly_context_t ctx = quic_ctx;
+    ctx.ack_frequency = 1024; // every rtt
+
+    { /* connect */
+        quicly_address_t dest, src;
+        struct iovec raw;
+        uint8_t rawbuf[quic_ctx.transport_params.max_udp_payload_size];
+        size_t num_packets;
+        quicly_decoded_packet_t decoded;
+
+        ret = quicly_connect(&client, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                             NULL, NULL);
+        ok(ret == 0);
+        num_packets = 1;
+        ret = quicly_send(client, &dest, &src, &raw, &num_packets, rawbuf, sizeof(rawbuf));
+        ok(ret == 0);
+        ok(num_packets == 1);
+        ok(decode_packets(&decoded, &raw, 1) == 1);
+        ok(num_packets == 1);
+        ret = quicly_accept(&server, &ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL, NULL);
+        ok(ret == 0);
+        transmit(server, client);
+    }
+
+    ret = quicly_open_stream(client, &client_stream, 0);
+    assert(ret == 0);
+    ret = quicly_streambuf_egress_write(client_stream, "hello", 5);
+    assert(ret == 0);
+
+    transmit(client, server);
+    transmit(server, client);
+
+    /* reset one stream in both directions and close on the client-side */
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+
+    // Set some losses to trigger ack frequency path
+    server->egress.cc.num_loss_episodes = 5;
+    client->egress.cc.num_loss_episodes = 5;
+
+    ok(server->application->super.reordering_threshold == 1);
+    ok(client->application->super.reordering_threshold == 1);
+
+    const char *testdata = "hello";
+    const int testdata_len = strlen(testdata);
+
+    const int steps = 80;
+    for (int i = 0; i < steps; i++) {
+        quicly_stream_t *s = server_stream;
+        if (i > steps / 2)
+            s = client_stream;
+
+        ret = quicly_streambuf_egress_write(s, testdata, testdata_len);
+        assert(ret == 0);
+
+        ptls_iovec_t buf = quicly_streambuf_ingress_get(s);
+        quicly_streambuf_ingress_shift(s, buf.len);
+
+        transmit(server, client);
+        transmit(client, server);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    }
+
+    // Both sides have updated their reordering thresholds
+    ok(server->application->super.reordering_threshold == 3);
+    ok(client->application->super.reordering_threshold == 3);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_cid(void)
 {
     subtest("received cid", test_received_cid);
@@ -1143,6 +1220,7 @@ int main(int argc, char **argv)
 
     quicly_amend_ptls_context(quic_ctx.tls);
 
+    subtest("ack_frequency_handling", test_ack_frequency);
     subtest("error-codes", test_error_codes);
     subtest("next-packet-number", test_next_packet_number);
     subtest("address-token-codec", test_address_token_codec);
