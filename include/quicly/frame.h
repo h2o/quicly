@@ -813,7 +813,7 @@ inline quicly_error_t quicly_decode_ack_frequency_frame(const uint8_t **src, con
 {
     if ((frame->sequence = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    if ((frame->packet_tolerance = quicly_decodev(src, end)) == UINT64_MAX || frame->packet_tolerance == 0)
+    if ((frame->packet_tolerance = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
     if ((frame->max_ack_delay = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
