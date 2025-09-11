@@ -3980,14 +3980,22 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
                     if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
                         packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
 
+                    uint64_t max_ack_delay =
+                        1000 * (uint64_t)conn->egress.loss.rtt.minimum * (uint64_t)conn->super.ctx->ack_frequency / 1024;
+                    if (max_ack_delay >= (1 << 14) * 1000) {
+                        max_ack_delay = (uint64_t)conn->super.remote.transport_params.max_ack_delay * 1000;
+                    } else if (max_ack_delay < conn->super.remote.transport_params.min_ack_delay_usec) {
+                        max_ack_delay = conn->super.remote.transport_params.min_ack_delay_usec;
+                    }
+
                     uint64_t reordering_threshold = 1;
                     if (conn->egress.loss.thresholds.use_packet_based) {
                         reordering_threshold = QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD;
                     }
 
+                    /* TODO: Adjust the max_ack_delay we use for loss recovery to be consistent with this value */
                     s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
-                                                               conn->super.remote.transport_params.max_ack_delay * 1000,
-                                                               reordering_threshold);
+                                                               max_ack_delay, reordering_threshold);
                     ++conn->super.stats.num_frames_sent.ack_frequency;
                 }
             }
