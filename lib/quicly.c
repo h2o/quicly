@@ -150,6 +150,12 @@ struct st_quicly_pn_space_t {
     uint32_t reordering_threshold;
 
     /**
+     * largest unacked ack-eliciting packet number.
+     * After sending an ack this remains the same and represents the last
+     * largest unacked ack-eliciting packet number.
+     */
+    uint64_t largest_unacked;
+    /**
      * smallest missing packet number within the packet reordering window.
      */
     uint64_t smallest_unreported_missing;
@@ -1548,6 +1554,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz, uint32_t packet_to
         space->ecn_counts[i] = 0;
     space->packet_tolerance = packet_tolerance;
     space->reordering_threshold = 1;
+    space->largest_unacked = 0;
     space->smallest_unreported_missing = 0;
     if (sz != sizeof(*space))
         memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
@@ -1561,29 +1568,28 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
-static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t *smallest_unreported_missing, uint64_t received_pn,
-                                         uint32_t reordering_threshold)
+static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t largest_unacked, uint64_t *smallest_unreported_missing,
+                                         uint64_t received_pn, uint32_t reordering_threshold)
 {
     if (ranges->num_ranges == 0 || reordering_threshold == 0)
         return 0;
 
     uint64_t prev_smallest_unreported_missing = *smallest_unreported_missing;
-    uint64_t largest_pn = ranges->ranges[ranges->num_ranges - 1].end - 1;
     size_t slots_traversed_for_next_missing = 0;
 
     if (received_pn == prev_smallest_unreported_missing) {
-        if (received_pn == largest_pn) {
+        if (received_pn == largest_unacked) {
             // fast path
-            *smallest_unreported_missing = largest_pn + 1;
+            *smallest_unreported_missing = largest_unacked + 1;
         } else {
             *smallest_unreported_missing = quicly_ranges_next_missing(ranges, received_pn + 1, &slots_traversed_for_next_missing);
         }
     }
 
-    if (largest_pn < reordering_threshold)
+    if (largest_unacked < reordering_threshold)
         return 0;
 
-    uint64_t largest_pn_outside_reorder_window = largest_pn - (uint64_t)reordering_threshold;
+    uint64_t largest_pn_outside_reorder_window = largest_unacked - (uint64_t)reordering_threshold;
 
     if (*smallest_unreported_missing <= largest_pn_outside_reorder_window)
         *smallest_unreported_missing =
@@ -1631,13 +1637,15 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
         goto Exit;
     if (is_out_of_order)
         *received_out_of_order += 1;
+    if (!is_ack_only && space->largest_unacked < pn)
+        space->largest_unacked = pn;
 
     if (space->reordering_threshold == 1) {
         // Keep previous code paths when using RFC 9000 reordering_threshold.
         ack_now = !is_ack_only && (is_out_of_order || ecn == IPTOS_ECN_CE);
     } else {
-        ack_now =
-            change_outside_reorder_window(&space->ack_queue, &space->smallest_unreported_missing, pn, space->reordering_threshold);
+        ack_now = change_outside_reorder_window(&space->ack_queue, space->largest_unacked, &space->smallest_unreported_missing, pn,
+                                                space->reordering_threshold);
         // https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.4-1
         ack_now = ack_now || (ecn == IPTOS_ECN_CE && space->prior_ecn != IPTOS_ECN_CE);
     }
@@ -6812,7 +6820,7 @@ static quicly_error_t handle_ack_frequency_frame(quicly_conn_t *conn, struct st_
         conn->application->super.reordering_threshold = frame.reordering_threshold;
         if (conn->application->super.ack_queue.num_ranges > 0) {
             quicly_ranges_t *r = &conn->application->super.ack_queue;
-            uint64_t largest_pn = r->ranges[r->num_ranges - 1].end - 1;
+            uint64_t largest_pn = conn->application->super.largest_unacked;
             if (largest_pn > frame.reordering_threshold)
                 conn->application->super.smallest_unreported_missing =
                     quicly_ranges_next_missing(r, (largest_pn - frame.reordering_threshold) + 1, NULL);
