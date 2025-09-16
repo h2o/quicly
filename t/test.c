@@ -689,16 +689,16 @@ static void do_test_ack_frequency_ack_logic()
     // Disable reorder threshold, test packet tolerance
     // clang-format off
     const struct st_case_row_t test_case_1_rows[] = {
-        // smallest unreported is 0 because reordering threshold is set to 0
-        {1,  0, 0},  // No ack yet (reordering_threshold = 0, so no immediate ack for reordering)
-        {2,  1, 0},  // Ack because we've seen 2 packets
-        {3,  0, 0},  // No ack yet
-        {4,  1, 0},  // Ack because we've seen 2 packets
-        {5,  0, 0},  // ...
-        {6,  1, 0},
-        {7,  0, 0},
-        {8,  1, 0},
-        {9,  0, 0},
+        // smallest unreported is n+1 because reordering threshold is set to 0
+        {1,  0, 2},  // No ack yet (reordering_threshold = 0, so no immediate ack for reordering)
+        {2,  1, 3},  // Ack because we've seen 2 packets
+        {3,  0, 4},  // No ack yet
+        {4,  1, 5},  // Ack because we've seen 2 packets
+        {5,  0, 6},  // ...
+        {6,  1, 7},
+        {7,  0, 8},
+        {8,  1, 9},
+        {9,  0, 10},
     };
     // clang-format on
     const struct st_test_case test_case_1 = {
@@ -785,16 +785,16 @@ static void do_test_ack_frequency_ack_logic()
     // ack every packet
     // clang-format off
     const struct st_case_row_t test_case_6_rows[] = {
-        {0, 1, 0},
-        {1, 1, 0},
-        {2, 1, 0},
-        {3, 1, 0},
-        {4, 1, 0},
-        {5, 1, 0},
-        {6, 1, 0},
-        {7, 1, 0},
-        {8, 1, 0},
-        {9, 1, 0},
+        {0, 1, 1},
+        {1, 1, 2},
+        {2, 1, 3},
+        {3, 1, 4},
+        {4, 1, 5},
+        {5, 1, 6},
+        {6, 1, 7},
+        {7, 1, 8},
+        {8, 1, 9},
+        {9, 1, 10},
     };
     // clang-format on
     const struct st_test_case test_case_6 = {
