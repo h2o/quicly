@@ -150,11 +150,9 @@ struct st_quicly_pn_space_t {
     uint32_t reordering_threshold;
 
     /**
-     * largest unacked ack-eliciting packet number.
-     * After sending an ack this remains the same and represents the last
-     * largest unacked ack-eliciting packet number.
+     * max(acked packet number, unacked ack-eliciting packet number).
      */
-    uint64_t largest_unacked;
+    uint64_t largest_acked_unacked;
     /**
      * smallest missing packet number within the packet reordering window.
      */
@@ -1554,7 +1552,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz, uint32_t packet_to
         space->ecn_counts[i] = 0;
     space->packet_tolerance = packet_tolerance;
     space->reordering_threshold = 1;
-    space->largest_unacked = 0;
+    space->largest_acked_unacked = 0;
     space->smallest_unreported_missing = 0;
     if (sz != sizeof(*space))
         memset((uint8_t *)space + sizeof(*space), 0, sz - sizeof(*space));
@@ -1568,8 +1566,34 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
     free(space);
 }
 
-static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t largest_unacked, uint64_t *smallest_unreported_missing,
-                                         uint64_t received_pn, uint32_t reordering_threshold)
+static void update_smallest_unreported_missing_on_send_ack(quicly_ranges_t *ranges, uint64_t *largest_acked_unacked,
+                                                           uint64_t *smallest_unreported_missing, uint32_t reordering_threshold)
+{
+    /* as an ack is not sent if num_ranges == 0 */
+    assert(ranges->num_ranges != 0);
+    uint64_t largest_acked = ranges->ranges[ranges->num_ranges - 1].end - 1;
+    if (largest_acked <= *largest_acked_unacked)
+        return;
+    *largest_acked_unacked = largest_acked;
+
+    if (reordering_threshold == 0 || reordering_threshold == 1) {
+        /* for these cases simply set the smallest_unreported missing to the
+         * next expected packet number.
+         * When reordering_threshold is 0, smallest_unreported_missing isn't
+         * used, but it's convenient to keep
+         * its state consistent if the reordering_threshold changes. */
+        *smallest_unreported_missing = largest_acked + 1;
+        return;
+    }
+    uint64_t largest_pn_outside_reorder_window = largest_acked - (uint64_t)reordering_threshold;
+    if (largest_pn_outside_reorder_window >= *smallest_unreported_missing) {
+        *smallest_unreported_missing = quicly_ranges_next_missing(ranges, largest_pn_outside_reorder_window + 1, NULL);
+    }
+}
+
+static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t largest_acked_unacked,
+                                         uint64_t *smallest_unreported_missing, uint64_t received_pn,
+                                         uint32_t reordering_threshold)
 {
     /* as this function is called after `record_pn`, `received_pn` will be registered */
     assert(ranges->num_ranges != 0);
@@ -1577,7 +1601,7 @@ static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t large
         /* We don't use this when the reordering_threshold is 0, but by
          * maintaining it, we avoid having to do extra work if the
          * reordering_threshold changes. */
-        *smallest_unreported_missing = largest_unacked + 1;
+        *smallest_unreported_missing = largest_acked_unacked + 1;
         return 0;
     }
 
@@ -1585,18 +1609,18 @@ static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t large
     size_t slots_traversed_for_next_missing = 0;
 
     if (received_pn == prev_smallest_unreported_missing) {
-        if (received_pn == largest_unacked) {
-            // fast path
-            *smallest_unreported_missing = largest_unacked + 1;
+        if (received_pn == largest_acked_unacked) {
+            // fast path. We received the packets in order.
+            *smallest_unreported_missing = largest_acked_unacked + 1;
         } else {
             *smallest_unreported_missing = quicly_ranges_next_missing(ranges, received_pn + 1, &slots_traversed_for_next_missing);
         }
     }
 
-    if (largest_unacked < reordering_threshold)
+    if (largest_acked_unacked < reordering_threshold)
         return 0;
 
-    uint64_t largest_pn_outside_reorder_window = largest_unacked - (uint64_t)reordering_threshold;
+    uint64_t largest_pn_outside_reorder_window = largest_acked_unacked - (uint64_t)reordering_threshold;
 
     if (*smallest_unreported_missing <= largest_pn_outside_reorder_window)
         *smallest_unreported_missing =
@@ -1644,16 +1668,22 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
         goto Exit;
     if (is_out_of_order)
         *received_out_of_order += 1;
-    if (!is_ack_only && space->largest_unacked < pn)
-        space->largest_unacked = pn;
+    if (!is_ack_only && space->largest_acked_unacked < pn)
+        space->largest_acked_unacked = pn;
 
     if (space->reordering_threshold == 1) {
         // Keep previous code paths when using RFC 9000 reordering_threshold.
         ack_now = !is_ack_only && (is_out_of_order || ecn == IPTOS_ECN_CE);
-        space->smallest_unreported_missing = space->largest_unacked + 1;
+        space->smallest_unreported_missing = space->largest_acked_unacked + 1;
     } else {
-        ack_now = change_outside_reorder_window(&space->ack_queue, space->largest_unacked, &space->smallest_unreported_missing, pn,
-                                                space->reordering_threshold);
+        ack_now = change_outside_reorder_window(&space->ack_queue, space->largest_acked_unacked,
+                                                &space->smallest_unreported_missing, pn, space->reordering_threshold);
+        /* Only ack a change outside the reordering window if the packet is
+         * ack-eliciting.
+         *
+         * Note that we must still call `change_outside_reorder_window` to maintain
+         * the correct `smallest_unreported_missing` value. */
+        ack_now = !is_ack_only && ack_now;
         // https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.4-1
         ack_now = ack_now || (ecn == IPTOS_ECN_CE && space->prior_ecn != IPTOS_ECN_CE);
     }
@@ -4133,7 +4163,8 @@ Emit: /* emit an ACK frame */
     }
 
     space->unacked_count = 0;
-
+    update_smallest_unreported_missing_on_send_ack(&space->ack_queue, &space->largest_acked_unacked,
+                                                   &space->smallest_unreported_missing, space->reordering_threshold);
     return ret;
 }
 

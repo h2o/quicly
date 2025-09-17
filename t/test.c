@@ -637,6 +637,8 @@ static void do_test_ack_frequency_ack_logic()
         uint64_t packet_number;
         uint8_t send_ack;
         uint64_t expected_smallest_unreported_missing_after_receipt;
+        int is_ack_only;
+        uint64_t advance_time_by;
     };
 
     struct st_test_case {
@@ -649,14 +651,14 @@ static void do_test_ack_frequency_ack_logic()
     // From example 1 at https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.2.1
     // clang-format off
     const struct st_case_row_t example1_rows[] = {
-        {0,  0, 1},
-        {1,  0, 2},
-        {3,  0, 2},
-        {4,  0, 2},
-        {5,  1, 6},
-        {8,  0, 6},
-        {9,  1, 7},
-        {10, 1, 11},
+        {0,  0, 1,  0, 1},
+        {1,  0, 2,  0, 1},
+        {3,  0, 2,  0, 1},
+        {4,  0, 2,  0, 1},
+        {5,  1, 6,  0, 1},
+        {8,  0, 6,  0, 1},
+        {9,  1, 7,  0, 1},
+        {10, 1, 11, 0, 1},
     };
     // clang-format on
     const struct st_test_case example1 = {
@@ -669,14 +671,14 @@ static void do_test_ack_frequency_ack_logic()
     // From example 1 at https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.2.1
     // clang-format off
     const struct st_case_row_t example2_rows[] = {
-        {0, 0, 1},
-        {1, 0, 2},
-        {3, 0, 2},
-        {5, 0, 2},
-        {6, 0, 2},
-        {7, 1, 4},
-        {8, 0, 4},
-        {9, 1, 10},
+        {0, 0, 1,  0, 1},
+        {1, 0, 2,  0, 1},
+        {3, 0, 2,  0, 1},
+        {5, 0, 2,  0, 1},
+        {6, 0, 2,  0, 1},
+        {7, 1, 4,  0, 1},
+        {8, 0, 4,  0, 1},
+        {9, 1, 10, 0, 1},
     };
     // clang-format on
     const struct st_test_case example2 = {
@@ -690,15 +692,15 @@ static void do_test_ack_frequency_ack_logic()
     // clang-format off
     const struct st_case_row_t test_case_1_rows[] = {
         // smallest unreported is n+1 because reordering threshold is set to 0
-        {1,  0, 2},  // No ack yet (reordering_threshold = 0, so no immediate ack for reordering)
-        {2,  1, 3},  // Ack because we've seen 2 packets
-        {3,  0, 4},  // No ack yet
-        {4,  1, 5},  // Ack because we've seen 2 packets
-        {5,  0, 6},  // ...
-        {6,  1, 7},
-        {7,  0, 8},
-        {8,  1, 9},
-        {9,  0, 10},
+        {1,  0, 2,  0, 1},  // No ack yet (reordering_threshold = 0, so no immediate ack for reordering)
+        {2,  1, 3,  0, 1},  // Ack because we've seen 2 packets
+        {3,  0, 4,  0, 1},  // No ack yet
+        {4,  1, 5,  0, 1},  // Ack because we've seen 2 packets
+        {5,  0, 6,  0, 1},  // ...
+        {6,  1, 7,  0, 1},
+        {7,  0, 8,  0, 1},
+        {8,  1, 9,  0, 1},
+        {9,  0, 10, 0, 1},
     };
     // clang-format on
     const struct st_test_case test_case_1 = {
@@ -711,12 +713,12 @@ static void do_test_ack_frequency_ack_logic()
     // Test reordered packets
     // clang-format off
     const struct st_case_row_t test_case_2_rows[] = {
-        {0, 0, 1},
-        {1, 0, 2},
-        {3, 1, 2}, // Ack because we've seen 3 packets
-        {2, 0, 4}, // No ack because 2 was never considered lost
-        {4, 0, 5},
-        {5, 1, 6}, // Ack because we've seen 3 more packets
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 1, 2, 0, 1}, // Ack because we've seen 3 packets
+        {2, 0, 4, 0, 1}, // No ack because 2 was never considered lost
+        {4, 0, 5, 0, 1},
+        {5, 1, 6, 0, 1}, // Ack because we've seen 3 more packets
     };
     // clang-format on
     const struct st_test_case test_case_2 = {
@@ -729,12 +731,12 @@ static void do_test_ack_frequency_ack_logic()
     // Test a declared lost packet is received
     // clang-format off
     const struct st_case_row_t test_case_3_rows[] = {
-        {0, 0, 1},
-        {1, 0, 2},
-        {3, 1, 2}, // Ack because we've seen 3 packets
-        {4, 1, 5}, // Ack because 2 is now declared lost
-        {2, 1, 5}, // Ack because 2 was received (change outside the reordering window)
-        {5, 0, 6},
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 1, 2, 0, 1}, // Ack because we've seen 3 packets
+        {4, 1, 5, 0, 1}, // Ack because 2 is now declared lost
+        {2, 1, 5, 0, 1}, // Ack because 2 was received (change outside the reordering window)
+        {5, 0, 6, 0, 1},
     };
     // clang-format on
     const struct st_test_case test_case_3 = {
@@ -747,10 +749,10 @@ static void do_test_ack_frequency_ack_logic()
     // Test 0 is lost
     // clang-format off
     const struct st_case_row_t test_case_4_rows[] = {
-        {1, 0, 0},
-        {2, 0, 0},
-        {3, 1, 4}, // Ack because 0 is now declared lost
-        {0, 1, 4}, // Ack because 0 was received (change outside the reordering window)
+        {1, 0, 0, 0, 1},
+        {2, 0, 0, 0, 1},
+        {3, 1, 4, 0, 1}, // Ack because 0 is now declared lost
+        {0, 1, 4, 0, 1}, // Ack because 0 was received (change outside the reordering window)
     };
     // clang-format on
     const struct st_test_case test_case_4 = {
@@ -764,15 +766,15 @@ static void do_test_ack_frequency_ack_logic()
     // Skipped 0
     // clang-format off
     const struct st_case_row_t test_case_5_rows[] = {
-        {1, 0, 0},
-        {2, 0, 0},
-        {3, 0, 0},
-        {4, 0, 0},
-        {5, 0, 0},
-        {6, 0, 0},
-        {7, 0, 0},
-        {8, 0, 0},
-        {9, 0, 0},
+        {1, 0, 0, 0, 1},
+        {2, 0, 0, 0, 1},
+        {3, 0, 0, 0, 1},
+        {4, 0, 0, 0, 1},
+        {5, 0, 0, 0, 1},
+        {6, 0, 0, 0, 1},
+        {7, 0, 0, 0, 1},
+        {8, 0, 0, 0, 1},
+        {9, 0, 0, 0, 1},
     };
     // clang-format on
     const struct st_test_case test_case_5 = {
@@ -785,16 +787,16 @@ static void do_test_ack_frequency_ack_logic()
     // ack every packet
     // clang-format off
     const struct st_case_row_t test_case_6_rows[] = {
-        {0, 1, 1},
-        {1, 1, 2},
-        {2, 1, 3},
-        {3, 1, 4},
-        {4, 1, 5},
-        {5, 1, 6},
-        {6, 1, 7},
-        {7, 1, 8},
-        {8, 1, 9},
-        {9, 1, 10},
+        {0, 1, 1,  0, 1},
+        {1, 1, 2,  0, 1},
+        {2, 1, 3,  0, 1},
+        {3, 1, 4,  0, 1},
+        {4, 1, 5,  0, 1},
+        {5, 1, 6,  0, 1},
+        {6, 1, 7,  0, 1},
+        {7, 1, 8,  0, 1},
+        {8, 1, 9,  0, 1},
+        {9, 1, 10, 0, 1},
     };
     // clang-format on
     const struct st_test_case test_case_6 = {
@@ -802,6 +804,72 @@ static void do_test_ack_frequency_ack_logic()
         .rows_count = PTLS_ELEMENTSOF(test_case_6_rows),
         .reordering_threshold = 0,
         .packet_tolerance = 0,
+    };
+
+    // Send packets ack-eliciting packets [0,1,3]. Then send non-ack eliciting
+    // packets [4..7] with `QUICLY_DELAYED_ACK_TIMEOUT` amount of time between.
+    //
+    // After we send an ack for PN 4, PN 2 is declared lost, and the next
+    // smallest unreported missing PN is 5.
+    //
+    // clang-format off
+    const struct st_case_row_t test_case_7_rows[] = {
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 0, 2, 0, 1},
+        {4, 0, 5, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {5, 0, 6, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {6, 0, 7, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {7, 0, 8, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+    };
+    // clang-format on
+    const struct st_test_case test_case_7 = {
+        .rows = test_case_7_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_7_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 20,
+    };
+
+    // Send packets ack-eliciting packets [0,1,3]. Then send non-ack eliciting
+    // packets [4] with `QUICLY_DELAYED_ACK_TIMEOUT` amount of time between.
+    //
+    // After we send an ack for PN 4, PN 2 is declared lost, and the next
+    // smallest unreported missing PN is 5.
+    //
+    // Then send packet 2 as ack-eliciting packet. This should be reported right
+    // away to detect spurious losses.
+    //
+    // clang-format off
+    const struct st_case_row_t test_case_8_rows[] = {
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 0, 2, 0, 1},
+        {4, 0, 5, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {2, 1, 5, 0, 1},
+    };
+    // clang-format on
+    const struct st_test_case test_case_8 = {
+        .rows = test_case_8_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_8_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 20,
+    };
+
+    // Same as the above test case, but packet 2 is non-ack-eliciting, so we
+    // should not trigger and ack
+    const struct st_case_row_t test_case_9_rows[] = {
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 0, 2, 0, 1},
+        {4, 0, 5, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {2, 0, 5, 1, 1},
+    };
+    // clang-format on
+    const struct st_test_case test_case_9 = {
+        .rows = test_case_9_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_9_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 20,
     };
 
     // clang-format off
@@ -814,6 +882,9 @@ static void do_test_ack_frequency_ack_logic()
         test_case_4,
         test_case_5,
         test_case_6,
+        test_case_7,
+        test_case_8,
+        test_case_9,
     };
     // clang-format on
 
@@ -829,15 +900,14 @@ static void do_test_ack_frequency_ack_logic()
         for (int row_idx = 0; row_idx < test_cases[i].rows_count; ++row_idx) {
             struct st_case_row_t row = test_cases[i].rows[row_idx];
 
-            ok(record_receipt(space, row.packet_number, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
-
-            if (row.send_ack) {
-                ok(send_ack_at == now);
-                now += 1;
+            ok(record_receipt(space, row.packet_number, 0, row.is_ack_only, now, &send_ack_at, &out_of_order_cnt) == 0);
+            ok(row.send_ack ? send_ack_at == now : send_ack_at > now);
+            now += row.advance_time_by;
+            if (send_ack_at <= now && space->ack_queue.num_ranges > 0) {
                 send_ack_at = INT64_MAX;
                 space->unacked_count = 0;
-            } else {
-                ok(send_ack_at == now + QUICLY_DELAYED_ACK_TIMEOUT);
+                update_smallest_unreported_missing_on_send_ack(&space->ack_queue, &space->largest_acked_unacked,
+                                                               &space->smallest_unreported_missing, space->reordering_threshold);
             }
 
             ok(row.expected_smallest_unreported_missing_after_receipt == space->smallest_unreported_missing);
