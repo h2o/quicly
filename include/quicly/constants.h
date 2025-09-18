@@ -108,7 +108,7 @@ typedef int64_t quicly_error_t;
 #define QUICLY_TRANSPORT_ERROR_AEAD_LIMIT_REACHED QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(0xf)
 #define QUICLY_TRANSPORT_ERROR_CRYPTO(tls_alert) QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(0x100 + (tls_alert))
 
-/* internal error codes, used purely for signaling status to the application */
+/* local error codes, used for signaling status between quicly and the application */
 #define QUICLY_ERROR_PACKET_IGNORED 0xff01
 #define QUICLY_ERROR_SENDBUF_FULL 0xff02    /* internal use only; the error code is never exposed to the application */
 #define QUICLY_ERROR_FREE_CONNECTION 0xff03 /* returned by quicly_send when the connection is freeable */
