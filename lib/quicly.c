@@ -309,7 +309,7 @@ struct st_quicly_conn_t {
          * valid if state is CLOSING
          */
         struct {
-            uint16_t error_code;
+            uint64_t error_code;
             uint64_t frame_type; /* UINT64_MAX if application close */
             const char *reason_phrase;
             unsigned long num_packets_received;
@@ -431,7 +431,7 @@ struct st_quicly_conn_t {
         ptls_t *tls;
         ptls_handshake_properties_t handshake_properties;
         struct {
-            ptls_raw_extension_t ext[3];
+            ptls_raw_extension_t ext[2];
             ptls_buffer_t buf;
         } transport_params;
         unsigned async_in_progress : 1;
@@ -1419,7 +1419,7 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
     if (idle_msec == INT64_MAX)
         return;
 
-    uint32_t three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.ctx->transport_params.max_ack_delay,
+    uint32_t three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.remote.transport_params.max_ack_delay,
                                                 conn->egress.loss.conf->min_pto);
     conn->idle_timeout.at = conn->stash.now + (idle_msec > three_pto ? idle_msec : three_pto);
     conn->idle_timeout.should_rearm_on_send = is_in_receive;
@@ -2139,11 +2139,13 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
 {
     quicly_error_t ret;
 
-    QUICLY_PROBE(STREAM_RECEIVE, stream->conn, stream->conn->stash.now, stream, frame->offset, frame->data.len);
+    QUICLY_PROBE(STREAM_RECEIVE, stream->conn, stream->conn->stash.now, stream, frame->offset, frame->data.base, frame->data.len,
+                 (int)frame->is_fin);
     QUICLY_LOG_CONN(stream_receive, stream->conn, {
         PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
         PTLS_LOG_ELEMENT_UNSIGNED(off, frame->offset);
-        PTLS_LOG_ELEMENT_UNSIGNED(len, frame->data.len);
+        PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(data, frame->data.base, frame->data.len);
+        PTLS_LOG_ELEMENT_BOOL(is_fin, frame->is_fin);
     });
 
     if (quicly_recvstate_transfer_complete(&stream->recvstate))
@@ -2178,14 +2180,15 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
 
     if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t buf_offset = frame->offset + frame->data.len - apply_len - stream->recvstate.data_off;
-        const void *apply_src = frame->data.base + frame->data.len - apply_len;
-        QUICLY_PROBE(STREAM_ON_RECEIVE, stream->conn, stream->conn->stash.now, stream, (size_t)buf_offset, apply_src, apply_len);
+        size_t apply_off = frame->data.len - apply_len;
+        QUICLY_PROBE(STREAM_ON_RECEIVE, stream->conn, stream->conn->stash.now, stream, (size_t)buf_offset, apply_off, apply_len);
         QUICLY_LOG_CONN(stream_on_receive, stream->conn, {
             PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
-            PTLS_LOG_ELEMENT_UNSIGNED(off, buf_offset);
-            PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(src, apply_src, apply_len);
+            PTLS_LOG_ELEMENT_UNSIGNED(buf_off, buf_offset);
+            PTLS_LOG_ELEMENT_UNSIGNED(apply_off, apply_off);
+            PTLS_LOG_ELEMENT_UNSIGNED(apply_len, apply_len);
         });
-        stream->callbacks->on_receive(stream, (size_t)buf_offset, apply_src, apply_len);
+        stream->callbacks->on_receive(stream, (size_t)buf_offset, frame->data.base + apply_off, apply_len);
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
             return QUICLY_ERROR_IS_CLOSING;
     }
@@ -2784,12 +2787,9 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
              NULL, NULL, conn->super.ctx->expand_client_hello ? conn->super.ctx->initial_egress_max_udp_payload_size : 0)) != 0)
         goto Exit;
     conn->crypto.transport_params.ext[0] =
-        (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_FINAL,
+        (ptls_raw_extension_t){get_transport_parameters_extension_id(conn->super.version),
                                {conn->crypto.transport_params.buf.base, conn->crypto.transport_params.buf.off}};
-    conn->crypto.transport_params.ext[1] =
-        (ptls_raw_extension_t){QUICLY_TLS_EXTENSION_TYPE_TRANSPORT_PARAMETERS_DRAFT,
-                               {conn->crypto.transport_params.buf.base, conn->crypto.transport_params.buf.off}};
-    conn->crypto.transport_params.ext[2] = (ptls_raw_extension_t){UINT16_MAX};
+    conn->crypto.transport_params.ext[1] = (ptls_raw_extension_t){UINT16_MAX};
     conn->crypto.handshake_properties.additional_extensions = conn->crypto.transport_params.ext;
     conn->crypto.handshake_properties.collected_extensions = client_collected_extensions;
 
@@ -4363,12 +4363,13 @@ UpdateState:
     if (off < stream->sendstate.size_inflight)
         stream->conn->super.stats.num_bytes.stream_data_resent +=
             (stream->sendstate.size_inflight < off + len ? stream->sendstate.size_inflight : off + len) - off;
-    QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, len, is_fin);
+    QUICLY_PROBE(STREAM_SEND, stream->conn, stream->conn->stash.now, stream, off, s->dst - len, len, is_fin, wrote_all);
     QUICLY_LOG_CONN(stream_send, stream->conn, {
         PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
         PTLS_LOG_ELEMENT_UNSIGNED(off, off);
-        PTLS_LOG_ELEMENT_UNSIGNED(len, len);
+        PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(data, s->dst - len, len);
         PTLS_LOG_ELEMENT_BOOL(is_fin, is_fin);
+        PTLS_LOG_ELEMENT_BOOL(wrote_all, wrote_all);
     });
 
     QUICLY_PROBE(QUICTRACE_SEND_STREAM, stream->conn, stream->conn->stash.now, stream, off, len, is_fin);
@@ -4978,7 +4979,7 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
         switch (get_epoch(s->current.first_byte)) {
         case QUICLY_EPOCH_INITIAL:
         case QUICLY_EPOCH_HANDSHAKE:
-            error_code = QUICLY_TRANSPORT_ERROR_APPLICATION;
+            error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_APPLICATION);
             offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
             reason_phrase = "";
             break;
@@ -5805,7 +5806,7 @@ static quicly_error_t enter_close(quicly_conn_t *conn, int local_is_initiating, 
 
 quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, const char *reason_phrase)
 {
-    uint16_t quic_error_code;
+    uint64_t quic_error_code;
 
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         return 0;
@@ -5820,7 +5821,7 @@ quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t 
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
         frame_type = UINT64_MAX;
     } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_SELF_ALERT) {
-        quic_error_code = QUICLY_TRANSPORT_ERROR_CRYPTO(PTLS_ERROR_TO_ALERT(err));
+        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_CRYPTO(PTLS_ERROR_TO_ALERT(err)));
     } else if (err == QUICLY_ERROR_STATE_EXHAUSTION) {
         /* State exhaution is an error induced by the peer, but as there is no specific error code, the generic error code
          * (PROTOCOL_VIOLATION) is used. The exact cause is communicated using the reason phrase field because it is sometimes
