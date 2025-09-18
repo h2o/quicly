@@ -5837,7 +5837,6 @@ quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t 
     if (reason_phrase == NULL)
         reason_phrase = "";
 
-
     conn->egress.connection_close.error_code = quic_error_code;
     conn->egress.connection_close.frame_type = frame_type;
     conn->egress.connection_close.reason_phrase = reason_phrase;
