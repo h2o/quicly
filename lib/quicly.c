@@ -5815,13 +5815,6 @@ quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t 
     if (err == 0) {
         quic_error_code = 0;
         frame_type = QUICLY_FRAME_TYPE_PADDING;
-    } else if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
-        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
-    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
-        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
-        frame_type = UINT64_MAX;
-    } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_SELF_ALERT) {
-        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_CRYPTO(PTLS_ERROR_TO_ALERT(err)));
     } else if (err == QUICLY_ERROR_STATE_EXHAUSTION) {
         /* State exhaution is an error induced by the peer, but as there is no specific error code, the generic error code
          * (PROTOCOL_VIOLATION) is used. The exact cause is communicated using the reason phrase field because it is sometimes
@@ -5830,6 +5823,13 @@ quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t 
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
         if (reason_phrase == NULL)
             reason_phrase = "state exhaustion";
+    } else if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
+        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
+        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+        frame_type = UINT64_MAX;
+    } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_SELF_ALERT) {
+        quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_CRYPTO(PTLS_ERROR_TO_ALERT(err)));
     } else {
         quic_error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INTERNAL);
     }
