@@ -2008,11 +2008,17 @@ void quicly_free(quicly_conn_t *conn)
     QUICLY_PROBE(FREE, conn, conn->stash.now);
     QUICLY_LOG_CONN(free, conn, {});
 
-    if (QUICLY_PROBE_ENABLED(CONN_STATS)) {
+    PTLS_LOG_DEFINE_POINT(quicly, conn_stats, conn_stats_logpoint);
+    if (QUICLY_PROBE_ENABLED(CONN_STATS) ||
+        (ptls_log_point_maybe_active(&conn_stats_logpoint) &
+         ptls_log_conn_maybe_active(ptls_get_log_state(conn->crypto.tls), (const char *(*)(void *))ptls_get_server_name,
+                                    conn->crypto.tls)) != 0) {
         quicly_stats_t stats;
         quicly_get_stats(conn, &stats);
         QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
-        // TODO: emit stats with QUICLY_LOG_CONN()
+#define EMIT_FIELD(fld, lit) PTLS_LOG_ELEMENT_UNSIGNED(lit, stats.fld)
+        QUICLY_LOG_CONN(conn_stats, conn, { QUICLY_STATS_FOREACH(EMIT_FIELD); });
+#undef EMIT_FIELD
     }
 
     destroy_all_streams(conn, 0, 1);
