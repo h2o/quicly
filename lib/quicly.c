@@ -2016,7 +2016,7 @@ void quicly_free(quicly_conn_t *conn)
         quicly_stats_t stats;
         quicly_get_stats(conn, &stats);
         QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
-#define EMIT_FIELD(fld, lit) PTLS_LOG_ELEMENT_UNSIGNED(lit, stats.fld)
+#define EMIT_FIELD(fld, lit) PTLS_LOG__DO_ELEMENT_UNSIGNED(lit, stats.fld)
         QUICLY_LOG_CONN(conn_stats, conn, { QUICLY_STATS_FOREACH(EMIT_FIELD); });
 #undef EMIT_FIELD
     }
