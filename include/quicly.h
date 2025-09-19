@@ -452,10 +452,10 @@ struct st_quicly_conn_streamgroup_state_t {
 };
 
 /**
- * Fields that do not need to be gathered upon the invocation of `quicly_get_stats`. We use typedef to define the same fields in the
- * same order for `quicly_stats_t` and `struct st_quicly_conn_public_t::stats`.
+ * Aggregatable counters that do not need to be gathered upon the invocation of `quicly_get_stats`. We use typedef to define the
+ * same fields in the same order for quicly_stats_t and `struct st_quicly_conn_public_t::stats`.
  */
-#define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
+#define QUICLY_STATS_PREBUILT_COUNTERS                                                                                             \
     struct {                                                                                                                       \
         /**                                                                                                                        \
          * Total number of packets received.                                                                                       \
@@ -642,7 +642,7 @@ typedef struct st_quicly_stats_t {
     /**
      * The pre-built fields. This MUST be the first member of `quicly_stats_t` so that we can use `memcpy`.
      */
-    QUICLY_STATS_PREBUILT_FIELDS;
+    QUICLY_STATS_PREBUILT_COUNTERS;
     /**
      * RTT stats.
      */
@@ -845,7 +845,7 @@ struct _st_quicly_conn_public_t {
     quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
-        QUICLY_STATS_PREBUILT_FIELDS;
+        QUICLY_STATS_PREBUILT_COUNTERS;
         /**
          * Time took until handshake is confirmed. UINT64_MAX if handshake is not confirmed yet.
          */
