@@ -691,6 +691,8 @@ typedef struct st_quicly_stats_t {
         apply(num_packets.acked_ecn_counts[0], "packets-acked-ecn-ect0");                                                          \
         apply(num_packets.acked_ecn_counts[1], "packets-acked-ecn-ect1");                                                          \
         apply(num_packets.acked_ecn_counts[2], "packets-acked-ecn-ce");                                                            \
+        apply(num_packets.sent_promoted_paths, "packets-sent-promoted-paths");                                                     \
+        apply(num_packets.ack_received_promoted_paths, "packets-ack-received-promoted-paths");                                     \
     } while (0)
 
 #define QUICLY_STATS_FOREACH_NUM_BYTES(apply)                                                                                      \
@@ -705,6 +707,12 @@ typedef struct st_quicly_stats_t {
 
 #define QUICLY_STATS_FOREACH_TRANSPORT(apply)                                                                                      \
     do {                                                                                                                           \
+        apply(num_paths.created, "paths-created");                                                                                 \
+        apply(num_paths.validated, "paths-validated");                                                                             \
+        apply(num_paths.validation_failed, "paths-validation-failed");                                                             \
+        apply(num_paths.migration_elicited, "paths-migration-elicited");                                                           \
+        apply(num_paths.promoted, "paths-promoted");                                                                               \
+        apply(num_paths.closed_no_dcid, "paths-closed-no-dcid");                                                                   \
         apply(num_paths.ecn_validated, "paths-ecn-validated");                                                                     \
         apply(num_paths.ecn_failed, "paths-ecn-failed");                                                                           \
         apply(rtt.minimum, "rtt-minimum");                                                                                         \
