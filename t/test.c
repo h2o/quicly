@@ -1026,6 +1026,22 @@ static void test_migration_during_handshake(void)
     subtest("migrate-before-3nd", do_test_migration_during_handshake, 1);
 }
 
+static size_t test_stats_foreach_next_off = 0;
+
+static void test_stats_foreach_field(size_t off, size_t size)
+{
+    ok(test_stats_foreach_next_off == off);
+    test_stats_foreach_next_off += size;
+}
+
+static void test_stats_foreach(void)
+{
+#define CHECK(fld, name)                                                                                                           \
+    subtest(name, test_stats_foreach_field, offsetof(quicly_stats_t, fld), sizeof(((quicly_stats_t *)NULL)->fld))
+    QUICLY_STATS_FOREACH(CHECK);
+#undef CHECK
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -1100,6 +1116,8 @@ int main(int argc, char **argv)
 
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
+
+    subtest("stats-foreach", test_stats_foreach);
 
     return done_testing();
 }
