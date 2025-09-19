@@ -1026,20 +1026,38 @@ static void test_migration_during_handshake(void)
     subtest("migrate-before-3nd", do_test_migration_during_handshake, 1);
 }
 
-static size_t test_stats_foreach_next_off = 0;
+static size_t test_stats_foreach_next_off;
 
 static void test_stats_foreach_field(size_t off, size_t size)
 {
     ok(test_stats_foreach_next_off == off);
+
+    /* if a gap exists after the current slot, then the next field exists at the end of the gap */
+    static const size_t gaps[] = {
+#define GAP(before, after) offsetof(quicly_stats_t, before), offsetof(quicly_stats_t, after)
+        GAP(jumpstart.cwnd, token_sent.at),
+        GAP(token_sent.rtt, rtt.minimum),
+#undef GAP
+        SIZE_MAX};
+    for (size_t i = 0; gaps[i] != SIZE_MAX; i += 2) {
+        if (test_stats_foreach_next_off == gaps[i]) {
+            test_stats_foreach_next_off = gaps[i + 1];
+            return;
+        }
+    }
+
+    /* otherwise, it is right after the current field */
     test_stats_foreach_next_off += size;
 }
 
 static void test_stats_foreach(void)
 {
+    test_stats_foreach_next_off = 0;
 #define CHECK(fld, name)                                                                                                           \
     subtest(name, test_stats_foreach_field, offsetof(quicly_stats_t, fld), sizeof(((quicly_stats_t *)NULL)->fld))
     QUICLY_STATS_FOREACH(CHECK);
 #undef CHECK
+    ok(test_stats_foreach_next_off == sizeof(quicly_stats_t));
 }
 
 int main(int argc, char **argv)
