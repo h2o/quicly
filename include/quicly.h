@@ -722,15 +722,15 @@ typedef struct st_quicly_stats_t {
         apply(jumpstart.prev_rtt, "jumpstart-prev-rtt");                                                                           \
         apply(jumpstart.new_rtt, "jumpstart-prev-rtt");                                                                            \
         apply(jumpstart.cwnd, "jumpstart-cwnd");                                                                                   \
-        apply(token_sent.at, "token_sent-at");                                                                                     \
-        apply(token_sent.rate, "token_sent-rate");                                                                                 \
-        apply(token_sent.rtt, "token_sent-rtt");                                                                                   \
+        apply(token_sent.at, "token-sent-at");                                                                                     \
+        apply(token_sent.rate, "token-sent-rate");                                                                                 \
+        apply(token_sent.rtt, "token-sent-rtt");                                                                                   \
         apply(rtt.minimum, "rtt-minimum");                                                                                         \
         apply(rtt.smoothed, "rtt-smoothed");                                                                                       \
         apply(rtt.variance, "rtt-variance");                                                                                       \
         apply(rtt.latest, "rtt-latest");                                                                                           \
-        apply(loss_thresholds.use_packet_based, "loss_thresholds-use_packet_based"); \
-        apply(loss_thresholds.time_based_percentile, "loss_thresholds-time_based_percentile"); \
+        apply(loss_thresholds.use_packet_based, "loss-thresholds-use-packet-based"); \
+        apply(loss_thresholds.time_based_percentile, "loss-thresholds-time-based-percentile"); \
         apply(cc.cwnd, "cwnd");                                                                                                    \
         apply(cc.ssthresh, "ssthresh");                                                                                            \
         apply(cc.cwnd_initial, "cwnd-initial");                                                                                    \
