@@ -729,26 +729,23 @@ typedef struct st_quicly_stats_t {
         apply(rtt.smoothed, "rtt-smoothed");                                                                                       \
         apply(rtt.variance, "rtt-variance");                                                                                       \
         apply(rtt.latest, "rtt-latest");                                                                                           \
+        apply(loss_thresholds.use_packet_based, "loss_thresholds-use_packet_based"); \
+        apply(loss_thresholds.time_based_percentile, "loss_thresholds-time_based_percentile"); \
         apply(cc.cwnd, "cwnd");                                                                                                    \
         apply(cc.ssthresh, "ssthresh");                                                                                            \
         apply(cc.cwnd_initial, "cwnd-initial");                                                                                    \
         apply(cc.cwnd_exiting_slow_start, "cwnd-exiting-slow-start");                                                              \
         apply(cc.exit_slow_start_at, "exit-slow-start-at");                                                                        \
+        apply(cc.cwnd_exiting_jumpstart, "jumpstart-exit-cwnd");                                                                   \
         apply(cc.cwnd_minimum, "cwnd-minimum");                                                                                    \
         apply(cc.cwnd_maximum, "cwnd-maximum");                                                                                    \
-        apply(jumpstart.prev_rate, "jumpstart-prev-rate");                                                                         \
-        apply(jumpstart.prev_rtt, "jumpstart-pret-rtt");                                                                           \
-        apply(jumpstart.cwnd, "jumpstart-cwnd");                                                                                   \
-        apply(cc.cwnd_exiting_jumpstart, "jumpstart-exit-cwnd");                                                                   \
         apply(cc.num_loss_episodes, "num-loss-episodes");                                                                          \
         apply(cc.num_ecn_loss_episodes, "num-ecn-loss-episodes");                                                                  \
         apply(delivery_rate.latest, "delivery-rate-latest");                                                                       \
         apply(delivery_rate.smoothed, "delivery-rate-smoothed");                                                                   \
         apply(delivery_rate.stdev, "delivery-rate-stdev");                                                                         \
-        apply(token_sent.at, "token-sent-at");                                                                                     \
-        apply(token_sent.rate, "token-sent-rate");                                                                                 \
-        apply(token_sent.rtt, "token-sent-rtt");                                                                                   \
         apply(num_sentmap_packets_largest, "num-sentmap-packets-largest");                                                         \
+        apply(handshake_confirmed_msec, "handshake-confirmed-msec");                                                               \
     } while (0)
 
 #define QUICLY_STATS__DO_FOREACH_NUM_FRAMES(name, dir, apply) apply(num_frames_##dir.name, PTLS_TO_STR(name) "-" PTLS_TO_STR(dir))
