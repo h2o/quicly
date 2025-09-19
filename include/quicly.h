@@ -669,6 +669,113 @@ typedef struct st_quicly_stats_t {
     uint64_t handshake_confirmed_msec;
 } quicly_stats_t;
 
+#define QUICLY_STATS_FOREACH_NUM_PACKETS(apply)                                                                                    \
+    do {                                                                                                                           \
+        apply(num_packets.received, "packets-received");                                                                           \
+        apply(num_packets.received_ecn_counts[0], "packets-received-ecn-ect0");                                                    \
+        apply(num_packets.received_ecn_counts[1], "packets-received-ecn-ect1");                                                    \
+        apply(num_packets.received_ecn_counts[2], "packets-received-ecn-ce");                                                      \
+        apply(num_packets.decryption_failed, "packets-decryption-failed");                                                         \
+        apply(num_packets.sent, "packets-sent");                                                                                   \
+        apply(num_packets.lost, "packets-lost");                                                                                   \
+        apply(num_packets.lost_time_threshold, "packets-lost-time-threshold");                                                     \
+        apply(num_packets.ack_received, "packets-ack-received");                                                                   \
+        apply(num_packets.acked_ecn_counts[0], "packets-acked-ecn-ect0");                                                          \
+        apply(num_packets.acked_ecn_counts[1], "packets-acked-ecn-ect1");                                                          \
+        apply(num_packets.acked_ecn_counts[2], "packets-acked-ecn-ce");                                                            \
+        apply(num_packets.late_acked, "late-acked");                                                                               \
+        apply(num_packets.initial_received, "initial-received");                                                                   \
+        apply(num_packets.zero_rtt_received, "zero-rtt-received");                                                                 \
+        apply(num_packets.handshake_received, "handshake-received");                                                               \
+        apply(num_packets.initial_sent, "initial-sent");                                                                           \
+        apply(num_packets.zero_rtt_sent, "zero-rtt-sent");                                                                         \
+        apply(num_packets.handshake_sent, "handshake-sent");                                                                       \
+        apply(num_packets.received_out_of_order, "packets-received-out-of-order");                                                 \
+    } while (0)
+
+#define QUICLY_STATS_FOREACH_NUM_BYTES(apply)                                                                                      \
+    do {                                                                                                                           \
+        apply(num_bytes.received, "bytes-received");                                                                               \
+        apply(num_bytes.sent, "bytes-sent");                                                                                       \
+        apply(num_bytes.lost, "bytes-lost");                                                                                       \
+        apply(num_bytes.ack_received, "bytes-ack-received");                                                                       \
+        apply(num_bytes.stream_data_sent, "bytes-stream-data-sent");                                                               \
+        apply(num_bytes.stream_data_resent, "bytes-stream-data-resent");                                                           \
+    } while (0)
+
+#define QUICLY_STATS_FOREACH_TRANSPORT(apply)                                                                                      \
+    do {                                                                                                                           \
+        apply(num_paths.ecn_validated, "paths-ecn-validated");                                                                     \
+        apply(num_paths.ecn_failed, "paths-ecn-failed");                                                                           \
+        apply(rtt.minimum, "rtt-minimum");                                                                                         \
+        apply(rtt.smoothed, "rtt-smoothed");                                                                                       \
+        apply(rtt.variance, "rtt-variance");                                                                                       \
+        apply(rtt.latest, "rtt-latest");                                                                                           \
+        apply(cc.cwnd, "cwnd");                                                                                                    \
+        apply(cc.ssthresh, "ssthresh");                                                                                            \
+        apply(cc.cwnd_initial, "cwnd-initial");                                                                                    \
+        apply(cc.cwnd_exiting_slow_start, "cwnd-exiting-slow-start");                                                              \
+        apply(cc.exit_slow_start_at, "exit-slow-start-at");                                                                        \
+        apply(cc.cwnd_minimum, "cwnd-minimum");                                                                                    \
+        apply(cc.cwnd_maximum, "cwnd-maximum");                                                                                    \
+        apply(jumpstart.prev_rate, "jumpstart-prev-rate");                                                                         \
+        apply(jumpstart.prev_rtt, "jumpstart-pret-rtt");                                                                           \
+        apply(jumpstart.cwnd, "jumpstart-cwnd");                                                                                   \
+        apply(cc.cwnd_exiting_jumpstart, "jumpstart-exit-cwnd");                                                                   \
+        apply(cc.num_loss_episodes, "num-loss-episodes");                                                                          \
+        apply(cc.num_ecn_loss_episodes, "num-ecn-loss-episodes");                                                                  \
+        apply(num_ptos, "num-ptos");                                                                                               \
+        apply(delivery_rate.latest, "delivery-rate-latest");                                                                       \
+        apply(delivery_rate.smoothed, "delivery-rate-smoothed");                                                                   \
+        apply(delivery_rate.stdev, "delivery-rate-stdev");                                                                         \
+        apply(token_sent.at, "token-sent-at");                                                                                     \
+        apply(token_sent.rate, "token-sent-rate");                                                                                 \
+        apply(token_sent.rtt, "token-sent-rtt");                                                                                   \
+        apply(num_sentmap_packets_largest, "num-sentmap-packets-largest");                                                         \
+    } while (0)
+
+#define QUICLY_STATS__DO_FOREACH_NUM_FRAMES(name, dir, apply) apply(num_frames_##dir.name, PTLS_TO_STR(name) "-" PTLS_TO_SRT(dir))
+
+#define QUICLY_STATS_FOREACH_NUM_FRAMES(dir, apply)                                                                                \
+    do {                                                                                                                           \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(padding, dir, apply);                                                                  \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ping, dir, apply);                                                                     \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack, dir, apply);                                                                      \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(reset_stream, dir, apply);                                                             \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(stop_sending, dir, apply);                                                             \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(crypto, dir, apply);                                                                   \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(new_token, dir, apply);                                                                \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(stream, dir, apply);                                                                   \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(max_data, dir, apply);                                                                 \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(max_stream_data, dir, apply);                                                          \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(max_streams_bidi, dir, apply);                                                         \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(max_streams_uni, dir, apply);                                                          \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(data_blocked, dir, apply);                                                             \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(stream_data_blocked, dir, apply);                                                      \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(streams_blocked, dir, apply);                                                          \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(new_connection_id, dir, apply);                                                        \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(retire_connection_id, dir, apply);                                                     \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(path_challenge, dir, apply);                                                           \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(path_response, dir, apply);                                                            \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(transport_close, dir, apply);                                                          \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(application_close, dir, apply);                                                        \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(handshake_done, dir, apply);                                                           \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply);                                                            \
+    } while (0)
+
+/**
+ * Macro for iterating the fields of `quicly_stats_t`. Specific categories can be iterated by using the foreach macro with suffixes;
+ * e.g., `QUICLY_STATS_FOREACH_TRANSPORT`.
+ */
+#define QUICLY_STATS_FOREACH(apply)                                                                                                \
+    do {                                                                                                                           \
+        QUICLY_STATS_FOREACH_NUM_PACKETS(apply);                                                                                   \
+        QUICLY_STATS_FOREACH_NUM_BYTES(apply);                                                                                     \
+        QUICLY_STATS_FOREACH_TRANSPORT(apply);                                                                                     \
+        QUICLY_STATS_FOREACH_NUM_FRAMES(received, apply);                                                                          \
+        QUICLY_STATS_FOREACH_NUM_FRAMES(sent, apply);                                                                              \
+    } while (0)
+
 /**
  * The state of the default stream scheduler.
  * `active` is a linked-list of streams for which STREAM frames can be emitted.  `blocked` is a linked-list of streams that have
