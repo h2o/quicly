@@ -556,6 +556,15 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t stream_data_resent;                                                                                               \
     } num_bytes;                                                                                                                   \
+    /**                                                                                                                            \
+     * Total number of each frame being sent / received.                                                                           \
+     */                                                                                                                            \
+    struct {                                                                                                                       \
+        uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
+            max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
+            retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
+            ack_frequency;                                                                                                         \
+    } num_frames_received, num_frames_sent;                                                                                        \
     struct {                                                                                                                       \
         /**                                                                                                                        \
          * number of alternate paths created                                                                                       \
@@ -590,15 +599,6 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t ecn_failed;                                                                                                       \
     } num_paths;                                                                                                                   \
-    /**                                                                                                                            \
-     * Total number of each frame being sent / received.                                                                           \
-     */                                                                                                                            \
-    struct {                                                                                                                       \
-        uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
-            max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
-            retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            ack_frequency;                                                                                                         \
-    } num_frames_sent, num_frames_received;                                                                                        \
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
      */                                                                                                                            \
@@ -779,9 +779,9 @@ typedef struct st_quicly_stats_t {
     do {                                                                                                                           \
         QUICLY_STATS_FOREACH_NUM_PACKETS(apply);                                                                                   \
         QUICLY_STATS_FOREACH_NUM_BYTES(apply);                                                                                     \
-        QUICLY_STATS_FOREACH_TRANSPORT(apply);                                                                                     \
         QUICLY_STATS_FOREACH_NUM_FRAMES(received, apply);                                                                          \
         QUICLY_STATS_FOREACH_NUM_FRAMES(sent, apply);                                                                              \
+        QUICLY_STATS_FOREACH_TRANSPORT(apply);                                                                                     \
     } while (0)
 
 /**
