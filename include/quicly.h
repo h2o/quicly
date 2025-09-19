@@ -715,6 +715,16 @@ typedef struct st_quicly_stats_t {
         apply(num_paths.closed_no_dcid, "paths-closed-no-dcid");                                                                   \
         apply(num_paths.ecn_validated, "paths-ecn-validated");                                                                     \
         apply(num_paths.ecn_failed, "paths-ecn-failed");                                                                           \
+        apply(num_ptos, "num-ptos");                                                                                               \
+        apply(num_handshake_timeouts, "num-handshake-timeouts");                                                                   \
+        apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded");                                                   \
+        apply(jumpstart.prev_rate, "jumpstart-prev-rate");                                                                         \
+        apply(jumpstart.prev_rtt, "jumpstart-prev-rtt");                                                                           \
+        apply(jumpstart.new_rtt, "jumpstart-prev-rtt");                                                                            \
+        apply(jumpstart.cwnd, "jumpstart-cwnd");                                                                                   \
+        apply(token_sent.at, "token_sent-at");                                                                                     \
+        apply(token_sent.rate, "token_sent-rate");                                                                                 \
+        apply(token_sent.rtt, "token_sent-rtt");                                                                                   \
         apply(rtt.minimum, "rtt-minimum");                                                                                         \
         apply(rtt.smoothed, "rtt-smoothed");                                                                                       \
         apply(rtt.variance, "rtt-variance");                                                                                       \
@@ -732,7 +742,6 @@ typedef struct st_quicly_stats_t {
         apply(cc.cwnd_exiting_jumpstart, "jumpstart-exit-cwnd");                                                                   \
         apply(cc.num_loss_episodes, "num-loss-episodes");                                                                          \
         apply(cc.num_ecn_loss_episodes, "num-ecn-loss-episodes");                                                                  \
-        apply(num_ptos, "num-ptos");                                                                                               \
         apply(delivery_rate.latest, "delivery-rate-latest");                                                                       \
         apply(delivery_rate.smoothed, "delivery-rate-smoothed");                                                                   \
         apply(delivery_rate.stdev, "delivery-rate-stdev");                                                                         \
