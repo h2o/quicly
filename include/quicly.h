@@ -734,7 +734,7 @@ typedef struct st_quicly_stats_t {
         apply(num_sentmap_packets_largest, "num-sentmap-packets-largest");                                                         \
     } while (0)
 
-#define QUICLY_STATS__DO_FOREACH_NUM_FRAMES(name, dir, apply) apply(num_frames_##dir.name, PTLS_TO_STR(name) "-" PTLS_TO_SRT(dir))
+#define QUICLY_STATS__DO_FOREACH_NUM_FRAMES(name, dir, apply) apply(num_frames_##dir.name, PTLS_TO_STR(name) "-" PTLS_TO_STR(dir))
 
 #define QUICLY_STATS_FOREACH_NUM_FRAMES(dir, apply)                                                                                \
     do {                                                                                                                           \
