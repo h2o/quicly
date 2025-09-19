@@ -672,17 +672,11 @@ typedef struct st_quicly_stats_t {
 #define QUICLY_STATS_FOREACH_NUM_PACKETS(apply)                                                                                    \
     do {                                                                                                                           \
         apply(num_packets.received, "packets-received");                                                                           \
-        apply(num_packets.received_ecn_counts[0], "packets-received-ecn-ect0");                                                    \
-        apply(num_packets.received_ecn_counts[1], "packets-received-ecn-ect1");                                                    \
-        apply(num_packets.received_ecn_counts[2], "packets-received-ecn-ce");                                                      \
         apply(num_packets.decryption_failed, "packets-decryption-failed");                                                         \
         apply(num_packets.sent, "packets-sent");                                                                                   \
         apply(num_packets.lost, "packets-lost");                                                                                   \
         apply(num_packets.lost_time_threshold, "packets-lost-time-threshold");                                                     \
         apply(num_packets.ack_received, "packets-ack-received");                                                                   \
-        apply(num_packets.acked_ecn_counts[0], "packets-acked-ecn-ect0");                                                          \
-        apply(num_packets.acked_ecn_counts[1], "packets-acked-ecn-ect1");                                                          \
-        apply(num_packets.acked_ecn_counts[2], "packets-acked-ecn-ce");                                                            \
         apply(num_packets.late_acked, "late-acked");                                                                               \
         apply(num_packets.initial_received, "initial-received");                                                                   \
         apply(num_packets.zero_rtt_received, "zero-rtt-received");                                                                 \
@@ -691,6 +685,12 @@ typedef struct st_quicly_stats_t {
         apply(num_packets.zero_rtt_sent, "zero-rtt-sent");                                                                         \
         apply(num_packets.handshake_sent, "handshake-sent");                                                                       \
         apply(num_packets.received_out_of_order, "packets-received-out-of-order");                                                 \
+        apply(num_packets.received_ecn_counts[0], "packets-received-ecn-ect0");                                                    \
+        apply(num_packets.received_ecn_counts[1], "packets-received-ecn-ect1");                                                    \
+        apply(num_packets.received_ecn_counts[2], "packets-received-ecn-ce");                                                      \
+        apply(num_packets.acked_ecn_counts[0], "packets-acked-ecn-ect0");                                                          \
+        apply(num_packets.acked_ecn_counts[1], "packets-acked-ecn-ect1");                                                          \
+        apply(num_packets.acked_ecn_counts[2], "packets-acked-ecn-ce");                                                            \
     } while (0)
 
 #define QUICLY_STATS_FOREACH_NUM_BYTES(apply)                                                                                      \
