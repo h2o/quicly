@@ -768,6 +768,7 @@ typedef struct st_quicly_stats_t {
         QUICLY_STATS__DO_FOREACH_NUM_FRAMES(transport_close, dir, apply);                                                          \
         QUICLY_STATS__DO_FOREACH_NUM_FRAMES(application_close, dir, apply);                                                        \
         QUICLY_STATS__DO_FOREACH_NUM_FRAMES(handshake_done, dir, apply);                                                           \
+        QUICLY_STATS__DO_FOREACH_NUM_FRAMES(datagram, dir, apply);                                                                 \
         QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply);                                                            \
     } while (0)
 
