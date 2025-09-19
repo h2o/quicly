@@ -452,8 +452,8 @@ struct st_quicly_conn_streamgroup_state_t {
 };
 
 /**
- * Aggregatable counters that do not need to be gathered upon the invocation of `quicly_get_stats`. We use typedef to define the
- * same fields in the same order for quicly_stats_t and `struct st_quicly_conn_public_t::stats`.
+ * These fields that exist within QUICLY_STATS_PREBUILT_FIELDS as the first elements are the stat counters that can be aggregated to
+ * calclucate total amongst multiple connections.
  */
 #define QUICLY_STATS_PREBUILT_COUNTERS                                                                                             \
     struct {                                                                                                                       \
@@ -610,7 +610,14 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of events where `initial_handshake_sent` exceeds limit.                                                        \
      */                                                                                                                            \
-    uint64_t num_initial_handshake_exceeded;                                                                                       \
+    uint64_t num_initial_handshake_exceeded
+
+/**
+ * Stats that do not need to be gathered upon the invocation of `quicly_get_stats`. This macro is used to define the same fields in
+ * the same order for quicly_stats_t and `struct st_quicly_conn_public_t::stats`.
+ */
+#define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
+    QUICLY_STATS_PREBUILT_COUNTERS;                                                                                                \
     /**                                                                                                                            \
      * jumpstart parameters and the CWND being adopted (see also quicly_cc_t::cwnd_exiting_jumpstart)                              \
      */                                                                                                                            \
@@ -642,7 +649,7 @@ typedef struct st_quicly_stats_t {
     /**
      * The pre-built fields. This MUST be the first member of `quicly_stats_t` so that we can use `memcpy`.
      */
-    QUICLY_STATS_PREBUILT_COUNTERS;
+    QUICLY_STATS_PREBUILT_FIELDS;
     /**
      * RTT stats.
      */
@@ -705,49 +712,6 @@ typedef struct st_quicly_stats_t {
         apply(num_bytes.stream_data_resent, "bytes-stream-data-resent");                                                           \
     } while (0)
 
-#define QUICLY_STATS_FOREACH_TRANSPORT(apply)                                                                                      \
-    do {                                                                                                                           \
-        apply(num_paths.created, "paths-created");                                                                                 \
-        apply(num_paths.validated, "paths-validated");                                                                             \
-        apply(num_paths.validation_failed, "paths-validation-failed");                                                             \
-        apply(num_paths.migration_elicited, "paths-migration-elicited");                                                           \
-        apply(num_paths.promoted, "paths-promoted");                                                                               \
-        apply(num_paths.closed_no_dcid, "paths-closed-no-dcid");                                                                   \
-        apply(num_paths.ecn_validated, "paths-ecn-validated");                                                                     \
-        apply(num_paths.ecn_failed, "paths-ecn-failed");                                                                           \
-        apply(num_ptos, "num-ptos");                                                                                               \
-        apply(num_handshake_timeouts, "num-handshake-timeouts");                                                                   \
-        apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded");                                                   \
-        apply(jumpstart.prev_rate, "jumpstart-prev-rate");                                                                         \
-        apply(jumpstart.prev_rtt, "jumpstart-prev-rtt");                                                                           \
-        apply(jumpstart.new_rtt, "jumpstart-prev-rtt");                                                                            \
-        apply(jumpstart.cwnd, "jumpstart-cwnd");                                                                                   \
-        apply(token_sent.at, "token-sent-at");                                                                                     \
-        apply(token_sent.rate, "token-sent-rate");                                                                                 \
-        apply(token_sent.rtt, "token-sent-rtt");                                                                                   \
-        apply(rtt.minimum, "rtt-minimum");                                                                                         \
-        apply(rtt.smoothed, "rtt-smoothed");                                                                                       \
-        apply(rtt.variance, "rtt-variance");                                                                                       \
-        apply(rtt.latest, "rtt-latest");                                                                                           \
-        apply(loss_thresholds.use_packet_based, "loss-thresholds-use-packet-based"); \
-        apply(loss_thresholds.time_based_percentile, "loss-thresholds-time-based-percentile"); \
-        apply(cc.cwnd, "cwnd");                                                                                                    \
-        apply(cc.ssthresh, "ssthresh");                                                                                            \
-        apply(cc.cwnd_initial, "cwnd-initial");                                                                                    \
-        apply(cc.cwnd_exiting_slow_start, "cwnd-exiting-slow-start");                                                              \
-        apply(cc.exit_slow_start_at, "exit-slow-start-at");                                                                        \
-        apply(cc.cwnd_exiting_jumpstart, "jumpstart-exit-cwnd");                                                                   \
-        apply(cc.cwnd_minimum, "cwnd-minimum");                                                                                    \
-        apply(cc.cwnd_maximum, "cwnd-maximum");                                                                                    \
-        apply(cc.num_loss_episodes, "num-loss-episodes");                                                                          \
-        apply(cc.num_ecn_loss_episodes, "num-ecn-loss-episodes");                                                                  \
-        apply(delivery_rate.latest, "delivery-rate-latest");                                                                       \
-        apply(delivery_rate.smoothed, "delivery-rate-smoothed");                                                                   \
-        apply(delivery_rate.stdev, "delivery-rate-stdev");                                                                         \
-        apply(num_sentmap_packets_largest, "num-sentmap-packets-largest");                                                         \
-        apply(handshake_confirmed_msec, "handshake-confirmed-msec");                                                               \
-    } while (0)
-
 #define QUICLY_STATS__DO_FOREACH_NUM_FRAMES(name, dir, apply) apply(num_frames_##dir.name, PTLS_TO_STR(name) "-" PTLS_TO_STR(dir))
 
 #define QUICLY_STATS_FOREACH_NUM_FRAMES(dir, apply)                                                                                \
@@ -778,17 +742,72 @@ typedef struct st_quicly_stats_t {
         QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply);                                                            \
     } while (0)
 
+#define QUICLY_STATS_FOREACH_TRANSPORT_COUNTERS(apply)                                                                             \
+    do {                                                                                                                           \
+        apply(num_paths.created, "paths-created");                                                                                 \
+        apply(num_paths.validated, "paths-validated");                                                                             \
+        apply(num_paths.validation_failed, "paths-validation-failed");                                                             \
+        apply(num_paths.migration_elicited, "paths-migration-elicited");                                                           \
+        apply(num_paths.promoted, "paths-promoted");                                                                               \
+        apply(num_paths.closed_no_dcid, "paths-closed-no-dcid");                                                                   \
+        apply(num_paths.ecn_validated, "paths-ecn-validated");                                                                     \
+        apply(num_paths.ecn_failed, "paths-ecn-failed");                                                                           \
+        apply(num_ptos, "num-ptos");                                                                                               \
+        apply(num_handshake_timeouts, "num-handshake-timeouts");                                                                   \
+        apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded");                                                   \
+    } while (0)
+
 /**
- * Macro for iterating the fields of `quicly_stats_t`. Specific categories can be iterated by using the foreach macro with suffixes;
- * e.g., `QUICLY_STATS_FOREACH_TRANSPORT`.
+ * Macro for iterating QUICLY_STATS_PREBUILT_COUNTERS.
  */
-#define QUICLY_STATS_FOREACH(apply)                                                                                                \
+#define QUICLY_STATS_FOREACH_COUNTERS(apply)                                                                                       \
     do {                                                                                                                           \
         QUICLY_STATS_FOREACH_NUM_PACKETS(apply);                                                                                   \
         QUICLY_STATS_FOREACH_NUM_BYTES(apply);                                                                                     \
         QUICLY_STATS_FOREACH_NUM_FRAMES(received, apply);                                                                          \
         QUICLY_STATS_FOREACH_NUM_FRAMES(sent, apply);                                                                              \
-        QUICLY_STATS_FOREACH_TRANSPORT(apply);                                                                                     \
+        QUICLY_STATS_FOREACH_TRANSPORT_COUNTERS(apply);                                                                            \
+    } while (0)
+
+/**
+ * Macro for iterating the fields of `quicly_stats_t` other than QUICLY_STATS_PREBUILT_COUNTERS.
+ */
+#define QUICLY_STATS_FOREACH_NON_COUNTERS(apply)                                                                                   \
+    do {                                                                                                                           \
+        apply(jumpstart.prev_rate, "jumpstart-prev-rate");                                                                         \
+        apply(jumpstart.prev_rtt, "jumpstart-prev-rtt");                                                                           \
+        apply(jumpstart.new_rtt, "jumpstart-prev-rtt");                                                                            \
+        apply(jumpstart.cwnd, "jumpstart-cwnd");                                                                                   \
+        apply(token_sent.at, "token-sent-at");                                                                                     \
+        apply(token_sent.rate, "token-sent-rate");                                                                                 \
+        apply(token_sent.rtt, "token-sent-rtt");                                                                                   \
+        apply(rtt.minimum, "rtt-minimum");                                                                                         \
+        apply(rtt.smoothed, "rtt-smoothed");                                                                                       \
+        apply(rtt.variance, "rtt-variance");                                                                                       \
+        apply(rtt.latest, "rtt-latest");                                                                                           \
+        apply(loss_thresholds.use_packet_based, "loss-thresholds-use-packet-based");                                               \
+        apply(loss_thresholds.time_based_percentile, "loss-thresholds-time-based-percentile");                                     \
+        apply(cc.cwnd, "cwnd");                                                                                                    \
+        apply(cc.ssthresh, "ssthresh");                                                                                            \
+        apply(cc.cwnd_initial, "cwnd-initial");                                                                                    \
+        apply(cc.cwnd_exiting_slow_start, "cwnd-exiting-slow-start");                                                              \
+        apply(cc.exit_slow_start_at, "exit-slow-start-at");                                                                        \
+        apply(cc.cwnd_exiting_jumpstart, "jumpstart-exit-cwnd");                                                                   \
+        apply(cc.cwnd_minimum, "cwnd-minimum");                                                                                    \
+        apply(cc.cwnd_maximum, "cwnd-maximum");                                                                                    \
+        apply(cc.num_loss_episodes, "num-loss-episodes");                                                                          \
+        apply(cc.num_ecn_loss_episodes, "num-ecn-loss-episodes");                                                                  \
+        apply(delivery_rate.latest, "delivery-rate-latest");                                                                       \
+        apply(delivery_rate.smoothed, "delivery-rate-smoothed");                                                                   \
+        apply(delivery_rate.stdev, "delivery-rate-stdev");                                                                         \
+        apply(num_sentmap_packets_largest, "num-sentmap-packets-largest");                                                         \
+        apply(handshake_confirmed_msec, "handshake-confirmed-msec");                                                               \
+    } while (0)
+
+#define QUICLY_STATS_FOREACH(apply)                                                                                                \
+    do {                                                                                                                           \
+        QUICLY_STATS_FOREACH_COUNTERS(apply);                                                                                      \
+        QUICLY_STATS_FOREACH_NON_COUNTERS(apply);                                                                                  \
     } while (0)
 
 /**
@@ -845,7 +864,7 @@ struct _st_quicly_conn_public_t {
     quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
-        QUICLY_STATS_PREBUILT_COUNTERS;
+        QUICLY_STATS_PREBUILT_FIELDS;
         /**
          * Time took until handshake is confirmed. UINT64_MAX if handshake is not confirmed yet.
          */
