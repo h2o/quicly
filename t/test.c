@@ -1056,12 +1056,23 @@ static void test_stats_foreach_field(size_t off, size_t size)
 
 static void test_stats_foreach(void)
 {
-    test_stats_foreach_next_off = 0;
 #define CHECK(fld, name)                                                                                                           \
     subtest(name, test_stats_foreach_field, offsetof(quicly_stats_t, fld), sizeof(((quicly_stats_t *)NULL)->fld))
+
+    /* check QUICLY_STATS_FOREACH touches all fields, in the correct order */
+    test_stats_foreach_next_off = 0;
     QUICLY_STATS_FOREACH(CHECK);
-#undef CHECK
     ok(test_stats_foreach_next_off == sizeof(quicly_stats_t));
+
+    /* check QUICLY_STATS_FOREACH_COUNTERS only check the counters */
+    struct counters_only {
+        QUICLY_STATS_PREBUILT_COUNTERS;
+    };
+    test_stats_foreach_next_off = 0;
+    QUICLY_STATS_FOREACH_COUNTERS(CHECK);
+    ok(test_stats_foreach_next_off == sizeof(struct counters_only));
+
+#undef CHECK
 }
 
 int main(int argc, char **argv)
