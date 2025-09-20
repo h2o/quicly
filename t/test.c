@@ -1058,7 +1058,7 @@ static void test_stats_foreach_field(size_t off, size_t size)
 static void test_stats_foreach(void)
 {
 #define CHECK(fld, name)                                                                                                           \
-    subtest(name, test_stats_foreach_field, offsetof(quicly_stats_t, fld), sizeof(((quicly_stats_t *)NULL)->fld))
+    subtest(name, test_stats_foreach_field, offsetof(quicly_stats_t, fld), sizeof(((quicly_stats_t *)NULL)->fld));
 
     /* check QUICLY_STATS_FOREACH touches all fields, in the correct order */
     test_stats_foreach_next_off = 0;
