@@ -619,6 +619,10 @@ struct st_quicly_conn_streamgroup_state_t {
 #define QUICLY_STATS_PREBUILT_FIELDS                                                                                               \
     QUICLY_STATS_PREBUILT_COUNTERS;                                                                                                \
     /**                                                                                                                            \
+     * Time took until handshake is confirmed. UINT64_MAX if handshake is not confirmed yet.                                       \
+     */                                                                                                                            \
+    uint64_t handshake_confirmed_msec;                                                                                             \
+    /**                                                                                                                            \
      * jumpstart parameters and the CWND being adopted (see also quicly_cc_t::cwnd_exiting_jumpstart)                              \
      */                                                                                                                            \
     struct {                                                                                                                       \
@@ -670,10 +674,6 @@ typedef struct st_quicly_stats_t {
      * largest number of packets contained in the sentmap
      */
     size_t num_sentmap_packets_largest;
-    /**
-     * Time took until handshake is confirmed. UINT64_MAX if handshake is not confirmed yet.
-     */
-    uint64_t handshake_confirmed_msec;
 } quicly_stats_t;
 
 #define QUICLY_STATS_FOREACH_NUM_PACKETS(apply)                                                                                    \
@@ -774,6 +774,7 @@ typedef struct st_quicly_stats_t {
  */
 #define QUICLY_STATS_FOREACH_NON_COUNTERS(apply)                                                                                   \
     do {                                                                                                                           \
+        apply(handshake_confirmed_msec, "handshake-confirmed-msec");                                                               \
         apply(jumpstart.prev_rate, "jumpstart-prev-rate");                                                                         \
         apply(jumpstart.prev_rtt, "jumpstart-prev-rtt");                                                                           \
         apply(jumpstart.new_rtt, "jumpstart-prev-rtt");                                                                            \
@@ -801,7 +802,6 @@ typedef struct st_quicly_stats_t {
         apply(delivery_rate.smoothed, "delivery-rate-smoothed");                                                                   \
         apply(delivery_rate.stdev, "delivery-rate-stdev");                                                                         \
         apply(num_sentmap_packets_largest, "num-sentmap-packets-largest");                                                         \
-        apply(handshake_confirmed_msec, "handshake-confirmed-msec");                                                               \
     } while (0)
 
 #define QUICLY_STATS_FOREACH(apply)                                                                                                \
@@ -865,10 +865,6 @@ struct _st_quicly_conn_public_t {
     struct st_quicly_default_scheduler_state_t _default_scheduler;
     struct {
         QUICLY_STATS_PREBUILT_FIELDS;
-        /**
-         * Time took until handshake is confirmed. UINT64_MAX if handshake is not confirmed yet.
-         */
-        uint64_t handshake_confirmed_msec;
     } stats;
     uint32_t version;
     void *data;

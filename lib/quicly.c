@@ -1377,7 +1377,6 @@ quicly_error_t quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     }
     quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate);
     stats->num_sentmap_packets_largest = conn->egress.loss.sentmap.num_packets_largest;
-    stats->handshake_confirmed_msec = conn->super.stats.handshake_confirmed_msec;
 
     return 0;
 }
