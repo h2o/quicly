@@ -769,7 +769,7 @@ typedef struct st_quicly_stats_t {
     apply(handshake_confirmed_msec, "handshake-confirmed-msec")                                                                    \
     apply(jumpstart.prev_rate, "jumpstart.prev-rate")                                                                              \
     apply(jumpstart.prev_rtt, "jumpstart.prev-rtt")                                                                                \
-    apply(jumpstart.new_rtt, "jumpstart.prev-rtt")                                                                                 \
+    apply(jumpstart.new_rtt, "jumpstart.new-rtt")                                                                                 \
     apply(jumpstart.cwnd, "jumpstart.cwnd")                                                                                        \
     apply(token_sent.at, "token-sent.at")                                                                                          \
     apply(token_sent.rate, "token-sent.rate")                                                                                      \
@@ -785,7 +785,7 @@ typedef struct st_quicly_stats_t {
     apply(cc.cwnd_initial, "cc.cwnd-initial")                                                                                      \
     apply(cc.cwnd_exiting_slow_start, "cc.cwnd-exiting-slow-start")                                                                \
     apply(cc.exit_slow_start_at, "cc.exit-slow-start-at")                                                                          \
-    apply(cc.cwnd_exiting_jumpstart, "cc.jumpstart-exit-cwnd")                                                                     \
+    apply(cc.cwnd_exiting_jumpstart, "cc.cwnd-exiting-jumpstart")                                                                  \
     apply(cc.cwnd_minimum, "cc.cwnd-minimum")                                                                                      \
     apply(cc.cwnd_maximum, "cc.cwnd-maximum")                                                                                      \
     apply(cc.num_loss_episodes, "cc.num-loss-episodes")                                                                            \
