@@ -678,41 +678,42 @@ typedef struct st_quicly_stats_t {
 
 #define QUICLY_STATS_FOREACH_NUM_PACKETS(apply)                                                                                    \
     do {                                                                                                                           \
-        apply(num_packets.received, "packets-received");                                                                           \
-        apply(num_packets.decryption_failed, "packets-decryption-failed");                                                         \
-        apply(num_packets.sent, "packets-sent");                                                                                   \
-        apply(num_packets.lost, "packets-lost");                                                                                   \
-        apply(num_packets.lost_time_threshold, "packets-lost-time-threshold");                                                     \
-        apply(num_packets.ack_received, "packets-ack-received");                                                                   \
-        apply(num_packets.late_acked, "late-acked");                                                                               \
-        apply(num_packets.initial_received, "initial-received");                                                                   \
-        apply(num_packets.zero_rtt_received, "zero-rtt-received");                                                                 \
-        apply(num_packets.handshake_received, "handshake-received");                                                               \
-        apply(num_packets.initial_sent, "initial-sent");                                                                           \
-        apply(num_packets.zero_rtt_sent, "zero-rtt-sent");                                                                         \
-        apply(num_packets.handshake_sent, "handshake-sent");                                                                       \
-        apply(num_packets.received_out_of_order, "packets-received-out-of-order");                                                 \
-        apply(num_packets.received_ecn_counts[0], "packets-received-ecn-ect0");                                                    \
-        apply(num_packets.received_ecn_counts[1], "packets-received-ecn-ect1");                                                    \
-        apply(num_packets.received_ecn_counts[2], "packets-received-ecn-ce");                                                      \
-        apply(num_packets.acked_ecn_counts[0], "packets-acked-ecn-ect0");                                                          \
-        apply(num_packets.acked_ecn_counts[1], "packets-acked-ecn-ect1");                                                          \
-        apply(num_packets.acked_ecn_counts[2], "packets-acked-ecn-ce");                                                            \
-        apply(num_packets.sent_promoted_paths, "packets-sent-promoted-paths");                                                     \
-        apply(num_packets.ack_received_promoted_paths, "packets-ack-received-promoted-paths");                                     \
+        apply(num_packets.received, "num-packets.received");                                                                       \
+        apply(num_packets.decryption_failed, "num-packets.decryption-failed");                                                     \
+        apply(num_packets.sent, "num-packets.sent");                                                                               \
+        apply(num_packets.lost, "num-packets.lost");                                                                               \
+        apply(num_packets.lost_time_threshold, "num-packets.lost-time-threshold");                                                 \
+        apply(num_packets.ack_received, "num-packets.ack-received");                                                               \
+        apply(num_packets.late_acked, "num-packets.late-acked");                                                                   \
+        apply(num_packets.initial_received, "num-packets.initial-received");                                                       \
+        apply(num_packets.zero_rtt_received, "num-packets.zero-rtt-received");                                                     \
+        apply(num_packets.handshake_received, "num-packets.handshake-received");                                                   \
+        apply(num_packets.initial_sent, "num-packets.initial-sent");                                                               \
+        apply(num_packets.zero_rtt_sent, "num-packets.zero-rtt-sent");                                                             \
+        apply(num_packets.handshake_sent, "num-packets.handshake-sent");                                                           \
+        apply(num_packets.received_out_of_order, "num-packets.received-out-of-order");                                             \
+        apply(num_packets.received_ecn_counts[0], "num-packets.received-ecn-ect0");                                                \
+        apply(num_packets.received_ecn_counts[1], "num-packets.received-ecn-ect1");                                                \
+        apply(num_packets.received_ecn_counts[2], "num-packets.received-ecn-ce");                                                  \
+        apply(num_packets.acked_ecn_counts[0], "num-packets.acked-ecn-ect0");                                                      \
+        apply(num_packets.acked_ecn_counts[1], "num-packets.acked-ecn-ect1");                                                      \
+        apply(num_packets.acked_ecn_counts[2], "num-packets.acked-ecn-ce");                                                        \
+        apply(num_packets.sent_promoted_paths, "num-packets.sent-promoted-paths");                                                 \
+        apply(num_packets.ack_received_promoted_paths, "num-packets.ack-received-promoted-paths");                                 \
     } while (0)
 
 #define QUICLY_STATS_FOREACH_NUM_BYTES(apply)                                                                                      \
     do {                                                                                                                           \
-        apply(num_bytes.received, "bytes-received");                                                                               \
-        apply(num_bytes.sent, "bytes-sent");                                                                                       \
-        apply(num_bytes.lost, "bytes-lost");                                                                                       \
-        apply(num_bytes.ack_received, "bytes-ack-received");                                                                       \
-        apply(num_bytes.stream_data_sent, "bytes-stream-data-sent");                                                               \
-        apply(num_bytes.stream_data_resent, "bytes-stream-data-resent");                                                           \
+        apply(num_bytes.received, "num-bytes.received");                                                                           \
+        apply(num_bytes.sent, "num-bytes.sent");                                                                                   \
+        apply(num_bytes.lost, "num-bytes.lost");                                                                                   \
+        apply(num_bytes.ack_received, "num-bytes.ack-received");                                                                   \
+        apply(num_bytes.stream_data_sent, "num-bytes.stream-data-sent");                                                           \
+        apply(num_bytes.stream_data_resent, "num-bytes.stream-data-resent");                                                       \
     } while (0)
 
-#define QUICLY_STATS__DO_FOREACH_NUM_FRAMES(name, dir, apply) apply(num_frames_##dir.name, PTLS_TO_STR(name) "-" PTLS_TO_STR(dir))
+#define QUICLY_STATS__DO_FOREACH_NUM_FRAMES(name, dir, apply)                                                                      \
+    apply(num_frames_##dir.name, "num-frames-" PTLS_TO_STR(dir) "." PTLS_TO_STR(name))
 
 #define QUICLY_STATS_FOREACH_NUM_FRAMES(dir, apply)                                                                                \
     do {                                                                                                                           \
@@ -744,14 +745,14 @@ typedef struct st_quicly_stats_t {
 
 #define QUICLY_STATS_FOREACH_TRANSPORT_COUNTERS(apply)                                                                             \
     do {                                                                                                                           \
-        apply(num_paths.created, "paths-created");                                                                                 \
-        apply(num_paths.validated, "paths-validated");                                                                             \
-        apply(num_paths.validation_failed, "paths-validation-failed");                                                             \
-        apply(num_paths.migration_elicited, "paths-migration-elicited");                                                           \
-        apply(num_paths.promoted, "paths-promoted");                                                                               \
-        apply(num_paths.closed_no_dcid, "paths-closed-no-dcid");                                                                   \
-        apply(num_paths.ecn_validated, "paths-ecn-validated");                                                                     \
-        apply(num_paths.ecn_failed, "paths-ecn-failed");                                                                           \
+        apply(num_paths.created, "num-paths.created");                                                                             \
+        apply(num_paths.validated, "num-paths.validated");                                                                         \
+        apply(num_paths.validation_failed, "num-paths.validation-failed");                                                         \
+        apply(num_paths.migration_elicited, "num-paths.migration-elicited");                                                       \
+        apply(num_paths.promoted, "num-paths.promoted");                                                                           \
+        apply(num_paths.closed_no_dcid, "num-paths.closed-no-dcid");                                                               \
+        apply(num_paths.ecn_validated, "num-paths.ecn-validated");                                                                 \
+        apply(num_paths.ecn_failed, "num-paths.ecn-failed");                                                                       \
         apply(num_ptos, "num-ptos");                                                                                               \
         apply(num_handshake_timeouts, "num-handshake-timeouts");                                                                   \
         apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded");                                                   \
@@ -775,32 +776,32 @@ typedef struct st_quicly_stats_t {
 #define QUICLY_STATS_FOREACH_NON_COUNTERS(apply)                                                                                   \
     do {                                                                                                                           \
         apply(handshake_confirmed_msec, "handshake-confirmed-msec");                                                               \
-        apply(jumpstart.prev_rate, "jumpstart-prev-rate");                                                                         \
-        apply(jumpstart.prev_rtt, "jumpstart-prev-rtt");                                                                           \
-        apply(jumpstart.new_rtt, "jumpstart-prev-rtt");                                                                            \
-        apply(jumpstart.cwnd, "jumpstart-cwnd");                                                                                   \
-        apply(token_sent.at, "token-sent-at");                                                                                     \
-        apply(token_sent.rate, "token-sent-rate");                                                                                 \
-        apply(token_sent.rtt, "token-sent-rtt");                                                                                   \
-        apply(rtt.minimum, "rtt-minimum");                                                                                         \
-        apply(rtt.smoothed, "rtt-smoothed");                                                                                       \
-        apply(rtt.variance, "rtt-variance");                                                                                       \
-        apply(rtt.latest, "rtt-latest");                                                                                           \
-        apply(loss_thresholds.use_packet_based, "loss-thresholds-use-packet-based");                                               \
-        apply(loss_thresholds.time_based_percentile, "loss-thresholds-time-based-percentile");                                     \
-        apply(cc.cwnd, "cwnd");                                                                                                    \
-        apply(cc.ssthresh, "ssthresh");                                                                                            \
-        apply(cc.cwnd_initial, "cwnd-initial");                                                                                    \
-        apply(cc.cwnd_exiting_slow_start, "cwnd-exiting-slow-start");                                                              \
-        apply(cc.exit_slow_start_at, "exit-slow-start-at");                                                                        \
-        apply(cc.cwnd_exiting_jumpstart, "jumpstart-exit-cwnd");                                                                   \
-        apply(cc.cwnd_minimum, "cwnd-minimum");                                                                                    \
-        apply(cc.cwnd_maximum, "cwnd-maximum");                                                                                    \
-        apply(cc.num_loss_episodes, "num-loss-episodes");                                                                          \
-        apply(cc.num_ecn_loss_episodes, "num-ecn-loss-episodes");                                                                  \
-        apply(delivery_rate.latest, "delivery-rate-latest");                                                                       \
-        apply(delivery_rate.smoothed, "delivery-rate-smoothed");                                                                   \
-        apply(delivery_rate.stdev, "delivery-rate-stdev");                                                                         \
+        apply(jumpstart.prev_rate, "jumpstart.prev-rate");                                                                         \
+        apply(jumpstart.prev_rtt, "jumpstart.prev-rtt");                                                                           \
+        apply(jumpstart.new_rtt, "jumpstart.prev-rtt");                                                                            \
+        apply(jumpstart.cwnd, "jumpstart.cwnd");                                                                                   \
+        apply(token_sent.at, "token-sent.at");                                                                                     \
+        apply(token_sent.rate, "token-sent.rate");                                                                                 \
+        apply(token_sent.rtt, "token-sent.rtt");                                                                                   \
+        apply(rtt.minimum, "rtt.minimum");                                                                                         \
+        apply(rtt.smoothed, "rtt.smoothed");                                                                                       \
+        apply(rtt.variance, "rtt.variance");                                                                                       \
+        apply(rtt.latest, "rtt.latest");                                                                                           \
+        apply(loss_thresholds.use_packet_based, "loss-thresholds.use-packet-based");                                               \
+        apply(loss_thresholds.time_based_percentile, "loss-thresholds.time-based-percentile");                                     \
+        apply(cc.cwnd, "cc.cwnd");                                                                                                 \
+        apply(cc.ssthresh, "cc.ssthresh");                                                                                         \
+        apply(cc.cwnd_initial, "cc.cwnd-initial");                                                                                 \
+        apply(cc.cwnd_exiting_slow_start, "cc.cwnd-exiting-slow-start");                                                           \
+        apply(cc.exit_slow_start_at, "cc.exit-slow-start-at");                                                                     \
+        apply(cc.cwnd_exiting_jumpstart, "cc.jumpstart-exit-cwnd");                                                                \
+        apply(cc.cwnd_minimum, "cc.cwnd-minimum");                                                                                 \
+        apply(cc.cwnd_maximum, "cc.cwnd-maximum");                                                                                 \
+        apply(cc.num_loss_episodes, "cc.num-loss-episodes");                                                                       \
+        apply(cc.num_ecn_loss_episodes, "cc.num-ecn-loss-episodes");                                                               \
+        apply(delivery_rate.latest, "delivery-rate.latest");                                                                       \
+        apply(delivery_rate.smoothed, "delivery-rate.smoothed");                                                                   \
+        apply(delivery_rate.stdev, "delivery-rate.stdev");                                                                         \
         apply(num_sentmap_packets_largest, "num-sentmap-packets-largest");                                                         \
     } while (0)
 
