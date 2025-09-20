@@ -1032,9 +1032,10 @@ static void test_stats_foreach_field(size_t off, size_t size)
 {
     ok(test_stats_foreach_next_off == off);
 
-    /* if a gap exists after the current slot, then the next field exists at the end of the gap */
+    /* Due to alignment, padding might exist between two fields when their types are different. The `gaps` list calls out the ones
+     * that "might" have such padding on some architectures. */
     static const size_t gaps[] = {
-#define GAP(before, after) offsetof(quicly_stats_t, before), offsetof(quicly_stats_t, after)
+#define GAP(after, before) offsetof(quicly_stats_t, after), offsetof(quicly_stats_t, before)
         GAP(jumpstart.cwnd, token_sent.at),
         GAP(token_sent.rtt, rtt.minimum),
         GAP(loss_thresholds.use_packet_based, loss_thresholds.time_based_percentile),
