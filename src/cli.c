@@ -1368,7 +1368,7 @@ static size_t determine_pn_offset(ptls_iovec_t input, size_t *packet_size, size_
         /* short header packet; only 0-byte DCID is supported */
         *packet_size = input.len;
         *epoch = QUICLY_EPOCH_1RTT;
-        return 1;
+        return 1 + 8 /* assumes DCID of 8 bytes */;
 
     }
 
