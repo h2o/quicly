@@ -111,10 +111,12 @@ static struct {
 /**
  * list of requests to be processed, terminated by reqs[N].path == NULL
  */
-struct {
+static struct {
     const char *path;
     int to_file;
 } *reqs;
+
+static int exit_after_handshake;
 
 struct st_stream_data_t {
     quicly_streambuf_t streambuf;
@@ -753,16 +755,22 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                         quicly_send_datagram_frames(conn, &datagram, 1);
                         send_datagram_frame = 0;
                     }
-                    if (quicly_num_streams(conn) == 0) {
-                        if (request_interval != 0 && client_gotsig != SIGTERM) {
-                            if (enqueue_requests_at == INT64_MAX)
-                                enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
-                        } else {
-                            static int close_called;
-                            if (!close_called) {
-                                dump_stats(stderr, conn);
-                                quicly_close(conn, 0, "");
-                                close_called = 1;
+                    if (exit_after_handshake) {
+                        quicly_stats_t stats;
+                        if (quicly_get_stats(conn, &stats) == 0 && stats.handshake_confirmed_msec != UINT64_MAX)
+                            exit(0);
+                    } else {
+                        if (quicly_num_streams(conn) == 0) {
+                            if (request_interval != 0 && client_gotsig != SIGTERM) {
+                                if (enqueue_requests_at == INT64_MAX)
+                                    enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
+                            } else {
+                                static int close_called;
+                                if (!close_called) {
+                                    dump_stats(stderr, conn);
+                                    quicly_close(conn, 0, "");
+                                    close_called = 1;
+                                }
                             }
                         }
                     }
@@ -1215,6 +1223,8 @@ static void usage(const char *cmd)
            "                            retry_configs from the server\n"
            "  --ech-key <file>          ECH private key for each ECH config provided by\n"
            "                            --ech-config\n"
+           "  --exit-after-handshake    immediately exists one the handshake concludes,\n"
+           "                            without sending application data\n"
            "  -f fraction               increases the induced ack frequency to specified\n"
            "                            fraction of CWND (default: 0)\n"
            "  -G                        enable UDP generic segmentation offload\n"
@@ -1236,6 +1246,7 @@ static void usage(const char *cmd)
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
+           "  --sockfd fd               specifies the UDP socket to be used\n"
            "  -u size                   initial size of UDP datagram payload\n"
            "  -U size                   maximum size of UDP datagram payload\n"
            "  -V                        verify peer using the default certificates\n"
@@ -1452,7 +1463,7 @@ int main(int argc, char **argv)
     struct sockaddr_storage sa;
     socklen_t salen;
     unsigned udpbufsize = 0;
-    int ch, opt_index, fd;
+    int ch, opt_index, fd = -1;
 
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
@@ -1485,6 +1496,8 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
+                                             {"sockfd", required_argument, NULL, 0},
+                                             {"exit-after-handshake", no_argument, NULL, 0},
                                              {"calc-initial-secret", required_argument, NULL, 0},
                                              {"decrypt-packet", required_argument, NULL, 0},
                                              {"encrypt-packet", required_argument, NULL, 0},
@@ -1511,6 +1524,13 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {
+                if (sscanf(optarg, "%d", &fd) != 1) {
+                    fprintf(stderr, "invalid argument passed to --sockfd\n");
+                    exit(1);
+                }
+            } else if (strcmp(longopts[opt_index].name, "exit-after-handshake") == 0) {
+                exit_after_handshake = 1;
             } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
                 return cmd_calc_initial_secret(optarg);
             } else if (strcmp(longopts[opt_index].name, "decrypt-packet") == 0) {
@@ -1752,8 +1772,15 @@ int main(int argc, char **argv)
     argc -= optind;
     argv += optind;
 
-    if (reqs[0].path == NULL)
-        push_req("/", 0);
+    if (exit_after_handshake) {
+        if (reqs[0].path != NULL) {
+            fprintf(stderr, "-p and --exit-after-handshake cannot be used together\n");
+            exit(1);
+        }
+    } else {
+        if (reqs[0].path == NULL)
+            push_req("/", 0);
+    }
 
     if (key_exchanges[0] == NULL)
         key_exchanges[0] = &ptls_openssl_secp256r1;
@@ -1852,7 +1879,7 @@ int main(int argc, char **argv)
     if (resolve_address((void *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
-    if ((fd = socket(sa.ss_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
+    if (fd == -1 && (fd = socket(sa.ss_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         perror("socket(2) failed");
         return 1;
     }
