@@ -1262,10 +1262,10 @@ static void usage(const char *cmd)
            "Miscellaneous Options:\n"
            "  -h                        print this help\n"
            "  --calc-initial-secret     calculate Initial client traffic secret given DCID\n"
-           "  --decrypt-packet secret   given a QUIC packet and traffic key, decrypts and\n"
-           "                            prints the packet payload\n"
+           "  --decrypt-packet secret   given a QUIC packet and a traffic secret, decrypts\n"
+           "                            and prints the packet payload\n"
            "  --encrypt-packet secret   given a packet without encryption applied, emits a\n"
-           "                            packet encrypted using given traffic key\n"
+           "                            packet encrypted using the given traffic secret\n"
            "\n",
            cmd);
 }
@@ -1324,38 +1324,53 @@ static int cmd_calc_initial_secret(const char *dcid_hex)
     return 0;
 }
 
-static size_t determine_pn_offset(ptls_iovec_t input, size_t *packet_size)
+static size_t determine_pn_offset(ptls_iovec_t input, size_t *packet_size, size_t *epoch)
 {
-    if (input.len < 5)
+    if (input.len < 1)
         goto Broken;
 
-    if ((input.base[0] & QUICLY_PACKET_TYPE_BITMASK) != QUICLY_PACKET_TYPE_INITIAL)
-        goto UnexpectedType;
+    if ((input.base[0] & QUICLY_LONG_HEADER_BIT) == QUICLY_LONG_HEADER_BIT) {
 
-    size_t off = 5;
+        /* long header packet; at the moment, only Inital packets are supported */
+        if ((input.base[0] & QUICLY_PACKET_TYPE_BITMASK) != QUICLY_PACKET_TYPE_INITIAL)
+            goto UnexpectedType;
 
-    /* skip CIDs */
-    for (int i = 0; i < 2; ++i) {
-        if (off >= input.len || (off += 1 + input.base[off]) > input.len)
+        if (input.len < 5)
             goto Broken;
-    }
+        size_t off = 5;
 
-    { /* skip token length */
-        const uint8_t *p = input.base + off;
-        uint64_t token_len = quicly_decodev(&p, input.base + input.len);
-        if (token_len == UINT64_MAX || (off = p - input.base + token_len) > input.len)
-            goto Broken;
-    }
+        /* skip CIDs */
+        for (int i = 0; i < 2; ++i) {
+            if (off >= input.len || (off += 1 + input.base[off]) > input.len)
+                goto Broken;
+        }
 
-    { /* read packet length and adjust so that `*packet_size` contains  */
-        const uint8_t *p = input.base + off;
-        if ((*packet_size = quicly_decodev(&p, input.base + input.len)) == SIZE_MAX)
-            goto Broken;
-        off = p - input.base;
-        *packet_size += off;
-    }
+        { /* skip token length */
+            const uint8_t *p = input.base + off;
+            uint64_t token_len = quicly_decodev(&p, input.base + input.len);
+            if (token_len == UINT64_MAX || (off = p - input.base + token_len) > input.len)
+                goto Broken;
+        }
 
-    return off;
+        { /* read packet length and adjust so that `*packet_size` contains  */
+            const uint8_t *p = input.base + off;
+            if ((*packet_size = quicly_decodev(&p, input.base + input.len)) == SIZE_MAX)
+                goto Broken;
+            off = p - input.base;
+            *packet_size += off;
+        }
+
+        *epoch = QUICLY_EPOCH_INITIAL;
+        return off;
+
+    } else {
+
+        /* short header packet; only 0-byte DCID is supported */
+        *packet_size = input.len;
+        *epoch = QUICLY_EPOCH_1RTT;
+        return 1;
+
+    }
 
 Broken:
     fprintf(stderr, "Invalid or unsupported type of QUIC packet.\n");
@@ -1373,18 +1388,7 @@ static int cmd_encrypt_packet(int is_enc, const char *secret_hex)
     ptls_cipher_context_t *header_protect;
     ptls_aead_context_t *packet_protect;
     uint8_t buf[1500] = {}, secret[PTLS_MAX_DIGEST_SIZE];
-    size_t inlen, pn_off, packet_size;
-
-    /* setup crypto */
-    if (decode_hexstring(secret, cs->hash->digest_size, secret_hex) != cs->hash->digest_size) {
-        fprintf(stderr, "Invalid secret (must be of %zu bytes in hex)\n", cs->hash->digest_size);
-        return 1;
-    }
-    if (engine->setup_cipher(engine, NULL, QUICLY_EPOCH_INITIAL, is_enc, &header_protect, &packet_protect, cs->aead, cs->hash,
-                             secret) != 0) {
-        fprintf(stderr, "Crypto faiure.\n");
-        return 1;
-    }
+    size_t inlen, pn_off, packet_size, epoch;
 
     /* read the packet */
     inlen = fread(buf, 1, sizeof(buf) - cs->aead->tag_size, stdin);
@@ -1395,10 +1399,20 @@ static int cmd_encrypt_packet(int is_enc, const char *secret_hex)
         fprintf(stderr, "Unexpected amount of input.\n");
         return 1;
     }
-    if ((pn_off = determine_pn_offset(ptls_iovec_init(buf, inlen), &packet_size)) == SIZE_MAX)
+    if ((pn_off = determine_pn_offset(ptls_iovec_init(buf, inlen), &packet_size, &epoch)) == SIZE_MAX)
         return 1;
     if (packet_size - pn_off < QUICLY_MAX_PN_SIZE + cs->aead->tag_size) {
         fprintf(stderr, "encrypted part of the packet is too small.\n");
+        return 1;
+    }
+
+    /* setup crypto */
+    if (decode_hexstring(secret, cs->hash->digest_size, secret_hex) != cs->hash->digest_size) {
+        fprintf(stderr, "Invalid secret (must be of %zu bytes in hex)\n", cs->hash->digest_size);
+        return 1;
+    }
+    if (engine->setup_cipher(engine, NULL, epoch, is_enc, &header_protect, &packet_protect, cs->aead, cs->hash, secret) != 0) {
+        fprintf(stderr, "Crypto faiure.\n");
         return 1;
     }
 
