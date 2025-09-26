@@ -574,6 +574,15 @@ subtest "reset-stream-overflow" => sub {
     like $received, qr/^\x1c\x03\x04/, "responds with CONNECTION_CLOSE(FLOW_CONTROL_ERROR) for RESET_STREAM";
 };
 
+subtest "stream-open-after-connection-close" => sub {
+    my $server = spawn_server(qw(-e /dev/stderr));
+    my $conn = RawConnection->new("127.0.0.1", $port);
+    $conn->send("\x1c\x00\x00\x00" . "\x0a\x00\x05hello"); # CONNECTION_CLOSE -> STREAM
+    sleep 0.5;
+    ok !$server->is_dead(), "server process must be alive";
+    is `$cli -I 1000 -p /12 127.0.0.1 $port 2> /dev/null`, "hello world\n", "server is responding";
+};
+
 done_testing;
 
 sub spawn_server {
