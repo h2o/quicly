@@ -568,8 +568,10 @@ subtest "reset-stream-overflow" => sub {
     my $server = spawn_server();
     my $conn = RawConnection->new("127.0.0.1", $port);
     $conn->send("\x04\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff"); # reset stream with final_size=QUICINT_MAX
-    sleep 1;
+    sleep 0.5;
     ok !$server->is_dead(), "server process must be alive";
+    my $received = $conn->receive();
+    like $received, qr/^\x1c\x03\x04/, "responds with CONNECTION_CLOSE(FLOW_CONTROL_ERROR) for RESET_STREAM";
 };
 
 done_testing;
