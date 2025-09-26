@@ -564,6 +564,14 @@ subtest "trasport-parameters" => sub {
     };
 };
 
+subtest "reset-stream-overflow" => sub {
+    my $server = spawn_server();
+    my $conn = RawConnection->new("127.0.0.1", $port);
+    $conn->send("\x04\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff"); # reset stream with final_size=QUICINT_MAX
+    sleep 1;
+    ok !$server->is_dead(), "server process must be alive";
+};
+
 done_testing;
 
 sub spawn_server {
