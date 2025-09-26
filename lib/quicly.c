@@ -6172,6 +6172,9 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
+    if (frame.final_size > stream->recvstate.data_off + stream->_recv_aux.window)
+        return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
+
     if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t bytes_missing;
         if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, &bytes_missing)) != 0)
