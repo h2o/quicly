@@ -6807,7 +6807,7 @@ quicly_error_t handle_close(quicly_conn_t *conn, quicly_error_t err, uint64_t fr
                                               (const char *)reason_phrase.base, reason_phrase.len);
     destroy_all_streams(conn, err, 0);
 
-    return 0;
+    return QUICLY_ERROR_IS_CLOSING;
 }
 
 static quicly_error_t handle_transport_close_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
