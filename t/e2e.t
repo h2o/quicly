@@ -647,6 +647,7 @@ package RawConnection {
             },
             peeraddr => pack_sockaddr_in($port, inet_aton($host)),
             pn       => 256,   # whatever large enough to avoid collision with those used during the handshake
+            largest_pn_received => -1,
         }, $klass;
 
         # perform handshake and obtain connection parameters
@@ -671,12 +672,20 @@ package RawConnection {
                 }
             } elsif ($event->{type} eq 'crypto_update_secret' && $event->{epoch} == 3) {
                 ($event->{is_enc} ? $self->{enc_secret} : $self->{dec_secret}) = $event->{secret};
+            } elsif ($event->{type} eq 'packet_received') {
+                $self->{largest_pn_received} = $event->{pn}
+                    if $self->{largest_pn_received} < $event->{pn};
             }
         }
         close $fh
             or die "$cli failed with exit status:$?";
 
         $self;
+    }
+
+    sub largest_pn_received {
+        my $self = shift;
+        $self->{largest_pn_received};
     }
 
     sub send {
