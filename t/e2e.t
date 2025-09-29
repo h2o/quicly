@@ -583,6 +583,17 @@ subtest "stream-open-after-connection-close" => sub {
     is `$cli -I 1000 -p /12 127.0.0.1 $port 2> /dev/null`, "hello world\n", "server is responding";
 };
 
+subtest "invalid-ack" => sub {
+    my $server = spawn_server();
+    my $conn = RawConnection->new("127.0.0.1", $port);
+    my $pn = $conn->largest_pn_received;
+    $conn->send("\x02" . chr($pn) . "\x00\x00" . chr($pn)); # ACK all PNs up to largest_pn_received
+    sleep 0.5;
+    ok !$server->is_dead(), "server is alive";
+    my $received = $conn->receive();
+    like $received, qr/^\x1c\x0a\x02/, "responds with CONNECTION_CLOSE(PROTOCOL_VIOLATION) for ACK";
+};
+
 done_testing;
 
 sub spawn_server {
