@@ -582,18 +582,25 @@ package SpawnedProcess {
 
     sub is_dead {
         my $self = shift;
-        waitpid($self->{pid}, WNOHANG) > 0;
+
+        return 1
+            unless $self->{pid};
+
+        my $dead = waitpid($self->{pid}, WNOHANG) > 0;
+        undef $self->{pid}
+            if $dead;
+        $dead;
     }
 
     sub finalize {
         my $self = shift;
 
-        return unless $self->{pid};
-
-        # kill the process
-        kill 9, $self->{pid};
-        while (waitpid($self->{pid}, 0) != $self->{pid}) {}
-        undef $self->{pid};
+        # kill the process, if it is still alive
+        if ($self->{pid}) {
+            kill 9, $self->{pid};
+            while (waitpid($self->{pid}, 0) != $self->{pid}) {}
+            undef $self->{pid};
+        }
 
         # fetch and close the log file
         seek $self->{logfh}, 0, 0;
