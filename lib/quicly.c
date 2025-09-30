@@ -6216,6 +6216,10 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
     if ((ret = quicly_decode_ack_frame(&state->src, state->end, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
         return ret;
 
+    /* early bail out if the peer is acking a PN that would have never been sent */
+    if (frame.largest_acknowledged > conn->egress.packet_number)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
     uint64_t pn_acked = frame.smallest_acknowledged;
 
     switch (state->epoch) {
