@@ -5510,7 +5510,8 @@ Exit:
                 if (conn->super.stats.jumpstart.cwnd <= conn->egress.cc.cwnd + orig_bytes_inflight)
                     conn->super.stats.jumpstart.cwnd = 0;
             }
-            /* disable jumpstart probablistically based on the specified ratios */
+            /* disable jumpstart probablistically based on the specified ratios; disablement is observable from the probes as
+             * `jumpstart.cwnd == 0` */
             if (conn->super.stats.jumpstart.cwnd > 0) {
                 uint8_t ratio = conn->super.stats.jumpstart.prev_rate != 0 ? conn->super.ctx->resume_jumpstart_ratio
                                                                            : conn->super.ctx->non_resume_jumpstart_ratio;
