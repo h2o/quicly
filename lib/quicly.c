@@ -553,6 +553,19 @@ const quicly_salt_t *quicly_get_salt(uint32_t protocol_version)
     }
 }
 
+static int enable_with_ratio255(uint8_t ratio, void (*random_bytes)(void *, size_t))
+{
+    if (ratio == 0)
+        return 0;
+    if (ratio == 255)
+        return 1;
+
+    /* approximate using 255*257=256*256-1 */
+    uint16_t r;
+    random_bytes(&r, sizeof(r));
+    return r < ratio * 257u;
+}
+
 static void lock_now(quicly_conn_t *conn, int is_reentrant)
 {
     if (conn->stash.now == 0) {
@@ -5499,19 +5512,9 @@ Exit:
             }
             /* disable jumpstart probablistically based on the specified ratios */
             if (conn->super.stats.jumpstart.cwnd > 0) {
-                int disable = 0;
                 uint8_t ratio = conn->super.stats.jumpstart.prev_rate != 0 ? conn->super.ctx->resume_jumpstart_ratio
                                                                            : conn->super.ctx->non_resume_jumpstart_ratio;
-                uint8_t randvals[2];
-                conn->super.ctx->tls->random_bytes(&randvals, sizeof(randvals));
-                for (size_t i = 0; i < PTLS_ELEMENTSOF(randvals); ++i) {
-                    if (randvals[i] != UINT8_MAX) {
-                        if (randvals[i] >= ratio)
-                            disable = 1;
-                        break;
-                    }
-                }
-                if (disable)
+                if (!enable_with_ratio255(ratio, conn->super.ctx->tls->random_bytes))
                     conn->super.stats.jumpstart.cwnd = 0;
                 QUICLY_PROBE(ENTER_JUMPSTART, conn, conn->stash.now, conn->egress.packet_number,
                              conn->super.stats.jumpstart.new_rtt, conn->egress.cc.cwnd, conn->super.stats.jumpstart.cwnd);
