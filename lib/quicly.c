@@ -5497,6 +5497,22 @@ Exit:
                 if (conn->super.stats.jumpstart.cwnd <= conn->egress.cc.cwnd + orig_bytes_inflight)
                     conn->super.stats.jumpstart.cwnd = 0;
             }
+            if (conn->super.stats.jumpstart.cwnd > 0) {
+                int disable = 0;
+                uint8_t ratio = conn->super.stats.jumpstart.prev_rate != 0 ? conn->super.ctx->resume_jumpstart_ratio
+                                                                           : conn->super.ctx->non_resume_jumpstart_ratio;
+                uint8_t randvals[2];
+                conn->super.ctx->tls->random_bytes(&randvals, sizeof(randvals));
+                for (size_t i = 0; i < PTLS_ELEMENTSOF(randvals); ++i) {
+                    if (randvals[i] != UINT8_MAX) {
+                        if (randvals[i] >= ratio)
+                            disable = 1;
+                        break;
+                    }
+                }
+                if (disable)
+                    conn->super.stats.jumpstart.cwnd = 0;
+            }
             if (conn->super.stats.jumpstart.cwnd > 0)
                 conn->egress.cc.type->cc_jumpstart(&conn->egress.cc, conn->super.stats.jumpstart.cwnd, conn->egress.packet_number);
         }
