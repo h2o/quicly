@@ -5513,8 +5513,8 @@ Exit:
             /* disable jumpstart probablistically based on the specified ratios; disablement is observable from the probes as
              * `jumpstart.cwnd == 0` */
             if (conn->super.stats.jumpstart.cwnd > 0) {
-                uint8_t ratio = conn->super.stats.jumpstart.prev_rate != 0 ? conn->super.ctx->resume_jumpstart_ratio
-                                                                           : conn->super.ctx->non_resume_jumpstart_ratio;
+                uint8_t ratio = conn->super.stats.jumpstart.prev_rate != 0 ? conn->super.ctx->enable_ratio.jumpstart.resume
+                                                                           : conn->super.ctx->enable_ratio.jumpstart.non_resume;
                 if (!enable_with_ratio255(ratio, conn->super.ctx->tls->random_bytes))
                     conn->super.stats.jumpstart.cwnd = 0;
                 QUICLY_PROBE(ENTER_JUMPSTART, conn, conn->stash.now, conn->egress.packet_number,

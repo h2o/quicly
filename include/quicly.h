@@ -354,9 +354,14 @@ struct st_quicly_context_t {
      */
     uint32_t max_jumpstart_cwnd_packets;
     /**
-     * Ratios to use jumpstart, when CWND packets are configured. 255 means 100%.
+     * Probabilities for enabling jumpstart when they are configured, multiplied by 255. 0 means never, 255 (default) means always.
      */
-    uint8_t non_resume_jumpstart_ratio, resume_jumpstart_ratio;
+    struct {
+        struct {
+            uint8_t non_resume;
+            uint8_t resume;
+        } jumpstart;
+    } enable_ratio;
     /**
      * expand client hello so that it does not fit into one datagram
      */
