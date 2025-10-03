@@ -2642,9 +2642,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.send_probe_at = INT64_MAX;
     conn->super.ctx->init_cc->cb(
         conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->stash.now,
-        conn->super.ctx->scaled_slow_start != 0 &&
+        conn->super.ctx->slow_start_increase != 0 &&
                 enable_with_ratio255(conn->super.ctx->enable_ratio.scaled_slow_start, conn->super.ctx->tls->random_bytes)
-            ? conn->super.ctx->scaled_slow_start
+            ? conn->super.ctx->slow_start_increase
             : QUICLY_STANDARD_SLOW_START_INCREASE);
     if (pacer != NULL) {
         conn->egress.pacer = pacer;

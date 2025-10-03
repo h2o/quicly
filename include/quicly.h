@@ -344,10 +344,10 @@ struct st_quicly_context_t {
      */
     uint64_t max_path_validation_failures;
     /**
-     * If set to non-zero, CWND is be increased by `scaled_slow_start / 256` bytes for each byte acked. If set to zero, CWND
+     * If set to non-zero, CWND is be increased by `slow_start_increase / 256` bytes for each byte acked. If set to zero, CWND
      * increase is 1 byte per byte acked.
      */
-    uint32_t scaled_slow_start;
+    uint32_t slow_start_increase;
     /**
      * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
      * possible only when the use_pacing flag is set.
