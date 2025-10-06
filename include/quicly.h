@@ -621,6 +621,10 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_initial_handshake_exceeded;                                                                                       \
     /**                                                                                                                            \
+     * Number of connections for which jumpstart is or could have been used.                                                       \
+     */                                                                                                                            \
+    uint64_t num_jumpstart_applicable;                                                                                             \
+    /**                                                                                                                            \
      * Total number of connections that were paced.                                                                                \
      */                                                                                                                            \
     uint64_t num_paced;                                                                                                            \
@@ -768,6 +772,7 @@ typedef struct st_quicly_stats_t {
     apply(num_ptos, "num-ptos")                                                                                                    \
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
+    apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
     apply(num_paced, "num-paced")                                                                                                  \
     apply(num_respected_app_limited, "num-respected-app-limited")
 
@@ -788,7 +793,7 @@ typedef struct st_quicly_stats_t {
     apply(handshake_confirmed_msec, "handshake-confirmed-msec")                                                                    \
     apply(jumpstart.prev_rate, "jumpstart.prev-rate")                                                                              \
     apply(jumpstart.prev_rtt, "jumpstart.prev-rtt")                                                                                \
-    apply(jumpstart.new_rtt, "jumpstart.new-rtt")                                                                                 \
+    apply(jumpstart.new_rtt, "jumpstart.new-rtt")                                                                                  \
     apply(jumpstart.cwnd, "jumpstart.cwnd")                                                                                        \
     apply(token_sent.at, "token-sent.at")                                                                                          \
     apply(token_sent.rate, "token-sent.rate")                                                                                      \
