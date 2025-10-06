@@ -1502,9 +1502,9 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
-                ctx.enable_ecn = 0;
+                ctx.enable_ratio.ecn = 0;
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
-                ctx.respect_app_limited = 0;
+                ctx.enable_ratio.respect_app_limited = 0;
             } else if (strcmp(longopts[opt_index].name, "slow-start-increase") == 0) {
                 double increase;
                 if (sscanf(optarg, "%lf", &increase) == 0 || !(1 <= increase && increase <= 10)) {
@@ -1574,7 +1574,7 @@ int main(int argc, char **argv)
             /* pacing */
             if ((token = strsep(&buf, ":")) != NULL) {
                 if (strcmp(token, "p") == 0) {
-                    ctx.use_pacing = 1;
+                    ctx.enable_ratio.pacing = 255;
                 } else {
                     fprintf(stderr, "invalid pacing value: %s\n", token);
                     exit(1);
