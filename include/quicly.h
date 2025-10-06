@@ -627,6 +627,10 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_initial_handshake_exceeded;                                                                                       \
     /**                                                                                                                            \
+     * Number of connections that used scaled slow start.                                                                          \
+     */                                                                                                                            \
+    uint64_t num_scaled_slow_start;                                                                                                \
+    /**                                                                                                                            \
      * Number of connections for which jumpstart is or could have been used.                                                       \
      */                                                                                                                            \
     uint64_t num_jumpstart_applicable;                                                                                             \
@@ -778,6 +782,7 @@ typedef struct st_quicly_stats_t {
     apply(num_ptos, "num-ptos")                                                                                                    \
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
+    apply(num_scaled_slow_start, "num-scaled-slow-start")                                                                          \
     apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
     apply(num_paced, "num-paced")                                                                                                  \
     apply(num_respected_app_limited, "num-respected-app-limited")
