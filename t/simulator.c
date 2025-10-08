@@ -456,15 +456,20 @@ static void usage(const char *cmd)
            "Options:\n"
            "  -n <cc>             adds a sender using specified controller\n"
            "  -b <bytes_per_sec>  bottleneck bandwidth (default: 1000000, i.e., 1MB/s)\n"
+           "  -d <delay_secs>     delay added between the sender and the botteneck\n"
+           "                      (default: 0.1)\n"
+           "  -i <packets>        sets initial CWND (default: %" PRIu32 ")\n"
+           "  -j <packets>        enables use of jumpstart using given window size\n"
            "  -l <seconds>        number of seconds to simulate (default: 100)\n"
-           "  -d <delay>          delay to be introduced between the sender and the botteneck, in seconds (default: 0.1)\n"
-           "  -q <seconds>        maximum depth of the bottleneck queue, in seconds (default: 0.1)\n"
-           "  -r <rate>           introduce random loss at specified probability (default: 0)\n"
-           "  -s <seconds>        delay until the sender is introduced to the simulation (default: 0)\n"
+           "  -p                  turns on pacing\n"
+           "  -q <seconds>        max depth of the bottleneck queue (default: 0.1)\n"
+           "  -r <probability>    adds random loss at given probability (default: 0)\n"
+           "  -s <seconds>        delay until the sender is added to the simulation\n"
+           "                      (default: 0)\n"
            "  -t                  emits trace as well\n"
            "  -h                  print this help\n"
            "\n",
-           cmd);
+           cmd, quicly_spec_context.initcwnd_packets);
 }
 
 #define RSA_PRIVATE_KEY                                                                                                            \
@@ -579,7 +584,7 @@ int main(int argc, char **argv)
     double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
     unsigned length = 100;
     int ch;
-    while ((ch = getopt(argc, argv, "n:b:d:s:l:q:r:th")) != -1) {
+    while ((ch = getopt(argc, argv, "n:b:d:i:j:l:pq:r:s:th")) != -1) {
         switch (ch) {
         case 'n': {
             quicly_cc_type_t **cc;
@@ -623,9 +628,15 @@ int main(int argc, char **argv)
                 exit(1);
             }
             break;
-        case 's':
-            if (sscanf(optarg, "%lf", &start) != 1) {
-                fprintf(stderr, "invaild start: %s\n", optarg);
+        case 'i':
+            if (sscanf(optarg, "%" PRIu32, &quicctx.initcwnd_packets) != 1) {
+                fprintf(stderr, "invalid INITCWND size: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 'j':
+            if (sscanf(optarg, "%" PRIu32, &quicctx.default_jumpstart_cwnd_packets) != 1) {
+                fprintf(stderr, "invalid jumpstart window size: %s\n", optarg);
                 exit(1);
             }
             break;
@@ -634,6 +645,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid length: %s\n", optarg);
                 exit(1);
             }
+            break;
+        case 'p':
+            quicctx.enable_ratio.pacing = 255;
             break;
         case 'q':
             if (sscanf(optarg, "%lf", &depth) != 1) {
@@ -644,6 +658,12 @@ int main(int argc, char **argv)
         case 'r':
             if (sscanf(optarg, "%lf", &random_loss) != 1) {
                 fprintf(stderr, "invalid random loss rate: %s\n", optarg);
+                exit(1);
+            }
+            break;
+        case 's':
+            if (sscanf(optarg, "%lf", &start) != 1) {
+                fprintf(stderr, "invaild start: %s\n", optarg);
                 exit(1);
             }
             break;
