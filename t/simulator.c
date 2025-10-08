@@ -431,6 +431,8 @@ static void stream_on_receive_cb(quicly_stream_t *stream, size_t off, const void
 
     if (stream->recvstate.data_off < stream->recvstate.received.ranges[0].end)
         quicly_stream_sync_recvbuf(stream, stream->recvstate.received.ranges[0].end - stream->recvstate.data_off);
+
+    printf("{\"bytes-available\": %" PRIu64 ", \"at\": %f}\n", stream->recvstate.data_off, now);
 }
 
 static void stream_on_receive_reset_cb(quicly_stream_t *stream, quicly_error_t err)
