@@ -82,7 +82,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     /* Calculate the amount of bytes required to be acked for incrementing CWND by one MTU. */
     uint32_t bytes_per_mtu_increase;
     if (cc->cwnd < cc->ssthresh) {
-        bytes_per_mtu_increase = max_udp_payload_size;
+        quicly_cc_update_rapid_start(&cc->rapid_start, &loss->rtt, now);
+        bytes_per_mtu_increase = quicly_cc_rapid_start_use_3x(&cc->rapid_start, &loss->rtt) ? max_udp_payload_size / 2 : max_udp_payload_size;
     } else {
         bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
     }
@@ -123,8 +124,9 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     /* Calculate increase rate. */
     cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, loss->rtt.smoothed, max_udp_payload_size);
 
-    /* Reduce congestion window. */
-    cc->cwnd *= cc->ssthresh == UINT32_MAX ? 0.5 : QUICLY_RENO_BETA; /* without HyStart++, we overshoot by 2x in slowstart */
+    /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
+     * overshoot by 2x. When using rapid Slow Start (3x), the sender might have overshot more, but let's start with 0.5x. */
+    cc->cwnd *= cc->ssthresh == UINT32_MAX ? 0.5 : QUICLY_RENO_BETA;
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
     cc->ssthresh = cc->cwnd;
@@ -187,6 +189,11 @@ static int pico_on_switch(quicly_cc_t *cc)
     return 0;
 }
 
+static void pico_enable_rapid_start(quicly_cc_t *cc, int64_t now)
+{
+    quicly_cc_init_rapid_start(&cc->rapid_start, now);
+}
+
 static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
     pico_reset(cc, initcwnd);
@@ -194,5 +201,5 @@ static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd
 
 quicly_cc_type_t quicly_cc_type_pico = {"pico",         &quicly_cc_pico_init,          pico_on_acked,
                                         pico_on_lost,   pico_on_persistent_congestion, pico_on_sent,
-                                        pico_on_switch, quicly_cc_jumpstart_enter};
+                                        pico_on_switch, quicly_cc_jumpstart_enter,     pico_enable_rapid_start};
 quicly_init_cc_t quicly_cc_pico_init = {pico_init};
