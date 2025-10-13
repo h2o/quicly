@@ -31,11 +31,11 @@ static void test_rapid_start(void)
     rtt.minimum = rtt.latest = 16;
 
     ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* no sample => 2x */
-    quicly_cc_update_rapid_start(&rs, &rtt, 1);
+    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 1);
     ok(quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* floor == min => 3x */
 
     /* 2 samples after 1/4 min_rtt */
-    quicly_cc_update_rapid_start(&rs, &rtt, 5);
+    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 5);
     ok(rs.rtt_samples[0] == 16);
     ok(rs.rtt_samples[1] == 16);
     ok(rs.rtt_samples[2] == UINT32_MAX);
@@ -43,7 +43,7 @@ static void test_rapid_start(void)
 
     /* after another 1/2 min_rtt, rtt increases to min + 5 */
     rtt.latest = 21;
-    quicly_cc_update_rapid_start(&rs, &rtt, 13);
+    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 13);
     ok(rs.rtt_samples[0] == 21);
     ok(rs.rtt_samples[1] == UINT32_MAX);
     ok(rs.rtt_samples[2] == 16);
@@ -51,7 +51,7 @@ static void test_rapid_start(void)
     ok(quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* floor == min => 3x */
 
     /* after another 1/2 min_rtt, smaller samples are pushed out */
-    quicly_cc_update_rapid_start(&rs, &rtt, 21);
+    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 21);
     ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt));
 }
 

@@ -66,9 +66,12 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 {
     assert(inflight >= bytes);
 
-    /* Do not increase congestion window while in recovery (but jumpstart may do something different). */
+    /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
-        quicly_cc_jumpstart_on_acked(cc, 1, bytes, largest_acked, inflight, next_pn);
+        if (!quicly_cc_jumpstart_on_acked(cc, 1, bytes, largest_acked, inflight, next_pn)) {
+            if (cc->num_loss_episodes == 1)
+                quicly_cc_rapid_start_on_ack_in_recovery(&cc->rapid_start, bytes, &cc->cwnd, &cc->ssthresh);
+        }
         return;
     }
 
@@ -82,8 +85,9 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     /* Calculate the amount of bytes required to be acked for incrementing CWND by one MTU. */
     uint32_t bytes_per_mtu_increase;
     if (cc->cwnd < cc->ssthresh) {
-        quicly_cc_update_rapid_start(&cc->rapid_start, &loss->rtt, now);
-        bytes_per_mtu_increase = quicly_cc_rapid_start_use_3x(&cc->rapid_start, &loss->rtt) ? max_udp_payload_size / 2 : max_udp_payload_size;
+        quicly_cc_rapid_start_update_rtt(&cc->rapid_start, &loss->rtt, now);
+        bytes_per_mtu_increase =
+            quicly_cc_rapid_start_use_3x(&cc->rapid_start, &loss->rtt) ? max_udp_payload_size / 2 : max_udp_payload_size;
     } else {
         bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
     }
@@ -125,8 +129,12 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, loss->rtt.smoothed, max_udp_payload_size);
 
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
-     * overshoot by 2x. When using rapid Slow Start (3x), the sender might have overshot more, but let's start with 0.5x. */
-    cc->cwnd *= cc->ssthresh == UINT32_MAX ? 0.5 : QUICLY_RENO_BETA;
+     * overshoot by 2x. In the case of rapid start, CWND is reduced to 1/3 then increases to 1/2 if PRR permits it. */
+    if (cc->ssthresh == UINT32_MAX) {
+        cc->cwnd *= quicly_cc_rapid_start_is_enabled(&cc->rapid_start) != 0 ? 1. / 3 : 0.5;
+    } else {
+        cc->cwnd *= QUICLY_RENO_BETA;
+    }
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
     cc->ssthresh = cc->cwnd;
