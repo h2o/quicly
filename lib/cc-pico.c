@@ -68,10 +68,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
-        if (!quicly_cc_jumpstart_on_acked(cc, 1, bytes, largest_acked, inflight, next_pn)) {
-            if (cc->num_loss_episodes == 1)
-                quicly_cc_rapid_start_on_ack_in_recovery(&cc->rapid_start, bytes, &cc->cwnd, &cc->ssthresh);
-        }
+        quicly_cc_jumpstart_on_acked(cc, 1, bytes, largest_acked, inflight, next_pn);
         return;
     }
 
@@ -110,9 +107,16 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 {
     quicly_cc__update_ecn_episodes(cc, bytes, lost_pn);
 
-    /* Nothing to do if loss is in recovery window. */
-    if (lost_pn < cc->recovery_end)
+    /* Nothing to do if loss is in recovery window (modulo when exiting rapid start, in which case CWND is further reduced relative
+     * to the number of bytes lost. */
+    if (lost_pn < cc->recovery_end) {
+        if (cc->num_loss_episodes == 1 && !quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
+            quicly_cc_rapid_start_on_lost(&cc->rapid_start, bytes, &cc->cwnd, cc->cwnd_exiting_slow_start);
+            goto ClampMinAndUpdateMetrics;
+        }
         return;
+    }
+
     cc->recovery_end = next_pn;
 
     /* if detected loss before receiving all acks for jumpstart, restore original CWND */
@@ -129,12 +133,21 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, loss->rtt.smoothed, max_udp_payload_size);
 
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
-     * overshoot by 2x. In the case of rapid start, CWND is reduced to 1/3 then increases to 1/2 if PRR permits it. */
+     * overshoot by 2x (note: after 0.5x reduction, CWND is still as large as BDP+QUEUE, so further reduction is preferable).
+     *
+     * In rapid start, upon the first loss we set CWND to 0.7x (QUICLY_RENO_BETA), then reduce proportionally to the bytes deemed
+     * lost during recovery, with a lower bound of 1/3 * beta.
+     * Rationale: at a small loss, reducing by beta mirrors CA's single signal behavior. With up to ~67% loss (typical for 3x
+     * growth under tail-drop), CWND upon loss detection is 3 * (BDP + Q); therefore clamping to 1/3 * beta reproduces the CA
+     * target. For loss >67% (i.e., beyond queue overflow), we keep the lower bound to avoid over-shrinking. */
     if (cc->ssthresh == UINT32_MAX) {
-        cc->cwnd *= quicly_cc_rapid_start_is_enabled(&cc->rapid_start) != 0 ? 1. / 3 : 0.5;
+        cc->cwnd *= quicly_cc_rapid_start_is_enabled(&cc->rapid_start) != 0 ? QUICLY_RENO_BETA : 0.5;
     } else {
         cc->cwnd *= QUICLY_RENO_BETA;
     }
+
+ClampMinAndUpdateMetrics:
+    /* After CWND has been reduced, adjust if it is below permitted minimum and update metrics. */
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
     cc->ssthresh = cc->cwnd;

@@ -50,24 +50,14 @@ typedef const struct st_quicly_cc_type_t quicly_cc_type_t;
  */
 struct st_quicly_cc_rapid_start_t {
     /**
-     * Until when the newest sample (i.e., `rtt_samples[0]`) is to be updated. 0 if rapid start is disabled. -1 after loss has been
-     * observed.
+     * Until when the newest sample (i.e., `rtt_samples[0]`) is to be updated. 0 if rapid start is disabled.
      */
     int64_t newest_rtt_sample_until;
-    union {
-        /**
-         * Records the RTT floor for most recent periods of 4, where the duration the period is defined as `floor(rtt.minimum / 4)`.
-         * [0] holds the newest entry, [3] holds the oldest one. This field is used only when newest_rtt_sample_until > 0.
-         */
-        uint32_t rtt_samples[4];
-        /**
-         * States used for doing PRR during recovery (i.e., when newest_rtt_sample_until == -1)
-         */
-        struct {
-            uint32_t cwnd_ceil;
-            uint32_t bytes_acked;
-        } in_recovery;
-    };
+    /**
+     * Records the RTT floor for most recent periods of 4, where the duration the period is defined as `floor(rtt.minimum / 4)`.
+     * [0] holds the newest entry, [3] holds the oldest one.
+     */
+    uint32_t rtt_samples[4];
 };
 
 typedef struct st_quicly_cc_t {
@@ -271,9 +261,10 @@ static void quicly_cc__update_ecn_episodes(quicly_cc_t *cc, uint32_t lost_bytes,
 
 static void quicly_cc_jumpstart_reset(quicly_cc_t *cc);
 static int quicly_cc_in_jumpstart(quicly_cc_t *cc);
+static int quicly_cc_is_jumpstart_ack(quicly_cc_t *cc, uint64_t pn);
 static void quicly_cc_jumpstart_enter(quicly_cc_t *cc, uint32_t jump_cwnd, uint64_t next_pn);
-static int quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                                        uint64_t next_pn);
+static void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint32_t bytes, uint64_t largest_acked,
+                                         uint32_t inflight, uint64_t next_pn);
 static void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn);
 
 /**
@@ -296,8 +287,8 @@ static int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, c
 /**
  * During the first recovery period, updates CWND. Must only be called during the first recovery period.
  */
-static int quicly_cc_rapid_start_on_ack_in_recovery(struct st_quicly_cc_rapid_start_t *rs, uint32_t bytes_newly_acked,
-                                                    uint32_t *cwnd, uint32_t *ssthresh);
+static void quicly_cc_rapid_start_on_lost(struct st_quicly_cc_rapid_start_t *rs, uint32_t bytes_lost, uint32_t *cwnd,
+                                          uint32_t cwnd_exiting_slow_start);
 
 /* inline definitions */
 
@@ -328,6 +319,11 @@ inline int quicly_cc_in_jumpstart(quicly_cc_t *cc)
     return cc->jumpstart.enter_pn < UINT64_MAX && cc->jumpstart.exit_pn == UINT64_MAX;
 }
 
+inline int quicly_cc_is_jumpstart_ack(quicly_cc_t *cc, uint64_t pn)
+{
+    return cc->jumpstart.enter_pn <= pn && pn < cc->jumpstart.exit_pn;
+}
+
 inline void quicly_cc_jumpstart_enter(quicly_cc_t *cc, uint32_t jump_cwnd, uint64_t next_pn)
 {
     assert(cc->cwnd < jump_cwnd);
@@ -339,10 +335,10 @@ inline void quicly_cc_jumpstart_enter(quicly_cc_t *cc, uint32_t jump_cwnd, uint6
     cc->cwnd = jump_cwnd;
 }
 
-inline int quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
-                                        uint64_t next_pn)
+inline void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint32_t bytes, uint64_t largest_acked,
+                                         uint32_t inflight, uint64_t next_pn)
 {
-    int is_jumpstart_ack = cc->jumpstart.enter_pn <= largest_acked && largest_acked < cc->jumpstart.exit_pn;
+    int is_jumpstart_ack = quicly_cc_is_jumpstart_ack(cc, largest_acked);
 
     /* remember the amount of bytes acked for the packets sent in jumpstart */
     if (is_jumpstart_ack)
@@ -354,7 +350,7 @@ inline int quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint32
          * received */
         if (is_jumpstart_ack && cc->cwnd < cc->jumpstart.bytes_acked)
             cc->cwnd = cc->jumpstart.bytes_acked;
-        return is_jumpstart_ack;
+        return;
     }
 
     /* when receiving the first ack for jumpstart, stop jumpstart and go back to slow start, adopting current inflight as cwnd */
@@ -364,8 +360,6 @@ inline int quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint32
         cc->cwnd_exiting_jumpstart = cc->cwnd;
         cc->jumpstart.exit_pn = next_pn;
     }
-
-    return is_jumpstart_ack;
 }
 
 inline void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn)
@@ -396,10 +390,8 @@ inline int quicly_cc_rapid_start_is_enabled(struct st_quicly_cc_rapid_start_t *r
 inline void quicly_cc_rapid_start_update_rtt(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt, int64_t now)
 {
     /* bail out unless enabled */
-    if (rs->newest_rtt_sample_until <= 0) {
-        assert(rs->newest_rtt_sample_until != -1 && "quicly_cc_rapid_start_update_rtt called after loss");
+    if (rs->newest_rtt_sample_until == 0)
         return;
-    }
 
     /* fast path: if the newest slot covers `now`, update the slot and return */
     if (now < rs->newest_rtt_sample_until) {
@@ -424,7 +416,7 @@ inline void quicly_cc_rapid_start_update_rtt(struct st_quicly_cc_rapid_start_t *
 
 inline int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt)
 {
-    if (rs->newest_rtt_sample_until <= 0)
+    if (rs->newest_rtt_sample_until == 0)
         return 0;
 
     /* If the latest RTT is below max(min_rtt + 4ms, min_rtt * 1.1), adopt a higher increase rate (i.e., 3x per RTT) than the
@@ -442,32 +434,15 @@ inline int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, c
     return floor <= threshold;
 }
 
-inline int quicly_cc_rapid_start_on_ack_in_recovery(struct st_quicly_cc_rapid_start_t *rs, uint32_t bytes_newly_acked,
-                                                    uint32_t *cwnd, uint32_t *ssthresh)
+inline void quicly_cc_rapid_start_on_lost(struct st_quicly_cc_rapid_start_t *rs, uint32_t bytes_lost, uint32_t *cwnd,
+                                          uint32_t cwnd_exiting_slow_start)
 {
     if (rs->newest_rtt_sample_until == 0)
-        return 0;
+        return;
 
-    if (rs->newest_rtt_sample_until != -1) {
-        /* first loss */
-        rs->newest_rtt_sample_until = -1;
-        rs->in_recovery.cwnd_ceil =
-            *cwnd * 1.5; /* upon loss, the CWND is reduced to 1/3, therefore x1.5 brings us back to 1/2 reduction */
-        rs->in_recovery.bytes_acked = bytes_newly_acked;
-    } else {
-        rs->in_recovery.bytes_acked += bytes_newly_acked;
-    }
-
-    /* adjust CWND and ssthresh based on `bytes_acked` */
-    if (*cwnd < rs->in_recovery.bytes_acked) {
-        *cwnd = rs->in_recovery.bytes_acked;
-        if (*cwnd > rs->in_recovery.cwnd_ceil)
-            *cwnd = rs->in_recovery.cwnd_ceil;
-        if (*ssthresh < *cwnd)
-            *ssthresh = *cwnd;
-    }
-
-    return 1;
+    *cwnd -= QUICLY_RENO_BETA * bytes_lost;
+    if (*cwnd < 1 / 3 * QUICLY_RENO_BETA * cwnd_exiting_slow_start)
+        *cwnd = 1 / 3 * QUICLY_RENO_BETA * cwnd_exiting_slow_start;
 }
 
 #ifdef __cplusplus
