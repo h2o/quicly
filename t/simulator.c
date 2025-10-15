@@ -582,7 +582,7 @@ int main(int argc, char **argv)
 
     /* parse args */
     double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
-    unsigned length = 100;
+    double length = 100;
     int ch;
     while ((ch = getopt(argc, argv, "n:b:d:i:j:l:pq:r:s:th")) != -1) {
         switch (ch) {
@@ -641,7 +641,7 @@ int main(int argc, char **argv)
             }
             break;
         case 'l':
-            if (sscanf(optarg, "%u", &length) != 1) {
+            if (sscanf(optarg, "%lf", &length) != 1) {
                 fprintf(stderr, "invalid length: %s\n", optarg);
                 exit(1);
             }
