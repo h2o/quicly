@@ -1234,6 +1234,7 @@ static void usage(const char *cmd)
            "                            multiple times)\n"
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
+           "  --rapid-start             turns on rapid start\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
            "  -u size                   initial size of UDP datagram payload\n"
@@ -1485,6 +1486,7 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
+                                             {"rapid-start", no_argument, NULL, 0},
                                              {"calc-initial-secret", required_argument, NULL, 0},
                                              {"decrypt-packet", required_argument, NULL, 0},
                                              {"encrypt-packet", required_argument, NULL, 0},
@@ -1511,6 +1513,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
+                ctx.enable_ratio.rapid_start = 255;
             } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
                 return cmd_calc_initial_secret(optarg);
             } else if (strcmp(longopts[opt_index].name, "decrypt-packet") == 0) {

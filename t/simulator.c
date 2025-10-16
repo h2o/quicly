@@ -464,6 +464,7 @@ static void usage(const char *cmd)
            "  -p                  turns on pacing\n"
            "  -q <seconds>        max depth of the bottleneck queue (default: 0.1)\n"
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
+           "  -R                  turns on rapid start\n"
            "  -s <seconds>        delay until the sender is added to the simulation\n"
            "                      (default: 0)\n"
            "  -t                  emits trace as well\n"
@@ -584,7 +585,7 @@ int main(int argc, char **argv)
     double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
     double length = 100;
     int ch;
-    while ((ch = getopt(argc, argv, "n:b:d:i:j:l:pq:r:s:th")) != -1) {
+    while ((ch = getopt(argc, argv, "n:b:d:i:j:l:pq:r:Rs:th")) != -1) {
         switch (ch) {
         case 'n': {
             quicly_cc_type_t **cc;
@@ -660,6 +661,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "invalid random loss rate: %s\n", optarg);
                 exit(1);
             }
+            break;
+        case 'R':
+            quicctx.enable_ratio.rapid_start = 255;
             break;
         case 's':
             if (sscanf(optarg, "%lf", &start) != 1) {

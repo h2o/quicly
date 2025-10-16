@@ -61,6 +61,7 @@ const quicly_context_t quicly_spec_context = {
         {
             .jumpstart.non_resume = 255,
             .jumpstart.resume = 255,
+            .rapid_start = 0, /* off by default */
             .ecn = 255,
             .pacing = 0, /* off by default */
             .respect_app_limited = 255,
@@ -99,6 +100,7 @@ const quicly_context_t quicly_performant_context = {
         {
             .jumpstart.non_resume = 255,
             .jumpstart.resume = 255,
+            .rapid_start = 0, /* off by default */
             .ecn = 255,
             .pacing = 0, /* off by default */
             .respect_app_limited = 255,

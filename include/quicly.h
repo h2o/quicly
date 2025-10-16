@@ -362,6 +362,10 @@ struct st_quicly_context_t {
             uint8_t resume;
         } jumpstart;
         /**
+         * if rapid cstart should be used
+         */
+        uint8_t rapid_start;
+        /**
          * whether to use ECN on the send side; ECN is always on on the receive side
          */
         uint8_t ecn;
@@ -625,6 +629,10 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_jumpstart_applicable;                                                                                             \
     /**                                                                                                                            \
+     * Number of connections that used rapid start.                                                                                \
+     */                                                                                                                            \
+    uint64_t num_rapid_start;                                                                                                      \
+    /**                                                                                                                            \
      * Total number of connections that were paced.                                                                                \
      */                                                                                                                            \
     uint64_t num_paced;                                                                                                            \
@@ -773,6 +781,7 @@ typedef struct st_quicly_stats_t {
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
     apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
+    apply(num_rapid_start, "num-rapid-start")                                                                                      \
     apply(num_paced, "num-paced")                                                                                                  \
     apply(num_respected_app_limited, "num-respected-app-limited")
 
