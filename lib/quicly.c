@@ -4066,11 +4066,8 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
                     /* TODO: Discuss (and possibly test) the strategy for choosing max_ack_delay; note the chosen value should be
                      * passed to quicly_loss_detect_loss too. */
                     uint64_t max_ack_delay = conn->super.remote.transport_params.max_ack_delay * 1000;
-                    uint64_t reordering_threshold = 1;
-                    if (conn->egress.loss.thresholds.use_packet_based) {
-                        reordering_threshold = QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD;
-                    }
-
+                    uint64_t reordering_threshold =
+                        conn->egress.loss.thresholds.use_packet_based ? QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD : 0;
                     /* TODO: Adjust the max_ack_delay we use for loss recovery to be consistent with this value */
                     s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
                                                                max_ack_delay, reordering_threshold);
