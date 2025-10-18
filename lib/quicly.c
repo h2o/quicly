@@ -129,7 +129,6 @@ struct st_quicly_pn_space_t {
      * number of ACK-eliciting packets that have not been ACKed yet
      */
     uint32_t unacked_count;
-
     /**
      * The previously received packet's ecn value
      */
@@ -147,7 +146,6 @@ struct st_quicly_pn_space_t {
      * Zero disables immediate ACKS on out of order packets.
      */
     uint32_t reordering_threshold;
-
     /**
      * max(acked packet number, unacked ack-eliciting packet number).
      */
