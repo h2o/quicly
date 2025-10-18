@@ -142,8 +142,7 @@ struct st_quicly_pn_space_t {
      */
     uint32_t packet_tolerance;
     /**
-     * maximum packet reordering before eliciting an immediate ACK.
-     * Zero disables immediate ACKS on out of order packets.
+     * Maximum packet reordering before eliciting an immediate ACK. Zero disables immediate ACKS on out of order packets.
      */
     uint32_t reordering_threshold;
     /**
@@ -1587,8 +1586,7 @@ static void update_smallest_unreported_missing_on_send_ack(quicly_ranges_t *rang
 }
 
 static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t largest_acked_unacked,
-                                         uint64_t *smallest_unreported_missing, uint64_t received_pn,
-                                         uint32_t reordering_threshold)
+                                         uint64_t *smallest_unreported_missing, uint64_t received_pn, uint32_t reordering_threshold)
 {
     /* as this function is called after `record_pn`, `received_pn` will be registered */
     assert(ranges->num_ranges != 0);
