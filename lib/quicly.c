@@ -4063,15 +4063,9 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
                     uint32_t packet_tolerance = fraction_of_cwnd / conn->egress.max_udp_payload_size;
                     if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
                         packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
-
-                    uint64_t max_ack_delay =
-                        1000 * (uint64_t)conn->egress.loss.rtt.minimum * (uint64_t)conn->super.ctx->ack_frequency / 1024;
-                    if (max_ack_delay >= (1 << 14) * 1000) {
-                        max_ack_delay = (uint64_t)conn->super.remote.transport_params.max_ack_delay * 1000;
-                    } else if (max_ack_delay < conn->super.remote.transport_params.min_ack_delay_usec) {
-                        max_ack_delay = conn->super.remote.transport_params.min_ack_delay_usec;
-                    }
-
+                    /* TODO: Discuss (and possibly test) the strategy for choosing max_ack_delay; note the chosen value should be
+                     * passed to quicly_loss_detect_loss too. */
+                    uint64_t max_ack_delay = conn->super.remote.transport_params.max_ack_delay * 1000;
                     uint64_t reordering_threshold = 1;
                     if (conn->egress.loss.thresholds.use_packet_based) {
                         reordering_threshold = QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD;
