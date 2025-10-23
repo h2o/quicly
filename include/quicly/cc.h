@@ -393,7 +393,7 @@ inline void quicly_cc_rapid_start_update_rtt(struct st_quicly_cc_rapid_start_t *
     if (rs->newest_rtt_sample_until == 0)
         return;
 
-    /* if minrtt is smaller than 4ms, disable rapid start (this guards `sample_duration` becoming zero) */
+    /* when the delay is tiny (minrtt < 4ms) benefits are small, so disable rapid start to guard `sample_duration` becoming zero */
     if (rtt->minimum < PTLS_ELEMENTSOF(rs->rtt_samples)) {
         rs->newest_rtt_sample_until  = 0;
         return;
