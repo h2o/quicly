@@ -393,6 +393,12 @@ inline void quicly_cc_rapid_start_update_rtt(struct st_quicly_cc_rapid_start_t *
     if (rs->newest_rtt_sample_until == 0)
         return;
 
+    /* when the delay is tiny (minrtt < 4ms) benefits are small, so disable rapid start to guard `sample_duration` becoming zero */
+    if (rtt->minimum < PTLS_ELEMENTSOF(rs->rtt_samples)) {
+        rs->newest_rtt_sample_until  = 0;
+        return;
+    }
+
     /* fast path: if the newest slot covers `now`, update the slot and return */
     if (now < rs->newest_rtt_sample_until) {
         if (rs->rtt_samples[0] > rtt->latest)
