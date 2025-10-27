@@ -330,7 +330,7 @@ struct st_quicly_context_t {
      */
     uint32_t handshake_timeout_rtt_multiplier;
     /**
-     * if the number of Initial/Handshake packets sent during the handshake phase exceeds this limit, treat it as an error and close
+     * If the number of Initial/Handshake packets sent during the handshake phase exceeds this limit, treat it as an error and close
      * the connection.
      */
     uint64_t max_initial_handshake_packets;
@@ -407,7 +407,7 @@ struct st_quicly_context_t {
      */
     quicly_now_t *now;
     /**
-     * called wen a NEW_TOKEN token is being received
+     * called when a NEW_TOKEN token is being received
      */
     quicly_save_resumption_token_t *save_resumption_token;
     /**
@@ -419,7 +419,7 @@ struct st_quicly_context_t {
      */
     quicly_crypto_engine_t *crypto_engine;
     /**
-     * initializes a congestion controller for given connection.
+     * initializes a congestion controller for given connection
      */
     quicly_init_cc_t *init_cc;
     /**
@@ -882,8 +882,8 @@ struct _st_quicly_conn_public_t {
         } address_validation;
     } remote;
     /**
-     * Retains the original DCID used by the client. Servers use this to route packets incoming packets. Clients use this when
-     * validating the Transport Parameters sent by the server.
+     * Retains the original DCID used by the client. Servers use this to route incoming packets. Clients use this when validating the
+     * Transport Parameters sent by the server.
      */
     quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;

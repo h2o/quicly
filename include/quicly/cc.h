@@ -159,7 +159,7 @@ typedef struct st_quicly_cc_t {
      */
     uint32_t cwnd_initial;
     /**
-     * Congestion window at the end of slow start.
+     * Congestion window at the end of slow start. (Equals 0 if still in slow start.)
      */
     uint32_t cwnd_exiting_slow_start;
     /**
@@ -218,7 +218,7 @@ struct st_quicly_cc_type_t {
      */
     void (*cc_on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
     /**
-     * Switches the underlying algorithm of `cc` to that of `cc_switch`, returning a boolean if the operation was successful.
+     * Switches the underlying algorithm of `cc` to that of `cc_switch`, returning a boolean whether the operation was successful.
      */
     int (*cc_switch)(quicly_cc_t *cc);
     /**
