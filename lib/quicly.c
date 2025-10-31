@@ -2895,8 +2895,8 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* setup ack frequency */
     ack_frequency_set_next_update_at(conn);
 
-    /* update UDP max payload size to:
-     * min(remote.tp.max_udp_payload_size, max(current, max_the_remote_sent, local.tp.max_udp_payload_size)) */
+    /* update UDP max payload size, as described in the doc-comment of
+    `quicly_context_t::initial_egress_max_udp_payload_size` */
     assert(conn->initial != NULL);
     if (conn->egress.max_udp_payload_size < conn->initial->largest_ingress_udp_payload_size) {
         uint16_t size = conn->initial->largest_ingress_udp_payload_size;
