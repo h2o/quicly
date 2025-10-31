@@ -550,7 +550,7 @@ subtest "trasport-parameters" => sub {
                 if ($line =~ /^[^:]+:[^:]+:d:forward:(\d+)/) {
                     $server_packets++;
                     if ($server_packets == 1) {
-                        ok $1 == $expected_max_payload_size, "First packet size $1 is equal to expected max payload size $expected_max_payload_size";
+                        is $1, $expected_max_payload_size, 'First packet size is equal to expected max payload size';
                     } else {
                         ok $1 <= $expected_max_payload_size, "Packet size $1 is lower or equal to expected max payload size $expected_max_payload_size";
                     }
