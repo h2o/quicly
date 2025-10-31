@@ -533,7 +533,7 @@ subtest "trasport-parameters" => sub {
     my $guard = spawn_server();
 
     subtest "max-udp-payload-size" => sub {
-        sub do_test {
+        my $do_test = sub {
             my $max_payload_size = shift;
             my $expected_max_payload_size = shift;
             # we use the forwarder just to print the size of the packets
