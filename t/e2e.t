@@ -556,7 +556,7 @@ subtest "trasport-parameters" => sub {
                     }
                 }
             }
-            ok $server_packets > 0, "We have seen packets from the server";
+            cmp_ok $server_packets, '>', 0, "We have seen packets from the server";
         };
         $do_test->(1252, 1252);
         $do_test->(1200, 1200);
