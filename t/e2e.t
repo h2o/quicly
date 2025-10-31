@@ -552,7 +552,7 @@ subtest "trasport-parameters" => sub {
                     if ($server_packets == 1) {
                         is $1, $expected_max_payload_size, 'First packet size is equal to expected max payload size';
                     } else {
-                        ok $1 <= $expected_max_payload_size, "Packet size $1 is lower or equal to expected max payload size $expected_max_payload_size";
+                        cmp_ok $1, '<=', $expected_max_payload_size, 'Packet size is lower or equal to expected max payload size';
                     }
                 }
             }
