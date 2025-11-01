@@ -38,6 +38,7 @@
 		085AB4D9264283D600DF5209 /* pacer.c in Sources */ = {isa = PBXBuildFile; fileRef = 085AB4D8264283D600DF5209 /* pacer.c */; };
 		086001CB273271E80043886F /* rate.c in Sources */ = {isa = PBXBuildFile; fileRef = 0829878D26E03D4D0053638F /* rate.c */; };
 		0869056E2E9B3D8E00AE2A41 /* cc.c in Sources */ = {isa = PBXBuildFile; fileRef = 0869056D2E9B3D8E00AE2A41 /* cc.c */; };
+		088527042EB5507900F95D4C /* quicly-probes.d in Sources */ = {isa = PBXBuildFile; fileRef = E95EBCCD227EC13F0022C32D /* quicly-probes.d */; };
 		089738FB2B9FF2E1000569EB /* jumpstart.c in Sources */ = {isa = PBXBuildFile; fileRef = 089738FA2B9FF2E1000569EB /* jumpstart.c */; };
 		08B3297A29407097009D6766 /* hpke.c in Sources */ = {isa = PBXBuildFile; fileRef = 08B3297929407096009D6766 /* hpke.c */; };
 		08B3297B29407097009D6766 /* hpke.c in Sources */ = {isa = PBXBuildFile; fileRef = 08B3297929407096009D6766 /* hpke.c */; };
@@ -762,6 +763,7 @@
 			files = (
 				0829876726D372B70053638F /* cc-cubic.c in Sources */,
 				0829876926D372B70053638F /* picotls-probes.d in Sources */,
+				088527042EB5507900F95D4C /* quicly-probes.d in Sources */,
 				0829876A26D372B70053638F /* ranges.c in Sources */,
 				0829876B26D372B70053638F /* cc-reno.c in Sources */,
 				0829876C26D372B70053638F /* local_cid.c in Sources */,
