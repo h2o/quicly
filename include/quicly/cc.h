@@ -348,8 +348,8 @@ inline void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint3
         /* Propotional Rate Reduction: if a loss is observed due to jumpstart, CWND is adjusted so that it would become bytes that
          * passed through to the client during the jumpstart phase of exactly 1 RTT, when the last ACK for the jumpstart phase is
          * received */
-        if (is_jumpstart_ack && cc->cwnd < cc->jumpstart.bytes_acked)
-            cc->cwnd = cc->jumpstart.bytes_acked;
+        if (is_jumpstart_ack && cc->cwnd < cc->jumpstart.bytes_acked * QUICLY_RENO_BETA)
+            cc->cwnd = cc->jumpstart.bytes_acked * QUICLY_RENO_BETA;
         return;
     }
 
