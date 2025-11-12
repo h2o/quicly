@@ -137,8 +137,17 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->exit_slow_start_at = now;
     }
 
-    /* Calculate increase rate. */
-    cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(cc->cwnd, loss->rtt.smoothed, max_udp_payload_size);
+    { /* Calculate increase rate based on CWND before reduction. When rapid start is on but the loss is observed while jump start is
+       * in action, CWND is not adjusted in the code above, therefore jumpstart.bytes_acked is adopted here. */
+        uint32_t bdp = cc->cwnd;
+        if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start) &&
+            quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
+            bdp = cc->jumpstart.bytes_acked;
+            if (bdp < cc->cwnd_initial)
+                bdp = cc->cwnd_initial;
+        }
+        cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size);
+    }
 
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
      * overshoot by 2x (note: after 0.5x reduction, CWND is still as large as BDP+QUEUE, so further reduction is preferable).
