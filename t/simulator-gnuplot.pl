@@ -73,6 +73,16 @@ my $NETWORKS = {
         queue => 0.4,
         bw    => 1e6,
     },
+    bdp20 => {
+        rtt   => 0.1,
+        queue => 0.1,
+        bw    => 1e6,
+    },
+    bdp40 => {
+        rtt   => 0.1,
+        queue => 0.1,
+        bw    => 2e6,
+    },
 };
 
 my $cc = 'pico';
