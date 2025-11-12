@@ -140,9 +140,12 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     { /* Calculate increase rate based on CWND before reduction. When rapid start is on but the loss is observed while jump start is
        * in action, CWND is not adjusted in the code above, therefore jumpstart.bytes_acked is adopted here. */
         uint32_t bdp = cc->cwnd;
-        if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start) &&
-            quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
-            bdp = cc->jumpstart.bytes_acked;
+        if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+            if (quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
+                bdp = cc->jumpstart.bytes_acked;
+            } else {
+                bdp = cc->cwnd / 3;
+            }
             if (bdp < cc->cwnd_initial)
                 bdp = cc->cwnd_initial;
         }
