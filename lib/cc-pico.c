@@ -130,8 +130,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (cc->cwnd_exiting_slow_start == 0) {
         assert(cc->ssthresh == UINT32_MAX);
         /* jumpstart: if detected loss during the validating phase, advance to validating phase */
-        if (!quicly_cc_rapid_start_is_enabled(&cc->rapid_start))
-            quicly_cc_jumpstart_on_first_loss(cc, lost_pn);
+        quicly_cc_jumpstart_on_first_loss(cc, lost_pn, quicly_cc_rapid_start_is_enabled(&cc->rapid_start));
         /* save values */
         cc->cwnd_exiting_slow_start = cc->cwnd;
         cc->exit_slow_start_at = now;
