@@ -276,7 +276,7 @@ static int quicly_cc_is_jumpstart_ack(quicly_cc_t *cc, uint64_t pn);
 static void quicly_cc_jumpstart_enter(quicly_cc_t *cc, uint32_t jump_cwnd, uint64_t next_pn);
 static void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint32_t bytes, uint64_t largest_acked,
                                          uint32_t inflight, uint64_t next_pn);
-static void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn);
+static void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn, int skip_cwnd_adjust);
 
 /**
  * Initializes the heuristics needed to determine if slow start needs to be acclerated (i.e., 3x).
@@ -377,14 +377,16 @@ inline void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint3
     }
 }
 
-inline void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn)
+inline void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn, int skip_cwnd_adjust)
 {
     if (cc->jumpstart.enter_pn != UINT64_MAX && lost_pn < cc->jumpstart.exit_pn) {
         assert(cc->cwnd < cc->ssthresh);
         /* CWND is set to the amount of bytes ACKed during the jump start phase plus the value before jump start */
-        cc->cwnd = cc->jumpstart.bytes_acked;
-        if (cc->cwnd < cc->cwnd_initial)
-            cc->cwnd = cc->cwnd_initial;
+        if (!skip_cwnd_adjust) {
+            cc->cwnd = cc->jumpstart.bytes_acked;
+            if (cc->cwnd < cc->cwnd_initial)
+                cc->cwnd = cc->cwnd_initial;
+        }
         if (cc->jumpstart.exit_pn == UINT64_MAX)
             cc->jumpstart.exit_pn = lost_pn;
     }
