@@ -7587,8 +7587,8 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
             *conn->delayed_packets.as_array[slot].tail = delayed;
             conn->delayed_packets.as_array[slot].tail = &delayed->next;
             ++conn->delayed_packets.num_packets;
-            if (conn->super.stats.num_packets.max_buffered < conn->delayed_packets.num_packets)
-                conn->super.stats.num_packets.max_buffered = conn->delayed_packets.num_packets;
+            if (conn->super.stats.num_packets.max_delayed < conn->delayed_packets.num_packets)
+                conn->super.stats.num_packets.max_delayed = conn->delayed_packets.num_packets;
         }
 
     } else if (ret == 0) { /* if state has advanced, process delayed slots that have become processible */
