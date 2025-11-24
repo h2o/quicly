@@ -547,6 +547,10 @@ struct st_quicly_conn_streamgroup_state_t {
          * Maximum number of packets that were buffered to delay their processing due to being undecryptable.                      \
          */                                                                                                                        \
         uint64_t max_delayed;                                                                                                      \
+        /**                                                                                                                        \
+         * Number of packets that were delayed processing and successfully used.                                                   \
+         */                                                                                                                        \
+        uint64_t delayed_used;                                                                                                     \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -735,7 +739,8 @@ typedef struct st_quicly_stats_t {
     apply(num_packets.acked_ecn_counts[2], "num-packets.acked-ecn-ce")                                                             \
     apply(num_packets.sent_promoted_paths, "num-packets.sent-promoted-paths")                                                      \
     apply(num_packets.ack_received_promoted_paths, "num-packets.ack-received-promoted-paths")                                      \
-    apply(num_packets.max_delayed, "num-packets.max-delayed")
+    apply(num_packets.max_delayed, "num-packets.max-delayed")                                                                      \
+    apply(num_packets.delayed_used, "num-packets.delayed-used")
 
 #define QUICLY_STATS_FOREACH_NUM_BYTES(apply)                                                                                      \
     apply(num_bytes.received, "num-bytes.received")                                                                                \

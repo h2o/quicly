@@ -7612,6 +7612,8 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
                 free(delayed);
                 switch (ret) {
                 case 0:
+                    conn->super.stats.num_packets.delayed_used += 1;
+                    break;
                 case QUICLY_ERROR_PACKET_IGNORED:
                 case QUICLY_ERROR_DECRYPTION_FAILED:
                     break;
