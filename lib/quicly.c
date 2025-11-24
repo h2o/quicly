@@ -245,6 +245,7 @@ struct st_quicly_conn_path_t {
 
 struct st_quicly_delayed_packet_t {
     struct st_quicly_delayed_packet_t *next;
+    int64_t at;
     quicly_address_t dest_addr;
     quicly_address_t src_addr;
     quicly_decoded_packet_t packet;
@@ -1618,8 +1619,8 @@ static quicly_error_t record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_ou
     return 0;
 }
 
-static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, uint8_t ecn, int is_ack_only, int64_t now,
-                                     int64_t *send_ack_at, uint64_t *received_out_of_order)
+static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, uint8_t ecn, int is_ack_only,
+                                     int64_t received_at, int64_t *send_ack_at, uint64_t *received_out_of_order)
 {
     int ack_now, is_out_of_order;
     quicly_error_t ret;
@@ -1633,7 +1634,7 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
-        space->largest_pn_received_at = now;
+        space->largest_pn_received_at = received_at;
 
     /* increment ecn counters */
     if (ecn != 0)
@@ -1647,9 +1648,9 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
     }
 
     if (ack_now) {
-        *send_ack_at = now;
+        *send_ack_at = received_at;
     } else if (*send_ack_at == INT64_MAX && space->unacked_count != 0) {
-        *send_ack_at = now + QUICLY_DELAYED_ACK_TIMEOUT;
+        *send_ack_at = received_at + QUICLY_DELAYED_ACK_TIMEOUT;
     }
 
     ret = 0;
@@ -7194,7 +7195,7 @@ Exit:
 }
 
 quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
-                          quicly_decoded_packet_t *packet, int *might_be_reorder)
+                          quicly_decoded_packet_t *packet, int64_t receive_delay, int *might_be_reorder)
 {
     ptls_cipher_context_t *header_protection;
     struct {
@@ -7211,8 +7212,6 @@ quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
     assert(src_addr->sa_family == AF_INET || src_addr->sa_family == AF_INET6);
 
     *might_be_reorder = 0;
-
-    lock_now(conn, 0);
 
     QUICLY_PROBE(RECEIVE, conn, conn->stash.now,
                  QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), packet->octets.base,
@@ -7477,7 +7476,7 @@ quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
         QUICLY_LOG_CONN(elicit_path_migration, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
     }
     if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
-        if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->stash.now, &conn->egress.send_ack_at,
+        if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->stash.now - receive_delay, &conn->egress.send_ack_at,
                                   &conn->super.stats.num_packets.received_out_of_order)) != 0)
             goto Exit;
     }
@@ -7548,15 +7547,16 @@ Exit:
         ret = 0;
         break;
     }
-    unlock_now(conn);
     return ret;
 }
 
 quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                               quicly_decoded_packet_t *packet)
 {
+    lock_now(conn, 0);
+
     int might_be_reorder;
-    quicly_error_t ret = do_receive(conn, dest_addr, src_addr, packet, &might_be_reorder);
+    quicly_error_t ret = do_receive(conn, dest_addr, src_addr, packet, 0, &might_be_reorder);
 
     if (might_be_reorder) {
 
@@ -7568,6 +7568,7 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
                 goto Exit;
             }
             delayed->next = NULL;
+            delayed->at = conn->stash.now;
             set_address(&delayed->dest_addr, dest_addr);
             set_address(&delayed->src_addr, src_addr);
             delayed->packet = *packet;
@@ -7606,7 +7607,8 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
                 --conn->delayed_packets.num_packets;
                 /* process the packet and free */
                 int might_be_reorder;
-                ret = do_receive(conn, &delayed->dest_addr.sa, &delayed->src_addr.sa, &delayed->packet, &might_be_reorder);
+                ret = do_receive(conn, &delayed->dest_addr.sa, &delayed->src_addr.sa, &delayed->packet,
+                                 conn->stash.now - delayed->at, &might_be_reorder);
                 free(delayed);
                 switch (ret) {
                 case 0:
@@ -7621,6 +7623,7 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
     }
 
 Exit:
+    unlock_now(conn);
     return ret;
 }
 
