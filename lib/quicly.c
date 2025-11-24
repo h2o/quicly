@@ -74,6 +74,10 @@
  * smaller than QUICLY_MAX_RANGES.
  */
 #define QUICLY_NUM_ACK_BLOCKS_TO_INDUCE_ACKACK 8
+/**
+ * maximum number of undecryptable packets to buffer
+ */
+#define QUICLY_MAX_DELAYED_PACKETS 10
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
@@ -237,6 +241,14 @@ struct st_quicly_conn_path_t {
         uint64_t sent;
         uint64_t received;
     } num_packets;
+};
+
+struct st_quicly_delayed_packet_t {
+    struct st_quicly_delayed_packet_t *next;
+    quicly_address_t dest_addr;
+    quicly_address_t src_addr;
+    quicly_decoded_packet_t packet;
+    uint8_t bytes[1];
 };
 
 struct st_quicly_conn_t {
@@ -463,6 +475,21 @@ struct st_quicly_conn_t {
      */
     int64_t created_at;
     /**
+     *
+     */
+    struct {
+        union {
+            struct {
+                struct st_quicly_delayed_packet_linklist_t {
+                    struct st_quicly_delayed_packet_t *head, **tail;
+                } zero_rtt, handshake, one_rtt;
+            };
+            struct st_quicly_delayed_packet_linklist_t as_array[3];
+        };
+        size_t num_packets;
+        unsigned slots_newly_processible;
+    } delayed_packets;
+    /**
      * structure to hold various data used internally
      */
     struct {
@@ -664,6 +691,28 @@ static void clear_datagram_frame_payloads(quicly_conn_t *conn)
         conn->egress.datagram_frame_payloads.payloads[i] = ptls_iovec_init(NULL, 0);
     }
     conn->egress.datagram_frame_payloads.count = 0;
+}
+
+/**
+ * changes the raw bytes being referred to by `packet` to `octets`
+ */
+static void adjust_pointers_of_decoded_packet(quicly_decoded_packet_t *packet, uint8_t *octets)
+{
+    uint8_t *orig = packet->octets.base;
+    uintptr_t diff = (uintptr_t)octets - (uintptr_t)packet->octets.base;
+
+#define ADJUST(memb, nullable)                                                                                                     \
+    do {                                                                                                                           \
+        if (!(nullable && packet->memb == NULL)) {                                                                                 \
+            assert(orig <= packet->memb && packet->memb <= orig + packet->octets.len);                                             \
+            packet->memb = (void *)((uintptr_t)packet->memb + diff);                                                               \
+        }                                                                                                                          \
+    } while (0)
+    ADJUST(octets.base, 0);
+    ADJUST(cid.dest.encrypted.base, 1);
+    ADJUST(cid.src.base, 1);
+    ADJUST(token.base, 1);
+#undef ADJUST
 }
 
 static int is_retry(quicly_conn_t *conn)
@@ -2040,6 +2089,14 @@ void quicly_free(quicly_conn_t *conn)
     update_open_count(conn->super.ctx, -1);
     clear_datagram_frame_payloads(conn);
 
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(conn->delayed_packets.as_array); ++i) {
+        while (conn->delayed_packets.as_array[i].head != NULL) {
+            struct st_quicly_delayed_packet_t *delayed = conn->delayed_packets.as_array[i].head;
+            conn->delayed_packets.as_array[i].head = delayed->next;
+            free(delayed);
+        }
+    }
+
     quicly_maxsender_dispose(&conn->ingress.max_data.sender);
     quicly_maxsender_dispose(&conn->ingress.max_streams.uni);
     quicly_maxsender_dispose(&conn->ingress.max_streams.bidi);
@@ -2675,6 +2732,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->retry_scid.len = UINT8_MAX;
     conn->idle_timeout.at = INT64_MAX;
     conn->idle_timeout.should_rearm_on_send = 1;
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(conn->delayed_packets.as_array); ++i)
+        conn->delayed_packets.as_array[i].tail = &conn->delayed_packets.as_array[i].head;
     conn->stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
 
     *ptls_get_data_ptr(tls) = conn;
@@ -5169,12 +5228,17 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         } else {
             hp_slot = &conn->application->cipher.ingress.header_protection.zero_rtt;
             aead_slot = &conn->application->cipher.ingress.aead[1];
+            conn->delayed_packets.slots_newly_processible |= 1
+                                                             << (&conn->delayed_packets.zero_rtt - conn->delayed_packets.as_array);
         }
         break;
     case QUICLY_EPOCH_HANDSHAKE:
         if (conn->handshake == NULL && (ret = setup_handshake_space_and_flow(conn, QUICLY_EPOCH_HANDSHAKE)) != 0)
             return ret;
         SELECT_CIPHER_CONTEXT(is_enc ? &conn->handshake->cipher.egress : &conn->handshake->cipher.ingress);
+        if (!is_enc)
+            conn->delayed_packets.slots_newly_processible |= 1
+                                                             << (&conn->delayed_packets.handshake - conn->delayed_packets.as_array);
         break;
     case QUICLY_EPOCH_1RTT: {
         if (is_enc)
@@ -5192,6 +5256,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
             hp_slot = &conn->application->cipher.ingress.header_protection.one_rtt;
             aead_slot = &conn->application->cipher.ingress.aead[0];
             secret_store = conn->application->cipher.ingress.secret;
+            conn->delayed_packets.slots_newly_processible |= 1 << (&conn->delayed_packets.one_rtt - conn->delayed_packets.as_array);
         }
         memcpy(secret_store, secret, cipher->hash->digest_size);
     } break;
@@ -7128,8 +7193,8 @@ Exit:
     return ret;
 }
 
-quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
-                              quicly_decoded_packet_t *packet)
+quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
+                          quicly_decoded_packet_t *packet, int *might_be_reorder)
 {
     ptls_cipher_context_t *header_protection;
     struct {
@@ -7144,6 +7209,8 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
     quicly_error_t ret;
 
     assert(src_addr->sa_family == AF_INET || src_addr->sa_family == AF_INET6);
+
+    *might_be_reorder = 0;
 
     lock_now(conn, 0);
 
@@ -7291,6 +7358,8 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
             break;
         case QUICLY_PACKET_TYPE_HANDSHAKE:
             if (conn->handshake == NULL || (header_protection = conn->handshake->cipher.ingress.header_protection) == NULL) {
+                if (!(conn->application != NULL && conn->application->cipher.ingress.header_protection.one_rtt != NULL))
+                    *might_be_reorder = 1;
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
@@ -7306,6 +7375,8 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
             }
             if (conn->application == NULL ||
                 (header_protection = conn->application->cipher.ingress.header_protection.zero_rtt) == NULL) {
+                if (!(conn->application != NULL && conn->application->cipher.ingress.header_protection.one_rtt != NULL))
+                    *might_be_reorder = 1;
                 ret = QUICLY_ERROR_PACKET_IGNORED;
                 goto Exit;
             }
@@ -7322,6 +7393,7 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
         /* short header packet */
         if (conn->application == NULL ||
             (header_protection = conn->application->cipher.ingress.header_protection.one_rtt) == NULL) {
+            *might_be_reorder = 1;
             ret = QUICLY_ERROR_PACKET_IGNORED;
             goto Exit;
         }
@@ -7477,6 +7549,78 @@ Exit:
         break;
     }
     unlock_now(conn);
+    return ret;
+}
+
+quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
+                              quicly_decoded_packet_t *packet)
+{
+    int might_be_reorder;
+    quicly_error_t ret = do_receive(conn, dest_addr, src_addr, packet, &might_be_reorder);
+
+    if (might_be_reorder) {
+
+        if (conn->delayed_packets.num_packets < QUICLY_MAX_DELAYED_PACKETS) {
+            /* instantiate the delayed packet */
+            struct st_quicly_delayed_packet_t *delayed;
+            if ((delayed = malloc(offsetof(struct st_quicly_delayed_packet_t, bytes) + packet->octets.len)) == NULL) {
+                ret = PTLS_ERROR_NO_MEMORY;
+                goto Exit;
+            }
+            delayed->next = NULL;
+            set_address(&delayed->dest_addr, dest_addr);
+            set_address(&delayed->src_addr, src_addr);
+            delayed->packet = *packet;
+            memcpy(delayed->bytes, packet->octets.base, packet->octets.len);
+            adjust_pointers_of_decoded_packet(&delayed->packet, delayed->bytes);
+            /* attach */
+            size_t slot;
+            if ((delayed->packet.octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_0RTT) {
+                slot = &conn->delayed_packets.zero_rtt - conn->delayed_packets.as_array;
+            } else if ((delayed->packet.octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_HANDSHAKE) {
+                slot = &conn->delayed_packets.handshake - conn->delayed_packets.as_array;
+            } else {
+                assert(!QUICLY_PACKET_IS_LONG_HEADER(delayed->packet.octets.base[0]));
+                slot = &conn->delayed_packets.one_rtt - conn->delayed_packets.as_array;
+            }
+            *conn->delayed_packets.as_array[slot].tail = delayed;
+            conn->delayed_packets.as_array[slot].tail = &delayed->next;
+            ++conn->delayed_packets.num_packets;
+            if (conn->super.stats.num_packets.max_buffered < conn->delayed_packets.num_packets)
+                conn->super.stats.num_packets.max_buffered = conn->delayed_packets.num_packets;
+        }
+
+    } else if (ret == 0) { /* if state has advanced, process delayed slots that have become processible */
+
+        for (size_t slot = 0; conn->delayed_packets.slots_newly_processible != 0; ++slot) {
+            if ((conn->delayed_packets.slots_newly_processible & (1 << slot)) == 0)
+                continue;
+            conn->delayed_packets.slots_newly_processible ^= 1 << slot;
+
+            /* processes each delayed packet */
+            struct st_quicly_delayed_packet_t *delayed;
+            while ((delayed = conn->delayed_packets.as_array[slot].head) != NULL) {
+                /* detach */
+                if ((conn->delayed_packets.as_array[slot].head = delayed->next) == NULL)
+                    conn->delayed_packets.as_array[slot].tail = &conn->delayed_packets.as_array[slot].head;
+                --conn->delayed_packets.num_packets;
+                /* process the packet and free */
+                int might_be_reorder;
+                ret = do_receive(conn, &delayed->dest_addr.sa, &delayed->src_addr.sa, &delayed->packet, &might_be_reorder);
+                free(delayed);
+                switch (ret) {
+                case 0:
+                case QUICLY_ERROR_PACKET_IGNORED:
+                case QUICLY_ERROR_DECRYPTION_FAILED:
+                    break;
+                default: /* bail out if a fatal error has been raised */
+                    goto Exit;
+                }
+            }
+        }
+    }
+
+Exit:
     return ret;
 }
 
