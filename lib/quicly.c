@@ -1622,15 +1622,13 @@ static quicly_error_t record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_ou
 static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, uint8_t ecn, int is_ack_only,
                                      int64_t received_at, int64_t *send_ack_at, uint64_t *received_out_of_order)
 {
-    int ack_now, is_out_of_order;
+    int is_out_of_order;
     quicly_error_t ret;
 
     if ((ret = record_pn(&space->ack_queue, pn, &is_out_of_order)) != 0)
         goto Exit;
     if (is_out_of_order)
         *received_out_of_order += 1;
-
-    ack_now = !is_ack_only && ((is_out_of_order && !space->ignore_order) || ecn == IPTOS_ECN_CE);
 
     /* update largest_pn_received_at (TODO implement deduplication at an earlier moment?) */
     if (space->ack_queue.ranges[space->ack_queue.num_ranges - 1].end == pn + 1)
@@ -1643,14 +1641,16 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
     /* if the received packet is ack-eliciting, update / schedule transmission of ACK */
     if (!is_ack_only) {
         space->unacked_count++;
-        if (space->unacked_count >= space->packet_tolerance)
-            ack_now = 1;
-    }
-
-    if (ack_now) {
-        *send_ack_at = received_at;
-    } else if (*send_ack_at == INT64_MAX && space->unacked_count != 0) {
-        *send_ack_at = received_at + QUICLY_DELAYED_ACK_TIMEOUT;
+        int64_t delay;
+        if ((is_out_of_order && !space->ignore_order) || ecn == IPTOS_ECN_CE) {
+            delay = 0;
+        } else if (space->unacked_count >= space->packet_tolerance) {
+            delay = 0;
+        } else {
+            delay = QUICLY_DELAYED_ACK_TIMEOUT;
+        }
+        if (*send_ack_at > received_at + delay)
+            *send_ack_at = received_at + delay;
     }
 
     ret = 0;
