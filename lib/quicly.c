@@ -7194,6 +7194,10 @@ Exit:
     return ret;
 }
 
+/**
+ * @param receive_delay  set to -1 when received for the first time, but if buffered for replay, contains how long the packet has
+ *                       been delayed
+ */
 quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                           quicly_decoded_packet_t *packet, int64_t receive_delay, int *might_be_reorder)
 {
@@ -7215,10 +7219,11 @@ quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
 
     QUICLY_PROBE(RECEIVE, conn, conn->stash.now,
                  QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), packet->octets.base,
-                 packet->octets.len);
+                 packet->octets.len, receive_delay);
     QUICLY_LOG_CONN(receive, conn, {
         PTLS_LOG_ELEMENT_HEXDUMP(dcid, packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len);
         PTLS_LOG_ELEMENT_HEXDUMP(bytes, packet->octets.base, packet->octets.len);
+        PTLS_LOG_ELEMENT_SIGNED(receive_delay, receive_delay);
     });
 
     /* drop packets with invalid server tuple (note: when running as a server, `dest_addr` may not be available depending on the
@@ -7476,8 +7481,8 @@ quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
         QUICLY_LOG_CONN(elicit_path_migration, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
     }
     if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
-        if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->stash.now - receive_delay, &conn->egress.send_ack_at,
-                                  &conn->super.stats.num_packets.received_out_of_order)) != 0)
+        if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->stash.now - (receive_delay >= 0 ? receive_delay : 0),
+                                  &conn->egress.send_ack_at, &conn->super.stats.num_packets.received_out_of_order)) != 0)
             goto Exit;
     }
 
@@ -7556,7 +7561,7 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
     lock_now(conn, 0);
 
     int might_be_reorder;
-    quicly_error_t ret = do_receive(conn, dest_addr, src_addr, packet, 0, &might_be_reorder);
+    quicly_error_t ret = do_receive(conn, dest_addr, src_addr, packet, -1, &might_be_reorder);
 
     if (might_be_reorder) {
 
