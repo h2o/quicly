@@ -1620,7 +1620,8 @@ static quicly_error_t record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_ou
 }
 
 static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_t pn, uint8_t ecn, int is_ack_only,
-                                     int64_t received_at, int64_t *send_ack_at, uint64_t *received_out_of_order)
+                                     int address_validated, int64_t received_at, int64_t *send_ack_at,
+                                     uint64_t *received_out_of_order)
 {
     int is_out_of_order;
     quicly_error_t ret;
@@ -1645,7 +1646,7 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
         if ((is_out_of_order && !space->ignore_order) || ecn == IPTOS_ECN_CE) {
             delay = 0;
         } else if (space->unacked_count >= space->packet_tolerance) {
-            delay = 0;
+            delay = address_validated ? 0 : 1;
         } else {
             delay = QUICLY_DELAYED_ACK_TIMEOUT;
         }
@@ -7171,7 +7172,8 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
     if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, 0, payload.base, payload.len, &offending_frame_type, &is_ack_only,
                               &is_probe_only)) != 0)
         goto Exit;
-    if ((ret = record_receipt(&(*conn)->initial->super, pn, packet->ecn, 0, (*conn)->stash.now, &(*conn)->egress.send_ack_at,
+    if ((ret = record_receipt(&(*conn)->initial->super, pn, packet->ecn, 0, (*conn)->super.remote.address_validation.validated,
+                              (*conn)->stash.now, &(*conn)->egress.send_ack_at,
                               &(*conn)->super.stats.num_packets.received_out_of_order)) != 0)
         goto Exit;
 
@@ -7476,7 +7478,8 @@ quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
         QUICLY_LOG_CONN(elicit_path_migration, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
     }
     if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
-        if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->stash.now - receive_delay, &conn->egress.send_ack_at,
+        if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->super.remote.address_validation.validated,
+                                  conn->stash.now - receive_delay, &conn->egress.send_ack_at,
                                   &conn->super.stats.num_packets.received_out_of_order)) != 0)
             goto Exit;
     }
