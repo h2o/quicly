@@ -246,8 +246,6 @@ struct st_quicly_conn_path_t {
 struct st_quicly_delayed_packet_t {
     struct st_quicly_delayed_packet_t *next;
     int64_t at;
-    quicly_address_t dest_addr;
-    quicly_address_t src_addr;
     quicly_decoded_packet_t packet;
     uint8_t bytes[1];
 };
@@ -7565,7 +7563,8 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
 
     if (might_be_reorder) {
 
-        if (conn->delayed_packets.num_packets < QUICLY_MAX_DELAYED_PACKETS) {
+        if (conn->delayed_packets.num_packets < QUICLY_MAX_DELAYED_PACKETS &&
+            compare_socket_address(&conn->paths[0]->address.remote.sa, src_addr) == 0) {
             /* instantiate the delayed packet */
             struct st_quicly_delayed_packet_t *delayed;
             if ((delayed = malloc(offsetof(struct st_quicly_delayed_packet_t, bytes) + packet->octets.len)) == NULL) {
@@ -7574,8 +7573,6 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
             }
             delayed->next = NULL;
             delayed->at = conn->stash.now;
-            set_address(&delayed->dest_addr, dest_addr);
-            set_address(&delayed->src_addr, src_addr);
             delayed->packet = *packet;
             memcpy(delayed->bytes, packet->octets.base, packet->octets.len);
             adjust_pointers_of_decoded_packet(&delayed->packet, delayed->bytes);
@@ -7612,8 +7609,8 @@ quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, s
                 --conn->delayed_packets.num_packets;
                 /* process the packet and free */
                 int might_be_reorder;
-                ret = do_receive(conn, &delayed->dest_addr.sa, &delayed->src_addr.sa, &delayed->packet,
-                                 conn->stash.now - delayed->at, &might_be_reorder);
+                ret = do_receive(conn, NULL, &conn->paths[0]->address.remote.sa, &delayed->packet, conn->stash.now - delayed->at,
+                                 &might_be_reorder);
                 free(delayed);
                 switch (ret) {
                 case 0:
