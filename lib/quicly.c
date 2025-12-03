@@ -7196,8 +7196,8 @@ Exit:
  * @param receive_delay  set to -1 when received for the first time, but if buffered for replay, contains how long the packet has
  *                       been delayed
  */
-quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
-                          quicly_decoded_packet_t *packet, int64_t receive_delay, int *might_be_reorder)
+static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
+                                 quicly_decoded_packet_t *packet, int64_t receive_delay, int *might_be_reorder)
 {
     ptls_cipher_context_t *header_protection;
     struct {
