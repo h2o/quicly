@@ -27,6 +27,9 @@
 #include <openssl/engine.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/provider.h>
+#endif
 #include "picotls.h"
 #include "picotls/openssl.h"
 #include "quicly.h"
@@ -186,6 +189,32 @@ static void test_adjust_crypto_frame_layout(void)
         ok(memcmp(buf, "\x06\x04\x04hell", 7) == 0);
     });
 #undef TEST
+}
+
+static uint16_t test_enable_with_ratio255_random_value;
+
+static void test_enable_with_ratio255_get_random(void *p, size_t len)
+{
+    assert(len == sizeof(test_enable_with_ratio255_random_value));
+    memcpy(p, &test_enable_with_ratio255_random_value, sizeof(test_enable_with_ratio255_random_value));
+}
+
+static void test_enable_with_ratio255(void)
+{
+    test_enable_with_ratio255_random_value = 0;
+    ok(!enable_with_ratio255(0, test_enable_with_ratio255_get_random));
+    ok(enable_with_ratio255(255, test_enable_with_ratio255_get_random));
+
+    test_enable_with_ratio255_random_value = 255;
+    ok(!enable_with_ratio255(0, test_enable_with_ratio255_get_random));
+    ok(enable_with_ratio255(255, test_enable_with_ratio255_get_random));
+
+    size_t num_enabled = 0;
+    for (test_enable_with_ratio255_random_value = 0; test_enable_with_ratio255_random_value < 0xffff;
+         ++test_enable_with_ratio255_random_value)
+        if (enable_with_ratio255(63, test_enable_with_ratio255_get_random))
+            ++num_enabled;
+    ok(num_enabled == 63 * (65535 / 255));
 }
 
 static void test_adjust_last_stream_frame(void)
@@ -545,6 +574,23 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     return num_datagrams;
 }
 
+static void exchange_until_idle(quicly_conn_t *c1, quicly_conn_t *c2)
+{
+    while (1) {
+        int64_t t1 = quicly_get_first_timeout(c1), t2 = quicly_get_first_timeout(c2), tmin = t1 <= t2 ? t1 : t2;
+        if (tmin > quic_now) {
+            if (tmin - quic_now > QUICLY_DEFAULT_MAX_ACK_DELAY)
+                break;
+            quic_now = tmin;
+        }
+        if (t1 <= t2) {
+            transmit(c1, c2);
+        } else {
+            transmit(c2, c1);
+        }
+    }
+}
+
 int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
 {
     uint64_t client_sent, client_consumed;
@@ -722,7 +768,6 @@ static void test_cid(void)
 {
     subtest("received cid", test_received_cid);
     subtest("local cid", test_local_cid);
-    subtest("retire cid", test_retire_cid);
 }
 
 /**
@@ -875,6 +920,135 @@ static void test_jumpstart_cwnd(void)
     ok(derive_jumpstart_cwnd(&bounded_max, 250, 1000000, 250) == 80000);
 }
 
+static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **server)
+{
+    quicly_address_t dest, src;
+    struct iovec datagrams[8];
+    uint8_t packetsbuf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 4];
+    size_t num_datagrams, num_decoded;
+    quicly_error_t ret;
+
+    ret = quicly_connect(client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                         NULL, NULL);
+    ok(ret == 0);
+    num_datagrams = sizeof(datagrams);
+    ret = quicly_send(*client, &dest, &src, datagrams, &num_datagrams, packetsbuf, sizeof(packetsbuf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    num_decoded = decode_packets(decoded, datagrams, 1);
+    ok(num_decoded == 1);
+    ret = quicly_accept(server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL);
+    ok(ret == 0);
+    num_datagrams = transmit(*server, *client);
+    ok(num_datagrams > 0);
+    ok(quicly_get_state(*client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(*server) == QUICLY_STATE_CONNECTED);
+    exchange_until_idle(*client, *server);
+}
+
+static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, struct iovec *datagram, void *buf,
+                                    size_t bufsize)
+{
+    assert(conn->application != NULL);
+
+    *s = (quicly_send_context_t){
+        .current.first_byte = -1,
+        .datagrams = datagram,
+        .max_datagrams = 1,
+        .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
+        .first_packet_number = conn->egress.packet_number,
+        .send_window = bufsize,
+        .dcid = get_dcid(conn, 0 /* path_index */),
+    };
+    lock_now(conn, 0);
+    setup_send_space(conn, QUICLY_EPOCH_1RTT, s);
+}
+
+static struct {
+    quicly_conn_t *conn;
+    quicly_error_t err;
+    char reason[64];
+} test_state_exhaustion_closed_by_remote;
+
+static void test_state_exhaustion_on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *conn, quicly_error_t err,
+                                                      uint64_t frame_type, const char *reason, size_t reason_len)
+{
+    if (test_state_exhaustion_closed_by_remote.conn == NULL) {
+        test_state_exhaustion_closed_by_remote.conn = conn;
+        test_state_exhaustion_closed_by_remote.err = err;
+        memcpy(test_state_exhaustion_closed_by_remote.reason, reason, reason_len);
+        test_state_exhaustion_closed_by_remote.reason[reason_len] = '\0';
+    }
+}
+
+/**
+ * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
+ * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
+ */
+static void test_state_exhaustion(void)
+{
+    static quicly_closed_by_remote_t closed_by_remote = {test_state_exhaustion_on_closed_by_remote};
+
+    assert(quic_ctx.closed_by_remote == NULL);
+    quic_ctx.closed_by_remote = &closed_by_remote;
+    memset(&test_state_exhaustion_closed_by_remote, 0, sizeof(test_state_exhaustion_closed_by_remote));
+    uint64_t orig_max_stream_data_bidi_remote = quic_ctx.transport_params.max_stream_data.bidi_remote;
+    quic_ctx.transport_params.max_stream_data.bidi_remote = 65536; /* shrink to reduce # of gaps permitted */
+
+    quicly_conn_t *client, *server;
+    quicly_send_context_t s;
+    struct iovec datagram;
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded;
+    size_t num_datagrams, num_decoded;
+    quicly_address_t dest, src;
+    quicly_error_t ret = 0;
+
+    test_setup_connected_peers(&client, &server);
+
+    /* send up to 200 packets with stream frame having gaps and check that the receiver raises state exhaustion */
+    for (size_t i = 0; i < 200; ++i) {
+        test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
+        do_allocate_frame(client, &s, 100, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
+        *s.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
+        s.dst = quicly_encodev(s.dst, 0);     /* stream id */
+        s.dst = quicly_encodev(s.dst, i * 2); /* off */
+        s.dst = quicly_encodev(s.dst, 1);     /* len */
+        *s.dst++ = (uint8_t)('a' + (i * 2) % 26);
+        commit_send_packet(client, &s, 0);
+        unlock_now(client);
+
+        num_decoded = decode_packets(&decoded, &datagram, 1);
+        ok(num_decoded == 1);
+        if ((ret = quicly_receive(server, NULL, &fake_address.sa, &decoded)) != 0)
+            break;
+    }
+    ok(ret == QUICLY_ERROR_STATE_EXHAUSTION);
+
+    /* upon state exhaustion, the receiving endpoint MAY send CONNECTION_CLOSE (in this test, state-exhaustion is sent) */
+    quicly_close(server, ret, NULL);
+    num_datagrams = 1;
+    ret = quicly_send(server, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    num_decoded = decode_packets(&decoded, &datagram, 1);
+    ret = quicly_receive(client, NULL, &fake_address.sa, &decoded);
+    ok(ret == 0);
+    ok(quicly_get_state(client) == QUICLY_STATE_DRAINING);
+
+    /* sender should have received PROTOCOL_VIOLATION with the special reason phrase */
+    ok(test_state_exhaustion_closed_by_remote.conn == client);
+    ok(test_state_exhaustion_closed_by_remote.err == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    ok(strcmp(test_state_exhaustion_closed_by_remote.reason, "state exhaustion") == 0);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quic_ctx.closed_by_remote = NULL;
+    quic_ctx.transport_params.max_stream_data.bidi_remote = orig_max_stream_data_bidi_remote;
+}
+
 static void do_test_migration_during_handshake(int second_flight_from_orig_address)
 {
     quicly_conn_t *client, *server;
@@ -959,6 +1133,56 @@ static void test_migration_during_handshake(void)
     subtest("migrate-before-3nd", do_test_migration_during_handshake, 1);
 }
 
+static size_t test_stats_foreach_next_off;
+
+static void test_stats_foreach_field(size_t off, size_t size)
+{
+    ok(test_stats_foreach_next_off == off);
+
+    /* Due to alignment, padding might exist between two fields when their types are different. The `gaps` list calls out the ones
+     * that "might" have such padding on some architectures. */
+    static const size_t gaps[] = {
+#define GAP(after, before) offsetof(quicly_stats_t, after), offsetof(quicly_stats_t, before)
+        GAP(jumpstart.cwnd, token_sent.at),
+        GAP(token_sent.rtt, rtt.minimum),
+        GAP(loss_thresholds.use_packet_based, loss_thresholds.time_based_percentile),
+        GAP(loss_thresholds.time_based_percentile, cc.cwnd),
+        GAP(cc.ssthresh, cc.cwnd_initial),
+        GAP(cc.num_ecn_loss_episodes, delivery_rate.latest),
+#undef GAP
+        SIZE_MAX};
+    for (size_t i = 0; gaps[i] != SIZE_MAX; i += 2) {
+        if (test_stats_foreach_next_off == gaps[i]) {
+            test_stats_foreach_next_off = gaps[i + 1];
+            return;
+        }
+    }
+
+    /* otherwise, it is right after the current field */
+    test_stats_foreach_next_off += size;
+}
+
+static void test_stats_foreach(void)
+{
+#define CHECK(fld, name)                                                                                                           \
+    subtest(name, test_stats_foreach_field, offsetof(quicly_stats_t, fld), sizeof(((quicly_stats_t *)NULL)->fld));
+
+    /* check QUICLY_STATS_FOREACH touches all fields, in the correct order */
+    test_stats_foreach_next_off = 0;
+    QUICLY_STATS_FOREACH(CHECK);
+    ok(test_stats_foreach_next_off == sizeof(quicly_stats_t));
+
+    /* check QUICLY_STATS_FOREACH_COUNTERS only check the counters */
+    struct counters_only {
+        QUICLY_STATS_PREBUILT_COUNTERS;
+    };
+    test_stats_foreach_next_off = 0;
+    QUICLY_STATS_FOREACH_COUNTERS(CHECK);
+    ok(test_stats_foreach_next_off == sizeof(struct counters_only));
+
+#undef CHECK
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -980,11 +1204,10 @@ int main(int argc, char **argv)
 
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
-#if !defined(OPENSSL_NO_ENGINE)
-    /* Load all compiled-in ENGINEs */
-    ENGINE_load_builtin_engines();
-    ENGINE_register_all_ciphers();
-    ENGINE_register_all_digests();
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+    /* Explicitly load the legacy provider in addition to default, as we test Blowfish in one of the tests. */
+    (void)OSSL_PROVIDER_load(NULL, "legacy");
+    (void)OSSL_PROVIDER_load(NULL, "default");
 #endif
 
     {
@@ -1008,6 +1231,7 @@ int main(int argc, char **argv)
     quicly_amend_ptls_context(quic_ctx.tls);
 
     subtest("error-codes", test_error_codes);
+    subtest("enable_with_ratio255", test_enable_with_ratio255);
     subtest("next-packet-number", test_next_packet_number);
     subtest("address-token-codec", test_address_token_codec);
     subtest("ranges", test_ranges);
@@ -1033,8 +1257,12 @@ int main(int argc, char **argv)
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
+    subtest("cc", test_cc);
 
+    subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
+
+    subtest("stats-foreach", test_stats_foreach);
 
     return done_testing();
 }
