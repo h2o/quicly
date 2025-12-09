@@ -99,6 +99,11 @@ int64_t quic_now = 1;
 quicly_context_t quic_ctx;
 quicly_stream_callbacks_t stream_callbacks = {
     on_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_egress_stop, on_ingress_receive, on_ingress_reset};
+quicly_stream_scheduler_t stream_scheduler = {
+    .can_send = quicly_default_stream_scheduler_can_send,
+    .do_send = quicly_default_stream_scheduler_do_send,
+    .update_state = quicly_default_stream_scheduler_update_state,
+};
 size_t on_destroy_callcnt;
 
 static void test_error_codes(void)
@@ -1183,6 +1188,50 @@ static void test_stats_foreach(void)
 #undef CHECK
 }
 
+static size_t do_emit_scattered(quicly_stream_t *stream, size_t off, const ptls_iovec_t *vecs, size_t num_vecs, int *wrote_all)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+    size_t bytes_written = 0;
+
+    for (size_t i = 0; i < num_vecs; ++i) {
+        size_t vec_len = vecs[i].len;
+        quicly_sendbuf_emit(stream, &sbuf->egress, off, vecs[i].base, &vec_len, wrote_all);
+        bytes_written += vec_len;
+        if (*wrote_all)
+            break;
+        assert(vec_len == vecs[i].len);
+        off += vec_len;
+    }
+
+    return bytes_written;
+}
+
+static quicly_error_t do_send_scattered(quicly_stream_t *stream, quicly_send_context_t *s)
+{
+    assert(stream->callbacks == &stream_callbacks);
+    return quicly_send_stream_scattered(stream, s, do_emit_scattered, SIZE_MAX);
+}
+
+static quicly_error_t scheduler_do_send_scattered(quicly_stream_scheduler_t *self, quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    return quicly_default_stream_scheduler_do_send_with(self, conn, s, do_send_scattered);
+}
+
+static void run_stream_tests(int scatter)
+{
+    if (scatter) {
+        assert(stream_scheduler.do_send == quicly_default_stream_scheduler_do_send);
+        stream_scheduler.do_send = scheduler_do_send_scattered;
+    }
+
+    subtest("simple", test_simple);
+    subtest("stream-concurrency", test_stream_concurrency);
+    subtest("lossy", test_lossy);
+
+    if (scatter)
+        stream_scheduler.do_send = quicly_default_stream_scheduler_do_send;
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -1199,6 +1248,7 @@ int main(int argc, char **argv)
     quic_ctx.transport_params.max_streams_bidi = 10;
     quic_ctx.stream_open = &stream_open;
     quic_ctx.now = &get_now;
+    quic_ctx.stream_scheduler = &stream_scheduler;
 
     fake_address.sa.sa_family = AF_INET;
 
@@ -1249,9 +1299,8 @@ int main(int argc, char **argv)
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
     subtest("cid", test_cid);
-    subtest("simple", test_simple);
-    subtest("stream-concurrency", test_stream_concurrency);
-    subtest("lossy", test_lossy);
+    subtest("stream-subtests", run_stream_tests, 0);
+    subtest("stream-subtests-scattered", run_stream_tests, 1);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
