@@ -5818,7 +5818,7 @@ uint8_t quicly_send_get_ecn_bits(quicly_conn_t *conn)
 size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
                                        ptls_iovec_t src_cid, const char *err_desc, void *datagram)
 {
-    quicly_cipher_context_t egress = {0};
+    struct st_quicly_cipher_context_t egress = {0};
     const quicly_salt_t *salt;
 
     /* setup keys */
