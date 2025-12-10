@@ -227,7 +227,7 @@ static void test_adjust_last_stream_frame(void)
 #define TEST(space_left, check)                                                                                                    \
     do {                                                                                                                           \
         uint8_t buf[] = {0x08, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
-        size_t increase = adjust_last_stream_frame(buf, 2, 5, space_left, 1);                                                      \
+        size_t increase = adjust_last_stream_frame(buf, 2, 5, space_left);                                                         \
         do {                                                                                                                       \
             check                                                                                                                  \
         } while (0);                                                                                                               \
