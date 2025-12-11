@@ -250,85 +250,90 @@ static void test_adjust_last_stream_frame(void)
 #undef TEST
 }
 
-static void test_scatter_stream_payload(void)
+static void test_prepare_scatter(void)
 {
-    quicly_cid_t dcid = {.cid = {'C', 'I', 'D'}, .len = 3};
+#define DATAGRAM_SIZE 100
+#define STREAM_ID 4
+#define TAG_SIZE 16
+
+    quicly_cid_t dcid = {.cid = {0x41, 0x42, 0x43}, .len = 3};
     ptls_aead_context_t aead = {.algo = &ptls_openssl_aes128gcm};
     struct st_quicly_cipher_context_t cipher = {.aead = &aead};
 
-#define TEST(_len, datagram_size, extra_datagrams, check)                                                                          \
+    assert(aead.algo->tag_size == TAG_SIZE);
+
+#define SETUP()                                                                                                                    \
+    uint8_t buf[DATAGRAM_SIZE * 20];                                                                                               \
+    quicly_send_context_t s = {                                                                                                    \
+        .dcid = &dcid,                                                                                                             \
+        .current.cipher = &cipher,                                                                                                 \
+        .payload_buf.datagram = buf,                                                                                               \
+        .payload_buf.end = buf + sizeof(buf),                                                                                      \
+        .dst = buf + DATAGRAM_SIZE - 20 - TAG_SIZE, /* pretend as if only 20 bytes is left within the first datagram */            \
+        .dst_end = buf + DATAGRAM_SIZE - TAG_SIZE,                                                                                 \
+    };                                                                                                                             \
+    ptls_iovec_t vecs[10] = {{.base = s.dst + 2, .len = s.dst_end - (s.dst + 2)}}; /* 2 bytes for STREAM header(sid=0) */          \
+    assert(vecs[0].len == 18)
+
+#define CHECK_VEC(index, expected_header, expected_len)                                                                            \
     do {                                                                                                                           \
-        uint8_t buf[] = "\x08\x04"                                                                                                 \
-                        "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to "    \
-                        "do: once or twice she had peeped into the book her sister was reading, but it had no pictures or "        \
-                        "conversations in it";                                                                                     \
-        quicly_send_context_t s = {                                                                                                \
-            .dcid = &dcid,                                                                                                         \
-            .current.cipher = &cipher,                                                                                             \
-            .dst = buf,                                                                                                            \
-            .dst_end = buf + 8,                                                                                                    \
-        };                                                                                                                         \
-        size_t len = (_len);                                                                                                       \
-        int wrote_all = 1;                                                                                                         \
-        uint16_t scattered_payload_lengths[11];                                                                                    \
-        memset(scattered_payload_lengths, 0x55, sizeof(scattered_payload_lengths));                                                \
-        uint8_t *end_of_last_frame = scatter_stream_payload(&s, datagram_size, 4, 0, buf + 2, &len, &wrote_all,                    \
-                                                            scattered_payload_lengths, (extra_datagrams));                         \
-        do {                                                                                                                       \
-            check                                                                                                                  \
-        } while (0);                                                                                                               \
+        ok(vecs[index].base == &buf[DATAGRAM_SIZE * (index) + 1 + dcid.len + QUICLY_SEND_PN_SIZE] + sizeof(expected_header) - 1);  \
+        ok(memcmp(vecs[index].base - (sizeof(expected_header) - 1), expected_header, sizeof(expected_header) - 1) == 0);           \
+        if ((expected_len) == SIZE_MAX) {                                                                                          \
+            ok(vecs[index].base + vecs[index].len == buf + DATAGRAM_SIZE * ((index) + 1) - TAG_SIZE);                              \
+        } else {                                                                                                                   \
+            ok(vecs[index].len == (expected_len));                                                                                 \
+        }                                                                                                                          \
     } while (0)
 
-    TEST(34 /* 6 (current) + 13 * 2 + 2 */, 38 /* 16 bytes frame space per datagram */, 2, {
-        ok(len == 32);
-        ok(wrote_all == 0);
-        ok(scattered_payload_lengths[0] == 13);
-        ok(scattered_payload_lengths[1] == 13);
-        ok(scattered_payload_lengths[2] == 0);
-        ok(memcmp(buf,
-                  "\x08\x04"
-                  "Alice ",
-                  8) == 0);
-        size_t payload_gap = aead.algo->tag_size + 1 + dcid.len + QUICLY_SEND_PN_SIZE;
-        ok(memcmp(buf + 8 + payload_gap,
-                  "\x0c\x04\x06"
-                  "was beginning",
-                  16) == 0);
-        ok(memcmp(buf + 24 + payload_gap * 2,
-                  "\x0c\x04\x13"
-                  " to get very ",
-                  16) == 0);
-        ok(buf + 24 + payload_gap * 2 + 16 == end_of_last_frame);
-    });
+    { /* basic check */
+        SETUP();
+        s.payload_buf.end = buf + DATAGRAM_SIZE * 5; /* limit output to 5 datagrams */
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 5);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", SIZE_MAX);
+        CHECK_VEC(3, "\x0c\x04\x40\xa7", SIZE_MAX);
+        CHECK_VEC(4, "\x0c\x04\x40\xf1", SIZE_MAX);
+    }
 
-    TEST(34 /* 6 (current) + 13 * 2 + 2 */, 38 /* 16 bytes frame space per datagram */, 3, {
-        ok(len == 34);
-        ok(wrote_all == 1);
-        ok(scattered_payload_lengths[0] == 13);
-        ok(scattered_payload_lengths[1] == 13);
-        ok(scattered_payload_lengths[2] == 2);
-        ok(scattered_payload_lengths[3] == 0);
-        ok(memcmp(buf,
-                  "\x08\x04"
-                  "Alice ",
-                  8) == 0);
-        size_t payload_gap = aead.algo->tag_size + 1 + dcid.len + QUICLY_SEND_PN_SIZE;
-        ok(memcmp(buf + 8 + payload_gap,
-                  "\x0c\x04\x06"
-                  "was beginning",
-                  16) == 0);
-        ok(memcmp(buf + 24 + payload_gap * 2,
-                  "\x0c\x04\x13"
-                  " to get very ",
-                  16) == 0);
-        ok(memcmp(buf + 40 + payload_gap * 3,
-                  "\x0e\x04\x20\x02"
-                  "ti",
-                  6) == 0);
-        ok(buf + 40 + payload_gap * 3 + 6 == end_of_last_frame);
-    });
+    { /* no more than 10 vectors are expected to be returned */
+        SETUP();
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 10);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", SIZE_MAX);
+        CHECK_VEC(3, "\x0c\x04\x40\xa7", SIZE_MAX);
+        CHECK_VEC(4, "\x0c\x04\x40\xf1", SIZE_MAX);
+    }
 
-#undef TEST
+    { /* if provided len is smaller than the space available in the first datagram, `vec[0].len` is reduced */
+        SETUP();
+        size_t len = 11;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 1);
+        ok(vecs[0].len == 11);
+    }
+
+    { /* len might run out in the middle of the following datagrams */
+        SETUP();
+        size_t len = 150;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 3);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", 57);
+    }
+
+#undef CHECK_VEC
+#undef SETUP
+#undef DATAGRAM_SIZE
+#undef STREAM_ID
+#undef TAG_SIZE
 }
 
 static int64_t get_now_cb(quicly_now_t *self)
@@ -1294,7 +1299,7 @@ int main(int argc, char **argv)
     subtest("loss", test_loss);
     subtest("adjust-crypto-frame-layout", test_adjust_crypto_frame_layout);
     subtest("adjust-last-stream-frame", test_adjust_last_stream_frame);
-    subtest("scatter-stream-payload", test_scatter_stream_payload);
+    subtest("prepare-scatter", test_prepare_scatter);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
