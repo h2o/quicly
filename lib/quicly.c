@@ -4307,17 +4307,18 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
 /**
  * builds stream frame headers and setups the offset / scattered iovec arrays, and returns the size of the arrays
  */
-static size_t prepare_scattered_emit(quicly_send_context_t *s, uint16_t datagram_size, quicly_stream_id_t stream_id, uint64_t off,
-                                     size_t *len, ptls_iovec_t *vecs)
+static size_t prepare_scattered_emit(quicly_send_context_t *s, const uint16_t datagram_size, quicly_stream_id_t stream_id,
+                                     uint64_t off, size_t *len, ptls_iovec_t *vecs)
 {
     const uint16_t packet_header_size = 1 + s->dcid->len + QUICLY_SEND_PN_SIZE;
     const uint64_t max_off = off + *len;
+    const size_t tag_size = s->current.cipher->aead->algo->tag_size;
     size_t num_vecs = 1;
 
     off += vecs[0].len;
 
     /* build more frames (in the payload buffer in which additional datagrams will be allocated) */
-    uint8_t *datagram_at = s->dst_end + s->current.cipher->aead->algo->tag_size;
+    uint8_t *datagram_at = s->dst_end + tag_size;
     assert(datagram_at == s->payload_buf.datagram + datagram_size);
     for (; num_vecs < 10 && off < max_off && s->payload_buf.end - datagram_at >= datagram_size;
          ++num_vecs, datagram_at += datagram_size) {
@@ -4325,7 +4326,7 @@ static size_t prepare_scattered_emit(quicly_send_context_t *s, uint16_t datagram
         *p++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF;
         p = quicly_encodev(p, stream_id);
         p = quicly_encodev(p, off);
-        vecs[num_vecs] = ptls_iovec_init(p, datagram_at + datagram_size - p);
+        vecs[num_vecs] = ptls_iovec_init(p, datagram_at + datagram_size - tag_size - p);
         off += vecs[num_vecs].len;
     }
 
