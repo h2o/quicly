@@ -4310,17 +4310,23 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s)
 static size_t prepare_scattered_emit(quicly_send_context_t *s, const uint16_t datagram_size, quicly_stream_id_t stream_id,
                                      uint64_t off, size_t *len, ptls_iovec_t *vecs)
 {
+    size_t num_vecs = 1, max_vecs = 10;
+
+    if (max_vecs > s->max_datagrams - s->num_datagrams)
+        max_vecs = s->max_datagrams - s->num_datagrams;
+    if (max_vecs > (s->send_window + datagram_size - 1) / datagram_size)
+        max_vecs = (s->send_window + datagram_size - 1) / datagram_size;
+
     const uint16_t packet_header_size = 1 + s->dcid->len + QUICLY_SEND_PN_SIZE;
     const uint64_t max_off = off + *len;
     const size_t tag_size = s->current.cipher->aead->algo->tag_size;
-    size_t num_vecs = 1;
 
     off += vecs[0].len;
 
     /* build more frames (in the payload buffer in which additional datagrams will be allocated) */
     uint8_t *datagram_at = s->dst_end + tag_size;
     assert(datagram_at == s->payload_buf.datagram + datagram_size);
-    for (; num_vecs < 10 && off < max_off && s->payload_buf.end - datagram_at >= datagram_size;
+    for (; num_vecs < max_vecs && off < max_off && s->payload_buf.end - datagram_at >= datagram_size;
          ++num_vecs, datagram_at += datagram_size) {
         uint8_t *frame_at = datagram_at + packet_header_size, *p = frame_at;
         *p++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF;

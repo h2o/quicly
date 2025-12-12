@@ -271,6 +271,9 @@ static void test_prepare_scatter(void)
         .payload_buf.end = buf + sizeof(buf),                                                                                      \
         .dst = buf + DATAGRAM_SIZE - 20 - TAG_SIZE, /* pretend as if only 20 bytes is left within the first datagram */            \
         .dst_end = buf + DATAGRAM_SIZE - TAG_SIZE,                                                                                 \
+        .num_datagrams = 0,                                                                                                        \
+        .max_datagrams = 20,                                                                                                       \
+        .send_window = DATAGRAM_SIZE * 20,                                                                                         \
     };                                                                                                                             \
     ptls_iovec_t vecs[10] = {{.base = s.dst + 2, .len = s.dst_end - (s.dst + 2)}}; /* 2 bytes for STREAM header(sid=0) */          \
     assert(vecs[0].len == 18)
@@ -327,6 +330,47 @@ static void test_prepare_scatter(void)
         ok(vecs[0].len == 18);
         CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
         CHECK_VEC(2, "\x0c\x04\x40\x5d", 57);
+    }
+
+    { /* prepare no more than the number of the datagrams that can be built */
+        SETUP();
+        s.num_datagrams = s.max_datagrams - 3;
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 3);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", SIZE_MAX);
+    }
+
+    { /* prepare no more than send window */
+        SETUP();
+        s.send_window = DATAGRAM_SIZE;
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 1);
+        ok(vecs[0].len == 18);
+    }
+
+    { /* prepare no more than send window (of 3 datagrams) */
+        SETUP();
+        s.send_window = DATAGRAM_SIZE * 3;
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 3);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", SIZE_MAX);
+    }
+
+    { /* send window is rounded up to the datagram size */
+        SETUP();
+        s.send_window = DATAGRAM_SIZE + 1;
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 2);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
     }
 
 #undef CHECK_VEC
