@@ -4560,7 +4560,7 @@ quicly_error_t quicly_send_stream_scattered(quicly_stream_t *stream, quicly_send
         /* STREAM frame */
         uint64_t frame_off = off;
         size_t vec_index = 0;
-        for (; payload_vecs[vec_index].len < len; ++vec_index) {
+        for (; payload_vecs[vec_index].len < off + len - frame_off; ++vec_index) {
             assert(payload_vecs[vec_index].base + payload_vecs[vec_index].len == s->dst_end);
             commit_stream_frame(stream, sent, frame_off, payload_vecs[vec_index].base, payload_vecs[vec_index].len, 0, 0);
             frame_off += payload_vecs[vec_index].len;
