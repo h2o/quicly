@@ -4527,7 +4527,9 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
         /* if sending in 1-RTT, generate stream payload past the end of current datagram and move them to build datagrams */
         if (get_epoch(s->current.first_byte) == QUICLY_EPOCH_1RTT) {
             size_t mtu = stream->conn->egress.max_udp_payload_size;
-            size_t extra_datagrams = (s->payload_buf.end - (s->dst_end + s->target.cipher->aead->algo->tag_size)) / mtu;
+            size_t extra_datagrams = s->send_window > mtu ? (s->send_window + mtu - 1) / mtu - 1 : 0;
+            if (extra_datagrams > (s->payload_buf.end - (s->dst_end + s->target.cipher->aead->algo->tag_size)) / mtu)
+                extra_datagrams = (s->payload_buf.end - (s->dst_end + s->target.cipher->aead->algo->tag_size)) / mtu;
             if (extra_datagrams > s->max_datagrams - s->num_datagrams - 1)
                 extra_datagrams = s->max_datagrams - s->num_datagrams - 1;
             if (extra_datagrams > STREAM_SEND_MAX_EXTRA_DATAGRAMS)
