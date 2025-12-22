@@ -4534,7 +4534,8 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
                 extra_datagrams = s->max_datagrams - s->num_datagrams - 1;
             if (extra_datagrams > STREAM_SEND_MAX_EXTRA_DATAGRAMS)
                 extra_datagrams = STREAM_SEND_MAX_EXTRA_DATAGRAMS;
-            len += (mtu - (1 + s->dcid->len + QUICLY_SEND_PN_SIZE + 2)) * extra_datagrams;
+            size_t overhead = 1 + s->dcid->len + QUICLY_SEND_PN_SIZE + (dst - s->dst) + s->current.cipher->aead->algo->tag_size;
+            len += (mtu - overhead) * extra_datagrams;
         }
         /* cap by max_stream_data */
         if (off + len > stream->_send_aux.max_stream_data)
