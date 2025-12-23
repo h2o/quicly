@@ -3753,10 +3753,6 @@ struct st_quicly_send_context_t {
      */
     uint8_t *dst_payload_from;
     /**
-     * first packet number to be used within the lifetime of this send context
-     */
-    uint64_t first_packet_number;
-    /**
      * index of `conn->paths[]` to which we are sending
      */
     size_t path_index;
@@ -5715,8 +5711,7 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     quicly_send_context_t s = {.current = {.first_byte = -1},
                                .datagrams = datagrams,
                                .max_datagrams = *num_datagrams,
-                               .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
-                               .first_packet_number = conn->egress.packet_number};
+                               .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize}};
     quicly_error_t ret;
 
     lock_now(conn, 0);
