@@ -1618,18 +1618,14 @@ static void update_smallest_unreported_missing_on_send_ack(quicly_ranges_t *rang
         return;
     *largest_acked_unacked = largest_acked;
 
-    if (reordering_threshold == 0 || reordering_threshold == 1) {
-        /* for these cases simply set the smallest_unreported missing to the
-         * next expected packet number.
-         * When reordering_threshold is 0, smallest_unreported_missing isn't
-         * used, but it's convenient to keep
-         * its state consistent if the reordering_threshold changes. */
+    if (reordering_threshold <= 1) {
+        /* For these cases simply set the smallest_unreported missing to the next expected PN. When reordering_threshold is 0,
+         * smallest_unreported_missing isn't used, but it's convenient to keep its state consistent if the threshold changes. */
         *smallest_unreported_missing = largest_acked + 1;
-        return;
-    }
-    uint64_t largest_pn_outside_reorder_window = largest_acked - (uint64_t)reordering_threshold;
-    if (largest_pn_outside_reorder_window >= *smallest_unreported_missing) {
-        *smallest_unreported_missing = quicly_ranges_next_missing(ranges, largest_pn_outside_reorder_window + 1, NULL);
+    } else {
+        uint64_t largest_pn_outside_reorder_window = largest_acked - (uint64_t)reordering_threshold;
+        if (largest_pn_outside_reorder_window >= *smallest_unreported_missing)
+            *smallest_unreported_missing = quicly_ranges_next_missing(ranges, largest_pn_outside_reorder_window + 1, NULL);
     }
 }
 
