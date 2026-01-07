@@ -1611,8 +1611,8 @@ static void do_free_pn_space(struct st_quicly_pn_space_t *space)
 static void update_smallest_unreported_missing_on_send_ack(quicly_ranges_t *ranges, uint64_t *largest_acked_unacked,
                                                            uint64_t *smallest_unreported_missing, uint32_t reordering_threshold)
 {
-    /* as an ack is not sent if num_ranges == 0 */
-    assert(ranges->num_ranges != 0);
+    assert(ranges->num_ranges != 0 && "on_send_ack is never called until the first packet is received");
+
     uint64_t largest_acked = ranges->ranges[ranges->num_ranges - 1].end - 1;
     if (largest_acked <= *largest_acked_unacked)
         return;
