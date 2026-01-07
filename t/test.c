@@ -1240,7 +1240,6 @@ static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *
         .datagrams = datagram,
         .max_datagrams = 1,
         .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
-        .first_packet_number = conn->egress.packet_number,
         .send_window = bufsize,
         .dcid = get_dcid(conn, 0 /* path_index */),
     };
