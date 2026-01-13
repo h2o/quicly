@@ -4476,7 +4476,6 @@ static uint8_t *scatter_stream_payload(quicly_send_context_t *s, uint16_t datagr
 quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
 {
     uint64_t off = stream->sendstate.pending.ranges[0].start;
-    quicly_sent_t *sent;
     uint8_t *dst; /* this pointer points to the current write position within the frame being built, while `s->dst` points to the
                    * beginning of the frame. */
     size_t len;
@@ -4485,9 +4484,8 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
 
     /* write frame type, stream_id and offset, calculate capacity (and store that in `len`) */
     if (stream->stream_id < 0) {
-        if ((ret = allocate_ack_eliciting_frame(stream->conn, s,
-                                                1 + quicly_encodev_capacity(off) + 2 /* type + offset + len + 1-byte payload */,
-                                                &sent, on_ack_stream)) != 0)
+        if ((ret = allocate_frame(stream->conn, s, 1 + quicly_encodev_capacity(off) + 2 /* type + offset + len + 1-byte payload */,
+                                  1)) != 0)
             return ret;
         dst = s->dst;
         *dst++ = QUICLY_FRAME_TYPE_CRYPTO;
@@ -4503,8 +4501,9 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
             header[0] = QUICLY_FRAME_TYPE_STREAM_BASE;
         }
         if (off == stream->sendstate.final_size) {
-            assert(!quicly_sendstate_is_open(&stream->sendstate));
             /* special case for emitting FIN only */
+            quicly_sent_t *sent;
+            assert(!quicly_sendstate_is_open(&stream->sendstate));
             header[0] |= QUICLY_FRAME_TYPE_STREAM_BIT_FIN;
             if ((ret = allocate_ack_eliciting_frame(stream->conn, s, hp - header, &sent, on_ack_stream)) != 0)
                 return ret;
@@ -4518,7 +4517,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
             update_stream_sendstate(stream, off, 0, 1, 1);
             return 0;
         }
-        if ((ret = allocate_ack_eliciting_frame(stream->conn, s, hp - header + 1, &sent, on_ack_stream)) != 0)
+        if ((ret = allocate_frame(stream->conn, s, hp - header + 1, 1)) != 0)
             return ret;
         dst = s->dst;
         memcpy(dst, header, hp - header);
@@ -4577,8 +4576,16 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
         return QUICLY_ERROR_IS_CLOSING;
     } else if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE) {
         return 0;
+    } else if (len == 0) {
+        assert(!wrote_all); /* Do we want to allow on_send_emit to indicate steram closure without writing anything? */
+        return QUICLY_ERROR_SEND_EMIT_BLOCKED;
     }
-    assert(len != 0);
+
+    /* Finally, we are certain that a frame is built. Mark the packet as ack-elicting and allocate a sentmap entry. */
+    mark_frame_built_as_ack_eliciting(stream->conn, s);
+    quicly_sent_t *sent;
+    if ((sent = quicly_sentmap_allocate(&stream->conn->egress.loss.sentmap, on_ack_stream)) == NULL)
+        return PTLS_ERROR_NO_MEMORY;
 
     /* Adjust the frame layout and commit. */
     if (stream->stream_id < 0) {
@@ -5771,6 +5778,10 @@ Exit:
         }
     }
     if (ret == 0 && s->target.first_byte_at != NULL) {
+        /* If only a STREAM frame was to be built but `on_send_emit` returned BLOCKED, we might have built zero frames. Assuming
+         * that it is rare to see BLOCKED, send a PADDING-only packet (TODO skip sending the packet at all) */
+        if (s->dst == s->dst_payload_from)
+            *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
         /* last packet can be small-sized, unless it is the first flight sent from the client */
         if ((s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
             (quicly_is_client(conn) || !ack_only))
