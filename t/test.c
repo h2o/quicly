@@ -251,7 +251,7 @@ static void test_scatter_stream_payload(void)
     ptls_aead_context_t aead = {.algo = &ptls_openssl_aes128gcm};
     struct st_quicly_cipher_context_t cipher = {.aead = &aead};
 
-#define TEST(_len, datagram_size, extra_datagrams, check)                                                                          \
+#define TEST(_len, datagram_size, check)                                                                                           \
     do {                                                                                                                           \
         uint8_t buf[] = "\x08\x04"                                                                                                 \
                         "Alice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to "    \
@@ -267,19 +267,27 @@ static void test_scatter_stream_payload(void)
         int wrote_all = 1;                                                                                                         \
         uint16_t scattered_payload_lengths[11];                                                                                    \
         memset(scattered_payload_lengths, 0x55, sizeof(scattered_payload_lengths));                                                \
-        uint8_t *end_of_last_frame = scatter_stream_payload(&s, datagram_size, 4, 0, buf + 2, &len, &wrote_all,                    \
-                                                            scattered_payload_lengths, (extra_datagrams));                         \
+        uint8_t *end_of_last_frame =                                                                                               \
+            scatter_stream_payload(&s, datagram_size, 4, 0, buf + 2, &len, &wrote_all, scattered_payload_lengths);                 \
         do {                                                                                                                       \
             check                                                                                                                  \
         } while (0);                                                                                                               \
     } while (0)
 
-    TEST(34 /* 6 (current) + 13 * 2 + 2 */, 38 /* 16 bytes frame space per datagram */, 2, {
-        ok(len == 32);
+    /* test the case where all space are used */
+    TEST(150 /* 6 (current) + 16 * 9 incl. some extra */, 38 /* 16 bytes frame space per datagram */, {
+        ok(len == 119);
         ok(wrote_all == 0);
         ok(scattered_payload_lengths[0] == 13);
         ok(scattered_payload_lengths[1] == 13);
-        ok(scattered_payload_lengths[2] == 0);
+        ok(scattered_payload_lengths[2] == 13);
+        ok(scattered_payload_lengths[3] == 13);
+        ok(scattered_payload_lengths[4] == 13);
+        ok(scattered_payload_lengths[5] == 12);
+        ok(scattered_payload_lengths[6] == 12);
+        ok(scattered_payload_lengths[7] == 12);
+        ok(scattered_payload_lengths[8] == 12);
+        ok(scattered_payload_lengths[9] == 0);
         ok(memcmp(buf,
                   "\x08\x04"
                   "Alice ",
@@ -293,10 +301,35 @@ static void test_scatter_stream_payload(void)
                   "\x0c\x04\x13"
                   " to get very ",
                   16) == 0);
-        ok(buf + 24 + payload_gap * 2 + 16 == end_of_last_frame);
+        ok(memcmp(buf + 40 + payload_gap * 3,
+                  "\x0c\x04\x20"
+                  "tired of sitt",
+                  16) == 0);
+        ok(memcmp(buf + 56 + payload_gap * 4,
+                  "\x0c\x04\x2d"
+                  "ing by her si",
+                  16) == 0);
+        ok(memcmp(buf + 72 + payload_gap * 5,
+                  "\x0c\x04\x3a"
+                  "ster on the b",
+                  16) == 0);
+        ok(memcmp(buf + 88 + payload_gap * 6,
+                  "\x0c\x04\x40\x47"
+                  "ank, and of ",
+                  16) == 0);
+        ok(memcmp(buf + 104 + payload_gap * 7,
+                  "\x0c\x04\x40\x53"
+                  "having nothi",
+                  16) == 0);
+        ok(memcmp(buf + 120 + payload_gap * 8,
+                  "\x0c\x04\x40\x5f"
+                  "ng to do: on",
+                  16) == 0);
+        ok(buf + 8 + 38 * 9 == end_of_last_frame);
     });
 
-    TEST(34 /* 6 (current) + 13 * 2 + 2 */, 38 /* 16 bytes frame space per datagram */, 3, {
+    /* test the case where some space left */
+    TEST(34 /* 6 (current) + 13 * 2 + 2 */, 38 /* 16 bytes frame space per datagram */, {
         ok(len == 34);
         ok(wrote_all == 1);
         ok(scattered_payload_lengths[0] == 13);
