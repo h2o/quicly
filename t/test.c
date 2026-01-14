@@ -1021,11 +1021,7 @@ static void do_test_ack_frequency_ack_logic()
     // Same as the above test case, but packet 2 is non-ack-eliciting, so we
     // should not trigger and ack
     const struct st_case_row_t test_case_9_rows[] = {
-        {0, 0, 1, 0, 1},
-        {1, 0, 2, 0, 1},
-        {3, 0, 2, 0, 1},
-        {4, 0, 5, 1, QUICLY_DELAYED_ACK_TIMEOUT},
-        {2, 0, 5, 1, 1},
+        {0, 0, 1, 0, 1}, {1, 0, 2, 0, 1}, {3, 0, 2, 0, 1}, {4, 0, 5, 1, QUICLY_DELAYED_ACK_TIMEOUT}, {2, 0, 5, 1, 1},
     };
     // clang-format on
     const struct st_test_case test_case_9 = {
