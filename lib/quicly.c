@@ -1253,6 +1253,8 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     }
     stream->streams_blocked = 0;
 
+    stream->scatter_emit = 0;
+
     stream->_send_aux.max_stream_data = initial_max_stream_data_remote;
     stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_NONE;
     stream->_send_aux.stop_sending.error_code = 0;

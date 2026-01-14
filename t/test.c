@@ -402,6 +402,8 @@ const quicly_cid_plaintext_t *new_master_id(void)
     return &master;
 }
 
+static int use_scatter_emit;
+
 static quicly_error_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     test_streambuf_t *sbuf;
@@ -413,6 +415,8 @@ static quicly_error_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t
     sbuf->error_received.stop_sending = -1;
     sbuf->error_received.reset_stream = -1;
     stream->callbacks = &stream_callbacks;
+
+    stream->scatter_emit = use_scatter_emit;
 
     return 0;
 }
@@ -1579,6 +1583,26 @@ static void test_stats_foreach(void)
 #undef CHECK
 }
 
+static void test_endpoints(int input_flag)
+{
+    int use_scatter_emit_backup = use_scatter_emit;
+    use_scatter_emit = input_flag;
+
+    subtest("simple", test_simple);
+    subtest("stream-concurrency", test_stream_concurrency);
+    subtest("lossy", test_lossy);
+    subtest("test-nondecryptable-initial", test_nondecryptable_initial);
+    subtest("set_cc", test_set_cc);
+    subtest("ecn-index-from-bits", test_ecn_index_from_bits);
+    subtest("jumpstart-cwnd", test_jumpstart_cwnd);
+    subtest("jumpstart", test_jumpstart);
+    subtest("cc", test_cc);
+    subtest("state-exhaustion", test_state_exhaustion);
+    subtest("migration-during-handshake", test_migration_during_handshake);
+
+    use_scatter_emit = use_scatter_emit_backup;
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -1626,6 +1650,7 @@ int main(int argc, char **argv)
 
     quicly_amend_ptls_context(quic_ctx.tls);
 
+    /* module-level tests */
     subtest("ack_frequency_handling", test_ack_frequency);
     subtest("error-codes", test_error_codes);
     subtest("enable_with_ratio255", test_enable_with_ratio255);
@@ -1646,20 +1671,10 @@ int main(int argc, char **argv)
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
     subtest("cid", test_cid);
-    subtest("simple", test_simple);
-    subtest("stream-concurrency", test_stream_concurrency);
-    subtest("lossy", test_lossy);
-    subtest("test-nondecryptable-initial", test_nondecryptable_initial);
-    subtest("set_cc", test_set_cc);
-    subtest("ecn-index-from-bits", test_ecn_index_from_bits);
-    subtest("jumpstart-cwnd", test_jumpstart_cwnd);
-    subtest("jumpstart", test_jumpstart);
-    subtest("cc", test_cc);
-
-    subtest("state-exhaustion", test_state_exhaustion);
-    subtest("migration-during-handshake", test_migration_during_handshake);
-
     subtest("stats-foreach", test_stats_foreach);
+
+    subtest("test-endpoints", test_endpoints, 0);
+    subtest("test-endpoints-scattering", test_endpoints, 1);
 
     return done_testing();
 }

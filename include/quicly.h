@@ -999,6 +999,12 @@ struct st_quicly_stream_t {
      */
     unsigned streams_blocked : 1;
     /**
+     * if `on_send_emit` should be called to read payload of multiple datagrams. After the callback returns, quicly calls `memmove`
+     * to scatter the payload. Setting this flag is likely to improve throughput when the overhead is high for reading the payload
+     * (e.g., when `on_send_emit` calls `pread`).
+     */
+    unsigned scatter_emit : 1;
+    /**
      *
      */
     struct {
