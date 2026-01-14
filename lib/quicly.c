@@ -3988,11 +3988,14 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
+#define ALLOCATE_FRAME_FLAG_CONSULT_CC 0x1
+#define ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY 0x2
+
 /**
  * Allocates a frame. This is a low-level function; for allocating ordinary ACK-eliciting frames, use `allocate_ack_eliciting_frame`
  * instead.
  */
-static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, int consult_cc)
+static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, unsigned flags)
 {
     int coalescible;
     quicly_error_t ret;
@@ -4042,7 +4045,7 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
         /* note: send_window (ssize_t) can become negative; see doc-comment */
-        if (consult_cc && s->send_window <= 0)
+        if ((flags & ALLOCATE_FRAME_FLAG_CONSULT_CC) != 0 && s->send_window <= 0)
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
             return QUICLY_ERROR_SENDBUF_FULL;
@@ -4097,7 +4100,7 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
         if ((ret = quicly_sentmap_prepare(&conn->egress.loss.sentmap, conn->egress.packet_number, conn->stash.now, ack_epoch)) != 0)
             return ret;
         /* adjust ack-frequency */
-        if (frame_type == ALLOCATE_FRAME_TYPE_ACK_ELICITING && conn->stash.now >= conn->egress.ack_frequency.update_at &&
+        if ((flags & ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY) != 0 && conn->stash.now >= conn->egress.ack_frequency.update_at &&
             s->dst_end - s->dst >= QUICLY_ACK_FREQUENCY_FRAME_CAPACITY + min_space) {
             assert(conn->super.remote.transport_params.min_ack_delay_usec != UINT64_MAX);
             if (conn->egress.cc.num_loss_episodes >= QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE && conn->initial == NULL &&
@@ -4137,7 +4140,7 @@ static inline quicly_error_t allocate_ack_eliciting_frame(quicly_conn_t *conn, q
 {
     quicly_error_t ret;
 
-    if ((ret = allocate_frame(conn, s, min_space, 1)) != 0)
+    if ((ret = allocate_frame(conn, s, min_space, ALLOCATE_FRAME_FLAG_CONSULT_CC | ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY)) != 0)
         return ret;
     mark_frame_built_as_ack_eliciting(conn, s);
     if (sent != NULL && (*sent = quicly_sentmap_allocate(&conn->egress.loss.sentmap, acked)) == NULL)
@@ -4581,7 +4584,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
     /* write frame type, stream_id and offset, calculate capacity (and store that in `len`) */
     if (stream->stream_id < 0) {
         if ((ret = allocate_frame(stream->conn, s, 1 + quicly_encodev_capacity(off) + 2 /* type + offset + len + 1-byte payload */,
-                                  1)) != 0)
+                                  ALLOCATE_FRAME_FLAG_CONSULT_CC | ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY)) != 0)
             return ret;
         dst = s->dst;
         *dst++ = QUICLY_FRAME_TYPE_CRYPTO;
@@ -4613,7 +4616,8 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
             update_stream_sendstate(stream, off, 0, 1, 1);
             return 0;
         }
-        if ((ret = allocate_frame(stream->conn, s, hp - header + 1, 1)) != 0)
+        if ((ret = allocate_frame(stream->conn, s, hp - header + 1,
+                                  ALLOCATE_FRAME_FLAG_CONSULT_CC | ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY)) != 0)
             return ret;
         dst = s->dst;
         memcpy(dst, header, hp - header);
@@ -5748,7 +5752,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 for (size_t i = 0; i != conn->egress.datagram_frame_payloads.count; ++i) {
                     ptls_iovec_t *payload = conn->egress.datagram_frame_payloads.payloads + i;
                     size_t required_space = quicly_datagram_frame_capacity(*payload);
-                    if ((ret = allocate_frame(conn, s, required_space, 0)) != 0)
+                    if ((ret = allocate_frame(conn, s, required_space, ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY)) != 0)
                         goto Exit;
                     mark_frame_built_as_ack_eliciting(conn, s);
                     if (s->dst_end - s->dst >= required_space) {

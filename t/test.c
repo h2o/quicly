@@ -1406,7 +1406,7 @@ static void test_state_exhaustion(void)
     /* send up to 200 packets with stream frame having gaps and check that the receiver raises state exhaustion */
     for (size_t i = 0; i < 200; ++i) {
         test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
-        allocate_frame(client, &s, 100, 1);
+        allocate_frame(client, &s, 100, ALLOCATE_FRAME_FLAG_CONSULT_CC | ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY);
         mark_frame_built_as_ack_eliciting(client, &s);
         *s.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
         s.dst = quicly_encodev(s.dst, 0);     /* stream id */
