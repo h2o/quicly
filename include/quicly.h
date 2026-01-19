@@ -285,9 +285,10 @@ struct st_quicly_context_t {
      */
     ptls_context_t *tls;
     /**
-     * Maximum size of packets that we are willing to send when path-specific information is unavailable. As a path-specific
-     * optimization, quicly acting as a server expands this value to `min(local.tp.max_udp_payload_size,
-     * remote.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters from the client.
+     * Maximum size of packets that we are willing to send when path-specific information is unavailable. As a
+     * path-specific optimization, quicly acting as a server sets this value to `min(remote.tp.max_udp_payload_size,
+     * max(local.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters
+     * from the client.
      */
     uint16_t initial_egress_max_udp_payload_size;
     /**
@@ -330,7 +331,7 @@ struct st_quicly_context_t {
      */
     uint32_t handshake_timeout_rtt_multiplier;
     /**
-     * if the number of Initial/Handshake packets sent during the handshake phase exceeds this limit, treat it as an error and close
+     * If the number of Initial/Handshake packets sent during the handshake phase exceeds this limit, treat it as an error and close
      * the connection.
      */
     uint64_t max_initial_handshake_packets;
@@ -354,21 +355,34 @@ struct st_quicly_context_t {
      */
     uint32_t max_jumpstart_cwnd_packets;
     /**
+     * Probabilities for enabling jumpstart when they are configured, multiplied by 255. 0 means never, 255 (default) means always.
+     */
+    struct {
+        struct {
+            uint8_t non_resume;
+            uint8_t resume;
+        } jumpstart;
+        /**
+         * if rapid cstart should be used
+         */
+        uint8_t rapid_start;
+        /**
+         * whether to use ECN on the send side; ECN is always on on the receive side
+         */
+        uint8_t ecn;
+        /**
+         * if pacing should be used
+         */
+        uint8_t pacing;
+        /**
+         * if CC should take app-limited into consideration
+         */
+        uint8_t respect_app_limited;
+    } enable_ratio;
+    /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
-    /**
-     * whether to use ECN on the send side; ECN is always on on the receive side
-     */
-    unsigned enable_ecn : 1;
-    /**
-     * if pacing should be used
-     */
-    unsigned use_pacing : 1;
-    /**
-     * if CC should take app-limited into consideration
-     */
-    unsigned respect_app_limited : 1;
     /**
      *
      */
@@ -394,7 +408,7 @@ struct st_quicly_context_t {
      */
     quicly_now_t *now;
     /**
-     * called wen a NEW_TOKEN token is being received
+     * called when a NEW_TOKEN token is being received
      */
     quicly_save_resumption_token_t *save_resumption_token;
     /**
@@ -406,7 +420,7 @@ struct st_quicly_context_t {
      */
     quicly_crypto_engine_t *crypto_engine;
     /**
-     * initializes a congestion controller for given connection.
+     * initializes a congestion controller for given connection
      */
     quicly_init_cc_t *init_cc;
     /**
@@ -529,6 +543,14 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total number of acked packets that were sent on promoted.                                                               \
          */                                                                                                                        \
         uint64_t ack_received_promoted_paths;                                                                                      \
+        /**                                                                                                                        \
+         * Maximum number of packets that were buffered to delay their processing due to being undecryptable.                      \
+         */                                                                                                                        \
+        uint64_t max_delayed;                                                                                                      \
+        /**                                                                                                                        \
+         * Number of packets that were delayed processing and successfully used.                                                   \
+         */                                                                                                                        \
+        uint64_t delayed_used;                                                                                                     \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -563,7 +585,7 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
             max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
             retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            ack_frequency;                                                                                                         \
+            ack_frequency, immediate_ack;                                                                                          \
     } num_frames_received, num_frames_sent;                                                                                        \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -610,7 +632,23 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of events where `initial_handshake_sent` exceeds limit.                                                        \
      */                                                                                                                            \
-    uint64_t num_initial_handshake_exceeded
+    uint64_t num_initial_handshake_exceeded;                                                                                       \
+    /**                                                                                                                            \
+     * Number of connections for which jumpstart is or could have been used.                                                       \
+     */                                                                                                                            \
+    uint64_t num_jumpstart_applicable;                                                                                             \
+    /**                                                                                                                            \
+     * Number of connections that used rapid start.                                                                                \
+     */                                                                                                                            \
+    uint64_t num_rapid_start;                                                                                                      \
+    /**                                                                                                                            \
+     * Total number of connections that were paced.                                                                                \
+     */                                                                                                                            \
+    uint64_t num_paced;                                                                                                            \
+    /**                                                                                                                            \
+     * Total number of connections where app-limited state was respected by CC.                                                    \
+     */                                                                                                                            \
+    uint64_t num_respected_app_limited
 
 /**
  * Stats that do not need to be gathered upon the invocation of `quicly_get_stats`. This macro is used to define the same fields in
@@ -700,7 +738,9 @@ typedef struct st_quicly_stats_t {
     apply(num_packets.acked_ecn_counts[1], "num-packets.acked-ecn-ect1")                                                           \
     apply(num_packets.acked_ecn_counts[2], "num-packets.acked-ecn-ce")                                                             \
     apply(num_packets.sent_promoted_paths, "num-packets.sent-promoted-paths")                                                      \
-    apply(num_packets.ack_received_promoted_paths, "num-packets.ack-received-promoted-paths")
+    apply(num_packets.ack_received_promoted_paths, "num-packets.ack-received-promoted-paths")                                      \
+    apply(num_packets.max_delayed, "num-packets.max-delayed")                                                                      \
+    apply(num_packets.delayed_used, "num-packets.delayed-used")
 
 #define QUICLY_STATS_FOREACH_NUM_BYTES(apply)                                                                                      \
     apply(num_bytes.received, "num-bytes.received")                                                                                \
@@ -737,20 +777,25 @@ typedef struct st_quicly_stats_t {
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(application_close, dir, apply)                                                             \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(handshake_done, dir, apply)                                                                \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(datagram, dir, apply)                                                                      \
-    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply)
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply)                                                                 \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(immediate_ack, dir, apply)
 
 #define QUICLY_STATS_FOREACH_TRANSPORT_COUNTERS(apply)                                                                             \
-        apply(num_paths.created, "num-paths.created")                                                                                  \
-        apply(num_paths.validated, "num-paths.validated")                                                                              \
-        apply(num_paths.validation_failed, "num-paths.validation-failed")                                                              \
-        apply(num_paths.migration_elicited, "num-paths.migration-elicited")                                                            \
-        apply(num_paths.promoted, "num-paths.promoted")                                                                                \
-        apply(num_paths.closed_no_dcid, "num-paths.closed-no-dcid")                                                                    \
-        apply(num_paths.ecn_validated, "num-paths.ecn-validated")                                                                      \
-        apply(num_paths.ecn_failed, "num-paths.ecn-failed")                                                                            \
-        apply(num_ptos, "num-ptos")                                                                                                    \
-        apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
-        apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")
+    apply(num_paths.created, "num-paths.created")                                                                                  \
+    apply(num_paths.validated, "num-paths.validated")                                                                              \
+    apply(num_paths.validation_failed, "num-paths.validation-failed")                                                              \
+    apply(num_paths.migration_elicited, "num-paths.migration-elicited")                                                            \
+    apply(num_paths.promoted, "num-paths.promoted")                                                                                \
+    apply(num_paths.closed_no_dcid, "num-paths.closed-no-dcid")                                                                    \
+    apply(num_paths.ecn_validated, "num-paths.ecn-validated")                                                                      \
+    apply(num_paths.ecn_failed, "num-paths.ecn-failed")                                                                            \
+    apply(num_ptos, "num-ptos")                                                                                                    \
+    apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
+    apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
+    apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
+    apply(num_rapid_start, "num-rapid-start")                                                                                      \
+    apply(num_paced, "num-paced")                                                                                                  \
+    apply(num_respected_app_limited, "num-respected-app-limited")
 
 /**
  * Macro for iterating QUICLY_STATS_PREBUILT_COUNTERS.
@@ -769,7 +814,7 @@ typedef struct st_quicly_stats_t {
     apply(handshake_confirmed_msec, "handshake-confirmed-msec")                                                                    \
     apply(jumpstart.prev_rate, "jumpstart.prev-rate")                                                                              \
     apply(jumpstart.prev_rtt, "jumpstart.prev-rtt")                                                                                \
-    apply(jumpstart.new_rtt, "jumpstart.new-rtt")                                                                                 \
+    apply(jumpstart.new_rtt, "jumpstart.new-rtt")                                                                                  \
     apply(jumpstart.cwnd, "jumpstart.cwnd")                                                                                        \
     apply(token_sent.at, "token-sent.at")                                                                                          \
     apply(token_sent.rate, "token-sent.rate")                                                                                      \
@@ -849,8 +894,8 @@ struct _st_quicly_conn_public_t {
         } address_validation;
     } remote;
     /**
-     * Retains the original DCID used by the client. Servers use this to route packets incoming packets. Clients use this when
-     * validating the Transport Parameters sent by the server.
+     * Retains the original DCID used by the client. Servers use this to route incoming packets. Clients use this when validating
+     * the Transport Parameters sent by the server.
      */
     quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
@@ -1010,6 +1055,10 @@ struct st_quicly_stream_t {
     } _recv_aux;
 };
 
+/**
+ * QUIC packet after decoded by `quicly_decode_packet` for routing. All the pointers within the struct points to the buffer pointed
+ * to by `.octets`. When adding new pointer members, `adjust_pointers_of_decoded_packet` must be updated as well.
+ */
 typedef struct st_quicly_decoded_packet_t {
     /**
      * octets of the entire packet

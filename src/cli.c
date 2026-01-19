@@ -157,7 +157,8 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 ", delivery-rate: %" PRIu64 ", cwnd: %" PRIu32
             ", cwnd-exiting-slow-start: %" PRIu32 ", slow-start-exit-at: %" PRId64 ", jumpstart-cwnd: %" PRIu32
             ", jumpstart-exit: %" PRIu32 ", jumpstart-prev-rate: %" PRIu64 ", jumpstart-prev-rtt: %" PRIu32
-            ", token-sent-rate: %" PRIu64 ", token-sent-rtt: %" PRIu32 "\n",
+            ", token-sent-rate: %" PRIu64 ", token-sent-rtt: %" PRIu32 ", ack-frequency-frames-sent: %" PRIu64
+            ", ack-frequency-frames-received: %" PRIu64 "\n",
             stats.num_packets.received, stats.num_packets.initial_received, stats.num_packets.zero_rtt_received,
             stats.num_packets.handshake_received, stats.num_packets.received_ecn_counts[0],
             stats.num_packets.received_ecn_counts[1], stats.num_packets.received_ecn_counts[2], stats.num_packets.decryption_failed,
@@ -168,7 +169,8 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             stats.num_paths.validated, stats.num_paths.promoted, stats.rtt.smoothed, stats.cc.num_loss_episodes,
             stats.cc.num_ecn_loss_episodes, stats.delivery_rate.smoothed, stats.cc.cwnd, stats.cc.cwnd_exiting_slow_start,
             stats.cc.exit_slow_start_at, stats.jumpstart.cwnd, stats.cc.cwnd_exiting_jumpstart, stats.jumpstart.prev_rate,
-            stats.jumpstart.prev_rtt, stats.token_sent.rate, stats.token_sent.rtt);
+            stats.jumpstart.prev_rtt, stats.token_sent.rate, stats.token_sent.rtt, stats.num_frames_sent.ack_frequency,
+            stats.num_frames_received.ack_frequency);
 }
 
 static int validate_path(const char *path)
@@ -1244,6 +1246,7 @@ static void usage(const char *cmd)
            "                            multiple times)\n"
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
+           "  --rapid-start             turns on rapid start\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
            "  --sockfd fd               specifies the UDP socket to be used\n"
@@ -1525,6 +1528,7 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
+                                             {"rapid-start", no_argument, NULL, 0},
                                              {"sockfd", required_argument, NULL, 0},
                                              {"exit-after-handshake", no_argument, NULL, 0},
                                              {"calc-initial-secret", required_argument, NULL, 0},
@@ -1540,9 +1544,9 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
-                ctx.enable_ecn = 0;
+                ctx.enable_ratio.ecn = 0;
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
-                ctx.respect_app_limited = 0;
+                ctx.enable_ratio.respect_app_limited = 0;
             } else if (strcmp(longopts[opt_index].name, "jumpstart-default") == 0) {
                 if (sscanf(optarg, "%" SCNu32, &ctx.default_jumpstart_cwnd_packets) != 1) {
                     fprintf(stderr, "failed to parse default jumpstart size: %s\n", optarg);
@@ -1553,6 +1557,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
+                ctx.enable_ratio.rapid_start = 255;
             } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {
                 if (sscanf(optarg, "%d", &fd) != 1) {
                     fprintf(stderr, "invalid argument passed to --sockfd\n");
@@ -1611,7 +1617,7 @@ int main(int argc, char **argv)
             /* pacing */
             if ((token = strsep(&buf, ":")) != NULL) {
                 if (strcmp(token, "p") == 0) {
-                    ctx.use_pacing = 1;
+                    ctx.enable_ratio.pacing = 255;
                 } else {
                     fprintf(stderr, "invalid pacing value: %s\n", token);
                     exit(1);
