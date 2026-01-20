@@ -946,8 +946,10 @@ typedef struct st_quicly_stream_callbacks_t {
      * asks the application to fill the frame payload.  `off` is the offset within the buffer (the beginning position of the buffer
      * changes as `on_send_shift` is invoked). `len` is an in/out argument that specifies the size of the buffer / amount of data
      * being written.  `wrote_all` is a boolean out parameter indicating if the application has written all the available data.
-     * As this callback is triggered by calling quicly_stream_sync_sendbuf (stream, 1) when tx data is present, it assumes data
-     * to be available - that is `len` return value should be non-zero.
+     * This callback typically writes some data and therefore sets `*len` to a non-zero value, as the callback is triggered by
+     * calling quicly_stream_sync_sendbuf (stream, 1) when tx data is present. However, the callback may set `*len` to zero to
+     * indicate that payload was not immediately avaiable (e,g., when it has to be loaded from disk). It is the responsibility of
+     * the user-supplied stream scheduler to reschedule the stream once data is loaded.
      */
     void (*on_send_emit)(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
     /**
@@ -996,6 +998,12 @@ struct st_quicly_stream_t {
      *
      */
     unsigned streams_blocked : 1;
+    /**
+     * if `on_send_emit` should be called to read payload of multiple datagrams. After the callback returns, quicly calls `memmove`
+     * to scatter the payload. Setting this flag is likely to improve throughput when the overhead is high for reading the payload
+     * (e.g., when `on_send_emit` calls `pread`).
+     */
+    unsigned scatter_emit : 1;
     /**
      *
      */
