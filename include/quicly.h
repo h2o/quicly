@@ -196,6 +196,13 @@ typedef struct st_quicly_crypto_engine_t {
     void (*encrypt_packet)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn, ptls_cipher_context_t *header_protect_ctx,
                            ptls_aead_context_t *packet_protect_ctx, ptls_iovec_t datagram, size_t first_byte_at,
                            size_t payload_from, uint64_t packet_number, int coalesced);
+    /**
+     * Optional callback that allows out-of-place encryption. If provided, this callback is used instead of `encrypt_packet`.
+     */
+    void (*encrypt_packet2)(struct st_quicly_crypto_engine_t *engine, quicly_conn_t *conn,
+                            ptls_cipher_context_t *header_protect_ctx, ptls_aead_context_t *packet_protect_ctx,
+                            ptls_iovec_t datagram, size_t first_byte_at, ptls_iovec_t payload, uint64_t packet_number,
+                            int coalesced);
 } quicly_crypto_engine_t;
 
 /**
