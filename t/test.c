@@ -1232,10 +1232,10 @@ static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *
     assert(conn->application != NULL);
 
     *s = (quicly_send_context_t){
-        .current.first_byte = -1,
+        .context.first_byte = -1,
         .datagrams = datagram,
         .max_datagrams = 1,
-        .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
+        .buf = {.dst = buf, .end = (uint8_t *)buf + bufsize},
         .send_window = bufsize,
         .dcid = get_dcid(conn, 0 /* path_index */),
     };
@@ -1289,11 +1289,11 @@ static void test_state_exhaustion(void)
     for (size_t i = 0; i < 200; ++i) {
         test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
         do_allocate_frame(client, &s, 100, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
-        *s.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
-        s.dst = quicly_encodev(s.dst, 0);     /* stream id */
-        s.dst = quicly_encodev(s.dst, i * 2); /* off */
-        s.dst = quicly_encodev(s.dst, 1);     /* len */
-        *s.dst++ = (uint8_t)('a' + (i * 2) % 26);
+        *s.frames.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
+        s.frames.dst = quicly_encodev(s.frames.dst, 0);     /* stream id */
+        s.frames.dst = quicly_encodev(s.frames.dst, i * 2); /* off */
+        s.frames.dst = quicly_encodev(s.frames.dst, 1);     /* len */
+        *s.frames.dst++ = (uint8_t)('a' + (i * 2) % 26);
         commit_send_packet(client, &s, 0);
         unlock_now(client);
 
