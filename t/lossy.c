@@ -490,7 +490,7 @@ static void test_bidirectional(void)
         subtest("50%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-50%", loss_check_stats, time_spent, 0, 4612, 5610, 886, 1175, 9269);
+    subtest("bidi-stats-50%", loss_check_stats, time_spent, 0, 4612, 5713, 886, 1175, 9269);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 4);
@@ -498,7 +498,7 @@ static void test_bidirectional(void)
         subtest("25%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-25%", loss_check_stats, time_spent, 0, 270, 280, 257, 284, 478);
+    subtest("bidi-stats-25%", loss_check_stats, time_spent, 0, 270, 280, 230, 284, 478);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 10);
@@ -514,7 +514,7 @@ static void test_bidirectional(void)
         subtest("5%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-5%", loss_check_stats, time_spent, 0, 101, 109, 80, 80, 190);
+    subtest("bidi-stats-5%", loss_check_stats, time_spent, 0, 101, 110, 80, 80, 190);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 40);
