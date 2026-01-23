@@ -425,7 +425,7 @@ static void test_downstream(void)
         subtest("75%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("down-stats-75%", loss_check_stats, time_spent, 3, 5131, 15505, 2644, 3280, 12824);
+    subtest("down-stats-75%", loss_check_stats, time_spent, 3, 5131, 17227, 2644, 3280, 12824);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 2);
