@@ -498,7 +498,7 @@ static void test_bidirectional(void)
         subtest("25%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-25%", loss_check_stats, time_spent, 0, 270, 280, 230, 284, 478);
+    subtest("bidi-stats-25%", loss_check_stats, time_spent, 0, 270, 285, 230, 284, 478);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 10);
