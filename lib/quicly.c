@@ -3990,6 +3990,47 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
     return dst;
 }
 
+static void prepare_packet(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    s->packet.cipher = s->context.cipher;
+    s->packet.ack_eliciting = 0;
+    /* s->packet.full_size is a datagram-level property and is modified by the caller */
+
+    QUICLY_PROBE(PACKET_PREPARE, conn, conn->stash.now, s->context.first_byte, QUICLY_PROBE_HEXDUMP(s->dcid->cid, s->dcid->len));
+    QUICLY_LOG_CONN(packet_prepare, conn, {
+        PTLS_LOG_ELEMENT_UNSIGNED(first_octet, s->context.first_byte);
+        PTLS_LOG_ELEMENT_HEXDUMP(dcid, s->dcid->cid, s->dcid->len);
+    });
+
+    uint8_t *p = s->packet.dst;
+    *p++ = s->context.first_byte | 0x1 /* pnlen == 2 */;
+
+    if (QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte)) {
+        p = quicly_encode32(p, conn->super.version);
+        *p++ = s->dcid->len;
+        p = emit_cid(p, s->dcid);
+        *p++ = conn->super.local.long_header_src_cid.len;
+        p = emit_cid(p, &conn->super.local.long_header_src_cid);
+        /* token */
+        if (s->context.first_byte == QUICLY_PACKET_TYPE_INITIAL) {
+            p = quicly_encodev(p, conn->token.len);
+            if (conn->token.len != 0) {
+                assert(s->packet.dst + conn->egress.max_udp_payload_size - p > conn->token.len);
+                memcpy(p, conn->token.base, conn->token.len);
+                p += conn->token.len;
+            }
+        }
+        /* payload length is filled laterwards (see commit_send_packet) */
+        *p++ = 0;
+        *p++ = 0;
+    } else {
+        p = emit_cid(p, s->dcid);
+    }
+    p += QUICLY_SEND_PN_SIZE; /* space for PN bits, filled in at commit time */
+
+    s->packet.frames_at = p - s->packet.dst;
+}
+
 enum allocate_frame_type {
     ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING,
     ALLOCATE_FRAME_TYPE_ACK_ELICITING,
@@ -4039,10 +4080,8 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         coalescible = 0;
     }
 
-    /* allocate packet */
-    if (coalescible) {
-        s->packet.cipher = s->context.cipher;
-    } else {
+    /* prepare packet */
+    if (!coalescible) {
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
         /* note: send_window (ssize_t) can become negative; see doc-comment */
@@ -4050,44 +4089,9 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
             return QUICLY_ERROR_SENDBUF_FULL;
         if (s->buf_end - s->packet.dst < conn->egress.max_udp_payload_size)
             return QUICLY_ERROR_SENDBUF_FULL;
-        s->packet.cipher = s->context.cipher;
         s->packet.full_size = 0;
     }
-    s->packet.ack_eliciting = 0;
-
-    QUICLY_PROBE(PACKET_PREPARE, conn, conn->stash.now, s->context.first_byte, QUICLY_PROBE_HEXDUMP(s->dcid->cid, s->dcid->len));
-    QUICLY_LOG_CONN(packet_prepare, conn, {
-        PTLS_LOG_ELEMENT_UNSIGNED(first_octet, s->context.first_byte);
-        PTLS_LOG_ELEMENT_HEXDUMP(dcid, s->dcid->cid, s->dcid->len);
-    });
-
-    { /* emit header and update s->packet */
-        uint8_t *p = s->packet.dst;
-        *p++ = s->context.first_byte | 0x1 /* pnlen == 2 */;
-        if (QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte)) {
-            p = quicly_encode32(p, conn->super.version);
-            *p++ = s->dcid->len;
-            p = emit_cid(p, s->dcid);
-            *p++ = conn->super.local.long_header_src_cid.len;
-            p = emit_cid(p, &conn->super.local.long_header_src_cid);
-            /* token */
-            if (s->context.first_byte == QUICLY_PACKET_TYPE_INITIAL) {
-                p = quicly_encodev(p, conn->token.len);
-                if (conn->token.len != 0) {
-                    assert(s->packet.dst + conn->egress.max_udp_payload_size - p > conn->token.len);
-                    memcpy(p, conn->token.base, conn->token.len);
-                    p += conn->token.len;
-                }
-            }
-            /* payload length is filled laterwards (see commit_send_packet) */
-            *p++ = 0;
-            *p++ = 0;
-        } else {
-            p = emit_cid(p, s->dcid);
-        }
-        p += QUICLY_SEND_PN_SIZE; /* space for PN bits, filled in at commit time */
-        s->packet.frames_at = p - s->packet.dst;
-    }
+    prepare_packet(conn, s);
 
     { /* Initialize s->frames. If possible, point `s->frames` to a location slightly after each packet would be built, so that
        * scattering and encryption can be performed at once. Specifically,
