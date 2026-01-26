@@ -3815,6 +3815,11 @@ struct st_quicly_send_context_t {
      */
     struct {
         uint8_t *dst, *start, *end;
+        /**
+         * if frames are built out-of-place. When set to true, `frames.start` to `buf_end` is just large enough to build frames
+         * for all packets that can be built at once.
+         */
+        unsigned out_of_place : 1;
     } frames;
     /**
      * end of buffer in which packets are built
@@ -4056,7 +4061,7 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         PTLS_LOG_ELEMENT_HEXDUMP(dcid, s->dcid->cid, s->dcid->len);
     });
 
-    { /* emit header and update s->packet, initialize s->frames */
+    { /* emit header and update s->packet */
         uint8_t *p = s->packet.dst;
         *p++ = s->context.first_byte | 0x1 /* pnlen == 2 */;
         if (QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte)) {
@@ -4082,13 +4087,35 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         }
         p += QUICLY_SEND_PN_SIZE; /* space for PN bits, filled in at commit time */
         s->packet.frames_at = p - s->packet.dst;
-        s->frames.start = p;
-        s->frames.dst = p;
-        assert(s->packet.cipher->aead != NULL);
-        s->frames.end =
-            s->frames.start + (conn->egress.max_udp_payload_size - (coalescible ? s->datagrams[s->num_datagrams - 1].iov_len : 0) -
-                               s->packet.frames_at - s->packet.cipher->aead->algo->tag_size);
+    }
+
+    { /* Initialize s->frames. If possible, point `s->frames` to a location slightly after each packet would be built, so that
+       * scattering and encryption can be performed at once. Specifically,
+       * 1) Payload of multiple packets is read at once without scattering (i.e., by using pread rather than preadv2, as
+       *    scattering inside the kernel is slow).
+       * 2) Then, each packet is encrypted out-of-place.
+       * 3) But the total L1$ footprint is minimized by having an overlap between where payload is read and where the encrypted
+       *    packets are built. */
+        size_t frame_bytes_per_datagram =
+            conn->egress.max_udp_payload_size - (s->packet.frames_at + s->packet.cipher->aead->algo->tag_size);
+        s->frames.out_of_place = 0;
+        if (!QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte) && conn->initial == NULL && conn->handshake == NULL) {
+            assert(conn->application != NULL && !s->packet.coalesced);
+            size_t max_overhead_per_datagram = s->packet.frames_at + (1 + 8 + 8 + 8) /* max size of stream frame header */ +
+                                               s->packet.cipher->aead->algo->tag_size,
+                   max_datagrams = s->max_datagrams - s->num_datagrams,
+                   space_needed = (conn->egress.max_udp_payload_size + max_overhead_per_datagram) * max_datagrams,
+                   space_left = s->buf_end - (s->packet.dst + conn->egress.max_udp_payload_size);
+            if (space_left >= space_needed) {
+                s->frames.start = s->buf_end - frame_bytes_per_datagram * max_datagrams;
+                s->frames.out_of_place = 1;
+            }
+        }
+        if (!s->frames.out_of_place)
+            s->frames.start = s->packet.dst + s->packet.frames_at;
+        s->frames.end = s->frames.start + frame_bytes_per_datagram - (coalescible ? s->datagrams[s->num_datagrams - 1].iov_len : 0);
         assert(s->frames.end - s->frames.start >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
+        s->frames.dst = s->frames.start;
     }
 
     if (conn->super.state < QUICLY_STATE_CLOSING) {
