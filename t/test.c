@@ -181,65 +181,75 @@ static void test_enable_with_ratio255(void)
     ok(num_enabled == 63 * (65535 / 255));
 }
 
-static void test_adjust_stream_frame_layout(void)
+static void test_adjust_crypto_frame_layout(void)
 {
-#define TEST(_is_crypto, _capacity, check)                                                                                         \
+#define TEST(_capacity, _check)                                                                                                    \
     do {                                                                                                                           \
-        uint8_t buf[] = {0xff, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
-        uint8_t *dst = buf + 2, *const dst_end = buf + _capacity, *frame_at = buf;                                                 \
+        uint8_t buf[] = {0x06, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
+        uint8_t *payload = buf + 2;                                                                                                \
         size_t len = 5;                                                                                                            \
         int wrote_all = 1;                                                                                                         \
-        buf[0] = _is_crypto ? 0x06 : 0x08;                                                                                         \
-        adjust_stream_frame_layout(&dst, dst_end, &len, &wrote_all, &frame_at);                                                    \
+        adjust_crypto_frame_layout(&payload, buf + (_capacity), &len, &wrote_all);                                                 \
         do {                                                                                                                       \
-            check                                                                                                                  \
+            _check                                                                                                                 \
         } while (0);                                                                                                               \
     } while (0);
 
-    /* test CRYPTO frames that fit and don't when length is inserted */
-    TEST(1, 10, {
-        ok(dst == buf + 8);
+    /* more than enough space */
+    TEST(10, {
+        ok(payload == buf + 3);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
     });
-    TEST(1, 8, {
-        ok(dst == buf + 8);
+
+    /* no extra space */
+    TEST(8, {
+        ok(payload == buf + 3);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
     });
-    TEST(1, 7, {
-        ok(dst == buf + 7);
+
+    /* trimmed */
+    TEST(7, {
+        ok(payload == buf + 3);
         ok(len == 4);
         ok(!wrote_all);
-        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x04hell", 7) == 0);
     });
 
-    /* test STREAM frames */
-    TEST(0, 9, {
-        ok(dst == buf + 8);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf);
-        ok(memcmp(buf, "\x0a\x04\x05hello", 8) == 0);
+#undef TEST
+}
+
+static void test_adjust_stream_frame_layout(void)
+{
+#define TEST(_capacity, _check)                                                                                                    \
+    do {                                                                                                                           \
+        uint8_t buf[] = {0x0c, 0x10, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                      \
+        uint8_t *payload = buf + 3;                                                                                                \
+        adjust_stream_frame_layout(&payload, buf, buf + (_capacity), 5);                                                           \
+        do {                                                                                                                       \
+            _check                                                                                                                 \
+        } while (0);                                                                                                               \
+    } while (0);
+
+    /* more than enough space */
+    TEST(10, {
+        ok(payload == buf + 4);
+        ok(memcmp(buf, "\x0e\x10\x04\x05hello", 9) == 0);
     });
-    TEST(0, 8, {
-        ok(dst == buf + 8);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf + 1);
-        ok(memcmp(buf, "\x00\x08\x04hello", 8) == 0);
+
+    /* no more space expect for PADDING */
+    TEST(9, {
+        ok(payload == buf + 4);
+        ok(memcmp(buf, "\x00\x0c\x10\x04hello", 9) == 0);
     });
-    TEST(0, 7, {
-        ok(dst == buf + 7);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf);
-        ok(memcmp(buf, "\x08\x04hello", 7) == 0);
+
+    /* no extra space */
+    TEST(8, {
+        ok(payload == buf + 3);
+        ok(memcmp(buf, "\x0c\x10\x04hello", 8) == 0);
     });
 
 #undef TEST
@@ -1289,7 +1299,8 @@ static void test_state_exhaustion(void)
     /* send up to 200 packets with stream frame having gaps and check that the receiver raises state exhaustion */
     for (size_t i = 0; i < 200; ++i) {
         test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
-        do_allocate_frame(client, &s, 100, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
+        allocate_frame(client, &s, 100, ALLOCATE_FRAME_FLAG_CONSULT_CC | ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY);
+        mark_frame_built_as_ack_eliciting(client, &s);
         *s.frames.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
         s.frames.dst = quicly_encodev(s.frames.dst, 0);     /* stream id */
         s.frames.dst = quicly_encodev(s.frames.dst, i * 2); /* off */
@@ -1521,6 +1532,7 @@ int main(int argc, char **argv)
     subtest("pacer", test_pacer);
     subtest("sentmap", test_sentmap);
     subtest("loss", test_loss);
+    subtest("adjust-crypto-frame-layout", test_adjust_crypto_frame_layout);
     subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
