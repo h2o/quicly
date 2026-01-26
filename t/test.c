@@ -473,7 +473,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 {
     quicly_address_t destaddr, srcaddr;
     struct iovec datagrams[32];
-    uint8_t datagramsbuf[PTLS_ELEMENTSOF(datagrams) * quicly_get_context(src)->transport_params.max_udp_payload_size];
+    uint8_t datagramsbuf[(PTLS_ELEMENTSOF(datagrams) + 2) * quicly_get_context(src)->transport_params.max_udp_payload_size];
     size_t num_datagrams, i;
     quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
     quicly_error_t ret;
@@ -1336,8 +1336,8 @@ static void do_test_migration_during_handshake(int second_flight_from_orig_addre
                              clientaddr2 = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(0x7f000003), .sin_port = htons(12345)};
     quicly_address_t destaddr, srcaddr;
     struct iovec datagrams[10];
-    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size * 10];
-    quicly_decoded_packet_t packets[40];
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size * (PTLS_ELEMENTSOF(datagrams) + 2)];
+    quicly_decoded_packet_t packets[PTLS_ELEMENTSOF(datagrams) * 4];
     size_t num_datagrams, num_packets;
     quicly_error_t ret;
 
