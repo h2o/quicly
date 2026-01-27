@@ -4127,10 +4127,9 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
         s->frames.out_of_place = 0;
         if (!QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte) && conn->initial == NULL && conn->handshake == NULL) {
             assert(conn->application != NULL && !s->packet.coalesced);
-            size_t out_of_place_offset =
-                calculate_out_of_place_offset(conn->egress.max_udp_payload_size, s->packet.frames_at,
-                                              s->packet.cipher->aead->algo->tag_size, s->max_datagrams - s->num_datagrams,
-                                              s->buf_end - s->packet.dst);
+            size_t out_of_place_offset = calculate_out_of_place_offset(
+                conn->egress.max_udp_payload_size, s->packet.frames_at, s->packet.cipher->aead->algo->tag_size,
+                s->max_datagrams - s->num_datagrams, s->buf_end - s->packet.dst);
             if (out_of_place_offset != 0) {
                 s->frames.start = s->packet.dst + out_of_place_offset;
                 s->frames.out_of_place = 1;
