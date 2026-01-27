@@ -4124,8 +4124,6 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
        * 2) Then, each packet is encrypted out-of-place.
        * 3) But the total L1$ footprint is minimized by having an overlap between where payload is read and where the encrypted
        *    packets are built. */
-        size_t frame_bytes_per_datagram =
-            conn->egress.max_udp_payload_size - (s->packet.frames_at + s->packet.cipher->aead->algo->tag_size);
         s->frames.out_of_place = 0;
         if (!QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte) && conn->initial == NULL && conn->handshake == NULL) {
             assert(conn->application != NULL && !s->packet.coalesced);
@@ -4140,7 +4138,9 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
         }
         if (!s->frames.out_of_place)
             s->frames.start = s->packet.dst + s->packet.frames_at;
-        s->frames.end = s->frames.start + frame_bytes_per_datagram - (coalescible ? s->datagrams[s->num_datagrams - 1].iov_len : 0);
+        s->frames.end = s->frames.start +
+                        (conn->egress.max_udp_payload_size - (s->packet.frames_at + s->packet.cipher->aead->algo->tag_size)) -
+                        (coalescible ? s->datagrams[s->num_datagrams - 1].iov_len : 0);
         assert(s->frames.end - s->frames.start >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
         s->frames.dst = s->frames.start;
     }
