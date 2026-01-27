@@ -4036,6 +4036,25 @@ static void prepare_packet(quicly_conn_t *conn, quicly_send_context_t *s)
     s->packet.frames_at = p - s->packet.dst;
 }
 
+/**
+ * Calculates the offset where frames have to be built for using out-of-place encryption, relative to the current position of the
+ * packet being built. If `buffer_capacity` is insufficient, returns zero.
+ * @param buffer_capacity  size of the buffer remaining, starting from the beginning of the packet being built
+ */
+static size_t calculate_out_of_place_offset(size_t mtu, size_t packet_header_len, size_t tag_size, size_t num_datagrams,
+                                            size_t buffer_capacity)
+{
+    if (num_datagrams == 1)
+        return 0;
+
+    const size_t max_stream_frame_header_size = 1 + 8 + 8 + 8;
+    size_t max_overhead_per_datagram = packet_header_len + max_stream_frame_header_size + tag_size,
+           offset_needed = mtu + (num_datagrams - 1) * max_overhead_per_datagram + max_stream_frame_header_size,
+           space_needed = offset_needed + (mtu - packet_header_len - tag_size) * num_datagrams;
+
+    return space_needed <= buffer_capacity ? offset_needed : 0;
+}
+
 #define ALLOCATE_FRAME_FLAG_CONSULT_CC 0x1
 #define ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY 0x2
 
@@ -4110,13 +4129,12 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
         s->frames.out_of_place = 0;
         if (!QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte) && conn->initial == NULL && conn->handshake == NULL) {
             assert(conn->application != NULL && !s->packet.coalesced);
-            size_t max_overhead_per_datagram = s->packet.frames_at + (1 + 8 + 8 + 8) /* max size of stream frame header */ +
-                                               s->packet.cipher->aead->algo->tag_size,
-                   max_datagrams = s->max_datagrams - s->num_datagrams,
-                   space_needed = (conn->egress.max_udp_payload_size + max_overhead_per_datagram) * max_datagrams,
-                   space_left = s->buf_end - (s->packet.dst + conn->egress.max_udp_payload_size);
-            if (space_left >= space_needed) {
-                s->frames.start = s->buf_end - frame_bytes_per_datagram * max_datagrams;
+            size_t out_of_place_offset =
+                calculate_out_of_place_offset(conn->egress.max_udp_payload_size, s->packet.frames_at,
+                                              s->packet.cipher->aead->algo->tag_size, s->max_datagrams - s->num_datagrams,
+                                              s->buf_end - s->packet.dst);
+            if (out_of_place_offset != 0) {
+                s->frames.start = s->packet.dst + out_of_place_offset;
                 s->frames.out_of_place = 1;
             }
         }

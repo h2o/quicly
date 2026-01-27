@@ -255,6 +255,27 @@ static void test_adjust_stream_frame_layout(void)
 #undef TEST
 }
 
+static void test_calculate_out_of_place_offset(void)
+{
+    /* no out-of-place encryption if space is minimal */
+    ok(calculate_out_of_place_offset(1280, 11, 16, 1, 1280) == 0);
+    ok(calculate_out_of_place_offset(1280, 11, 16, 2, 1280 * 2) == 0);
+
+    /* emulate generating 10 datagrams */
+    const size_t mtu = 1280, packet_header = 11, tag = 16;
+    size_t datagrams = 10, payload_offset = calculate_out_of_place_offset(mtu, packet_header, tag, datagrams, 15000);
+    /* payload of first datagram is out-of-place */
+    ok(payload_offset > mtu);
+
+    /* payload of following datagrams are also out-of-place */
+    size_t datagram_end = mtu * 2;
+    while (--datagrams != 0) {
+        payload_offset += mtu - (packet_header + tag + (1 + 8 + 8 + 8) /* max stream header size */);
+        ok(datagram_end <= payload_offset - (1 + 8 + 8 + 8) /* max stream header size */);
+        datagram_end += mtu;
+    }
+}
+
 static int64_t get_now_cb(quicly_now_t *self)
 {
     return quic_now;
@@ -1534,6 +1555,7 @@ int main(int argc, char **argv)
     subtest("loss", test_loss);
     subtest("adjust-crypto-frame-layout", test_adjust_crypto_frame_layout);
     subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
+    subtest("calculate-out-of-place-offset", test_calculate_out_of_place_offset);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
