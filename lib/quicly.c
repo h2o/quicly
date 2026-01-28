@@ -4678,6 +4678,10 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
                 return ret;
             /* prepare the next packet, and also the STREAM frame header which is prepended to the already available payload */
             prepare_packet(stream->conn, s);
+            mark_frame_built_as_ack_eliciting(stream->conn, s);
+            if ((ret = quicly_sentmap_prepare(&stream->conn->egress.loss.sentmap, stream->conn->egress.packet_number,
+                                              stream->conn->stash.now, QUICLY_EPOCH_1RTT)) != 0)
+                return ret;
             if ((sent = quicly_sentmap_allocate(&stream->conn->egress.loss.sentmap, on_ack_stream)) == NULL)
                 return PTLS_ERROR_NO_MEMORY;
             uint8_t frame_header[1 + 8 + 8], *hp = frame_header;
