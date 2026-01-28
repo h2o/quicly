@@ -4601,6 +4601,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
             if (extra_datagrams > s->max_datagrams - s->num_datagrams - 1)
                 extra_datagrams = s->max_datagrams - s->num_datagrams - 1;
             len += (s->frames.end - s->frames.start) * extra_datagrams;
+            assert(len <= s->buf_end - dst);
         }
         /* cap by max_stream_data */
         if (off + len > stream->_send_aux.max_stream_data)
