@@ -457,7 +457,4 @@ static void default_encrypt_packet(quicly_crypto_engine_t *engine, quicly_conn_t
         datagram.base[payload_from + i - QUICLY_SEND_PN_SIZE] ^= supp.output[i + 1];
 }
 
-quicly_crypto_engine_t quicly_default_crypto_engine = {
-    .setup_cipher = default_setup_cipher,
-    .encrypt_packet = default_encrypt_packet,
-};
+quicly_crypto_engine_t quicly_default_crypto_engine = {default_setup_cipher, default_encrypt_packet};
