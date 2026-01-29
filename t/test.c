@@ -99,6 +99,11 @@ int64_t quic_now = 1;
 quicly_context_t quic_ctx;
 quicly_stream_callbacks_t stream_callbacks = {
     on_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_egress_stop, on_ingress_receive, on_ingress_reset};
+quicly_stream_scheduler_t stream_scheduler = {
+    .can_send = quicly_default_stream_scheduler_can_send,
+    .do_send = quicly_default_stream_scheduler_do_send,
+    .update_state = quicly_default_stream_scheduler_update_state,
+};
 size_t on_destroy_callcnt;
 
 static void test_error_codes(void)
@@ -155,6 +160,42 @@ static void test_error_codes(void)
     ok(!QUICLY_ERROR_IS_QUIC_APPLICATION(a));
 }
 
+static void test_adjust_crypto_frame_layout(void)
+{
+#define TEST(_capacity, check)                                                                                                     \
+    do {                                                                                                                           \
+        uint8_t buf[] = {0x06, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
+        uint8_t *dst = buf + 2, *const dst_end = buf + _capacity;                                                                  \
+        size_t len = 5;                                                                                                            \
+        int wrote_all = 1;                                                                                                         \
+        dst = adjust_crypto_frame_layout(dst, dst_end, &len, &wrote_all);                                                          \
+        do {                                                                                                                       \
+            check                                                                                                                  \
+        } while (0);                                                                                                               \
+    } while (0);
+
+    /* test CRYPTO frames that fit and don't when length is inserted */
+    TEST(10, {
+        ok(dst == buf + 8);
+        ok(len == 5);
+        ok(wrote_all);
+        ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
+    });
+    TEST(18, {
+        ok(dst == buf + 8);
+        ok(len == 5);
+        ok(wrote_all);
+        ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
+    });
+    TEST(7, {
+        ok(dst == buf + 7);
+        ok(len == 4);
+        ok(!wrote_all);
+        ok(memcmp(buf, "\x06\x04\x04hell", 7) == 0);
+    });
+#undef TEST
+}
+
 static uint16_t test_enable_with_ratio255_random_value;
 
 static void test_enable_with_ratio255_get_random(void *p, size_t len)
@@ -181,68 +222,162 @@ static void test_enable_with_ratio255(void)
     ok(num_enabled == 63 * (65535 / 255));
 }
 
-static void test_adjust_stream_frame_layout(void)
+static void test_adjust_last_stream_frame(void)
 {
-#define TEST(_is_crypto, _capacity, check)                                                                                         \
+#define TEST(space_left, check)                                                                                                    \
     do {                                                                                                                           \
-        uint8_t buf[] = {0xff, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
-        uint8_t *dst = buf + 2, *const dst_end = buf + _capacity, *frame_at = buf;                                                 \
-        size_t len = 5;                                                                                                            \
-        int wrote_all = 1;                                                                                                         \
-        buf[0] = _is_crypto ? 0x06 : 0x08;                                                                                         \
-        adjust_stream_frame_layout(&dst, dst_end, &len, &wrote_all, &frame_at);                                                    \
+        uint8_t buf[] = {0x08, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
+        size_t increase = adjust_last_stream_frame(buf, 2, 5, space_left);                                                         \
         do {                                                                                                                       \
             check                                                                                                                  \
         } while (0);                                                                                                               \
-    } while (0);
-
-    /* test CRYPTO frames that fit and don't when length is inserted */
-    TEST(1, 10, {
-        ok(dst == buf + 8);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf);
-        ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
-    });
-    TEST(1, 8, {
-        ok(dst == buf + 8);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf);
-        ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
-    });
-    TEST(1, 7, {
-        ok(dst == buf + 7);
-        ok(len == 4);
-        ok(!wrote_all);
-        ok(frame_at == buf);
-        ok(memcmp(buf, "\x06\x04\x04hell", 7) == 0);
-    });
+    } while (0)
 
     /* test STREAM frames */
-    TEST(0, 9, {
-        ok(dst == buf + 8);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf);
-        ok(memcmp(buf, "\x0a\x04\x05hello", 8) == 0);
-    });
-    TEST(0, 8, {
-        ok(dst == buf + 8);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf + 1);
-        ok(memcmp(buf, "\x00\x08\x04hello", 8) == 0);
-    });
-    TEST(0, 7, {
-        ok(dst == buf + 7);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf);
+    TEST(0, {
+        ok(increase == 0);
         ok(memcmp(buf, "\x08\x04hello", 7) == 0);
+    });
+    TEST(1, {
+        ok(increase == 1);
+        ok(memcmp(buf, "\x00\x08\x04hello", 7) == 0);
+    });
+    TEST(2, {
+        ok(increase == 1);
+        ok(memcmp(buf, "\x0a\x04\x05hello", 7) == 0);
     });
 
 #undef TEST
+}
+
+static void test_prepare_scatter(void)
+{
+#define DATAGRAM_SIZE 100
+#define STREAM_ID 4
+#define TAG_SIZE 16
+
+    quicly_cid_t dcid = {.cid = {0x41, 0x42, 0x43}, .len = 3};
+    ptls_aead_context_t aead = {.algo = &ptls_openssl_aes128gcm};
+    struct st_quicly_cipher_context_t cipher = {.aead = &aead};
+
+    assert(aead.algo->tag_size == TAG_SIZE);
+
+#define SETUP()                                                                                                                    \
+    uint8_t buf[DATAGRAM_SIZE * 20];                                                                                               \
+    quicly_send_context_t s = {                                                                                                    \
+        .dcid = &dcid,                                                                                                             \
+        .current.cipher = &cipher,                                                                                                 \
+        .payload_buf.datagram = buf,                                                                                               \
+        .payload_buf.end = buf + sizeof(buf),                                                                                      \
+        .dst = buf + DATAGRAM_SIZE - 20 - TAG_SIZE, /* pretend as if only 20 bytes is left within the first datagram */            \
+        .dst_end = buf + DATAGRAM_SIZE - TAG_SIZE,                                                                                 \
+        .num_datagrams = 0,                                                                                                        \
+        .max_datagrams = 20,                                                                                                       \
+        .send_window = DATAGRAM_SIZE * 20,                                                                                         \
+    };                                                                                                                             \
+    ptls_iovec_t vecs[10] = {{.base = s.dst + 2, .len = s.dst_end - (s.dst + 2)}}; /* 2 bytes for STREAM header(sid=0) */          \
+    assert(vecs[0].len == 18)
+
+#define CHECK_VEC(index, expected_header, expected_len)                                                                            \
+    do {                                                                                                                           \
+        ok(vecs[index].base == &buf[DATAGRAM_SIZE * (index) + 1 + dcid.len + QUICLY_SEND_PN_SIZE] + sizeof(expected_header) - 1);  \
+        ok(memcmp(vecs[index].base - (sizeof(expected_header) - 1), expected_header, sizeof(expected_header) - 1) == 0);           \
+        if ((expected_len) == SIZE_MAX) {                                                                                          \
+            ok(vecs[index].base + vecs[index].len == buf + DATAGRAM_SIZE * ((index) + 1) - TAG_SIZE);                              \
+        } else {                                                                                                                   \
+            ok(vecs[index].len == (expected_len));                                                                                 \
+        }                                                                                                                          \
+    } while (0)
+
+    { /* basic check */
+        SETUP();
+        s.payload_buf.end = buf + DATAGRAM_SIZE * 5; /* limit output to 5 datagrams */
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 5);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", SIZE_MAX);
+        CHECK_VEC(3, "\x0c\x04\x40\xa7", SIZE_MAX);
+        CHECK_VEC(4, "\x0c\x04\x40\xf1", SIZE_MAX);
+    }
+
+    { /* no more than 10 vectors are expected to be returned */
+        SETUP();
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 10);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", SIZE_MAX);
+        CHECK_VEC(3, "\x0c\x04\x40\xa7", SIZE_MAX);
+        CHECK_VEC(4, "\x0c\x04\x40\xf1", SIZE_MAX);
+    }
+
+    { /* if provided len is smaller than the space available in the first datagram, `vec[0].len` is reduced */
+        SETUP();
+        size_t len = 11;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 1);
+        ok(vecs[0].len == 11);
+    }
+
+    { /* len might run out in the middle of the following datagrams */
+        SETUP();
+        size_t len = 150;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 3);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", 57);
+    }
+
+    { /* prepare no more than the number of the datagrams that can be built */
+        SETUP();
+        s.num_datagrams = s.max_datagrams - 3;
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 3);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", SIZE_MAX);
+    }
+
+    { /* prepare no more than send window */
+        SETUP();
+        s.send_window = DATAGRAM_SIZE;
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 1);
+        ok(vecs[0].len == 18);
+    }
+
+    { /* prepare no more than send window (of 3 datagrams) */
+        SETUP();
+        s.send_window = DATAGRAM_SIZE * 3;
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 3);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+        CHECK_VEC(2, "\x0c\x04\x40\x5d", SIZE_MAX);
+    }
+
+    { /* send window is rounded up to the datagram size */
+        SETUP();
+        s.send_window = DATAGRAM_SIZE + 1;
+        size_t len = SIZE_MAX;
+        size_t num_vecs = prepare_scattered_emit(&s, DATAGRAM_SIZE, STREAM_ID, 0, &len, vecs);
+        ok(num_vecs == 2);
+        ok(vecs[0].len == 18);
+        CHECK_VEC(1, "\x0c\x04\x12", SIZE_MAX);
+    }
+
+#undef CHECK_VEC
+#undef SETUP
+#undef DATAGRAM_SIZE
+#undef STREAM_ID
+#undef TAG_SIZE
 }
 
 static int64_t get_now_cb(quicly_now_t *self)
@@ -1461,6 +1596,50 @@ static void test_stats_foreach(void)
 #undef CHECK
 }
 
+static size_t do_emit_scattered(quicly_stream_t *stream, size_t off, const ptls_iovec_t *vecs, size_t num_vecs, int *wrote_all)
+{
+    quicly_streambuf_t *sbuf = stream->data;
+    size_t bytes_written = 0;
+
+    for (size_t i = 0; i < num_vecs; ++i) {
+        size_t vec_len = vecs[i].len;
+        quicly_sendbuf_emit(stream, &sbuf->egress, off, vecs[i].base, &vec_len, wrote_all);
+        bytes_written += vec_len;
+        if (*wrote_all)
+            break;
+        assert(vec_len == vecs[i].len);
+        off += vec_len;
+    }
+
+    return bytes_written;
+}
+
+static quicly_error_t do_send_scattered(quicly_stream_t *stream, quicly_send_context_t *s)
+{
+    assert(stream->callbacks == &stream_callbacks);
+    return quicly_send_stream_scattered(stream, s, do_emit_scattered, SIZE_MAX);
+}
+
+static quicly_error_t scheduler_do_send_scattered(quicly_stream_scheduler_t *self, quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    return quicly_default_stream_scheduler_do_send_with(self, conn, s, do_send_scattered);
+}
+
+static void run_stream_tests(int scatter)
+{
+    if (scatter) {
+        assert(stream_scheduler.do_send == quicly_default_stream_scheduler_do_send);
+        stream_scheduler.do_send = scheduler_do_send_scattered;
+    }
+
+    subtest("simple", test_simple);
+    subtest("stream-concurrency", test_stream_concurrency);
+    subtest("lossy", test_lossy);
+
+    if (scatter)
+        stream_scheduler.do_send = quicly_default_stream_scheduler_do_send;
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -1477,6 +1656,7 @@ int main(int argc, char **argv)
     quic_ctx.transport_params.max_streams_bidi = 10;
     quic_ctx.stream_open = &stream_open;
     quic_ctx.now = &get_now;
+    quic_ctx.stream_scheduler = &stream_scheduler;
 
     fake_address.sa.sa_family = AF_INET;
 
@@ -1520,14 +1700,15 @@ int main(int argc, char **argv)
     subtest("pacer", test_pacer);
     subtest("sentmap", test_sentmap);
     subtest("loss", test_loss);
-    subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
+    subtest("adjust-crypto-frame-layout", test_adjust_crypto_frame_layout);
+    subtest("adjust-last-stream-frame", test_adjust_last_stream_frame);
+    subtest("prepare-scatter", test_prepare_scatter);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
     subtest("cid", test_cid);
-    subtest("simple", test_simple);
-    subtest("stream-concurrency", test_stream_concurrency);
-    subtest("lossy", test_lossy);
+    subtest("stream-subtests", run_stream_tests, 0);
+    subtest("stream-subtests-scattered", run_stream_tests, 1);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
