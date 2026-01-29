@@ -3896,7 +3896,7 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
     if (QUICLY_PACKET_IS_LONG_HEADER(*s->packet.dst)) {
         uint16_t length = s->frames.dst - s->frames.start + s->packet.cipher->aead->algo->tag_size + QUICLY_SEND_PN_SIZE;
         quicly_encode16(s->packet.dst + s->packet.frames_at - QUICLY_SEND_PN_SIZE - 2,
-                        length | 0x4000 /* always 2 bytes; see _do_prepare_packet */);
+                        length | 0x4000 /* QUICLY_SEND_PN_SIZE == 2 bytes */);
         switch (*s->packet.dst & QUICLY_PACKET_TYPE_BITMASK) {
         case QUICLY_PACKET_TYPE_INITIAL:
             conn->super.stats.num_packets.initial_sent++;
