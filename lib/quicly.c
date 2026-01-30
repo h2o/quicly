@@ -3830,15 +3830,11 @@ struct st_quicly_send_context_t {
         uint8_t coalesced : 1;
     } packet;
     /**
-     * frames under construction
+     * frames under construction; when encryption is done out-of-place, these pointers point outside of the packet region expressed
+     * by `packet.dst` and `conn->egress.max_udp_payload_size`
      */
     struct {
         uint8_t *dst, *start, *end;
-        /**
-         * if frames are built out-of-place. When set to true, `frames.start` to `buf_end` is just large enough to build frames
-         * for all packets that can be built at once.
-         */
-        unsigned out_of_place : 1;
     } frames;
     /**
      * end of buffer in which packets are built
@@ -4143,25 +4139,27 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
        * 2) Then, each packet is encrypted out-of-place.
        * 3) But the total L1$ footprint is minimized by having an overlap between where payload is read and where the encrypted
        *    packets are built. */
-        s->frames.out_of_place = 0;
+        size_t mtu = conn->egress.max_udp_payload_size,
+               packet_overhead = s->packet.frames_at + s->packet.cipher->aead->algo->tag_size;
+        int out_of_place = 0;
         if (!QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte) && conn->initial == NULL && conn->handshake == NULL) {
             assert(conn->application != NULL && !s->packet.coalesced);
-            size_t out_of_place_offset = calculate_out_of_place_offset(
-                conn->egress.max_udp_payload_size, s->packet.frames_at + s->packet.cipher->aead->algo->tag_size,
-                s->max_datagrams - s->num_datagrams, s->buf_end - s->packet.dst, NULL);
+            size_t out_of_place_offset = calculate_out_of_place_offset(mtu, packet_overhead, s->max_datagrams - s->num_datagrams,
+                                                                       s->buf_end - s->packet.dst, NULL);
             if (out_of_place_offset != 0) {
                 s->frames.start = s->packet.dst + out_of_place_offset;
-                s->frames.out_of_place = 1;
+                s->frames.end = s->frames.start + mtu - packet_overhead;
+                out_of_place = 1;
             }
         }
-        if (!s->frames.out_of_place)
+        if (!out_of_place) {
             s->frames.start = s->packet.dst + s->packet.frames_at;
-        s->frames.end = s->frames.start +
-                        (conn->egress.max_udp_payload_size - (s->packet.frames_at + s->packet.cipher->aead->algo->tag_size)) -
-                        (coalescible ? s->datagrams[s->num_datagrams - 1].iov_len : 0);
-        assert(s->frames.end - s->frames.start >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
-        s->frames.dst = s->frames.start;
+            s->frames.end =
+                s->frames.start + (mtu - packet_overhead) - (coalescible ? s->datagrams[s->num_datagrams - 1].iov_len : 0);
+        }
     }
+    assert(s->frames.end - s->frames.start >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
+    s->frames.dst = s->frames.start;
 
     if (conn->super.state < QUICLY_STATE_CLOSING) {
         /* register to sentmap */
@@ -4618,8 +4616,8 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
         dst = s->frames.dst + (hp - header);
         len = s->frames.end - dst;
         /* if the frames are to be built for out-of-place encryption, try reading the payload for multiple QUIC packets at once */
-        if (s->frames.out_of_place) {
-            size_t mtu = stream->conn->egress.max_udp_payload_size;
+        uint16_t mtu = stream->conn->egress.max_udp_payload_size;
+        if (dst >= s->packet.dst + mtu) {
             extra_datagrams = s->send_window > mtu ? (s->send_window + mtu - 1) / mtu - 1 : 0;
             if (extra_datagrams > s->max_datagrams - s->num_datagrams - 1)
                 extra_datagrams = s->max_datagrams - s->num_datagrams - 1;
