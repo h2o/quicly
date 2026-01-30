@@ -286,17 +286,18 @@ static void test_calculate_out_of_place_offset(void)
     ok(calculate_out_of_place_offset(1280, 11, 16, 2, 1280 * 2) == 0);
 
     /* emulate generating 10 datagrams */
-    const size_t mtu = 1280, packet_header = 11, tag = 16;
+    const size_t mtu = 1280, packet_header = 11, tag = 16, max_stream_header_size = 1 + 8 + 8 + 8;
     size_t datagrams = 10, payload_offset = calculate_out_of_place_offset(mtu, packet_header, tag, datagrams, 15000);
-    /* payload of first datagram is out-of-place */
+    /* payload of the first datagram is out-of-place */
     ok(payload_offset > mtu);
 
-    /* payload of following datagrams are also out-of-place */
-    size_t datagram_end = mtu * 2;
+    /* payload of the following datagrams are also out-of-place, with the STREAM frame header prepended */
+    size_t datagram_end = mtu;
     while (--datagrams != 0) {
-        payload_offset += mtu - (packet_header + tag + (1 + 8 + 8 + 8) /* max stream header size */);
-        ok(datagram_end <= payload_offset - (1 + 8 + 8 + 8) /* max stream header size */);
+        payload_offset += mtu - (packet_header + tag + max_stream_header_size);
         datagram_end += mtu;
+        size_t payload_from = payload_offset - max_stream_header_size;
+        ok(datagram_end <= payload_from);
     }
 }
 
