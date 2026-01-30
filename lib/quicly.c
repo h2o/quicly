@@ -4079,26 +4079,19 @@ static inline size_t calculate_out_of_place_offset(size_t mtu, size_t packet_ove
  */
 static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space, unsigned flags)
 {
-    int coalescible;
     quicly_error_t ret;
 
     assert((s->context.first_byte & QUICLY_QUIC_BIT) != 0);
 
-    /* allocate and setup the new packet if necessary */
-    if (s->frames.end - s->frames.dst < min_space) {
-        coalescible = 0;
-    } else if (((*s->packet.dst ^ s->context.first_byte) & QUICLY_PACKET_TYPE_BITMASK) != 0) {
-        coalescible = QUICLY_PACKET_IS_LONG_HEADER(*s->packet.dst);
-    } else if (s->frames.end - s->frames.dst < min_space) {
-        coalescible = 0;
-    } else {
-        /* use the existing packet */
-        goto TargetReady;
-    }
-
-    /* commit at the same time determining if we will coalesce the packets */
+    /* if a packet is being built, either return space from that packet or allocate a new packet */
     if (s->packet.cipher != NULL) {
-        if (coalescible) {
+        int coalesce = 0;
+        if (((*s->packet.dst ^ s->context.first_byte) & QUICLY_PACKET_TYPE_BITMASK) == 0) {
+            /* if packet being built is of same type and has enough space, return immediately; otherwise allocate a new datagram */
+            if (min_space <= s->frames.end - s->frames.dst)
+                return 0;
+        } else {
+            /* packet of different type, check if coalescible */
             size_t overhead = 1 /* type */ + s->dcid->len + QUICLY_SEND_PN_SIZE + s->context.cipher->aead->algo->tag_size;
             if (QUICLY_PACKET_IS_LONG_HEADER(s->context.first_byte))
                 overhead += 4 /* version */ + 1 /* cidl */ + s->dcid->len + conn->super.local.long_header_src_cid.len +
@@ -4106,21 +4099,19 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
             size_t packet_min_space = QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE;
             if (packet_min_space < min_space)
                 packet_min_space = min_space;
-            if (overhead + packet_min_space > s->frames.end - s->frames.dst)
-                coalescible = 0;
+            if (overhead + packet_min_space <= s->frames.end - s->frames.dst)
+                coalesce = 1;
         }
         /* Close the packet under construction. Datagrams being returned by `quicly_send` are padded to full-size (except for the
          * last one datagram) so that they can be sent at once using GSO. */
-        if (!coalescible)
+        if (!coalesce)
             s->packet.full_size = 1;
-        if ((ret = commit_send_packet(conn, s, coalescible)) != 0)
+        if ((ret = commit_send_packet(conn, s, coalesce)) != 0)
             return ret;
-    } else {
-        coalescible = 0;
     }
 
     /* prepare packet */
-    if (!coalescible) {
+    if (!s->packet.coalesced) {
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
         /* note: send_window (ssize_t) can become negative; see doc-comment */
@@ -4155,7 +4146,7 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
         if (!out_of_place) {
             s->frames.start = s->packet.dst + s->packet.frames_at;
             s->frames.end =
-                s->frames.start + (mtu - packet_overhead) - (coalescible ? s->datagrams[s->num_datagrams - 1].iov_len : 0);
+                s->frames.start + (mtu - packet_overhead) - (s->packet.coalesced ? s->datagrams[s->num_datagrams - 1].iov_len : 0);
         }
     }
     assert(s->frames.end - s->frames.start >= QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE);
