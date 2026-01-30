@@ -4085,7 +4085,7 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
     assert((s->context.first_byte & QUICLY_QUIC_BIT) != 0);
 
     /* allocate and setup the new packet if necessary */
-    if (s->frames.end - s->frames.dst < min_space || s->packet.dst == NULL) {
+    if (s->frames.end - s->frames.dst < min_space) {
         coalescible = 0;
     } else if (((*s->packet.dst ^ s->context.first_byte) & QUICLY_PACKET_TYPE_BITMASK) != 0) {
         coalescible = QUICLY_PACKET_IS_LONG_HEADER(*s->packet.dst);
