@@ -4051,15 +4051,25 @@ static void prepare_packet(quicly_conn_t *conn, quicly_send_context_t *s)
  * packet being built. If `buffer_capacity` is insufficient, returns zero.
  * @param buffer_capacity  size of the buffer remaining, starting from the beginning of the packet being built
  */
-static size_t calculate_out_of_place_offset(size_t mtu, size_t packet_overhead, size_t num_datagrams, size_t buffer_capacity)
+static inline size_t calculate_out_of_place_offset(size_t mtu, size_t packet_overhead, size_t num_datagrams, size_t buffer_capacity,
+                                                   size_t *out_space_needed)
 {
     if (num_datagrams == 1)
         return 0;
 
     const size_t max_stream_frame_header_size = 1 + 8 + 8 + 8;
-    size_t max_overhead_per_datagram = packet_overhead + max_stream_frame_header_size,
-           offset_needed = mtu + (num_datagrams - 1) * max_overhead_per_datagram + max_stream_frame_header_size,
+
+    /* Both of these conditions have to be met:
+     * 1. Even if STREAM frame headers were never prepended, writing the payload for all the datagrams at once does not cause an
+     *    overflow.
+     * 2. Even if the largest STREAM frame headers were always prepended, the packet and the frame region of the last packet do not
+     *    overlap. */
+    size_t offset_needed =
+               mtu + (num_datagrams - 1) * (packet_overhead + max_stream_frame_header_size) + max_stream_frame_header_size,
            space_needed = offset_needed + (mtu - packet_overhead) * num_datagrams;
+
+    if (out_space_needed != NULL)
+        *out_space_needed = space_needed;
 
     return space_needed <= buffer_capacity ? offset_needed : 0;
 }
@@ -4138,7 +4148,7 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
             assert(conn->application != NULL && !s->packet.coalesced);
             size_t out_of_place_offset = calculate_out_of_place_offset(
                 conn->egress.max_udp_payload_size, s->packet.frames_at + s->packet.cipher->aead->algo->tag_size,
-                s->max_datagrams - s->num_datagrams, s->buf_end - s->packet.dst);
+                s->max_datagrams - s->num_datagrams, s->buf_end - s->packet.dst, NULL);
             if (out_of_place_offset != 0) {
                 s->frames.start = s->packet.dst + out_of_place_offset;
                 s->frames.out_of_place = 1;
