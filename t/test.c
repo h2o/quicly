@@ -181,68 +181,136 @@ static void test_enable_with_ratio255(void)
     ok(num_enabled == 63 * (65535 / 255));
 }
 
-static void test_adjust_stream_frame_layout(void)
+static void test_encodev_reverse(void)
 {
-#define TEST(_is_crypto, _capacity, check)                                                                                         \
+    uint8_t buf[8];
+
+#define TEST(val, len)                                                                                                             \
     do {                                                                                                                           \
-        uint8_t buf[] = {0xff, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
-        uint8_t *dst = buf + 2, *const dst_end = buf + _capacity, *frame_at = buf;                                                 \
+        ok(encodev_reverse(buf + 8, (val)) == buf + 8 - (len));                                                                    \
+        const uint8_t *p = buf + 8 - (len);                                                                                        \
+        ok(quicly_decodev(&p, buf + 8) == (val));                                                                                  \
+        ok(p == buf + 8);                                                                                                          \
+    } while (0)
+
+    TEST(0, 1);
+    TEST(0x3f, 1);
+    TEST(0x40, 2);
+    TEST(0x3fff, 2);
+    TEST(0x4000, 4);
+    TEST(0x3fffffff, 4);
+    TEST(0x40000000, 8);
+    TEST(0x3fffffffffffffff, 8);
+
+#undef TEST
+}
+
+static void test_adjust_crypto_frame_layout(void)
+{
+#define TEST(_capacity, _check)                                                                                                    \
+    do {                                                                                                                           \
+        uint8_t buf[] = {0x06, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                            \
+        uint8_t *payload = buf + 2;                                                                                                \
         size_t len = 5;                                                                                                            \
         int wrote_all = 1;                                                                                                         \
-        buf[0] = _is_crypto ? 0x06 : 0x08;                                                                                         \
-        adjust_stream_frame_layout(&dst, dst_end, &len, &wrote_all, &frame_at);                                                    \
+        adjust_crypto_frame_layout(&payload, buf + (_capacity), &len, &wrote_all);                                                 \
         do {                                                                                                                       \
-            check                                                                                                                  \
+            _check                                                                                                                 \
         } while (0);                                                                                                               \
     } while (0);
 
-    /* test CRYPTO frames that fit and don't when length is inserted */
-    TEST(1, 10, {
-        ok(dst == buf + 8);
+    /* more than enough space */
+    TEST(10, {
+        ok(payload == buf + 3);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
     });
-    TEST(1, 8, {
-        ok(dst == buf + 8);
+
+    /* no extra space */
+    TEST(8, {
+        ok(payload == buf + 3);
         ok(len == 5);
         ok(wrote_all);
-        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x05hello", 8) == 0);
     });
-    TEST(1, 7, {
-        ok(dst == buf + 7);
+
+    /* trimmed */
+    TEST(7, {
+        ok(payload == buf + 3);
         ok(len == 4);
         ok(!wrote_all);
-        ok(frame_at == buf);
         ok(memcmp(buf, "\x06\x04\x04hell", 7) == 0);
     });
 
-    /* test STREAM frames */
-    TEST(0, 9, {
-        ok(dst == buf + 8);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf);
-        ok(memcmp(buf, "\x0a\x04\x05hello", 8) == 0);
+#undef TEST
+}
+
+static void test_adjust_stream_frame_layout(void)
+{
+#define TEST(_capacity, _check)                                                                                                    \
+    do {                                                                                                                           \
+        uint8_t buf[] = {0x0c, 0x10, 0x04, 'h', 'e', 'l', 'l', 'o', 0, 0, 0};                                                      \
+        uint8_t *payload = buf + 3;                                                                                                \
+        adjust_stream_frame_layout(&payload, buf, buf + (_capacity), 5);                                                           \
+        do {                                                                                                                       \
+            _check                                                                                                                 \
+        } while (0);                                                                                                               \
+    } while (0);
+
+    /* more than enough space */
+    TEST(10, {
+        ok(payload == buf + 4);
+        ok(memcmp(buf, "\x0e\x10\x04\x05hello", 9) == 0);
     });
-    TEST(0, 8, {
-        ok(dst == buf + 8);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf + 1);
-        ok(memcmp(buf, "\x00\x08\x04hello", 8) == 0);
+
+    /* no more space expect for PADDING */
+    TEST(9, {
+        ok(payload == buf + 4);
+        ok(memcmp(buf, "\x00\x0c\x10\x04hello", 9) == 0);
     });
-    TEST(0, 7, {
-        ok(dst == buf + 7);
-        ok(len == 5);
-        ok(wrote_all);
-        ok(frame_at == buf);
-        ok(memcmp(buf, "\x08\x04hello", 7) == 0);
+
+    /* no extra space */
+    TEST(8, {
+        ok(payload == buf + 3);
+        ok(memcmp(buf, "\x0c\x10\x04hello", 8) == 0);
     });
 
 #undef TEST
+}
+
+static void test_calculate_out_of_place_offset_multi(size_t stream_frame_header_size)
+{
+    const size_t mtu = 1280, packet_overhead = 1 + 8 + 2 + 16 /* 1st byte, cid, pn, tag */;
+
+    /* emulate generating 10 datagrams */
+    size_t datagrams = 10, bufsize,
+           payload_offset = calculate_out_of_place_offset(mtu, packet_overhead, datagrams, 15000, &bufsize);
+
+    /* payload of the first datagram is out-of-place */
+    ok(payload_offset > mtu);
+
+    /* payload of the following datagrams are also out-of-place, with the STREAM frame header prepended */
+    size_t datagram_end = mtu;
+    while (--datagrams != 0) {
+        payload_offset += mtu - (packet_overhead + stream_frame_header_size);
+        datagram_end += mtu;
+        size_t payload_from = payload_offset - stream_frame_header_size;
+        ok(datagram_end <= payload_from);
+        ok(payload_from + mtu - packet_overhead <= bufsize);
+    }
+}
+
+static void test_calculate_out_of_place_offset(void)
+{
+    const size_t mtu = 1280, packet_overhead = 1 + 8 + 2 + 16 /* 1st byte, cid, pn, tag */;
+
+    /* no out-of-place encryption if space is minimal */
+    ok(calculate_out_of_place_offset(mtu, packet_overhead, 1, mtu, NULL) == 0);
+    ok(calculate_out_of_place_offset(mtu, packet_overhead, 2, mtu * 2, NULL) == 0);
+
+    subtest("frame_size=max", test_calculate_out_of_place_offset_multi, 1 + 8 + 8 + 8);
+    subtest("frame_size=0", test_calculate_out_of_place_offset_multi, 0);
 }
 
 static int64_t get_now_cb(quicly_now_t *self)
@@ -473,7 +541,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
 {
     quicly_address_t destaddr, srcaddr;
     struct iovec datagrams[32];
-    uint8_t datagramsbuf[PTLS_ELEMENTSOF(datagrams) * quicly_get_context(src)->transport_params.max_udp_payload_size];
+    uint8_t datagramsbuf[(PTLS_ELEMENTSOF(datagrams) + 2) * quicly_get_context(src)->transport_params.max_udp_payload_size];
     size_t num_datagrams, i;
     quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
     quicly_error_t ret;
@@ -1232,10 +1300,11 @@ static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *
     assert(conn->application != NULL);
 
     *s = (quicly_send_context_t){
-        .current.first_byte = -1,
+        .context.first_byte = -1,
+        .packet.dst = buf,
+        .buf_end = (uint8_t *)buf + bufsize,
         .datagrams = datagram,
         .max_datagrams = 1,
-        .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
         .send_window = bufsize,
         .dcid = get_dcid(conn, 0 /* path_index */),
     };
@@ -1288,12 +1357,13 @@ static void test_state_exhaustion(void)
     /* send up to 200 packets with stream frame having gaps and check that the receiver raises state exhaustion */
     for (size_t i = 0; i < 200; ++i) {
         test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
-        do_allocate_frame(client, &s, 100, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
-        *s.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
-        s.dst = quicly_encodev(s.dst, 0);     /* stream id */
-        s.dst = quicly_encodev(s.dst, i * 2); /* off */
-        s.dst = quicly_encodev(s.dst, 1);     /* len */
-        *s.dst++ = (uint8_t)('a' + (i * 2) % 26);
+        allocate_frame(client, &s, 100, ALLOCATE_FRAME_FLAG_CONSULT_CC | ALLOCATE_FRAME_FLAG_ADJUST_ACK_FREQUENCY);
+        mark_frame_built_as_ack_eliciting(client, &s);
+        *s.frames.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
+        s.frames.dst = quicly_encodev(s.frames.dst, 0);     /* stream id */
+        s.frames.dst = quicly_encodev(s.frames.dst, i * 2); /* off */
+        s.frames.dst = quicly_encodev(s.frames.dst, 1);     /* len */
+        *s.frames.dst++ = (uint8_t)('a' + (i * 2) % 26);
         commit_send_packet(client, &s, 0);
         unlock_now(client);
 
@@ -1335,8 +1405,8 @@ static void do_test_migration_during_handshake(int second_flight_from_orig_addre
                              clientaddr2 = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(0x7f000003), .sin_port = htons(12345)};
     quicly_address_t destaddr, srcaddr;
     struct iovec datagrams[10];
-    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size * 10];
-    quicly_decoded_packet_t packets[40];
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size * (PTLS_ELEMENTSOF(datagrams) + 2)];
+    quicly_decoded_packet_t packets[PTLS_ELEMENTSOF(datagrams) * 4];
     size_t num_datagrams, num_packets;
     quicly_error_t ret;
 
@@ -1510,6 +1580,7 @@ int main(int argc, char **argv)
 
     subtest("error-codes", test_error_codes);
     subtest("enable_with_ratio255", test_enable_with_ratio255);
+    subtest("encodev-reverse", test_encodev_reverse);
     subtest("next-packet-number", test_next_packet_number);
     subtest("address-token-codec", test_address_token_codec);
     subtest("ranges", test_ranges);
@@ -1520,7 +1591,9 @@ int main(int argc, char **argv)
     subtest("pacer", test_pacer);
     subtest("sentmap", test_sentmap);
     subtest("loss", test_loss);
+    subtest("adjust-crypto-frame-layout", test_adjust_crypto_frame_layout);
     subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
+    subtest("calculate-out-of-place-offset", test_calculate_out_of_place_offset);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
