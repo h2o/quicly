@@ -656,9 +656,18 @@ subtest "max-data" => sub {
         sleep 0.001
             if $stream_id % 40 == 0;
     }
+    # check server behavior by consulting the events log
     my $events = slurp_file("$tempdir/events");
-    # check MAX_DATA was never sent
     unlike $events, qr/"type":"max_data_send"/s, "MAX_DATA not sent";
+    like $events, qr/"type":"transport_close_send",.*"error_code":3,"frame_type":14,/, "flow control error caused by STREAM frame";
+    complex $events, sub {
+        my $max_stream_id = -1;
+        while (/"type":"stream_receive",.*"stream_id":([0-9]+),/g) {
+            $max_stream_id = $1
+                if $1 > $max_stream_id;
+        }
+        $max_stream_id == 64;
+    }, "16th stream (stream_id=64) causes overflow";
 };
 
 done_testing;
