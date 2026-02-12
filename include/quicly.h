@@ -1108,7 +1108,7 @@ typedef struct st_quicly_decoded_packet_t {
      */
     size_t encrypted_off;
     /**
-     * size of the UDP datagram; set to zero if this is not the first QUIC packet within the datagram
+     * size of the UDP datagram
      */
     size_t datagram_size;
     /**
@@ -1122,6 +1122,10 @@ typedef struct st_quicly_decoded_packet_t {
      * ECN bits
      */
     uint8_t ecn : 2;
+    /**
+     * if it is the first packet within the datagram
+     */
+    uint8_t first_packet : 1;
     /**
      *
      */

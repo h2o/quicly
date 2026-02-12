@@ -787,7 +787,8 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
     packet->octets = ptls_iovec_init(src + *off, datagram_size - *off);
     if (packet->octets.len < 2)
         goto Error;
-    packet->datagram_size = *off == 0 ? datagram_size : 0;
+    packet->datagram_size = datagram_size;
+    packet->first_packet = *off == 0;
     packet->token = ptls_iovec_init(NULL, 0);
     packet->decrypted.pn = UINT64_MAX;
     packet->ecn = 0; /* non-ECT */
@@ -7380,8 +7381,9 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         goto Exit;
     }
 
-    /* add unconditionally, as packet->datagram_size is set only for the first packet within the UDP datagram */
-    conn->super.stats.num_bytes.received += packet->datagram_size;
+    /* update num_bytes.received which is counted at the datagram-level */
+    if (packet->first_packet)
+        conn->super.stats.num_bytes.received += packet->datagram_size;
 
     switch (conn->super.state) {
     case QUICLY_STATE_CLOSING:
