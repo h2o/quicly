@@ -2381,10 +2381,15 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
 {
     int ret;
 
-#define PUSH_TP(buf, id, block)                                                                                                    \
+#define PUSH_TP_NO_GREASE_CHECK(buf, id, block)                                                                                    \
     do {                                                                                                                           \
         ptls_buffer_push_quicint((buf), (id));                                                                                     \
         ptls_buffer_push_block((buf), -1, block);                                                                                  \
+    } while (0)
+#define PUSH_TP(buf, id, block)                                                                                                    \
+    do {                                                                                                                           \
+        PTLS_BUILD_ASSERT(((uint64_t)id + 31 - 27) % 31 != 0);                                                                     \
+        PUSH_TP_NO_GREASE_CHECK(buf, id, block);                                                                                   \
     } while (0)
 
     PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_UDP_PAYLOAD_SIZE,
@@ -2440,7 +2445,7 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
                 { ptls_buffer_push_quicint(buf, params->max_datagram_frame_size); });
     /* if requested, add a greasing TP of 1 MTU size so that CH spans across multiple packets */
     if (expand_by != 0) {
-        PUSH_TP(buf, 31 * 100 + 27, {
+        PUSH_TP_NO_GREASE_CHECK(buf, 31 * 100 + 27, {
             if ((ret = ptls_buffer_reserve(buf, expand_by)) != 0)
                 goto Exit;
             memset(buf->base + buf->off, 0, expand_by);
