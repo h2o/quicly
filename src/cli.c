@@ -655,6 +655,51 @@ static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, qui
         quicly_send_datagram_frames(conn, &payload, 1);
 }
 
+/// @brief Waut on UDP socket fd for read-readiness.
+/// @param fd UDP socket descriptor.
+/// @param connections array of connections to handle. The name must not conflict with global 'conns' var.
+/// @param num_connections The size of the connections array. The name must not conflict with global 'num_conns' var.
+/// @param client_enqueue_rq_at Pass the global 'enqueue_requests_at' var for a client. INT64_MAX for server.
+/// 
+/// @return a non-zero value if the UDP socket fd is read-ready; otherwise returns 0.
+static int udp_wait_readready(int fd, quicly_conn_t** connections, size_t num_connections, int64_t client_enqueue_rq_at)
+{
+    fd_set readfds;
+    struct timeval* tv, tvbuf;
+    do {
+        int64_t timeout_at = INT64_MAX;
+        for (size_t i = 0; i != num_connections; ++i) {
+            int64_t conn_to = quicly_get_first_timeout(connections[i]);
+            if (conn_to < timeout_at)
+                timeout_at = conn_to;
+        }
+
+        // client enqueues a new request to send.
+        if (client_enqueue_rq_at < timeout_at)
+            timeout_at = client_enqueue_rq_at;
+
+        if (timeout_at != INT64_MAX) {
+            int64_t delta = timeout_at - ctx.now->cb(ctx.now);
+            if (delta > 0) {
+                tvbuf.tv_sec = delta / 1000;
+                tvbuf.tv_usec = (delta % 1000) * 1000;
+            }
+            else {
+                tvbuf.tv_sec = 0;
+                tvbuf.tv_usec = 0;
+            }
+            tv = &tvbuf;
+        }
+        else {
+            tv = NULL;
+        }
+        FD_ZERO(&readfds);
+        FD_SET(fd, &readfds);
+    } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
+
+    return FD_ISSET(fd, &readfds);
+}
+
 static void enqueue_requests(quicly_conn_t *conn)
 {
     size_t i;
@@ -710,32 +755,10 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
     send_pending(fd, conn);
 
     while (1) {
-        fd_set readfds;
-        struct timeval *tv, tvbuf;
-        do {
-            int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
-            if (enqueue_requests_at < timeout_at)
-                timeout_at = enqueue_requests_at;
-            if (timeout_at != INT64_MAX) {
-                quicly_context_t *ctx = quicly_get_context(conn);
-                int64_t delta = timeout_at - ctx->now->cb(ctx->now);
-                if (delta > 0) {
-                    tvbuf.tv_sec = delta / 1000;
-                    tvbuf.tv_usec = (delta % 1000) * 1000;
-                } else {
-                    tvbuf.tv_sec = 0;
-                    tvbuf.tv_usec = 0;
-                }
-                tv = &tvbuf;
-            } else {
-                tv = NULL;
-            }
-            FD_ZERO(&readfds);
-            FD_SET(fd, &readfds);
-        } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
+        int udp_read_ready = udp_wait_readready(fd, &conn, conn != NULL ? 1 : 0, enqueue_requests_at);
         if (enqueue_requests_at <= ctx.now->cb(ctx.now))
             enqueue_requests(conn);
-        if (FD_ISSET(fd, &readfds)) {
+        if (udp_read_ready) {
             while (1) {
                 uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
                 quicly_address_t dest, src;
@@ -894,33 +917,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
     }
 
     while (1) {
-        fd_set readfds;
-        struct timeval *tv, tvbuf;
-        do {
-            int64_t timeout_at = INT64_MAX;
-            size_t i;
-            for (i = 0; i != num_conns; ++i) {
-                int64_t conn_to = quicly_get_first_timeout(conns[i]);
-                if (conn_to < timeout_at)
-                    timeout_at = conn_to;
-            }
-            if (timeout_at != INT64_MAX) {
-                int64_t delta = timeout_at - ctx.now->cb(ctx.now);
-                if (delta > 0) {
-                    tvbuf.tv_sec = delta / 1000;
-                    tvbuf.tv_usec = (delta % 1000) * 1000;
-                } else {
-                    tvbuf.tv_sec = 0;
-                    tvbuf.tv_usec = 0;
-                }
-                tv = &tvbuf;
-            } else {
-                tv = NULL;
-            }
-            FD_ZERO(&readfds);
-            FD_SET(fd, &readfds);
-        } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
-        if (FD_ISSET(fd, &readfds)) {
+        if (udp_wait_readready(fd, conns, num_conns, INT64_MAX)) {
             while (1) {
                 quicly_address_t local, remote;
                 uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
