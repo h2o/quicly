@@ -647,6 +647,32 @@ subtest "coalesced-initials" => sub {
     }
 };
  
+# quicly misdetects packets ending with 16 0x00 bytes as a stateless reset
+subtest "misdetected-reset" => sub {
+    # Launch a server that will send a full-sized packet with all zeros when receiving the first packet, then switch
+    # it to a real server so that the handshake succeeds. A buggy client would treat this as a stateless reset.
+    my $server_pid = fork;
+    die "fork failed:$!"
+        unless defined $server_pid;
+    if ($server_pid == 0) {
+        my $sock = IO::Socket::INET->new(
+            LocalPort => $port,
+            Proto     => "udp",
+            ReuseAddr => 1,
+        ) or die "failed to create UDP socket:$!";
+        $sock->recv(my $buf, 1500);
+        $sock->send("\0" x 1200);
+        undef $sock;
+        exec "$cli", "-k", "t/assets/server.key", "-c", "t/assets/server.crt", "127.0.0.1", $port;
+        die "failed to exec $cli:$!";
+    }
+    my $resp = `exec $cli -p /12 127.0.0.1 $port 2>&1`;
+    like $resp, qr/^hello world\n/s;
+    kill 9, $server_pid;
+    while (waitpid($server_pid, 0) != $server_pid) {
+    }
+};
+
 done_testing;
 
 sub spawn_server {
