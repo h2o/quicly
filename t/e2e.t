@@ -643,6 +643,7 @@ package SpawnedProcess {
                 last;
             }
             if (waitpid($self->{pid}, WNOHANG) == $self->{pid}) {
+                undef $self->{pid};
                 die "failed to launch @{[$cmd->[0]]}:$?";
             }
             sleep 0.1;
