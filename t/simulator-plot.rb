@@ -68,7 +68,7 @@ def simout_to_series(lines, labels)
         label = assign_label.call(json["packet-src"])
         bytes_available[label] << [at, value] unless label.nil?
       end
-    elsif json["bottleneck"] == "dequeue"
+    elsif json["bottleneck"] == "enqueue" || json["bottleneck"] == "dequeue"
       queue_size << [json.fetch("at") - 1000.0, json.fetch("queue-size")]
       assign_label.call(json["packet-src"])
     end
@@ -144,7 +144,7 @@ def build_spec(values:, length:, network_name:, cc:, show_queue:, width:, height
 
     layers << {
       "transform" => [{ "filter" => "datum.metric == 'queue'" }],
-      "mark" => { "type" => "line" },
+      "mark" => { "type" => "line", "interpolate" => "step-after" },
       "encoding" => {
         "x" => x_encoding,
         "y" => {
@@ -186,16 +186,21 @@ def build_spec(values:, length:, network_name:, cc:, show_queue:, width:, height
   spec
 end
 
-def detect_renderer
-  system("command -v vl2svg >/dev/null 2>&1") ? ["vl2svg"] : nil
-end
-
-def render_svg(renderer_cmd, spec_json, svg_path)
-  stdout, stderr, status = Open3.capture3(*renderer_cmd, stdin_data: spec_json)
+def render_svg(spec_json, svg_path)
+  stdout, stderr, status = Open3.capture3("vl2svg", stdin_data: spec_json)
   raise "renderer failed: #{stderr.strip}" unless status.success?
   raise "renderer did not produce SVG output" if stdout.nil? || stdout.empty?
 
   File.write(svg_path, stdout)
+rescue Errno::ENOENT
+  warn "renderer not found on PATH."
+  warn "Either 'vl2svg' is not installed, or your PATH is not set up to include it."
+  warn "Install with one of:"
+  warn "  npm install -g vega-lite vega-cli"
+  warn "  npm install vega-lite vega-cli"
+  warn "Then verify with: command -v vl2svg"
+  warn "or run without rendering: --no-render"
+  exit 2
 end
 
 cc = "pico"
@@ -277,21 +282,9 @@ spec = build_spec(
 spec_json = JSON.pretty_generate(spec)
 
 if render
-  renderer_cmd = detect_renderer
-  if renderer_cmd.nil?
-    warn "renderer not found on PATH."
-    warn "Either 'vl2svg' is not installed, or your PATH is not set up to include it."
-    warn "Install with one of:"
-    warn "  npm install -g vega-lite vega-cli"
-    warn "  npm install vega-lite vega-cli"
-    warn "Then verify with: command -v vl2svg"
-    warn "or run without rendering: --no-render"
-    exit 2
-  end
-
   output_name = "simulator-plot-#{Time.now.strftime("%Y%m%d%H%M%S")}.svg"
   svg_path = output_prefix == "simulator" ? output_name : "#{output_prefix}.svg"
-  render_svg(renderer_cmd, spec_json, svg_path)
+  render_svg(spec_json, svg_path)
   puts "wrote #{svg_path}"
   if auto_open
     system("open", svg_path) || warn("failed to open #{svg_path}")
