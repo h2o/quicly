@@ -99,7 +99,7 @@ def build_values(deliver_series, queue_series, show_queue)
   values.sort_by { |v| [v["at"], v["flow"], v["metric"]] }
 end
 
-def build_spec(values:, length:, network_name:, cc:, show_queue:, width:, height:, flow_count:)
+def build_spec(values:, length:, title:, show_queue:, width:, height:, flow_count:)
   x_encoding = {
     "field" => "at",
     "type" => "quantitative",
@@ -176,7 +176,7 @@ def build_spec(values:, length:, network_name:, cc:, show_queue:, width:, height
 
   spec = {
     "$schema" => "https://vega.github.io/schema/vega-lite/v5.json",
-    "title" => "Simulator (#{network_name}, cc=#{cc})",
+    "title" => title,
     "width" => width,
     "height" => height,
     "data" => { "values" => values },
@@ -212,6 +212,7 @@ render = true
 auto_open = true
 width = 1000
 height = 1000
+title_override = nil
 
 sep_index = ARGV.index("--")
 global_argv = sep_index ? ARGV[0...sep_index] : ARGV.dup
@@ -227,6 +228,7 @@ OptionParser.new do |opt|
   end
   opt.on("--queue") { show_queue = true }
   opt.on("--output=PREFIX") { |v| output_prefix = v }
+  opt.on("--title=TEXT") { |v| title_override = v }
   opt.on("--width=PX", Integer) { |v| width = v }
   opt.on("--height=PX", Integer) { |v| height = v }
   opt.on("--[no-]render") { |v| render = v }
@@ -272,8 +274,7 @@ raise "no data produced by simulator" if values.empty?
 spec = build_spec(
   values: values,
   length: length,
-  network_name: network_name,
-  cc: cc,
+  title: (title_override || network_name),
   show_queue: show_queue,
   width: width,
   height: height,
