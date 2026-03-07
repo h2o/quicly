@@ -40,22 +40,46 @@ def parse_flows(tokens)
   flows
 end
 
-def simout_to_series(lines)
-  bytes_available = []
+def simout_to_series(lines, labels)
+  bytes_available = Hash.new { |h, k| h[k] = [] }
   queue_size = []
+  src_to_label = {}
+  next_label_index = 0
+
+  assign_label = lambda do |src|
+    return nil if src.nil?
+    return src_to_label[src] if src_to_label.key?(src)
+    return nil if next_label_index >= labels.length
+
+    label = labels[next_label_index]
+    src_to_label[src] = label
+    next_label_index += 1
+    label
+  end
 
   lines.each do |line|
     json = JSON.parse(line)
     if json.key?("bytes-available")
-      bytes_available << [json.fetch("at") - 1000.0, json.fetch("bytes-available")]
+      at = json.fetch("at") - 1000.0
+      value = json.fetch("bytes-available")
+      if labels.length == 1
+        bytes_available[labels[0]] << [at, value]
+      else
+        label = assign_label.call(json["packet-src"])
+        bytes_available[label] << [at, value] unless label.nil?
+      end
     elsif json["bottleneck"] == "dequeue"
       queue_size << [json.fetch("at") - 1000.0, json.fetch("queue-size")]
+      assign_label.call(json["packet-src"])
     end
   rescue JSON::ParserError
     next
   end
 
-  [bytes_available, queue_size]
+  queue_series = {}
+  queue_series[labels[0]] = queue_size if labels.length == 1
+
+  [bytes_available, queue_series]
 end
 
 def build_values(deliver_series, queue_series, show_queue)
@@ -211,33 +235,31 @@ if show_queue && flows.length > 1
 end
 
 network = NETWORKS.fetch(network_name)
-deliver_series = {}
-queue_series = {}
-
-flows.each do |label, flow_opts|
-  cmd = [
-    SIMULATOR,
-    "-d", network.fetch(:rtt).to_s,
-    "-q", network.fetch(:queue).to_s,
-    "-b", (network.fetch(:bw) / 8.0).to_s,
-    "-l", length.to_s,
-    "-n", cc,
-    "--",
-    *flow_opts
-  ]
-
-  stdout_lines = []
-  Open3.popen3(*cmd) do |_stdin, stdout, stderr, wait_thr|
-    stdout.each_line { |line| stdout_lines << line }
-    err = stderr.read
-    status = wait_thr.value
-    raise "simulator failed for flow #{label}: #{err.strip}" unless status.success?
-  end
-
-  deliver, queue = simout_to_series(stdout_lines)
-  deliver_series[label] = deliver
-  queue_series[label] = queue
+cmd = [
+  SIMULATOR,
+  "-d", network.fetch(:rtt).to_s,
+  "-q", network.fetch(:queue).to_s,
+  "-b", (network.fetch(:bw) / 8.0).to_s,
+  "-l", length.to_s,
+  "-n", cc
+]
+flows.each do |_label, flow_opts|
+  cmd << "--"
+  cmd.concat(flow_opts)
 end
+
+stdout_lines = []
+Open3.popen3(*cmd) do |_stdin, stdout, stderr, wait_thr|
+  stdout.each_line { |line| stdout_lines << line }
+  err = stderr.read
+  status = wait_thr.value
+  raise "simulator failed: #{err.strip}" unless status.success?
+end
+
+labels = flows.map(&:first)
+deliver_series, queue_series = simout_to_series(stdout_lines, labels)
+missing = labels.reject { |label| deliver_series.key?(label) && !deliver_series[label].empty? }
+raise "simulator did not emit data for flows: #{missing.join(", ")}" unless missing.empty?
 
 values = build_values(deliver_series, queue_series, show_queue)
 raise "no data produced by simulator" if values.empty?
