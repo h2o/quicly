@@ -40,6 +40,10 @@ def parse_flows(tokens)
   flows
 end
 
+def flow_has_sender_option?(flow_opts)
+  flow_opts.any? { |opt| opt == "-n" || opt.match?(/^-n.+/) }
+end
+
 def simout_to_series(lines)
   bytes_available = []
   queue_size = []
@@ -215,15 +219,16 @@ deliver_series = {}
 queue_series = {}
 
 flows.each do |label, flow_opts|
+  has_sender_option = flow_has_sender_option?(flow_opts)
   cmd = [
     SIMULATOR,
     *flow_opts,
     "-d", network.fetch(:rtt).to_s,
     "-q", network.fetch(:queue).to_s,
     "-b", (network.fetch(:bw) / 8.0).to_s,
-    "-l", length.to_s,
-    "-n", cc
+    "-l", length.to_s
   ]
+  cmd.concat(["-n", cc]) unless has_sender_option
 
   stdout_lines = []
   Open3.popen3(*cmd) do |_stdin, stdout, stderr, wait_thr|
