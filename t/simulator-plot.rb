@@ -219,7 +219,7 @@ global_argv = sep_index ? ARGV[0...sep_index] : ARGV.dup
 flow_argv = sep_index ? ARGV[(sep_index + 1)..] : []
 
 OptionParser.new do |opt|
-  opt.on("--cc=NAME") { |v| cc = v }
+  opt.on("-c NAME") { |v| cc = v }
   opt.on("--length=SECONDS", Float) { |v| length = v }
   opt.on("--network=NAME") do |v|
     raise OptionParser::InvalidArgument, "unknown network: #{v}" unless NETWORKS.key?(v)
@@ -248,7 +248,7 @@ cmd = [
   "-q", network.fetch(:queue).to_s,
   "-b", (network.fetch(:bw) / 8.0).to_s,
   "-l", length.to_s,
-  "-n", cc
+  "-c", cc
 ]
 flows.each do |_label, flow_opts|
   cmd << "--"

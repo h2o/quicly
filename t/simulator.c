@@ -459,7 +459,7 @@ static void usage(const char *cmd)
     printf("Usage: %s ...\n"
            "\n"
            "Options:\n"
-           "  -n <cc>             sets congestion controller\n"
+           "  -c <cc>             sets congestion controller\n"
            "  -b <bytes_per_sec>  bottleneck bandwidth (default: 1000000, i.e., 1MB/s)\n"
            "  -d <delay_secs>     delay added between the sender and the botteneck\n"
            "                      (default: 0.1)\n"
@@ -500,9 +500,9 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
 {
     reset_getopt_state();
     int ch;
-    while ((ch = getopt(argc, argv, "n:b:d:i:j:l:pq:r:Rs:th")) != -1) {
+    while ((ch = getopt(argc, argv, "c:b:d:i:j:l:pq:r:Rs:th")) != -1) {
         switch (ch) {
-        case 'n':
+        case 'c':
             {
                 quicly_cc_type_t **cc;
                 for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
