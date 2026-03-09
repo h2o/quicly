@@ -42,10 +42,14 @@ def parse_flows(tokens)
 end
 
 def parse_simulator_output(lines)
-  lines.filter_map do |line|
-    JSON.parse(line)
-  rescue JSON::ParserError
-    nil
+  Enumerator.new do |y|
+    lines.each do |line|
+      begin
+        y << JSON.parse(line)
+      rescue JSON::ParserError
+        next
+      end
+    end
   end
 end
 
@@ -251,16 +255,15 @@ flows.each do |_label, flow_opts|
   cmd.concat(flow_opts)
 end
 
-stdout_lines = []
+labels = flows.map(&:first)
+values = nil
 Open3.popen3(*cmd) do |_stdin, stdout, stderr, wait_thr|
-  stdout.each_line { |line| stdout_lines << line }
+  values = build_values(parse_simulator_output(stdout.each_line), labels, show_queue)
   err = stderr.read
   status = wait_thr.value
   raise "simulator failed: #{err.strip}" unless status.success?
 end
 
-labels = flows.map(&:first)
-values = build_values(parse_simulator_output(stdout_lines), labels, show_queue)
 missing = labels.reject { |label| values.any? { |value| value["flow"] == label && value["metric"] == "deliver" } }
 raise "simulator did not emit data for flows: #{missing.join(", ")}" unless missing.empty?
 raise "no data produced by simulator" if values.empty?
