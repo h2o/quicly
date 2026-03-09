@@ -68,8 +68,7 @@ def build_values(events, labels, show_queue)
     proc do
       select(
         _.key?("bytes-available") ||
-        _["bottleneck"] == "enqueue" ||
-        _["bottleneck"] == "dequeue"
+        (show_queue && (_["bottleneck"] == "enqueue" || _["bottleneck"] == "dequeue"))
       )
     end,
     proc do
@@ -84,7 +83,6 @@ def build_values(events, labels, show_queue)
         _.merge("flow" => labels[0], "kind" => "queue")
       end
     end,
-    proc { select(_["kind"] == "deliver" || show_queue) },
     proc do
       {
         "at" => _["at"] - 1000.0,
