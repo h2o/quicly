@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "jrf"
 require "open3"
 require "optparse"
 require "time"
@@ -40,9 +41,15 @@ def parse_flows(tokens)
   flows
 end
 
-def simout_to_series(lines, labels)
-  bytes_available = Hash.new { |h, k| h[k] = [] }
-  queue_size = []
+def parse_simulator_output(lines)
+  lines.filter_map do |line|
+    JSON.parse(line)
+  rescue JSON::ParserError
+    nil
+  end
+end
+
+def build_values(events, labels, show_queue)
   src_to_label = {}
   next_label_index = 0
 
@@ -57,46 +64,31 @@ def simout_to_series(lines, labels)
     label
   end
 
-  lines.each do |line|
-    json = JSON.parse(line)
-    if json.key?("bytes-available")
-      at = json.fetch("at") - 1000.0
-      value = json.fetch("bytes-available")
-      if labels.length == 1
-        bytes_available[labels[0]] << [at, value]
+  Jrf.new(
+    proc do
+      event = _
+
+      if event.key?("bytes-available")
+        flow = labels.length == 1 ? labels[0] : assign_label.call(event["packet-src"])
+        select(!flow.nil?)
+        {
+          "at" => event.fetch("at") - 1000.0,
+          "value" => event.fetch("bytes-available"),
+          "flow" => flow,
+          "metric" => "deliver"
+        }
+      elsif show_queue && (event["bottleneck"] == "enqueue" || event["bottleneck"] == "dequeue")
+        {
+          "at" => event.fetch("at") - 1000.0,
+          "value" => event.fetch("queue-size"),
+          "flow" => labels[0],
+          "metric" => "queue"
+        }
       else
-        label = assign_label.call(json["packet-src"])
-        bytes_available[label] << [at, value] unless label.nil?
-      end
-    elsif json["bottleneck"] == "enqueue" || json["bottleneck"] == "dequeue"
-      queue_size << [json.fetch("at") - 1000.0, json.fetch("queue-size")]
-      assign_label.call(json["packet-src"])
-    end
-  rescue JSON::ParserError
-    next
-  end
-
-  queue_series = {}
-  queue_series[labels[0]] = queue_size if labels.length == 1
-
-  [bytes_available, queue_series]
-end
-
-def build_values(deliver_series, queue_series, show_queue)
-  values = []
-  deliver_series.each do |flow, points|
-    points.each do |at, value|
-      values << { "at" => at, "value" => value, "flow" => flow, "metric" => "deliver" }
-    end
-  end
-  if show_queue
-    queue_series.each do |flow, points|
-      points.each do |at, value|
-        values << { "at" => at, "value" => value, "flow" => flow, "metric" => "queue" }
+        select(false)
       end
     end
-  end
-  values.sort_by { |v| [v["at"], v["flow"], v["metric"]] }
+  ).call(events).sort_by { |value| [value["at"], value["flow"], value["metric"]] }
 end
 
 def build_spec(values:, length:, title:, show_queue:, width:, height:, flow_count:)
@@ -264,11 +256,9 @@ Open3.popen3(*cmd) do |_stdin, stdout, stderr, wait_thr|
 end
 
 labels = flows.map(&:first)
-deliver_series, queue_series = simout_to_series(stdout_lines, labels)
-missing = labels.reject { |label| deliver_series.key?(label) && !deliver_series[label].empty? }
+values = build_values(parse_simulator_output(stdout_lines), labels, show_queue)
+missing = labels.reject { |label| values.any? { |value| value["flow"] == label && value["metric"] == "deliver" } }
 raise "simulator did not emit data for flows: #{missing.join(", ")}" unless missing.empty?
-
-values = build_values(deliver_series, queue_series, show_queue)
 raise "no data produced by simulator" if values.empty?
 
 spec = build_spec(
