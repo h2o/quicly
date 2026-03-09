@@ -70,13 +70,16 @@ def build_values(events, labels, show_queue)
 
       if event.key?("bytes-available")
         flow = labels.length == 1 ? labels[0] : assign_label.call(event["packet-src"])
-        select(!flow.nil?)
-        {
-          "at" => event.fetch("at") - 1000.0,
-          "value" => event.fetch("bytes-available"),
-          "flow" => flow,
-          "metric" => "deliver"
-        }
+        if flow.nil?
+          select(false)
+        else
+          {
+            "at" => event.fetch("at") - 1000.0,
+            "value" => event.fetch("bytes-available"),
+            "flow" => flow,
+            "metric" => "deliver"
+          }
+        end
       elsif show_queue && (event["bottleneck"] == "enqueue" || event["bottleneck"] == "dequeue")
         {
           "at" => event.fetch("at") - 1000.0,
