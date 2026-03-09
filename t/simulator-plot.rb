@@ -90,8 +90,9 @@ def build_values(events, labels, show_queue)
       else
         select(false)
       end
-    end
-  ).call(events).sort_by { |value| [value["at"], value["flow"], value["metric"]] }
+    end,
+    proc { sort([_["at"], _["flow"], _["metric"]]) }
+  ).call(events)
 end
 
 def build_spec(values:, length:, title:, show_queue:, width:, height:, flow_count:)
