@@ -66,30 +66,32 @@ def build_values(events, labels, show_queue)
 
   Jrf.new(
     proc do
-      event = _
-
-      if event.key?("bytes-available")
-        flow = labels.length == 1 ? labels[0] : assign_label.call(event["packet-src"])
+      select(
+        _.key?("bytes-available") ||
+        _["bottleneck"] == "enqueue" ||
+        _["bottleneck"] == "dequeue"
+      )
+    end,
+    proc do
+      if _.key?("bytes-available")
+        flow = labels.length == 1 ? labels[0] : assign_label.call(_["packet-src"])
         if flow.nil?
           select(false)
         else
-          {
-            "at" => event.fetch("at") - 1000.0,
-            "value" => event.fetch("bytes-available"),
-            "flow" => flow,
-            "metric" => "deliver"
-          }
+          _.merge("flow" => flow, "kind" => "deliver")
         end
-      elsif show_queue && (event["bottleneck"] == "enqueue" || event["bottleneck"] == "dequeue")
-        {
-          "at" => event.fetch("at") - 1000.0,
-          "value" => event.fetch("queue-size"),
-          "flow" => labels[0],
-          "metric" => "queue"
-        }
       else
-        select(false)
+        _.merge("flow" => labels[0], "kind" => "queue")
       end
+    end,
+    proc { select(_["kind"] == "deliver" || show_queue) },
+    proc do
+      {
+        "at" => _["at"] - 1000.0,
+        "value" => _["kind"] == "deliver" ? _["bytes-available"] : _["queue-size"],
+        "flow" => _["flow"],
+        "metric" => _["kind"]
+      }
     end,
     proc { sort([_["at"], _["flow"], _["metric"]]) }
   ).call(events)
