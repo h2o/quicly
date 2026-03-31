@@ -2711,7 +2711,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         ptls_build_v4_mapped_v6_address(&log_state_override.address, &((struct sockaddr_in *)remote_addr)->sin_addr);
         break;
     case AF_INET6:
-        log_state_override.address = ((struct sockaddr_in6 *)remote_addr)->sin6_addr;
+        memcpy(log_state_override.address, ((struct sockaddr_in6 *)remote_addr)->sin6_addr.s6_addr,
+               sizeof(log_state_override.address));
         break;
     default:
         break;
