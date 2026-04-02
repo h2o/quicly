@@ -4170,6 +4170,22 @@ static quicly_error_t qmux_call_acked(quicly_conn_t *conn, quicly_send_context_t
     return ret;
 }
 
+static void qmux_commit_record(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    assert(s->dst != NULL);
+
+    /* write the QMux record header */
+    size_t rec_size = s->dst - (s->payload_buf.datagram + 2);
+    assert(0 < rec_size && rec_size <= 16382);
+    s->payload_buf.datagram[0] = 0x40 | (rec_size >> 8);
+    s->payload_buf.datagram[1] = (uint8_t)rec_size;
+
+    /* adjust pointers */
+    s->payload_buf.datagram = s->dst;
+    s->dst = NULL;
+    s->dst_end = NULL;
+}
+
 static quicly_error_t allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space,
                                                    quicly_sent_t **sent, quicly_sent_acked_cb acked)
 {
@@ -4179,8 +4195,17 @@ static quicly_error_t allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_s
         /* qmux */
         if ((ret = qmux_call_acked(conn, s)) != 0)
             return ret;
-        if (min_space > s->dst_end - s->dst)
-            return QUICLY_ERROR_SENDBUF_FULL;
+        if (s->dst_end - s->dst < min_space) {
+            if (s->dst != NULL)
+                qmux_commit_record(conn, s);
+            if (s->payload_buf.end - s->payload_buf.datagram < 2)
+                return QUICLY_ERROR_SENDBUF_FULL;
+            size_t capacity = s->payload_buf.end - s->payload_buf.datagram - 2;
+            if (capacity > 16382)
+                capacity = 16382;
+            s->dst = s->payload_buf.datagram + 2;
+            s->dst_end = s->dst + capacity;
+        }
         *sent = &s->qmux.sent;
         (*sent)->acked = acked;
         return 0;
@@ -6210,10 +6235,7 @@ static quicly_error_t handle_stream_frame(quicly_conn_t *conn, struct st_quicly_
     quicly_stream_t *stream;
     quicly_error_t ret;
 
-    if ((ret = quicly_decode_stream_frame(
-             state->frame_type,
-             quicly_is_qmux(conn) ? 16384 /* hard-coded, until TP ID of max_frame_size is defined */ : SIZE_MAX, &state->src,
-             state->end, &frame)) != 0)
+    if ((ret = quicly_decode_stream_frame(state->frame_type, &state->src, state->end, &frame)) != 0)
         return ret;
     QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, conn->stash.now, frame.stream_id, frame.offset, frame.data.len, (int)frame.is_fin);
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
@@ -7073,10 +7095,8 @@ static quicly_error_t handle_qx_transport_parameters_frame(quicly_conn_t *conn, 
     uint64_t len;
     quicly_error_t ret;
 
-    if ((len = quicly_decodev(&state->src, state->end)) == UINT64_MAX)
-        return QUICLY_ERROR_PARTIAL_FRAME;
-    if (state->end - state->src < len)
-        return QUICLY_ERROR_PARTIAL_FRAME;
+    if ((len = quicly_decodev(&state->src, state->end)) == UINT64_MAX || state->end - state->src < len)
+        return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
     if ((ret = quicly_decode_transport_parameter_list(&conn->super.remote.transport_params, NULL, NULL, NULL, NULL, state->src,
                                                       state->src + len)) != 0)
         return ret;
@@ -7105,7 +7125,7 @@ static quicly_error_t handle_immediate_ack_frame(quicly_conn_t *conn, struct st_
 }
 
 static quicly_error_t handle_payload(quicly_conn_t *conn, size_t _epoch, size_t path_index, const uint8_t *_src, size_t _len,
-                                     size_t *decoded_len, uint64_t *offending_frame_type, int *is_ack_only, int *is_probe_only)
+                                     uint64_t *offending_frame_type, int *is_ack_only, int *is_probe_only)
 {
     /* clang-format off */
 
@@ -7214,7 +7234,7 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t _epoch, size_t 
             if ((state.frame_type = quicly_decodev(&state.src, state.end)) == UINT64_MAX) {
                 state.frame_type =
                     QUICLY_FRAME_TYPE_PADDING; /* we cannot signal the offending frame type when failing to decode the frame type */
-                ret = QUICLY_ERROR_PARTIAL_FRAME;
+                ret = QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
                 break;
             }
             size_t i;
@@ -7242,19 +7262,8 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t _epoch, size_t 
 
     *is_ack_only = num_frames_ack_eliciting == 0;
     *is_probe_only = num_frames_non_probing == 0;
-
-    if (ret == QUICLY_ERROR_PARTIAL_FRAME && decoded_len == NULL)
-        ret = QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
-    switch (ret) {
-    case 0:
-    case QUICLY_ERROR_PARTIAL_FRAME:
-        if (decoded_len != NULL)
-            *decoded_len = _len - (state.end - state.src);
-        break;
-    default:
+    if (ret != 0)
         *offending_frame_type = state.frame_type;
-        break;
-    }
     return ret;
 }
 
@@ -7396,7 +7405,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
     if (packet->ecn != 0)
         (*conn)->super.stats.num_packets.received_ecn_counts[get_ecn_index_from_bits(packet->ecn)] += 1;
     (*conn)->super.stats.num_bytes.received += packet->datagram_size;
-    if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, 0, payload.base, payload.len, NULL, &offending_frame_type, &is_ack_only,
+    if ((ret = handle_payload(*conn, QUICLY_EPOCH_INITIAL, 0, payload.base, payload.len, &offending_frame_type, &is_ack_only,
                               &is_probe_only)) != 0)
         goto Exit;
     if ((ret = record_receipt(&(*conn)->initial->super, pn, packet->ecn, 0, (*conn)->stash.now, &(*conn)->egress.send_ack_at,
@@ -7699,7 +7708,7 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
     }
 
     /* handle the payload */
-    if ((ret = handle_payload(conn, epoch, path_index, payload.base, payload.len, NULL, &offending_frame_type, &is_ack_only,
+    if ((ret = handle_payload(conn, epoch, path_index, payload.base, payload.len, &offending_frame_type, &is_ack_only,
                               &is_probe_only)) != 0)
         goto Exit;
     if (!is_probe_only && conn->paths[path_index]->probe_only) {
@@ -8342,7 +8351,7 @@ Exit:
 
 quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
 {
-    quicly_send_context_t s = {.dst = buf, .dst_end = (uint8_t *)buf + *bufsize, .max_datagrams = 1};
+    quicly_send_context_t s = {.payload_buf = {.datagram = buf, .end = (uint8_t *)buf + *bufsize}, .max_datagrams = 1};
     quicly_error_t ret;
 
     lock_now(conn, 0);
@@ -8355,8 +8364,7 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
         break;
     case QUICLY_STATE_CLOSING:
         destroy_all_streams(conn, 0, 0);
-        s.dst = quicly_encode_close_frame(s.dst, conn->egress.connection_close.error_code,
-                                          conn->egress.connection_close.frame_type,
+        s.dst = quicly_encode_close_frame(s.dst, conn->egress.connection_close.error_code, conn->egress.connection_close.frame_type,
                                           conn->egress.connection_close.reason_phrase);
         conn->super.state = QUICLY_STATE_DRAINING;
         conn->egress.send_ack_at = 0;
@@ -8380,24 +8388,47 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
         goto Exit;
 
 Exit:
-    if (ret == 0)
-        *bufsize = s.dst - (uint8_t *)buf;
+    if (ret == 0) {
+        if (s.dst != NULL)
+            qmux_commit_record(conn, &s);
+        *bufsize -= s.payload_buf.end - s.payload_buf.datagram;
+    }
     unlock_now(conn);
     return ret;
 }
 
-quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *src, size_t *len)
+quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t *len)
 {
-    size_t epoch = conn->super.stats.num_frames_received.qx_transport_parameters == 0 ? QUICLY_EPOCH_ON_STREAMS_TP
-                                                                                      : QUICLY_EPOCH_ON_STREAMS_OTHER;
-    uint64_t offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
-    int is_ack_only, is_probe_only;
+    const uint8_t *src = _src, *end = src + *len;
     quicly_error_t ret = 0;
+
+    *len = 0;
 
     lock_now(conn, 0);
 
-    if (*len != 0)
-        ret = handle_payload(conn, epoch, 0, src, *len, len, &offending_frame_type, &is_ack_only, &is_probe_only);
+    while (1) {
+        /* parse the QMux record */
+        const uint8_t *payload = src;
+        size_t payload_len;
+        if ((payload_len = ptls_decode_quicint(&payload, end)) == UINT64_MAX)
+            break;
+        if (!(1 <= payload_len && payload_len <= 16382)) {
+            ret = QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+            break;
+        }
+        if (end - payload < payload_len)
+            break;
+        /* process frames */
+        size_t epoch = conn->super.stats.num_frames_received.qx_transport_parameters == 0 ? QUICLY_EPOCH_ON_STREAMS_TP
+                                                                                          : QUICLY_EPOCH_ON_STREAMS_OTHER;
+        uint64_t offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
+        int is_ack_only, is_probe_only;
+        if ((ret = handle_payload(conn, epoch, 0, payload, payload_len, &offending_frame_type, &is_ack_only, &is_probe_only)) != 0)
+            break;
+        /* advance to the next QMux record */
+        *len += payload + payload_len - src;
+        src = payload + payload_len;
+    }
 
     unlock_now(conn);
 
