@@ -64,6 +64,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID 16
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE 0x20
 #define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xff04de1b
+#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_RECORD_SIZE 0x0571c59429cd0845
 
 /**
  * maximum size of token that quicly accepts
@@ -78,6 +79,10 @@
  * maximum number of undecryptable packets to buffer
  */
 #define QUICLY_MAX_DELAYED_PACKETS 10
+/**
+ * QMux: initial maximum record size; quicly's max. is hard-coded to this value
+ */
+#define QUICLY_QMUX_MAX_RECORD_SIZE 16382
 
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
@@ -2646,6 +2651,13 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                     v = UINT16_MAX;
                 params->max_datagram_frame_size = (uint16_t)v;
             });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_RECORD_SIZE, {
+                uint64_t v;
+                if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX || v < QUICLY_QMUX_MAX_RECORD_SIZE) {
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+            });
             /* skip unknown extension */
             if (tp_index >= 0)
                 src = end;
@@ -4176,7 +4188,7 @@ static void qmux_commit_record(quicly_conn_t *conn, quicly_send_context_t *s)
 
     /* write the QMux record header */
     size_t rec_size = s->dst - (s->payload_buf.datagram + 2);
-    assert(0 < rec_size && rec_size <= 16382);
+    assert(1 <= rec_size && rec_size <= QUICLY_QMUX_MAX_RECORD_SIZE);
     s->payload_buf.datagram[0] = 0x40 | (rec_size >> 8);
     s->payload_buf.datagram[1] = (uint8_t)rec_size;
 
@@ -4201,8 +4213,8 @@ static quicly_error_t allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_s
             if (s->payload_buf.end - s->payload_buf.datagram < 2)
                 return QUICLY_ERROR_SENDBUF_FULL;
             size_t capacity = s->payload_buf.end - s->payload_buf.datagram - 2;
-            if (capacity > 16382)
-                capacity = 16382;
+            if (capacity > QUICLY_QMUX_MAX_RECORD_SIZE)
+                capacity = QUICLY_QMUX_MAX_RECORD_SIZE;
             s->dst = s->payload_buf.datagram + 2;
             s->dst_end = s->dst + capacity;
         }
@@ -8412,7 +8424,7 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
         size_t payload_len;
         if ((payload_len = ptls_decode_quicint(&payload, end)) == UINT64_MAX)
             break;
-        if (!(1 <= payload_len && payload_len <= 16382)) {
+        if (!(1 <= payload_len && payload_len <= QUICLY_QMUX_MAX_RECORD_SIZE)) {
             ret = QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
             break;
         }
