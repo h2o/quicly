@@ -1461,7 +1461,7 @@ static void test_stats_foreach(void)
 #undef CHECK
 }
 
-static void test_on_streams(void)
+static void test_qmux(void)
 {
     static char message16k[16384];
 
@@ -1470,7 +1470,7 @@ static void test_on_streams(void)
             memcpy(message16k + i, "helloworldhello\n", 16);
     }
 
-    quicly_conn_t *cc = quicly_qos_new(&quic_ctx, 1, NULL), *sc = quicly_qos_new(&quic_ctx, 0, NULL);
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
     quicly_stream_t *cs1 = NULL, *cs2 = NULL, *ss1, *ss2;
     quicly_streambuf_t *ss1buf, *ss2buf;
     char buf[16384];
@@ -1478,10 +1478,10 @@ static void test_on_streams(void)
     quicly_error_t ret;
 
     bufsize = sizeof(buf);
-    ret = quicly_qos_send(sc, buf, &bufsize);
+    ret = quicly_qmux_send(sc, buf, &bufsize);
     ok(ret == 0);
 
-    ret = quicly_qos_receive(cc, buf, &bufsize);
+    ret = quicly_qmux_receive(cc, buf, &bufsize);
     ok(ret == 0);
 
     ret = quicly_open_stream(cc, &cs1, 0);
@@ -1494,11 +1494,11 @@ static void test_on_streams(void)
     ok(ret == 0);
 
     bufsize = sizeof(buf);
-    ret = quicly_qos_send(cc, buf, &bufsize);
+    ret = quicly_qmux_send(cc, buf, &bufsize);
     ok(ret == 0);
 
     decoded_len = bufsize; /* TODO add test for partial frame receive */
-    ret = quicly_qos_receive(sc, buf, &decoded_len);
+    ret = quicly_qmux_receive(sc, buf, &decoded_len);
     ok(ret == 0);
     ok(decoded_len == bufsize);
 
@@ -1516,11 +1516,11 @@ static void test_on_streams(void)
     ok(memcmp(ss2buf->ingress.base, message16k, ss2buf->ingress.off) == 0);
 
     bufsize = sizeof(buf);
-    ret = quicly_qos_send(cc, buf, &bufsize);
+    ret = quicly_qmux_send(cc, buf, &bufsize);
     ok(ret == 0);
 
     decoded_len = bufsize;
-    ret = quicly_qos_receive(sc, buf, &decoded_len);
+    ret = quicly_qmux_receive(sc, buf, &decoded_len);
     ok(ret == 0);
     ok(decoded_len == bufsize);
 
@@ -1608,7 +1608,7 @@ int main(int argc, char **argv)
 
     subtest("stats-foreach", test_stats_foreach);
 
-    subtest("on-streams", test_on_streams);
+    subtest("qmux", test_qmux);
 
     return done_testing();
 }

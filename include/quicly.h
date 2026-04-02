@@ -169,7 +169,7 @@ QUICLY_CALLBACK_TYPE(void, async_handshake, ptls_t *tls);
 /**
  *
  */
-QUICLY_CALLBACK_TYPE(int, qos_is_writing, quicly_conn_t *conn);
+QUICLY_CALLBACK_TYPE(int, qmux_is_writing, quicly_conn_t *conn);
 
 /**
  * crypto offload API
@@ -438,7 +438,7 @@ struct st_quicly_context_t {
     /**
      *
      */
-    quicly_qos_is_writing_t *qos_is_writing;
+    quicly_qmux_is_writing_t *qmux_is_writing;
 };
 
 /**
@@ -593,7 +593,7 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
             max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
             retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            ack_frequency, immediate_ack, qs_transport_parameters;                                                                 \
+            ack_frequency, immediate_ack, qx_transport_parameters;                                                                 \
     } num_frames_received, num_frames_sent;                                                                                        \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -787,7 +787,7 @@ typedef struct st_quicly_stats_t {
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(datagram, dir, apply)                                                                      \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply)                                                                 \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(immediate_ack, dir, apply)                                                                 \
-    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(qs_transport_parameters, dir, apply)
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(qx_transport_parameters, dir, apply)
 
 #define QUICLY_STATS_FOREACH_TRANSPORT_COUNTERS(apply)                                                                             \
     apply(num_paths.created, "num-paths.created")                                                                                  \
@@ -1217,7 +1217,7 @@ static const quicly_transport_parameters_t *quicly_get_remote_transport_paramete
 /**
  *
  */
-int quicly_is_on_streams(quicly_conn_t *conn);
+int quicly_is_qmux(quicly_conn_t *conn);
 /**
  *
  */
@@ -1623,9 +1623,9 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
         });                                                                                                                        \
     } while (0)
 
-quicly_error_t quicly_qos_send(quicly_conn_t *conn, void *buf, size_t *bufsize);
-quicly_error_t quicly_qos_receive(quicly_conn_t *conn, const void *src, size_t *len);
-quicly_conn_t *quicly_qos_new(quicly_context_t *ctx, int is_client, void *appdata);
+quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize);
+quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *src, size_t *len);
+quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appdata);
 
 /* inline definitions */
 
