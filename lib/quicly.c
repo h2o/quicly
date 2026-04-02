@@ -609,6 +609,28 @@ static int enable_with_ratio255(uint8_t ratio, void (*random_bytes)(void *, size
     return r < ratio * 257u;
 }
 
+ptls_log_conn_state_t *quicly_log_state(quicly_conn_t *conn, ptls_log_getsni_t *getsni)
+{
+    if (conn->crypto.tls == NULL) {
+        return conn->super.ctx->qmux_log_state->cb(conn->super.ctx->qmux_log_state, conn, getsni);
+    } else {
+        *getsni = ptls_log_getsni_ptls(conn->crypto.tls);
+        return ptls_get_log_state(conn->crypto.tls);
+    }
+}
+
+static inline int log_is_active(struct st_ptls_log_point_t *point, quicly_conn_t *conn)
+{
+    uint32_t active = ptls_log_point_maybe_active(point);
+    if (PTLS_LIKELY(active == 0))
+        return 0;
+
+    ptls_log_getsni_t getsni;
+    ptls_log_conn_state_t *conn_state = quicly_log_state(conn, &getsni);
+    active &= ptls_log_conn_maybe_active(conn_state, getsni);
+    return !!PTLS_LIKELY(active == 0);
+}
+
 static void lock_now(quicly_conn_t *conn, int is_reentrant)
 {
     if (conn->stash.now == 0) {
@@ -2016,9 +2038,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
     conn->paths[path_index] = path;
 
     PTLS_LOG_DEFINE_POINT(quicly, new_path, new_path_logpoint);
-    if (QUICLY_PROBE_ENABLED(NEW_PATH) ||
-        (ptls_log_point_maybe_active(&new_path_logpoint) &
-         ptls_log_conn_maybe_active(ptls_get_log_state(conn->crypto.tls), ptls_log_getsni_ptls(conn->crypto.tls))) != 0) {
+    if (QUICLY_PROBE_ENABLED(NEW_PATH) || log_is_active(&new_path_logpoint, conn)) {
         char remote[sizeof(LONGEST_ADDRESS_STR)];
         stringify_address(remote, &path->address.remote.sa);
         QUICLY_PROBE(NEW_PATH, conn, conn->stash.now, path_index, remote);
@@ -2177,9 +2197,7 @@ void quicly_free(quicly_conn_t *conn)
     QUICLY_LOG_CONN(free, conn, {});
 
     PTLS_LOG_DEFINE_POINT(quicly, conn_stats, conn_stats_logpoint);
-    if (QUICLY_PROBE_ENABLED(CONN_STATS) ||
-        (ptls_log_point_maybe_active(&conn_stats_logpoint) &
-         ptls_log_conn_maybe_active(ptls_get_log_state(conn->crypto.tls), ptls_log_getsni_ptls(conn->crypto.tls))) != 0) {
+    if (QUICLY_PROBE_ENABLED(CONN_STATS) || log_is_active(&conn_stats_logpoint, conn)) {
         quicly_stats_t stats;
         if (quicly_get_stats(conn, &stats) == 0) {
             QUICLY_PROBE(CONN_STATS, conn, conn->stash.now, &stats, sizeof(stats));
@@ -5936,9 +5954,7 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     }
 
     PTLS_LOG_DEFINE_POINT(quicly, send, send_logpoint);
-    if (QUICLY_PROBE_ENABLED(SEND) ||
-        (ptls_log_point_maybe_active(&send_logpoint) &
-         ptls_log_conn_maybe_active(ptls_get_log_state(conn->crypto.tls), ptls_log_getsni_ptls(conn->crypto.tls))) != 0) {
+    if (QUICLY_PROBE_ENABLED(SEND) || log_is_active(&send_logpoint, conn)) {
         const quicly_cid_t *dcid = get_dcid(conn, 0);
         QUICLY_PROBE(SEND, conn, conn->stash.now, conn->super.state, QUICLY_PROBE_HEXDUMP(dcid->cid, dcid->len));
         QUICLY_LOG_CONN(send, conn, {
@@ -8318,9 +8334,7 @@ const quicly_stream_callbacks_t quicly_stream_noop_callbacks = {
 void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, const char *fmt, ...)
 {
     PTLS_LOG_DEFINE_POINT(quicly, debug_message, debug_message_logpoint);
-    if (QUICLY_PROBE_ENABLED(DEBUG_MESSAGE) ||
-        (ptls_log_point_maybe_active(&debug_message_logpoint) &
-         ptls_log_conn_maybe_active(ptls_get_log_state(conn->crypto.tls), ptls_log_getsni_ptls(conn->crypto.tls))) != 0) {
+    if (QUICLY_PROBE_ENABLED(DEBUG_MESSAGE) || log_is_active(&debug_message_logpoint, conn)) {
         char buf[1024];
         va_list args;
 
