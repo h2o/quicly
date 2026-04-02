@@ -628,7 +628,7 @@ static inline int log_is_active(struct st_ptls_log_point_t *point, quicly_conn_t
     ptls_log_getsni_t getsni;
     ptls_log_conn_state_t *conn_state = quicly_log_state(conn, &getsni);
     active &= ptls_log_conn_maybe_active(conn_state, getsni);
-    return !!PTLS_LIKELY(active == 0);
+    return PTLS_UNLIKELY(active != 0);
 }
 
 static void lock_now(quicly_conn_t *conn, int is_reentrant)
