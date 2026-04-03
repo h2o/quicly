@@ -1524,9 +1524,13 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
     if (idle_msec == INT64_MAX)
         return;
 
-    uint32_t three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.remote.transport_params.max_ack_delay,
-                                                conn->egress.loss.conf->min_pto);
-    conn->idle_timeout.at = conn->stash.now + (idle_msec > three_pto ? idle_msec : three_pto);
+    if (!quicly_is_qmux(conn)) {
+        uint32_t three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.remote.transport_params.max_ack_delay,
+                                                    conn->egress.loss.conf->min_pto);
+        if (idle_msec < three_pto)
+            idle_msec = three_pto;
+    }
+    conn->idle_timeout.at = conn->stash.now + idle_msec;
     conn->idle_timeout.should_rearm_on_send = is_in_receive;
 }
 
@@ -2751,6 +2755,7 @@ static void init_connection_core(quicly_conn_t *conn, int is_client)
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
     conn->idle_timeout.at = INT64_MAX;
+    conn->idle_timeout.should_rearm_on_send = 1;
     conn->stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
 }
 
@@ -2864,7 +2869,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     }
     conn->crypto.handshake_properties.collect_extension = collect_transport_parameters;
     conn->retry_scid.len = UINT8_MAX;
-    conn->idle_timeout.should_rearm_on_send = 1;
     for (size_t i = 0; i != PTLS_ELEMENTSOF(conn->delayed_packets.as_array); ++i)
         conn->delayed_packets.as_array[i].tail = &conn->delayed_packets.as_array[i].head;
     conn->stash.on_ack_stream.active_acked_cache.stream_id = INT64_MIN;
@@ -8419,6 +8423,8 @@ Exit:
         if (s.dst != NULL)
             qmux_commit_record(conn, &s);
         *bufsize -= s.payload_buf.end - s.payload_buf.datagram;
+        if (*bufsize != 0)
+            update_idle_timeout(conn, 0);
     }
     unlock_now(conn);
     return ret;
@@ -8457,6 +8463,7 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
         src = payload + payload_len;
     }
 
+    update_idle_timeout(conn, 1);
     unlock_now(conn);
 
     return ret;
@@ -8477,7 +8484,7 @@ quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appda
 
     init_connection_core(conn, is_client);
     conn->egress.pending_flows = QUICLY_PENDING_FLOW_OTHERS_BIT; /* set for sending QX_TRANSPORT_PARAMETERS */
-    conn->egress.send_ack_at = INT64_MAX; /* used when closing */
+    conn->egress.send_ack_at = INT64_MAX;                        /* used when closing */
 
     unlock_now(conn);
 
