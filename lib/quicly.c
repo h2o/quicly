@@ -1509,6 +1509,11 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
         *consumed = conn->ingress.max_data.bytes_consumed;
 }
 
+/**
+ * @param must_rearm  In QUIC v1, ingress packets and the first outgoing packet after ingress updates the idle timeout. By setting
+ *                    `must_rearm` to 1 on the ingress path and 0 on the egress path provides the desired behavior. In QMux, any
+ *                    QMux record in both directions drive the timeout; therefore `must_rearm` should always be 1.
+ */
 static void update_idle_timeout(quicly_conn_t *conn, int must_rearm)
 {
     if (!must_rearm && !conn->idle_timeout.should_rearm_on_send)
