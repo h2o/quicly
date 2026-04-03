@@ -1011,7 +1011,7 @@ int quicly_is_qmux(quicly_conn_t *conn)
 
 int quicly_connection_is_ready(quicly_conn_t *conn)
 {
-    return conn->application != NULL;
+    return quicly_is_qmux(conn) ? conn->super.stats.num_frames_received.qx_transport_parameters > 0 : conn->application != NULL;
 }
 
 static int stream_is_destroyable(quicly_stream_t *stream)
