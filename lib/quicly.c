@@ -1509,9 +1509,9 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
         *consumed = conn->ingress.max_data.bytes_consumed;
 }
 
-static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
+static void update_idle_timeout(quicly_conn_t *conn, int must_rearm)
 {
-    if (!is_in_receive && !conn->idle_timeout.should_rearm_on_send)
+    if (!must_rearm && !conn->idle_timeout.should_rearm_on_send)
         return;
 
     /* calculate the minimum of the two max_idle_timeout */
@@ -1531,7 +1531,7 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
             idle_msec = three_pto;
     }
     conn->idle_timeout.at = conn->stash.now + idle_msec;
-    conn->idle_timeout.should_rearm_on_send = is_in_receive;
+    conn->idle_timeout.should_rearm_on_send = must_rearm;
 }
 
 static int scheduler_can_send(quicly_conn_t *conn)
@@ -8424,7 +8424,7 @@ Exit:
             qmux_commit_record(conn, &s);
         *bufsize -= s.payload_buf.end - s.payload_buf.datagram;
         if (*bufsize != 0)
-            update_idle_timeout(conn, 0);
+            update_idle_timeout(conn, 1);
     }
     unlock_now(conn);
     return ret;
