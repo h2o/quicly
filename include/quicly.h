@@ -1635,9 +1635,20 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
         });                                                                                                                        \
     } while (0)
 
-quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize);
-quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *src, size_t *len);
+/**
+ * Creates a new connection object.
+ */
 quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appdata);
+/**
+ * Writes QMux records to the given buffer.
+ * @param [in,out] bufsize  Upon entry, the size of the buffer. Upon return, number of bytes being written to the buffer.
+ */
+quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize);
+/**
+ * Reads QMumx records in a given buffer and processes them.
+ * @param [in,out] len  Upon entry, the size of the input. Upon return, the number of bytes being read out.
+ */
+quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *src, size_t *len);
 
 /* inline definitions */
 
