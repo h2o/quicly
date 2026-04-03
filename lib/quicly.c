@@ -5259,21 +5259,17 @@ Exit:
     return ret;
 }
 
-static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s)
+static quicly_error_t send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     uint64_t error_code, offending_frame_type;
     const char *reason_phrase;
     quicly_error_t ret;
 
-    /* setup send epoch, or return if it's impossible to send in this epoch */
-    if (setup_send_space(conn, epoch, s) == NULL)
-        return 0;
-
     /* determine the payload, masking the application error when sending the frame using an unauthenticated epoch */
     error_code = conn->egress.connection_close.error_code;
     offending_frame_type = conn->egress.connection_close.frame_type;
     reason_phrase = conn->egress.connection_close.reason_phrase;
-    if (offending_frame_type == UINT64_MAX) {
+    if (!quicly_is_qmux(conn) && offending_frame_type == UINT64_MAX) {
         switch (get_epoch(s->current.first_byte)) {
         case QUICLY_EPOCH_INITIAL:
         case QUICLY_EPOCH_HANDSHAKE:
@@ -5911,7 +5907,9 @@ static quicly_error_t do_send_closed(quicly_conn_t *conn, quicly_send_context_t 
         /* send CONNECTION_CLOSE in all possible epochs */
         s->dcid = get_dcid(conn, 0);
         for (size_t epoch = 0; epoch < QUICLY_NUM_EPOCHS; ++epoch) {
-            if ((ret = send_connection_close(conn, epoch, s)) != 0)
+            if (setup_send_space(conn, epoch, s) == NULL)
+                continue;
+            if ((ret = send_connection_close(conn, s)) != 0)
                 goto Exit;
         }
         if ((ret = commit_send_packet(conn, s, 0)) != 0)
@@ -8389,11 +8387,7 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
         break;
     case QUICLY_STATE_CLOSING:
         destroy_all_streams(conn, 0, 0);
-        s.dst = quicly_encode_close_frame(s.dst, conn->egress.connection_close.error_code, conn->egress.connection_close.frame_type,
-                                          conn->egress.connection_close.reason_phrase);
-        conn->super.state = QUICLY_STATE_DRAINING;
-        conn->egress.send_ack_at = 0;
-        ret = 0;
+        ret = send_connection_close(conn, &s);
         goto Exit;
     case QUICLY_STATE_DRAINING:
         destroy_all_streams(conn, 0, 0);
