@@ -167,11 +167,11 @@ QUICLY_CALLBACK_TYPE(void, update_open_count, ssize_t delta);
  */
 QUICLY_CALLBACK_TYPE(void, async_handshake, ptls_t *tls);
 /**
- *
+ * returns a boolean indicating if the underlying transport is ready for writing
  */
-QUICLY_CALLBACK_TYPE(int, qmux_is_writing, quicly_conn_t *conn);
+QUICLY_CALLBACK_TYPE(int, qmux_writable, quicly_conn_t *conn);
 /**
- *
+ * [probing] returns log state and the getsni delayed callback object associated with the underlying transport
  */
 QUICLY_CALLBACK_TYPE(ptls_log_conn_state_t *, qmux_log_state, quicly_conn_t *conn, ptls_log_getsni_t *getsni);
 
@@ -442,7 +442,7 @@ struct st_quicly_context_t {
     /**
      *
      */
-    quicly_qmux_is_writing_t *qmux_is_writing;
+    quicly_qmux_writable_t *qmux_writable;
     /**
      *
      */
