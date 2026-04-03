@@ -3681,9 +3681,6 @@ static inline uint64_t calc_amplification_limit_allowance(quicly_conn_t *conn)
 static size_t calc_send_window(quicly_conn_t *conn, size_t min_bytes_to_send, uint64_t amp_window, uint64_t pacer_window,
                                int restrict_sending)
 {
-    if (quicly_is_qmux(conn))
-        return conn->super.ctx->qmux_writable->cb(conn->super.ctx->qmux_writable, conn) ? SIZE_MAX : 0;
-
     uint64_t window = 0;
     if (restrict_sending) {
         /* Send min_bytes_to_send on PTO */
@@ -3733,19 +3730,30 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         return conn->egress.send_ack_at;
 
+    int64_t at = conn->idle_timeout.at;
+
+    /* Other than the idle timeout and `send_ack_at` which is used for closing, QMux needs to consult only transport state and if
+     * there are any frames need to be sent. */
+    if (quicly_is_qmux(conn)) {
+        if (conn->super.ctx->qmux_writable->cb(conn->super.ctx->qmux_writable, conn) &&
+            (conn->egress.pending_flows != 0 || quicly_linklist_is_linked(&conn->egress.pending_streams.control) ||
+             should_send_datagram_frame(conn) || scheduler_can_send(conn)))
+            at = 0;
+        return at;
+    }
+
     if (should_send_datagram_frame(conn))
         return 0;
 
     uint64_t amp_window = calc_amplification_limit_allowance(conn);
-    int64_t at = conn->idle_timeout.at, pacer_at = pacer_can_send_at(conn);
+    int64_t pacer_at = pacer_can_send_at(conn);
 
     /* reduce at to the moment pacer provides credit, if we are not CC-limited and there's something to be sent over CC */
     if (pacer_at < at && calc_send_window(conn, 0, amp_window, UINT64_MAX, 0) > 0) {
         if (conn->egress.pending_flows != 0) {
             /* crypto streams (as indicated by lower 4 bits) can be sent whenever CWND is available; other flows need application
              * packet number space */
-            if (quicly_is_qmux(conn) ||
-                (conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL) ||
+            if ((conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL) ||
                 (conn->egress.pending_flows & 0xf) != 0)
                 at = pacer_at;
         }
@@ -8464,8 +8472,13 @@ quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appda
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
     conn->super.data = appdata;
+
     lock_now(conn, 0);
+
     init_connection_core(conn, is_client);
+    conn->egress.pending_flows = QUICLY_PENDING_FLOW_OTHERS_BIT; /* set for sending QX_TRANSPORT_PARAMETERS */
+    conn->egress.send_ack_at = INT64_MAX; /* used when closing */
+
     unlock_now(conn);
 
     return conn;
