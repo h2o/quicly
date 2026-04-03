@@ -611,7 +611,7 @@ static int enable_with_ratio255(uint8_t ratio, void (*random_bytes)(void *, size
 
 ptls_log_conn_state_t *quicly_log_state(quicly_conn_t *conn, ptls_log_getsni_t *getsni)
 {
-    if (conn->crypto.tls == NULL) {
+    if (quicly_is_qmux(conn)) {
         return conn->super.ctx->qmux_log_state->cb(conn->super.ctx->qmux_log_state, conn, getsni);
     } else {
         *getsni = ptls_log_getsni_ptls(conn->crypto.tls);
@@ -4233,8 +4233,7 @@ static quicly_error_t allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_s
 {
     quicly_error_t ret;
 
-    if (conn->crypto.tls == NULL) {
-        /* qmux */
+    if (quicly_is_qmux(conn)) {
         if ((ret = qmux_call_acked(conn, s)) != 0)
             return ret;
         if (s->dst_end - s->dst < min_space) {
