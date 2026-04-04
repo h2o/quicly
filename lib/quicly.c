@@ -4247,6 +4247,23 @@ static void qmux_commit_record(quicly_conn_t *conn, quicly_send_context_t *s)
     s->dst_end = NULL;
 }
 
+static quicly_error_t do_allocate_qmux_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space)
+{
+    if (s->dst_end - s->dst < min_space) {
+        if (s->dst != NULL)
+            qmux_commit_record(conn, s);
+        if (s->payload_buf.end - s->payload_buf.datagram < 2)
+            return QUICLY_ERROR_SENDBUF_FULL;
+        size_t capacity = s->payload_buf.end - s->payload_buf.datagram - 2;
+        if (capacity > QUICLY_QMUX_MAX_RECORD_SIZE)
+            capacity = QUICLY_QMUX_MAX_RECORD_SIZE;
+        s->dst = s->payload_buf.datagram + 2;
+        s->dst_end = s->dst + capacity;
+    }
+
+    return 0;
+}
+
 static quicly_error_t allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space,
                                                    quicly_sent_t **sent, quicly_sent_acked_cb acked)
 {
@@ -4255,17 +4272,8 @@ static quicly_error_t allocate_ack_eliciting_frame(quicly_conn_t *conn, quicly_s
     if (quicly_is_qmux(conn)) {
         if ((ret = qmux_call_acked(conn, s)) != 0)
             return ret;
-        if (s->dst_end - s->dst < min_space) {
-            if (s->dst != NULL)
-                qmux_commit_record(conn, s);
-            if (s->payload_buf.end - s->payload_buf.datagram < 2)
-                return QUICLY_ERROR_SENDBUF_FULL;
-            size_t capacity = s->payload_buf.end - s->payload_buf.datagram - 2;
-            if (capacity > QUICLY_QMUX_MAX_RECORD_SIZE)
-                capacity = QUICLY_QMUX_MAX_RECORD_SIZE;
-            s->dst = s->payload_buf.datagram + 2;
-            s->dst_end = s->dst + capacity;
-        }
+        if ((ret = do_allocate_qmux_frame(conn, s, min_space)) != 0)
+            return ret;
         *sent = &s->qmux.sent;
         (*sent)->acked = acked;
         return 0;
@@ -5289,6 +5297,33 @@ Exit:
     return ret;
 }
 
+static quicly_error_t do_send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s, uint64_t error_code,
+                                               uint64_t offending_frame_type, const char *reason_phrase)
+{
+    /* encode */
+    s->dst = quicly_encode_close_frame(s->dst, error_code, offending_frame_type, reason_phrase);
+
+    /* update counter, probe */
+    if (offending_frame_type != UINT64_MAX) {
+        ++conn->super.stats.num_frames_sent.transport_close;
+        QUICLY_PROBE(TRANSPORT_CLOSE_SEND, conn, conn->stash.now, error_code, offending_frame_type, reason_phrase);
+        QUICLY_LOG_CONN(transport_close_send, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(error_code, error_code);
+            PTLS_LOG_ELEMENT_UNSIGNED(frame_type, offending_frame_type);
+            PTLS_LOG_ELEMENT_UNSAFESTR(reason_phrase, reason_phrase, strlen(reason_phrase));
+        });
+    } else {
+        ++conn->super.stats.num_frames_sent.application_close;
+        QUICLY_PROBE(APPLICATION_CLOSE_SEND, conn, conn->stash.now, error_code, reason_phrase);
+        QUICLY_LOG_CONN(application_close_send, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(error_code, error_code);
+            PTLS_LOG_ELEMENT_UNSAFESTR(reason_phrase, reason_phrase, strlen(reason_phrase));
+        });
+    }
+
+    return 0;
+}
+
 static quicly_error_t send_connection_close(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     uint64_t error_code, offending_frame_type;
@@ -5314,27 +5349,7 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, quicly_send_con
     if ((ret = do_allocate_frame(conn, s, quicly_close_frame_capacity(error_code, offending_frame_type, reason_phrase),
                                  ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING)) != 0)
         return ret;
-    s->dst = quicly_encode_close_frame(s->dst, error_code, offending_frame_type, reason_phrase);
-
-    /* update counter, probe */
-    if (offending_frame_type != UINT64_MAX) {
-        ++conn->super.stats.num_frames_sent.transport_close;
-        QUICLY_PROBE(TRANSPORT_CLOSE_SEND, conn, conn->stash.now, error_code, offending_frame_type, reason_phrase);
-        QUICLY_LOG_CONN(transport_close_send, conn, {
-            PTLS_LOG_ELEMENT_UNSIGNED(error_code, error_code);
-            PTLS_LOG_ELEMENT_UNSIGNED(frame_type, offending_frame_type);
-            PTLS_LOG_ELEMENT_UNSAFESTR(reason_phrase, reason_phrase, strlen(reason_phrase));
-        });
-    } else {
-        ++conn->super.stats.num_frames_sent.application_close;
-        QUICLY_PROBE(APPLICATION_CLOSE_SEND, conn, conn->stash.now, error_code, reason_phrase);
-        QUICLY_LOG_CONN(application_close_send, conn, {
-            PTLS_LOG_ELEMENT_UNSIGNED(error_code, error_code);
-            PTLS_LOG_ELEMENT_UNSAFESTR(reason_phrase, reason_phrase, strlen(reason_phrase));
-        });
-    }
-
-    return 0;
+    return do_send_connection_close(conn, s, error_code, offending_frame_type, reason_phrase);
 }
 
 static quicly_error_t send_new_connection_id(quicly_conn_t *conn, quicly_send_context_t *s, struct st_quicly_local_cid_t *new_cid)
@@ -8415,9 +8430,15 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
     switch (conn->super.state) {
     default:
         break;
-    case QUICLY_STATE_CLOSING:
+    case QUICLY_STATE_CLOSING: {
         destroy_all_streams(conn, 0, 0);
-        ret = send_connection_close(conn, &s);
+        uint64_t error_code = conn->egress.connection_close.error_code, frame_type = conn->egress.connection_close.frame_type;
+        const char *reason_phrase = conn->egress.connection_close.reason_phrase;
+        if ((ret = do_allocate_qmux_frame(conn, &s, quicly_close_frame_capacity(error_code, frame_type, reason_phrase))) != 0 ||
+            (ret = do_send_connection_close(conn, &s, error_code, frame_type, reason_phrase)) != 0)
+            goto Exit;
+        conn->super.state = QUICLY_STATE_DRAINING;
+    }
         goto Exit;
     case QUICLY_STATE_DRAINING:
         destroy_all_streams(conn, 0, 0);
@@ -8451,6 +8472,7 @@ Exit:
 quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t *len)
 {
     const uint8_t *src = _src, *end = src + *len;
+    uint64_t offending_frame_type;
     quicly_error_t ret = 0;
 
     *len = 0;
@@ -8458,6 +8480,7 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
     lock_now(conn, 0);
 
     while (1) {
+        offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
         /* parse the QMux record */
         const uint8_t *payload = src;
         size_t payload_len;
@@ -8472,13 +8495,17 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
         /* process frames */
         size_t epoch = conn->super.stats.num_frames_received.qx_transport_parameters == 0 ? QUICLY_EPOCH_ON_STREAMS_TP
                                                                                           : QUICLY_EPOCH_ON_STREAMS_OTHER;
-        uint64_t offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
         int is_ack_only, is_probe_only;
         if ((ret = handle_payload(conn, epoch, 0, payload, payload_len, &offending_frame_type, &is_ack_only, &is_probe_only)) != 0)
             break;
         /* advance to the next QMux record */
         *len += payload + payload_len - src;
         src = payload + payload_len;
+    }
+
+    if (ret != 0) {
+        initiate_close(conn, ret, offending_frame_type, "");
+        ret = 0;
     }
 
     update_idle_timeout(conn, 1);
