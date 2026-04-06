@@ -8424,11 +8424,25 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
 
     lock_now(conn, 0);
 
-    /* handle close */
+    /* silently close upon idle timeout */
     if (conn->idle_timeout.at <= conn->stash.now)
         conn->super.state = QUICLY_STATE_DRAINING;
+
+    /* send transport parameter */
+    if (conn->super.state < QUICLY_STATE_DRAINING && conn->super.stats.num_frames_sent.qx_transport_parameters == 0) {
+        if ((ret = emit_qmux_transport_parameters(conn, &s)) != 0)
+            goto Exit;
+        if (conn->super.state < QUICLY_STATE_CONNECTED)
+            conn->super.state = QUICLY_STATE_CONNECTED;
+    }
+
+    /* send frames (or destroy all streams and advance to draining) */
     switch (conn->super.state) {
-    default:
+    case QUICLY_STATE_CONNECTED:
+        if ((ret = do_send_core(conn, &s)) != 0 && ret != QUICLY_ERROR_SENDBUF_FULL)
+            goto Exit;
+        if ((ret = qmux_call_acked(conn, &s)) != 0)
+            goto Exit;
         break;
     case QUICLY_STATE_CLOSING: {
         destroy_all_streams(conn, 0, 0);
@@ -8438,24 +8452,17 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
             (ret = do_send_connection_close(conn, &s, error_code, frame_type, reason_phrase)) != 0)
             goto Exit;
         conn->super.state = QUICLY_STATE_DRAINING;
-    }
-        goto Exit;
+    } break;
     case QUICLY_STATE_DRAINING:
         destroy_all_streams(conn, 0, 0);
         ret = QUICLY_ERROR_FREE_CONNECTION;
-        goto Exit;
+        break;
+    default:
+        assert(!"unexpected state");
+        break;
     }
 
-    /* send transport parameters first (if necessary), then the ordinary frames */
-    if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT) {
-        if ((ret = emit_qmux_transport_parameters(conn, &s)) != 0)
-            goto Exit;
-        conn->super.state = QUICLY_STATE_CONNECTED;
-    }
-    if ((ret = do_send_core(conn, &s)) != 0 && ret != QUICLY_ERROR_SENDBUF_FULL)
-        goto Exit;
-    if ((ret = qmux_call_acked(conn, &s)) != 0)
-        goto Exit;
+    /* ordinary handling of */
 
 Exit:
     if (ret == 0) {
