@@ -1546,6 +1546,46 @@ static void test_qmux_simple(void)
     quicly_free(sc);
 }
 
+static void test_qmux_notp(void)
+{
+    static const uint8_t input[] = {1, 0x14 /* 1st frame = DATA_BLOCKED */};
+
+    quicly_conn_t *conn = quicly_qmux_new(&quic_ctx, 1, NULL);
+    size_t len = sizeof(input);
+    quicly_error_t ret = quicly_qmux_receive(conn, input, &len);
+    ok(ret == 0);
+    ok(quicly_get_state(conn) == QUICLY_STATE_CLOSING);
+
+    uint8_t buf[16384];
+    len = sizeof(buf);
+    ret = quicly_qmux_send(conn, buf, &len);
+
+    const uint8_t *src = buf, *end = src + len;
+    uint64_t reclen = ptls_decode_quicint(&src, end);
+    ok(reclen == end - src);
+    uint64_t tp_frame_type = ptls_decode_quicint(&src, end);
+    ok(tp_frame_type == QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS);
+    uint64_t tp_frame_len = ptls_decode_quicint(&src, end);
+    ok(src + tp_frame_len < end);
+    src += tp_frame_len;
+    uint64_t close_frame_type = ptls_decode_quicint(&src, end);
+    ok(close_frame_type == QUICLY_FRAME_TYPE_TRANSPORT_CLOSE);
+    uint64_t close_error_code = ptls_decode_quicint(&src, end);
+    ok(close_error_code ==
+       QUICLY_ERROR_GET_ERROR_CODE(
+           QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION)); /* draft-ietf-qmux-01 says TRANSPORT_PARAMETER_ERROR but use of
+                                                           PROTOCOL_VIOLATION is always allowed as an alternative */
+    uint64_t close_frame = ptls_decode_quicint(&src, end);
+    ok(close_frame == QUICLY_FRAME_TYPE_DATA_BLOCKED);
+
+    ok(quicly_get_first_timeout(conn) <= quic_now);
+    len = sizeof(buf);
+    ret = quicly_qmux_send(conn, buf, &len);
+    ok(ret == QUICLY_ERROR_FREE_CONNECTION);
+
+    quicly_free(conn);
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -1600,6 +1640,7 @@ static void test_qmux(void)
     quic_ctx.qmux_writable = &qmux_writable;
 
     subtest("simple", test_qmux_simple);
+    subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
 
     quic_ctx = orig_ctx;
