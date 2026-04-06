@@ -8503,7 +8503,7 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
         src = payload + payload_len;
     }
 
-    if (ret != 0) {
+    if (ret != 0 && conn->super.state < QUICLY_STATE_DRAINING) {
         initiate_close(conn, ret, offending_frame_type, "");
         ret = 0;
     }
