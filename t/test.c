@@ -1586,6 +1586,30 @@ static void test_qmux_notp(void)
     quicly_free(conn);
 }
 
+static void test_qmux_ping(void)
+{
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    uint8_t ping_record[] = {9, 0xf4, 0x8c, 0x67, 0x52, 0x9e, 0xf8, 0xc7, 0xbd, 11 /* seq = 11 */};
+    size_t len = sizeof(ping_record);
+    quicly_error_t ret = quicly_qmux_receive(sc, ping_record, &len);
+    ok(ret == 0);
+    ok(quicly_get_first_timeout(sc) <= quic_now);
+
+    uint8_t buf[16384];
+    len = sizeof(buf);
+    ret = quicly_qmux_send(sc, buf, &len);
+    ok(ret == 0);
+    ok(len == 2 + 8 + 1);
+    ok(memcmp(buf, "\x40\x09\xf4\x8c\x67\x52\x9e\xf8\xc7\xbe\x0b", 2 + 8 + 1) == 0);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -1642,6 +1666,7 @@ static void test_qmux(void)
     subtest("simple", test_qmux_simple);
     subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
+    subtest("ping", test_qmux_ping);
 
     quic_ctx = orig_ctx;
 }

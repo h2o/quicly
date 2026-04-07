@@ -506,6 +506,15 @@ struct st_quicly_conn_t {
         unsigned slots_newly_processible;
     } delayed_packets;
     /**
+     *
+     */
+    struct {
+        struct {
+            uint64_t queued : 1;
+            uint64_t sequence_plus1 : 63;
+        } pong;
+    } qmux;
+    /**
      * structure to hold various data used internally
      */
     struct {
@@ -5592,6 +5601,15 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
             return ret;
     }
 
+    /* QX_PING */
+    if (conn->qmux.pong.queued) {
+        quicly_sent_t *sent;
+        if ((ret = allocate_ack_eliciting_frame(conn, s, QUICLY_QX_PING_FRAME_CAPACITY, &sent, NULL)) != 0)
+            return ret;
+        s->dst = quicly_encode_qx_ping_frame(s->dst, 1, conn->qmux.pong.sequence_plus1 - 1);
+        ++conn->super.stats.num_frames_sent.qx_pong;
+    }
+
     return 0;
 }
 
@@ -7185,6 +7203,31 @@ static quicly_error_t handle_qx_transport_parameters_frame(quicly_conn_t *conn, 
     return 0;
 }
 
+static quicly_error_t handle_qx_ping_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    quicly_qx_ping_frame_t frame;
+    quicly_error_t ret;
+
+    /* decode and validate */
+    if ((ret = quicly_decode_qx_ping_frame(&state->src, state->end, &frame)) != 0)
+        return ret;
+    if (frame.sequence < conn->qmux.pong.sequence_plus1)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
+    /* update state and schedule emission */
+    conn->qmux.pong.sequence_plus1 = frame.sequence + 1;
+    conn->qmux.pong.queued = 1;
+    conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+
+    return 0;
+}
+
+static quicly_error_t handle_qx_pong_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    /* TODO not needed until we start sending QX_PING frames */
+    return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+}
+
 static quicly_error_t handle_immediate_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     /* recognize the frame only when the support has been advertised */
@@ -7281,6 +7324,8 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t _epoch, size_t 
         FRAME( DATAGRAM_NOLEN          , datagram                 ,  0 ,  1 ,  0 ,  1 ,   0 ,   1 ,             1 ,       0 ),
         FRAME( DATAGRAM_WITHLEN        , datagram                 ,  0 ,  1 ,  0 ,  1 ,   0 ,   1 ,             1 ,       0 ),
         FRAME( ACK_FREQUENCY           , ack_frequency            ,  0 ,  0 ,  0 ,  1 ,   0 ,   0 ,             1 ,       0 ),
+        FRAME( QX_PING                 , qx_ping                  ,  0 ,  0 ,  0 ,  0 ,   0 ,   1 ,             1 ,       0 ),
+        FRAME( QX_PONG                 , qx_pong                  ,  0 ,  0 ,  0 ,  0 ,   0 ,   1 ,             1 ,       0 ),
         FRAME( QX_TRANSPORT_PARAMETERS , qx_transport_parameters  ,  0 ,  0 ,  0 ,  0 ,   1 ,   0 ,             1 ,       0 ),
         /*   +-------------------------+--------------------------+----+----+----+----+-----+-----+---------------+---------+ */
 #undef FRAME
