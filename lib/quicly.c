@@ -8413,6 +8413,8 @@ static quicly_error_t emit_qmux_transport_parameters(quicly_conn_t *conn, quicly
     assert(!buf.is_allocated);
     s->dst += buf.off;
 
+    ++conn->super.stats.num_frames_sent.qx_transport_parameters;
+
 Exit:
     return ret;
 }
