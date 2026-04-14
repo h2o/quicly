@@ -5191,13 +5191,16 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
          * (PROTOCOL_VIOLATION) is used. The exact cause is communicated using the reason phrase field because it is sometimes
          * difficult for the peer to understand the problem without; e.g., when an ACK triggering the loss of a RETIRE_CONNECTION_ID
          * frame leading to the overflow of `quicly_conn_t::egress.retire_cid`. */
+        assert(offending_frame_type != UINT64_MAX);
         error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
         if (reason_phrase[0] == '\0')
             reason_phrase = "state exhaustion";
     } else if (QUICLY_ERROR_IS_QUIC_TRANSPORT(conn->connection_close.err)) {
+        assert(offending_frame_type != UINT64_MAX);
         error_code = QUICLY_ERROR_GET_ERROR_CODE(conn->connection_close.err);
     } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(conn->connection_close.err)) {
         /* conceal application errors unless sending in the application packet number space */
+        assert(offending_frame_type == UINT64_MAX);
         switch (get_epoch(s->current.first_byte)) {
         case QUICLY_EPOCH_INITIAL:
         case QUICLY_EPOCH_HANDSHAKE:
@@ -5210,8 +5213,10 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
             break;
         }
     } else if (PTLS_ERROR_GET_CLASS(conn->connection_close.err) == PTLS_ERROR_CLASS_SELF_ALERT) {
+        assert(offending_frame_type != UINT64_MAX);
         error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_CRYPTO(PTLS_ERROR_TO_ALERT(conn->connection_close.err)));
     } else {
+        assert(offending_frame_type != UINT64_MAX);
         error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INTERNAL);
     }
 
@@ -5222,7 +5227,7 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
     s->dst = quicly_encode_close_frame(s->dst, error_code, offending_frame_type, reason_phrase);
 
     /* update counter, probe */
-    if (!QUICLY_ERROR_IS_QUIC_APPLICATION(conn->connection_close.err)) {
+    if (offending_frame_type != UINT64_MAX) {
         ++conn->super.stats.num_frames_sent.transport_close;
         QUICLY_PROBE(TRANSPORT_CLOSE_SEND, conn, conn->stash.now, error_code, offending_frame_type, reason_phrase);
         QUICLY_LOG_CONN(transport_close_send, conn, {
