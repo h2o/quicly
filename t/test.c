@@ -1294,13 +1294,13 @@ static void test_state_exhaustion(void)
     ok(quicly_get_state(client) == QUICLY_STATE_DRAINING);
 
     /* sender should have received PROTOCOL_VIOLATION with the special reason phrase */
-    int is_remote;
     uint64_t offending_frame_type;
     const char *reason;
-    ret = quicly_get_close_reason(client, &is_remote, &offending_frame_type, &reason);
+    int is_remote;
+    ret = quicly_get_close_reason(client, &offending_frame_type, &reason, &is_remote);
     ok(ret == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
-    ok(is_remote);
     ok(strcmp(reason, "state exhaustion") == 0);
+    ok(is_remote);
 
     quicly_free(client);
     quicly_free(server);

@@ -442,10 +442,10 @@ struct st_quicly_conn_t {
      * close reason
      */
     struct {
-        uint8_t is_remote;
         quicly_error_t err;
         uint64_t frame_type;
         char *reason_phrase;
+        uint8_t is_remote : 1;
         unsigned long num_packets_received;
     } connection_close;
     /**
@@ -983,16 +983,16 @@ int quicly_connection_is_ready(quicly_conn_t *conn)
     return conn->application != NULL;
 }
 
-quicly_error_t quicly_get_close_reason(quicly_conn_t *conn, int *is_remote, uint64_t *offending_frame_type,
-                                       const char **reason_phrase)
+quicly_error_t quicly_get_close_reason(quicly_conn_t *conn, uint64_t *offending_frame_type, const char **reason_phrase,
+                                       int *is_remote)
 {
     assert(conn->super.state >= QUICLY_STATE_CLOSING);
-    if (is_remote != NULL)
-        *is_remote = conn->connection_close.is_remote;
     if (offending_frame_type != NULL)
         *offending_frame_type = conn->connection_close.frame_type;
     if (reason_phrase != NULL)
         *reason_phrase = conn->connection_close.reason_phrase;
+    if (is_remote != NULL)
+        *is_remote = conn->connection_close.is_remote;
     return conn->connection_close.err;
 }
 
@@ -6063,18 +6063,18 @@ static quicly_error_t enter_close(quicly_conn_t *conn, int local_is_initiating, 
     return 0;
 }
 
-static int set_connection_close(quicly_conn_t *conn, int is_remote, quicly_error_t err, uint64_t frame_type,
-                                const char *reason_phrase, size_t reason_phrase_len)
+static int set_connection_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, const char *reason_phrase,
+                                size_t reason_phrase_len, int is_remote)
 {
     assert(conn->connection_close.reason_phrase == NULL);
 
-    conn->connection_close.is_remote = is_remote;
     conn->connection_close.err = err;
     conn->connection_close.frame_type = QUICLY_ERROR_IS_QUIC_APPLICATION(err) ? UINT64_MAX : frame_type;
     if ((conn->connection_close.reason_phrase = malloc(reason_phrase_len + 1)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     memcpy(conn->connection_close.reason_phrase, reason_phrase, reason_phrase_len);
     conn->connection_close.reason_phrase[reason_phrase_len] = '\0';
+    conn->connection_close.is_remote = is_remote;
 
     return 0;
 }
@@ -6090,7 +6090,7 @@ quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t 
         reason_phrase = "";
 
     if ((ret = enter_close(conn, 1, 0)) != 0 ||
-        (ret = set_connection_close(conn, 0, err, frame_type, reason_phrase, strlen(reason_phrase))) != 0)
+        (ret = set_connection_close(conn, err, frame_type, reason_phrase, strlen(reason_phrase), 0)) != 0)
         return ret;
     if (conn->super.ctx->closed != NULL)
         conn->super.ctx->closed->cb(conn->super.ctx->closed, conn);
@@ -6834,7 +6834,7 @@ quicly_error_t handle_close(quicly_conn_t *conn, quicly_error_t err, uint64_t fr
     /* switch to closing state, notify the app (at this moment the streams are accessible), then destroy the streams */
     if ((ret = enter_close(conn, 0,
                            !(err == QUICLY_ERROR_RECEIVED_STATELESS_RESET || err == QUICLY_ERROR_NO_COMPATIBLE_VERSION))) != 0 ||
-        (ret = set_connection_close(conn, 1, err, frame_type, (const char *)reason_phrase.base, reason_phrase.len)) != 0)
+        (ret = set_connection_close(conn, err, frame_type, (const char *)reason_phrase.base, reason_phrase.len, 1)) != 0)
         return ret;
     if (conn->super.ctx->closed != NULL)
         conn->super.ctx->closed->cb(conn->super.ctx->closed, conn);

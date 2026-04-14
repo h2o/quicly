@@ -465,11 +465,11 @@ static void test_closed(quicly_closed_t *self, quicly_conn_t *conn)
     const char *reason;
     int is_remote;
 
-    quicly_error_t err = quicly_get_close_reason(conn, &is_remote, &frame_type, &reason);
-    ok(is_remote == (conn == server));
+    quicly_error_t err = quicly_get_close_reason(conn, &frame_type, &reason, &is_remote);
     ok(err == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     ok(frame_type == UINT64_MAX);
     ok(strcmp(reason, "good bye") == 0);
+    ok(is_remote == (conn == server));
 }
 
 static void test_close(void)

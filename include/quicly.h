@@ -1214,8 +1214,8 @@ static quicly_state_t quicly_get_state(quicly_conn_t *conn);
  * Returns the error code and other information regarding the closure of the connection. The out parameters may be NULL. This
  * function must only be called after the the state transitions to QUICLY_STATE_CLOSING or QUICLY_STATE_DRAINING.
  */
-quicly_error_t quicly_get_close_reason(quicly_conn_t *conn, int *is_remote, uint64_t *offending_frame_type,
-                                       const char **reason_phrase);
+quicly_error_t quicly_get_close_reason(quicly_conn_t *conn, uint64_t *offending_frame_type, const char **reason_phrase,
+                                       int *is_remote);
 /**
  *
  */

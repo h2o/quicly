@@ -404,10 +404,10 @@ static quicly_stream_open_t stream_open = {&on_stream_open};
 
 static void on_closed(quicly_closed_t *self, quicly_conn_t *conn)
 {
-    int is_remote;
     uint64_t frame_type;
     const char *reason;
-    quicly_error_t err = quicly_get_close_reason(conn, &is_remote, &frame_type, &reason);
+    int is_remote;
+    quicly_error_t err = quicly_get_close_reason(conn, &frame_type, &reason, &is_remote);
 
     if (!is_remote)
         return;
