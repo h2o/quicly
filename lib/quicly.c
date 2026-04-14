@@ -6072,11 +6072,18 @@ static int set_connection_close(quicly_conn_t *conn, quicly_error_t err, uint64_
 {
     assert(conn->connection_close.reason_phrase == NULL && "never called twice");
 
-    conn->connection_close.err = err;
     if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
+        conn->connection_close.err = err;
         conn->connection_close.frame_type = UINT64_MAX;
     } else {
         assert(frame_type != UINT64_MAX);
+        if (QUICLY_TRANSPORT_ERROR_CRYPTO(0) <= err && err <= QUICLY_TRANSPORT_ERROR_CRYPTO(0xff)) {
+            /* TLS alerts use the that of picotls */
+            uint8_t tls_alert = err - QUICLY_TRANSPORT_ERROR_CRYPTO(0);
+            conn->connection_close.err = is_remote ? PTLS_ALERT_TO_PEER_ERROR(tls_alert) : PTLS_ALERT_TO_SELF_ERROR(tls_alert);
+        } else {
+            conn->connection_close.err = err;
+        }
         conn->connection_close.frame_type = frame_type;
     }
     if ((conn->connection_close.reason_phrase = malloc(reason_phrase_len + 1)) == NULL)
