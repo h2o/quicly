@@ -6719,7 +6719,7 @@ static quicly_error_t handle_version_negotiation_packet(quicly_conn_t *conn, qui
         }
     }
     if (selected_version == 0)
-        return handle_close(conn, QUICLY_ERROR_NO_COMPATIBLE_VERSION, UINT64_MAX, ptls_iovec_init("", 0));
+        return handle_close(conn, QUICLY_ERROR_NO_COMPATIBLE_VERSION, QUICLY_FRAME_TYPE_PADDING, ptls_iovec_init("", 0));
 
     return negotiate_using_version(conn, selected_version);
 }
@@ -7187,7 +7187,7 @@ static quicly_error_t handle_stateless_reset(quicly_conn_t *conn)
 {
     QUICLY_PROBE(STATELESS_RESET_RECEIVE, conn, conn->stash.now);
     QUICLY_LOG_CONN(stateless_reset_receive, conn, {});
-    return handle_close(conn, QUICLY_ERROR_RECEIVED_STATELESS_RESET, UINT64_MAX, ptls_iovec_init("", 0));
+    return handle_close(conn, QUICLY_ERROR_RECEIVED_STATELESS_RESET, QUICLY_FRAME_TYPE_PADDING, ptls_iovec_init("", 0));
 }
 
 static int validate_retry_tag(quicly_decoded_packet_t *packet, quicly_cid_t *odcid, ptls_aead_context_t *retry_aead)
