@@ -421,6 +421,8 @@ static void on_closed(quicly_closed_t *self, quicly_conn_t *conn)
         fprintf(stderr, "stateless reset\n");
     } else if (err == QUICLY_ERROR_NO_COMPATIBLE_VERSION) {
         fprintf(stderr, "no compatible version\n");
+    } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_PEER_ALERT) {
+        fprintf(stderr, "TLS alert:code=%d\n", (int)PTLS_ERROR_TO_ALERT(err));
     } else {
         fprintf(stderr, "unexpected close:code=%" PRId64 "\n", err);
     }
