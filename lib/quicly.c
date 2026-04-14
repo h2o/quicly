@@ -5195,7 +5195,6 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
         if (reason_phrase[0] == '\0')
             reason_phrase = "state exhaustion";
     } else if (QUICLY_ERROR_IS_QUIC_TRANSPORT(conn->connection_close.err)) {
-        assert(conn->connection_close.frame_type == UINT64_MAX);
         error_code = QUICLY_ERROR_GET_ERROR_CODE(conn->connection_close.err);
     } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(conn->connection_close.err)) {
         /* conceal application errors unless sending in the application packet number space */
@@ -6066,10 +6065,15 @@ static quicly_error_t enter_close(quicly_conn_t *conn, int local_is_initiating, 
 static int set_connection_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, const char *reason_phrase,
                                 size_t reason_phrase_len, int is_remote)
 {
-    assert(conn->connection_close.reason_phrase == NULL);
+    assert(conn->connection_close.reason_phrase == NULL && "never called twice");
 
     conn->connection_close.err = err;
-    conn->connection_close.frame_type = QUICLY_ERROR_IS_QUIC_APPLICATION(err) ? UINT64_MAX : frame_type;
+    if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
+        conn->connection_close.frame_type = UINT64_MAX;
+    } else {
+        assert(frame_type != UINT64_MAX);
+        conn->connection_close.frame_type = frame_type;
+    }
     if ((conn->connection_close.reason_phrase = malloc(reason_phrase_len + 1)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     memcpy(conn->connection_close.reason_phrase, reason_phrase, reason_phrase_len);
