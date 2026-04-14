@@ -442,9 +442,9 @@ struct st_quicly_conn_t {
      * close reason
      */
     struct {
-        uint64_t is_remote : 1;
-        uint64_t error_code : 62;
-        uint64_t frame_type; /* UINT64_MAX if application close */
+        uint8_t is_remote;
+        quicly_error_t err;
+        uint64_t frame_type;
         char *reason_phrase;
         unsigned long num_packets_received;
     } connection_close;
@@ -550,8 +550,6 @@ static const quicly_stream_callbacks_t crypto_stream_callbacks = {quicly_streamb
 static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, int is_enc, size_t epoch, const void *secret);
 static quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, const char *reason_phrase);
 static quicly_error_t handle_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, ptls_iovec_t reason_phrase);
-static int set_connection_close(quicly_conn_t *conn, int is_remote, uint64_t error_code, uint64_t frame_type,
-                                const char *reason_phrase, size_t reason_phrase_len);
 static quicly_error_t discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
 
 quicly_cid_plaintext_t quicly_cid_plaintext_invalid = {.node_id = UINT64_MAX, .thread_id = 0xffffff};
@@ -995,7 +993,7 @@ quicly_error_t quicly_get_close_reason(quicly_conn_t *conn, int *is_remote, uint
         *offending_frame_type = conn->connection_close.frame_type;
     if (reason_phrase != NULL)
         *reason_phrase = conn->connection_close.reason_phrase;
-    return conn->connection_close.frame_type != UINT64_MAX ? QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(conn->connection_close.error_code) : QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(conn->connection_close.error_code);
+    return conn->connection_close.err;
 }
 
 static int stream_is_destroyable(quicly_stream_t *stream)
@@ -5174,8 +5172,6 @@ Exit:
 
 static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, quicly_send_context_t *s)
 {
-    uint64_t error_code, offending_frame_type;
-    const char *reason_phrase;
     quicly_error_t ret;
 
     assert(!conn->connection_close.is_remote);
@@ -5185,10 +5181,24 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
         return 0;
 
     /* determine the payload, masking the application error when sending the frame using an unauthenticated epoch */
-    error_code = conn->connection_close.error_code;
-    offending_frame_type = conn->connection_close.frame_type;
-    reason_phrase = conn->connection_close.reason_phrase;
-    if (offending_frame_type == UINT64_MAX) {
+    uint64_t error_code, offending_frame_type = conn->connection_close.frame_type;
+    const char *reason_phrase = conn->connection_close.reason_phrase;
+    if (conn->connection_close.err == 0) {
+        error_code = 0;
+        offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
+    } else if (conn->connection_close.err == QUICLY_ERROR_STATE_EXHAUSTION) {
+        /* State exhaution is an error induced by the peer, but as there is no specific error code, the generic error code
+         * (PROTOCOL_VIOLATION) is used. The exact cause is communicated using the reason phrase field because it is sometimes
+         * difficult for the peer to understand the problem without; e.g., when an ACK triggering the loss of a RETIRE_CONNECTION_ID
+         * frame leading to the overflow of `quicly_conn_t::egress.retire_cid`. */
+        error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+        if (reason_phrase[0] == '\0')
+            reason_phrase = "state exhaustion";
+    } else if (QUICLY_ERROR_IS_QUIC_TRANSPORT(conn->connection_close.err)) {
+        assert(conn->connection_close.frame_type == UINT64_MAX);
+        error_code = QUICLY_ERROR_GET_ERROR_CODE(conn->connection_close.err);
+    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(conn->connection_close.err)) {
+        /* conceal application errors unless sending in the application packet number space */
         switch (get_epoch(s->current.first_byte)) {
         case QUICLY_EPOCH_INITIAL:
         case QUICLY_EPOCH_HANDSHAKE:
@@ -5196,7 +5206,14 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
             offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
             reason_phrase = "";
             break;
+        default:
+            error_code = QUICLY_ERROR_GET_ERROR_CODE(conn->connection_close.err);
+            break;
         }
+    } else if (PTLS_ERROR_GET_CLASS(conn->connection_close.err) == PTLS_ERROR_CLASS_SELF_ALERT) {
+        error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_CRYPTO(PTLS_ERROR_TO_ALERT(conn->connection_close.err)));
+    } else {
+        error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INTERNAL);
     }
 
     /* write frame */
@@ -5206,7 +5223,7 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
     s->dst = quicly_encode_close_frame(s->dst, error_code, offending_frame_type, reason_phrase);
 
     /* update counter, probe */
-    if (offending_frame_type != UINT64_MAX) {
+    if (!QUICLY_ERROR_IS_QUIC_APPLICATION(conn->connection_close.err)) {
         ++conn->super.stats.num_frames_sent.transport_close;
         QUICLY_PROBE(TRANSPORT_CLOSE_SEND, conn, conn->stash.now, error_code, offending_frame_type, reason_phrase);
         QUICLY_LOG_CONN(transport_close_send, conn, {
@@ -6046,14 +6063,14 @@ static quicly_error_t enter_close(quicly_conn_t *conn, int local_is_initiating, 
     return 0;
 }
 
-static int set_connection_close(quicly_conn_t *conn, int is_remote, uint64_t error_code, uint64_t frame_type,
+static int set_connection_close(quicly_conn_t *conn, int is_remote, quicly_error_t err, uint64_t frame_type,
                                 const char *reason_phrase, size_t reason_phrase_len)
 {
     assert(conn->connection_close.reason_phrase == NULL);
 
     conn->connection_close.is_remote = is_remote;
-    conn->connection_close.error_code = error_code;
-    conn->connection_close.frame_type = frame_type;
+    conn->connection_close.err = err;
+    conn->connection_close.frame_type = QUICLY_ERROR_IS_QUIC_APPLICATION(err) ? UINT64_MAX : frame_type;
     if ((conn->connection_close.reason_phrase = malloc(reason_phrase_len + 1)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     memcpy(conn->connection_close.reason_phrase, reason_phrase, reason_phrase_len);
@@ -6064,40 +6081,17 @@ static int set_connection_close(quicly_conn_t *conn, int is_remote, uint64_t err
 
 quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, const char *reason_phrase)
 {
-    uint64_t error_code;
+    quicly_error_t ret;
 
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         return 0;
 
-    /* convert error code to QUIC error codes */
-    if (err == 0) {
-        frame_type = QUICLY_FRAME_TYPE_PADDING;
-        error_code = 0;
-    } else if (err == QUICLY_ERROR_STATE_EXHAUSTION) {
-        /* State exhaution is an error induced by the peer, but as there is no specific error code, the generic error code
-         * (PROTOCOL_VIOLATION) is used. The exact cause is communicated using the reason phrase field because it is sometimes
-         * difficult for the peer to understand the problem without; e.g., when an ACK triggering the loss of a RETIRE_CONNECTION_ID
-         * frame leading to the overflow of `quicly_conn_t::egress.retire_cid`. */
-        if (reason_phrase == NULL)
-            reason_phrase = "state exhaustion";
-        error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
-    } else if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
-        error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
-    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
-        frame_type = UINT64_MAX;
-        error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
-    } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_SELF_ALERT) {
-        error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_CRYPTO(PTLS_ERROR_TO_ALERT(err)));
-    } else {
-        error_code = QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_INTERNAL);
-    }
-
     if (reason_phrase == NULL)
         reason_phrase = "";
 
-    if ((err = enter_close(conn, 1, 0)) != 0 ||
-        (err = set_connection_close(conn, 0, error_code, frame_type, reason_phrase, strlen(reason_phrase))) != 0)
-        return err;
+    if ((ret = enter_close(conn, 1, 0)) != 0 ||
+        (ret = set_connection_close(conn, 0, err, frame_type, reason_phrase, strlen(reason_phrase))) != 0)
+        return ret;
     if (conn->super.ctx->closed != NULL)
         conn->super.ctx->closed->cb(conn->super.ctx->closed, conn);
     return 0;
@@ -6840,8 +6834,7 @@ quicly_error_t handle_close(quicly_conn_t *conn, quicly_error_t err, uint64_t fr
     /* switch to closing state, notify the app (at this moment the streams are accessible), then destroy the streams */
     if ((ret = enter_close(conn, 0,
                            !(err == QUICLY_ERROR_RECEIVED_STATELESS_RESET || err == QUICLY_ERROR_NO_COMPATIBLE_VERSION))) != 0 ||
-        (ret = set_connection_close(conn, 1, QUICLY_ERROR_GET_ERROR_CODE(err), frame_type, (const char *)reason_phrase.base,
-                                    reason_phrase.len)) != 0)
+        (ret = set_connection_close(conn, 1, err, frame_type, (const char *)reason_phrase.base, reason_phrase.len)) != 0)
         return ret;
     if (conn->super.ctx->closed != NULL)
         conn->super.ctx->closed->cb(conn->super.ctx->closed, conn);

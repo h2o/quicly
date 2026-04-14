@@ -404,25 +404,25 @@ static quicly_stream_open_t stream_open = {&on_stream_open};
 
 static void on_closed(quicly_closed_t *self, quicly_conn_t *conn)
 {
-    uint64_t error_code;
+    int is_remote;
     uint64_t frame_type;
     const char *reason;
-    int is_remote;
+    quicly_error_t err = quicly_get_close_reason(conn, &is_remote, &frame_type, &reason);
 
-    quicly_get_close_reason(conn, &is_remote, &error_code, &frame_type, &reason);
     if (!is_remote)
         return;
-    if (frame_type != UINT64_MAX) {
-        fprintf(stderr, "transport close:code=0x%" PRIx64 ";frame=%" PRIu64 ";reason=%.*s\n", error_code, frame_type,
-                (int)strlen(reason), reason);
-    } else if (error_code == QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_APPLICATION)) {
-        fprintf(stderr, "application close:code=0x%" PRIx64 ";reason=%.*s\n", error_code, (int)strlen(reason), reason);
-    } else if (error_code == QUICLY_ERROR_GET_ERROR_CODE(QUICLY_ERROR_RECEIVED_STATELESS_RESET)) {
+
+    if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
+        fprintf(stderr, "transport close:code=0x%" PRIx64 ";frame=%" PRIu64 ";reason=%s\n", QUICLY_ERROR_GET_ERROR_CODE(err),
+                frame_type, reason);
+    } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
+        fprintf(stderr, "application close:code=0x%" PRIx64 ";reason=%s\n", QUICLY_ERROR_GET_ERROR_CODE(err), reason);
+    } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
         fprintf(stderr, "stateless reset\n");
-    } else if (error_code == QUICLY_ERROR_GET_ERROR_CODE(QUICLY_ERROR_NO_COMPATIBLE_VERSION)) {
+    } else if (err == QUICLY_ERROR_NO_COMPATIBLE_VERSION) {
         fprintf(stderr, "no compatible version\n");
     } else {
-        fprintf(stderr, "unexpected close:code=0x%" PRIx64 "\n", error_code);
+        fprintf(stderr, "unexpected close:code=%" PRId64 "\n", err);
     }
 }
 
