@@ -443,7 +443,7 @@ struct st_quicly_conn_t {
      */
     struct {
         quicly_error_t err;
-        uint64_t frame_type;
+        uint64_t frame_type; /* UINT64_MAX if application close */
         char *reason_phrase;
         uint8_t is_remote : 1;
         unsigned long num_packets_received;
