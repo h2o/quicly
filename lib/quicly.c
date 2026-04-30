@@ -1575,7 +1575,9 @@ static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
     quicly_stream_t *stream;
     int ret;
 
-    if ((stream = open_stream(conn, -(quicly_stream_id_t)(1 + epoch), 65536, 65536)) == NULL)
+    if ((stream = open_stream(conn, -(quicly_stream_id_t)(1 + epoch), conn->super.ctx->max_crypto_bytes,
+                              16777216 /* CRYPTO streams are not flow controlled; set the remote threshold to a huge value that we'd
+                                        * never hit */)) == NULL)
         return PTLS_ERROR_NO_MEMORY;
     if ((ret = quicly_streambuf_create(stream, sizeof(quicly_streambuf_t))) != 0) {
         destroy_stream(stream, ret);

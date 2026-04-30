@@ -307,7 +307,7 @@ struct st_quicly_context_t {
     /**
      * maximum number of bytes that can be transmitted on a CRYPTO stream (per each epoch)
      */
-    uint64_t max_crypto_bytes;
+    uint32_t max_crypto_bytes;
     /**
      * initial CWND in terms of packet numbers
      */
