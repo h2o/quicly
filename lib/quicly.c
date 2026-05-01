@@ -2383,7 +2383,7 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
             return QUICLY_ERROR_IS_CLOSING;
     }
 
-    if (should_send_max_stream_data(stream))
+    if (stream->stream_id >= 0 && should_send_max_stream_data(stream))
         sched_stream_control(stream);
 
     if (stream_is_destroyable(stream))
