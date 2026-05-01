@@ -608,25 +608,16 @@ subtest "coalesced-initials" => sub {
     # Test that server processes coalesced Initial packets (RFC 9000 Section 12.2)
     # The test uses a pre-generated coalesced datagram with [Handshake][Initial]
     # where both packets have matching Connection IDs.
-
-    # Read the coalesced packet
-    open(my $fh, "<:raw", "t/assets/coalesced_packet.bin")
-        or BAIL_OUT("Cannot read coalesced_packet.bin: $!");
-    my $coalesced = do { local $/; <$fh> };
-    close($fh);
-
-    ok length($coalesced) > 0, "coalesced packet is non-empty";
-
-    # Spawn server
     my $guard = spawn_server();
 
     # Send coalesced packet
+    my $coalesced = slurp_file("t/assets/coalesced_packet.bin");
+    ok length($coalesced) > 0, "coalesced packet is non-empty";
     my $socket = IO::Socket::INET->new(
         Proto => 'udp',
         PeerAddr => '127.0.0.1',
         PeerPort => $port,
     ) or BAIL_OUT("Cannot create socket: $!");
-
     $socket->send($coalesced);
 
     # Wait for response with timeout
@@ -646,7 +637,22 @@ subtest "coalesced-initials" => sub {
         fail "server does not respond to coalesced Initial packet";
     }
 };
- 
+
+subtest "huge-CID" => sub {
+    # sends an Initial with a 255-byte SCID
+    my $server = spawn_server("-e", "$tempdir/events");
+
+    my $socket = IO::Socket::INET->new(
+        Proto    => 'udp',
+        PeerAddr => '127.0.0.1',
+        PeerPort => $port,
+    ) or BAIL_OUT("Cannot create socket:$!");
+    $socket->send(slurp_file("t/assets/huge_cid_packet.bin"));
+
+    sleep 1;
+    ok(!$server->is_dead);
+};
+
 done_testing;
 
 sub spawn_server {
