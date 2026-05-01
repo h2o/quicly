@@ -131,13 +131,28 @@ subtest "retry" => sub {
 };
 
 subtest "large-client-hello" => sub {
-    my $guard = spawn_server();
-    my $resp = `$cli -E -e $tempdir/events -p /12 127.0.0.1 $port 2> /dev/null`;
-    is $resp, "hello world\n";
-    my $events = slurp_file("$tempdir/events");
-    complex $events, sub {
-        my $before_receive = (split /"receive"/, $_)[0];
-        $before_receive =~ /"stream_send".*?\n.*?"stream_send"/s;
+    subtest "default" => sub {
+        my $guard = spawn_server();
+        my $resp = `$cli -E -e $tempdir/events -p /12 127.0.0.1 $port 2> /dev/null`;
+        is $resp, "hello world\n";
+        my $events = slurp_file("$tempdir/events");
+        complex $events, sub {
+            my $before_receive = (split /"receive"/, $_)[0];
+            $before_receive =~ /"stream_send".*?\n.*?"stream_send"/s;
+        };
+    };
+    subtest "max-crypto-bytes" => sub {
+        my $doit = sub {
+            my $size = shift;
+            my $server = spawn_server("--max-crypto-bytes", $size);
+            `$cli -E -e $tempdir/events -p /12 127.0.0.1 $port 2>&1`;
+        };
+        subtest "1K" => sub {
+            like $doit->(1024), qr/transport close:code=0xd;frame=6;/, "CRYPTO_BUFFER_EXCEEDED error";
+        };
+        subtest "2K" => sub {
+            like $doit->(2048), qr/hello world\n/s, "got response";
+        };
     };
 };
 
