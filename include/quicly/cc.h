@@ -118,13 +118,14 @@ typedef struct st_quicly_cc_t {
              */
             uint32_t bytes_per_mtu_increase;
             /**
-             * State to undo a recovery episode when all packets deemed lost are later acknowledged. `num_packets_lost` retains
-             * the number of packets deemed lost during the recovery period. Other fields retain the values to be restored when
+             * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
+             * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
+             * declared lost and have not yet been late-ACKed. Other fields retain the values to be restored when
              * `num_packets_lost` becomes zero.
              */
             struct {
-                uint32_t num_packets_lost;
                 uint64_t start_pn;
+                uint32_t num_packets_lost;
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_per_mtu_increase;
