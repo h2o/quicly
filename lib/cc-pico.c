@@ -198,8 +198,6 @@ ClampMinAndUpdateMetrics:
 
 static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
 {
-    (void)now;
-
     if (cc->state.pico.undo.num_packets_lost == 0 || pn < cc->state.pico.undo.start_pn || cc->recovery_end <= pn)
         return;
 
