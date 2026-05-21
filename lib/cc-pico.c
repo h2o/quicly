@@ -204,14 +204,16 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     if (--cc->state.pico.undo.num_packets_lost != 0)
         return;
 
-    int was_in_slow_start = cc->state.pico.undo.ssthresh == UINT32_MAX;
+    int was_in_startup = cc->state.pico.undo.ssthresh == UINT32_MAX;
     cc->cwnd = cc->state.pico.undo.cwnd;
     cc->ssthresh = cc->state.pico.undo.ssthresh;
     cc->state.pico.stash = 0;
     cc->state.pico.bytes_per_mtu_increase = cc->state.pico.undo.bytes_per_mtu_increase;
     cc->recovery_end = 0;
     --cc->num_loss_episodes;
-    if (was_in_slow_start) {
+    ++cc->num_loss_episodes_undone;
+    if (was_in_startup) {
+        ++cc->num_loss_episodes_undone_in_startup;
         cc->cwnd_exiting_slow_start = 0;
         cc->exit_slow_start_at = INT64_MAX;
     }

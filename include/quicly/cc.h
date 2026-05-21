@@ -206,6 +206,14 @@ typedef struct st_quicly_cc_t {
      */
     uint32_t num_loss_episodes;
     /**
+     * Total number of loss episodes undone.
+     */
+    uint32_t num_loss_episodes_undone;
+    /**
+     * Total number of loss episodes undone that occurred during startup.
+     */
+    uint32_t num_loss_episodes_undone_in_startup;
+    /**
      * Total number of loss episodes that was reported only by ECN (hence no packet loss).
      */
     uint32_t num_ecn_loss_episodes;

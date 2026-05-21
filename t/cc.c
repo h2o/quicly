@@ -43,6 +43,8 @@ static void test_pico_undo_loss(void)
     cc.type->cc_on_late_ack(&cc, 10, 1100);
     ok(cc.recovery_end == 0);
     ok(cc.num_loss_episodes == 0);
+    ok(cc.num_loss_episodes_undone == 1);
+    ok(cc.num_loss_episodes_undone_in_startup == 1);
     ok(cc.state.pico.undo.num_packets_lost == 0);
     ok(cc.cwnd == initcwnd);
     ok(cc.ssthresh == UINT32_MAX);
@@ -80,6 +82,8 @@ static void test_pico_undo_multiple_losses(void)
     ok(cc.cwnd == initcwnd);
     ok(cc.ssthresh == UINT32_MAX);
     ok(cc.num_loss_episodes == 0);
+    ok(cc.num_loss_episodes_undone == 1);
+    ok(cc.num_loss_episodes_undone_in_startup == 1);
 }
 
 static void test_rapid_start(void)
