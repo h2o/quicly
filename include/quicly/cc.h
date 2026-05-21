@@ -117,6 +117,18 @@ typedef struct st_quicly_cc_t {
              * Number of bytes required to be acked in order to increase CWND by 1 MTU.
              */
             uint32_t bytes_per_mtu_increase;
+            /**
+             * State to undo a recovery episode when all packets deemed lost are later acknowledged. `num_packets_lost` retains
+             * the number of packets deemed lost during the recovery period. Other fields retain the values to be restored when
+             * `num_packets_lost` becomes zero.
+             */
+            struct {
+                uint32_t num_packets_lost;
+                uint64_t start_pn;
+                uint32_t cwnd;
+                uint32_t ssthresh;
+                uint32_t bytes_per_mtu_increase;
+            } undo;
         } pico;
         /**
          * State information for CUBIC congestion control.
@@ -232,6 +244,10 @@ struct st_quicly_cc_type_t {
      * Switches the underlying algorithm of `cc` to that of `cc_switch`, returning a boolean whether the operation was successful.
      */
     int (*cc_switch)(quicly_cc_t *cc);
+    /**
+     * [optional] Called when a packet previously detected as lost is later acknowledged.
+     */
+    void (*cc_on_late_ack)(quicly_cc_t *cc, uint64_t pn, int64_t now);
     /**
      * [optional] called by quicly to enter jumpstart.
      */

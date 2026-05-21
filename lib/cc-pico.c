@@ -116,11 +116,25 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     /* Nothing to do if loss is in recovery window (modulo when exiting rapid start, in which case CWND is further reduced relative
      * to the number of bytes lost. */
     if (lost_pn < cc->recovery_end) {
+        if (bytes != 0 && cc->state.pico.undo.num_packets_lost != 0)
+            ++cc->state.pico.undo.num_packets_lost;
         if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
             quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, 0, bytes);
             goto ClampMinAndUpdateMetrics;
         }
         return;
+    }
+
+    /* Zero-byte congestion reports are ECN signals, not lost packets. They still enter recovery below, but cannot be undone by
+     * late ACKs because no packet was deemed lost. */
+    if (bytes != 0) {
+        cc->state.pico.undo.num_packets_lost = 1;
+        cc->state.pico.undo.start_pn = lost_pn;
+        cc->state.pico.undo.cwnd = cc->cwnd;
+        cc->state.pico.undo.ssthresh = cc->ssthresh;
+        cc->state.pico.undo.bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+    } else {
+        cc->state.pico.undo.num_packets_lost = 0;
     }
 
     cc->recovery_end = next_pn;
@@ -180,6 +194,28 @@ ClampMinAndUpdateMetrics:
 
     if (cc->cwnd_minimum > cc->cwnd)
         cc->cwnd_minimum = cc->cwnd;
+}
+
+static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
+{
+    (void)now;
+
+    if (cc->state.pico.undo.num_packets_lost == 0 || pn < cc->state.pico.undo.start_pn || cc->recovery_end <= pn)
+        return;
+
+    if (--cc->state.pico.undo.num_packets_lost != 0)
+        return;
+
+    int was_in_slow_start = cc->state.pico.undo.ssthresh == UINT32_MAX;
+    cc->cwnd = cc->state.pico.undo.cwnd;
+    cc->ssthresh = cc->state.pico.undo.ssthresh;
+    cc->state.pico.bytes_per_mtu_increase = cc->state.pico.undo.bytes_per_mtu_increase;
+    cc->recovery_end = 0;
+    --cc->num_loss_episodes;
+    if (was_in_slow_start) {
+        cc->cwnd_exiting_slow_start = 0;
+        cc->exit_slow_start_at = INT64_MAX;
+    }
 }
 
 static void pico_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
@@ -246,7 +282,14 @@ static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd
     pico_reset(cc, initcwnd);
 }
 
-quicly_cc_type_t quicly_cc_type_pico = {"pico",         &quicly_cc_pico_init,          pico_on_acked,
-                                        pico_on_lost,   pico_on_persistent_congestion, pico_on_sent,
-                                        pico_on_switch, quicly_cc_jumpstart_enter,     pico_enable_rapid_start};
+quicly_cc_type_t quicly_cc_type_pico = {"pico",
+                                        &quicly_cc_pico_init,
+                                        pico_on_acked,
+                                        pico_on_lost,
+                                        pico_on_persistent_congestion,
+                                        pico_on_sent,
+                                        pico_on_switch,
+                                        pico_on_late_ack,
+                                        quicly_cc_jumpstart_enter,
+                                        pico_enable_rapid_start};
 quicly_init_cc_t quicly_cc_pico_init = {pico_init};
