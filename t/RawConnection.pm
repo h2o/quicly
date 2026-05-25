@@ -29,10 +29,11 @@ sub new {
     # perform handshake and obtain connection parameters
     fcntl($self->{sock}, F_SETFD, 0)
         or die "failed to drop FD_CLOEXEC:$!";
+    my @alpn = map { ("-a", $_) } @{ $opts{alpn} // [] };
     open(
         my $fh,
         "-|",
-        $cli, "--sockfd", fileno($self->{sock}), qw(-y aes128gcmsha256 -e /dev/stdout --exit-after-handshake),
+        $cli, "--sockfd", fileno($self->{sock}), @alpn, qw(-y aes128gcmsha256 -e /dev/stdout --exit-after-handshake),
         $host, $port,
     ) or die "failed to spawn $cli:$!";
     fcntl($self->{sock}, F_SETFD, FD_CLOEXEC)
@@ -42,9 +43,13 @@ sub new {
         my $event = decode_json $line;
         if ($event->{type} eq 'receive') {
             if (!defined $self->{server_cid}) {
-                $event->{bytes} =~ /^..000000010008(.{16})/
+                $event->{bytes} =~ /^..0000000100([0-9a-f]{2})/
                     or die "invalid CID lengths found in packet:$event->{bytes}";
+                my $cid_len = hex $1;
+                $event->{bytes} =~ /^..0000000100..(.{@{[$cid_len * 2]}})/
+                    or die "invalid CID found in packet:$event->{bytes}";
                 $self->{server_cid} = pack "H*", $1;
+                $self->{server_cid_len} = $cid_len;
             }
         } elsif ($event->{type} eq 'crypto_update_secret' && $event->{epoch} == 3) {
             ($event->{is_enc} ? $self->{enc_secret} : $self->{dec_secret}) = $event->{secret};
@@ -94,7 +99,7 @@ sub transform_packet {
     $tmpfh->flush();
 
     my $mode = $is_enc ? "enc" : "dec";
-    my $dcid_len = $is_enc ? 8 : 0;
+    my $dcid_len = $is_enc ? $self->{server_cid_len} : 0;
     my $cli = $self->{cli};
     open my $fh, "$cli --${mode}rypt-packet @{[$self->{$mode . '_secret'}]}:$dcid_len < $tmpfh |"
         or die "failed to run $cli:$!";
