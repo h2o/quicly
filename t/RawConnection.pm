@@ -1,4 +1,4 @@
-package RawConnection;
+package t::RawConnection;
 
 use strict;
 use warnings;

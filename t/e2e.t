@@ -7,10 +7,9 @@ use File::Temp qw(tempdir);
 use IO::Select;
 use IO::Socket::INET;
 use JSON;
-use lib "t";
 use Net::EmptyPort qw(empty_port);
 use POSIX ":sys_wait_h";
-use RawConnection;
+use t::RawConnection;
 use Test::More;
 use Time::HiRes qw(sleep time);
 
@@ -568,7 +567,7 @@ subtest "trasport-parameters" => sub {
 
 subtest "reset-stream-overflow" => sub {
     my $server = spawn_server();
-    my $conn = RawConnection->new("127.0.0.1", $port, cli => $cli);
+    my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
     $conn->send("\x04\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff"); # reset stream with final_size=QUICINT_MAX
     sleep 0.5;
     ok !$server->is_dead(), "server process must be alive";
@@ -578,7 +577,7 @@ subtest "reset-stream-overflow" => sub {
 
 subtest "stream-open-after-connection-close" => sub {
     my $server = spawn_server(qw(-e /dev/stderr));
-    my $conn = RawConnection->new("127.0.0.1", $port, cli => $cli);
+    my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
     $conn->send("\x1c\x00\x00\x00" . "\x0a\x00\x05hello"); # CONNECTION_CLOSE -> STREAM
     sleep 0.5;
     ok !$server->is_dead(), "server process must be alive";
@@ -588,7 +587,7 @@ subtest "stream-open-after-connection-close" => sub {
 subtest "invalid-ack" => sub {
     my $server = spawn_server();
     subtest "gap" => sub {
-        my $conn = RawConnection->new("127.0.0.1", $port, cli => $cli);
+        my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
         my $pn = $conn->largest_pn_received;
         $conn->send("\x02" . chr($pn) . "\x00\x00" . chr($pn)); # ACK all PNs up to largest_pn_received
         sleep 0.5;
@@ -597,7 +596,7 @@ subtest "invalid-ack" => sub {
         like $received, qr/^\x1c\x0a\x02/, "responds with CONNECTION_CLOSE(PROTOCOL_VIOLATION) for ACK";
     };
     subtest "too large" => sub {
-        my $conn = RawConnection->new("127.0.0.1", $port, cli => $cli);
+        my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
         $conn->send("\x02\x3f\x00\x00\x00"); # ACK pn=63, server would not have sent so many packets
         sleep 0.5;
         ok !$server->is_dead(), "server is alive";
