@@ -131,6 +131,11 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->state.pico.undo.num_packets_lost = 1;
         cc->state.pico.undo.start_pn = lost_pn;
         cc->state.pico.undo.cwnd = cc->cwnd;
+        if (quicly_cc_in_jumpstart(cc)) {
+            cc->state.pico.undo.cwnd /= 2;
+            if (cc->state.pico.undo.cwnd < cc->cwnd_initial)
+                cc->state.pico.undo.cwnd = cc->cwnd_initial;
+        }
         cc->state.pico.undo.ssthresh = cc->ssthresh;
         cc->state.pico.undo.bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
     } else {
@@ -218,6 +223,7 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
         ++cc->num_loss_episodes_undone_in_startup;
         cc->cwnd_exiting_slow_start = 0;
         cc->exit_slow_start_at = INT64_MAX;
+        quicly_cc_jumpstart_reset(cc);
         cc->rapid_start.newest_rtt_sample_until = 0;
     }
 }
