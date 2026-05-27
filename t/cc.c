@@ -110,6 +110,33 @@ static void test_pico_undo_rapid_start_loss(void)
     ok(cc.ssthresh == cc.cwnd);
 }
 
+static void test_pico_undo_jumpstart_loss(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu, jumpcwnd = 24 * mtu;
+
+    quicly_cc_pico_init.cb(&quicly_cc_pico_init, &cc, initcwnd, 0);
+    cc.type->cc_jumpstart(&cc, jumpcwnd, 10);
+    ok(quicly_cc_in_jumpstart(&cc));
+    ok(cc.cwnd == jumpcwnd);
+
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.undo.cwnd == jumpcwnd / 2);
+    ok(cc.cwnd < jumpcwnd);
+    ok(!quicly_cc_in_jumpstart(&cc));
+
+    cc.type->cc_on_late_ack(&cc, 10, 1100);
+    ok(cc.recovery_end == 0);
+    ok(cc.cwnd == jumpcwnd / 2);
+    ok(cc.ssthresh == UINT32_MAX);
+
+    cc.type->cc_on_acked(&cc, &loss, mtu, 11, 18 * mtu, 1, 20, 1200, mtu);
+    ok(cc.cwnd != 18 * mtu);
+    ok(cc.cwnd_exiting_jumpstart == 0);
+    ok(!quicly_cc_in_jumpstart(&cc));
+}
+
 static void test_rapid_start(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
@@ -149,4 +176,5 @@ void test_cc(void)
     subtest("pico-undo-loss", test_pico_undo_loss);
     subtest("pico-undo-multiple-losses", test_pico_undo_multiple_losses);
     subtest("pico-undo-rapid-start-loss", test_pico_undo_rapid_start_loss);
+    subtest("pico-undo-jumpstart-loss", test_pico_undo_jumpstart_loss);
 }
