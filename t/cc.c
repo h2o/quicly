@@ -86,6 +86,30 @@ static void test_pico_undo_multiple_losses(void)
     ok(cc.num_loss_episodes_undone_in_startup == 1);
 }
 
+static void test_pico_undo_rapid_start_loss(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_pico_init.cb(&quicly_cc_pico_init, &cc, initcwnd, 0);
+    cc.type->enable_rapid_start(&cc, 900);
+    ok(quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.rapid_start.newest_rtt_sample_until == -1);
+
+    cc.type->cc_on_late_ack(&cc, 10, 1100);
+    ok(cc.rapid_start.newest_rtt_sample_until == 0);
+    ok(cc.recovery_end == 0);
+    ok(cc.cwnd == initcwnd);
+    ok(cc.ssthresh == UINT32_MAX);
+
+    cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1200, mtu);
+    ok(cc.cwnd == initcwnd / 2);
+    ok(cc.ssthresh == cc.cwnd);
+}
+
 static void test_rapid_start(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
@@ -124,4 +148,5 @@ void test_cc(void)
     subtest("rapid-start", test_rapid_start);
     subtest("pico-undo-loss", test_pico_undo_loss);
     subtest("pico-undo-multiple-losses", test_pico_undo_multiple_losses);
+    subtest("pico-undo-rapid-start-loss", test_pico_undo_rapid_start_loss);
 }
