@@ -1259,7 +1259,7 @@ quicly_error_t quicly_get_delivery_rate(quicly_conn_t *conn, quicly_rate_t *deli
 /**
  *
  */
-void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed);
+void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed, uint64_t *shifted);
 /**
  *
  */

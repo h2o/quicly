@@ -292,7 +292,15 @@ struct st_quicly_conn_t {
          *
          */
         struct {
+            /**
+             * sum of max(offset + len) for all the streams; used for checking if the peer stays in its flow control limit
+             */
             uint64_t bytes_consumed;
+            /**
+             * sum of bytes shifted (read out) from the receive buffers, by calling `quicly_stream_sync_recvbuf`; as bytes are
+             * shifted, additional connection-level flow control credits are provided to the peer
+             */
+            uint64_t bytes_shifted;
             quicly_maxsender_t sender;
         } max_data;
         /**
@@ -1045,7 +1053,7 @@ static void resched_stream_data(quicly_stream_t *stream)
 
 static int should_send_max_data(quicly_conn_t *conn)
 {
-    return quicly_maxsender_should_send_max(&conn->ingress.max_data.sender, conn->ingress.max_data.bytes_consumed,
+    return quicly_maxsender_should_send_max(&conn->ingress.max_data.sender, conn->ingress.max_data.bytes_shifted,
                                             (uint32_t)conn->super.ctx->transport_params.max_data, 512);
 }
 
@@ -1073,9 +1081,15 @@ int quicly_stream_sync_sendbuf(quicly_stream_t *stream, int activate)
 void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
 {
     stream->recvstate.data_off += shift_amount;
+
+    /* handle flow control unless the given stream is a CRYPTO stream, which are exempt from flow control */
     if (stream->stream_id >= 0) {
         if (should_send_max_stream_data(stream))
             sched_stream_control(stream);
+        quicly_conn_t *conn = stream->conn;
+        conn->ingress.max_data.bytes_shifted += shift_amount;
+        if (should_send_max_data(conn))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
 }
 
@@ -1481,7 +1495,7 @@ quicly_stream_id_t quicly_get_ingress_max_streams(quicly_conn_t *conn, int uni)
     return maxsender->max_committed;
 }
 
-void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed)
+void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed, uint64_t *shifted)
 {
     if (send_permitted != NULL)
         *send_permitted = conn->egress.max_data.permitted;
@@ -1489,6 +1503,8 @@ void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t
         *sent = conn->egress.max_data.sent;
     if (consumed != NULL)
         *consumed = conn->ingress.max_data.bytes_consumed;
+    if (shifted != NULL)
+        *shifted = conn->ingress.max_data.bytes_shifted;
 }
 
 static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
@@ -5442,7 +5458,7 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
         quicly_sent_t *sent;
         if ((ret = allocate_ack_eliciting_frame(conn, s, QUICLY_MAX_DATA_FRAME_CAPACITY, &sent, on_ack_max_data)) != 0)
             return ret;
-        uint64_t new_value = conn->ingress.max_data.bytes_consumed + conn->super.ctx->transport_params.max_data;
+        uint64_t new_value = conn->ingress.max_data.bytes_shifted + conn->super.ctx->transport_params.max_data;
         s->dst = quicly_encode_max_data_frame(s->dst, new_value);
         quicly_maxsender_record(&conn->ingress.max_data.sender, new_value, &sent->data.max_data.args);
         ++conn->super.stats.num_frames_sent.max_data;
