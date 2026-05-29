@@ -648,6 +648,29 @@ subtest "coalesced-initials" => sub {
     }
 };
  
+subtest "max-data" => sub {
+    my $server = spawn_server(qw(-M 1048576 -m 16777216 -X 100 -e), "$tempdir/events");
+    my $conn = RawConnection->new("127.0.0.1", $port);
+    # open 100 streams, send one byte of "X" just before 1MB
+    for (my $stream_id = 0; $stream_id < 400; $stream_id += 4) {
+        $conn->send("\x0e\x80\x00" . pack("n", $stream_id) . "\x80\x0f\xff\xff\x01X");
+        sleep 0.001
+            if $stream_id % 40 == 0;
+    }
+    # check server behavior by consulting the events log
+    my $events = slurp_file("$tempdir/events");
+    unlike $events, qr/"type":"max_data_send"/s, "MAX_DATA not sent";
+    like $events, qr/"type":"transport_close_send",.*"error_code":3,"frame_type":14,/, "flow control error caused by STREAM frame";
+    complex $events, sub {
+        my $max_stream_id = -1;
+        while (/"type":"stream_receive",.*"stream_id":([0-9]+),/g) {
+            $max_stream_id = $1
+                if $1 > $max_stream_id;
+        }
+        $max_stream_id == 64;
+    }, "16th stream (stream_id=64) causes overflow";
+};
+
 done_testing;
 
 sub spawn_server {
