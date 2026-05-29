@@ -1246,6 +1246,7 @@ static void usage(const char *cmd)
            "  -l log-file               file to log traffic secrets\n"
            "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
            "  -m <bytes>                max data (in bytes; default: 16MB)\n"
+           "  --max-crypto-bytes <N>    maximum permitted length of a CRYPTO stream\n"
            "  -N                        enforce HelloRetryRequest (client-only)\n"
            "  -n                        enforce version negotiation (client-only)\n"
            "  -O                        suppress output\n"
@@ -1536,6 +1537,7 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
+                                             {"max-crypto-bytes", required_argument, NULL, 0},
                                              {"rapid-start", no_argument, NULL, 0},
                                              {"sockfd", required_argument, NULL, 0},
                                              {"exit-after-handshake", no_argument, NULL, 0},
@@ -1563,6 +1565,11 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "jumpstart-max") == 0) {
                 if (sscanf(optarg, "%" SCNu32, &ctx.max_jumpstart_cwnd_packets) != 1) {
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
+                    exit(1);
+                }
+            } else if (strcmp(longopts[opt_index].name, "max-crypto-bytes") == 0) {
+                if (sscanf(optarg, "%" SCNu32, &ctx.max_crypto_bytes) != 1) {
+                    fprintf(stderr, "failed to parse max-crypto-bytes: %s\n", optarg);
                     exit(1);
                 }
             } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
