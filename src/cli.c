@@ -944,7 +944,10 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                         break;
                     packet.ecn = ecn;
                     if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
-                        if (packet.version != 0 && !quicly_is_supported_version(packet.version)) {
+                        /* handle version negotiation */
+                        if (packet.version == 0) {
+                            break;
+                        } else if (!quicly_is_supported_version(packet.version)) {
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
                             size_t payload_len = quicly_send_version_negotiation(&ctx, packet.cid.src, packet.cid.dest.encrypted,
                                                                                  quicly_supported_versions, payload);
@@ -952,9 +955,6 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             send_one_packet(fd, &remote, &local, payload, payload_len);
                             break;
                         }
-                        /* there is no way to send response to these v1 packets */
-                        if (packet.cid.dest.encrypted.len > QUICLY_MAX_CID_LEN_V1 || packet.cid.src.len > QUICLY_MAX_CID_LEN_V1)
-                            break;
                     }
 
                     quicly_conn_t *conn = NULL;

@@ -848,6 +848,8 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
         case QUICLY_PROTOCOL_VERSION_DRAFT29:
         case QUICLY_PROTOCOL_VERSION_DRAFT27:
             /* these are the recognized versions, and they share the same packet header format */
+            if (packet->cid.dest.encrypted.len > QUICLY_MAX_CID_LEN_V1 || packet->cid.src.len > QUICLY_MAX_CID_LEN_V1)
+                goto Error;
             if ((packet->octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_RETRY) {
                 /* retry */
                 if (src_end - src <= PTLS_AESGCM_TAG_SIZE)
