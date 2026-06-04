@@ -2740,24 +2740,19 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     if (ctx->transport_params.max_datagram_frame_size != 0)
         assert(ctx->receive_datagram_frame != NULL);
 
-    /* build log state */
-    ptls_log_init_conn_state(&log_state_override, ctx->tls->random_bytes);
-    switch (remote_addr->sa_family) {
-    case AF_INET:
-        ptls_build_v4_mapped_v6_address(&log_state_override.address, &((struct sockaddr_in *)remote_addr)->sin_addr);
-        break;
-    case AF_INET6:
-        memcpy(log_state_override.address, ((struct sockaddr_in6 *)remote_addr)->sin6_addr.s6_addr,
-               sizeof(log_state_override.address));
-        break;
-    default:
-        break;
+    /* build log state and override, unless already set by the caller */
+    if (ptls_log_conn_state_override == NULL) {
+        ptls_log_init_conn_state(&log_state_override, ctx->tls->random_bytes, 0, remote_addr);
+        ptls_log_conn_state_override = &log_state_override;
     }
 
     /* create TLS context */
-    ptls_log_conn_state_override = &log_state_override;
     tls = ptls_new(ctx->tls, server_name == NULL);
-    ptls_log_conn_state_override = NULL;
+
+    /* clear the override if we had set our own */
+    if (ptls_log_conn_state_override == &log_state_override)
+        ptls_log_conn_state_override = NULL;
+
     if (tls == NULL)
         return NULL;
     if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0) {
