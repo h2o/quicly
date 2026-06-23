@@ -4216,7 +4216,6 @@ static quicly_error_t allocate_frame(quicly_conn_t *conn, quicly_send_context_t 
         }
     }
 
-TargetReady:
     return 0;
 }
 
