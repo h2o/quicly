@@ -953,8 +953,10 @@ typedef struct st_quicly_stream_callbacks_t {
      * being written.  `wrote_all` is a boolean out parameter indicating if the application has written all the available data.
      * This callback is triggered by calling `quicly_stream_sync_sendbuf(stream, 1)` when tx data is present, and therefore, it
      * typically writes some data and sets `*len` to a non-zero value. However, the callback may set `*len` to zero to indicate that
-     * the payload was not immediately available (e,g., when it has to be loaded from disk). Then, it becomes the responsibility of
-     * the user-supplied stream scheduler to reschedule the stream once data is loaded.
+     * the payload was not immediately available (e.g., when it has to be loaded from disk). Setting `*len` to zero requires the use
+     * of a custom stream scheduler that absorbs the resulting `QUICLY_ERROR_SEND_EMIT_BLOCKED` (by descheduling the stream and
+     * returning zero) and reschedules the stream once the data becomes available. The default stream scheduler does not support
+     * the signal.
      */
     void (*on_send_emit)(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all);
     /**
