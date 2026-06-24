@@ -279,13 +279,14 @@ static void test_adjust_stream_frame_layout(void)
 #undef TEST
 }
 
-static void test_calculate_out_of_place_offset_multi(size_t stream_frame_header_size)
+static void test_scatter_bufsize_multi(size_t stream_frame_header_size)
 {
-    const size_t mtu = 1280, packet_overhead = 1 + 8 + 2 + 16 /* 1st byte, cid, pn, tag */;
+    const size_t mtu = 1280, real_overhead = 1 + 8 + 2 + 16 /* 1st byte, cid, pn, tag */;
 
-    /* emulate generating 10 datagrams */
-    size_t datagrams = 10, bufsize,
-           payload_offset = calculate_out_of_place_offset(mtu, packet_overhead, datagrams, 15000, &bufsize);
+    /* emulate generating 10 datagrams: size the tail (with the conservative, zero-length-DCID overhead), then derive the offset from
+     * it using the real overhead, exactly as the send path does */
+    size_t datagrams = 10, bufsize = calc_scatter_bufsize(mtu, datagrams),
+           payload_offset = bufsize - (mtu - real_overhead) * datagrams;
 
     /* payload of the first datagram is out-of-place */
     ok(payload_offset > mtu);
@@ -293,24 +294,25 @@ static void test_calculate_out_of_place_offset_multi(size_t stream_frame_header_
     /* payload of the following datagrams are also out-of-place, with the STREAM frame header prepended */
     size_t datagram_end = mtu;
     while (--datagrams != 0) {
-        payload_offset += mtu - (packet_overhead + stream_frame_header_size);
+        payload_offset += mtu - (real_overhead + stream_frame_header_size);
         datagram_end += mtu;
         size_t payload_from = payload_offset - stream_frame_header_size;
         ok(datagram_end <= payload_from);
-        ok(payload_from + mtu - packet_overhead <= bufsize);
+        ok(payload_from + mtu - real_overhead <= bufsize);
     }
 }
 
-static void test_calculate_out_of_place_offset(void)
+static void test_scatter_bufsize(void)
 {
-    const size_t mtu = 1280, packet_overhead = 1 + 8 + 2 + 16 /* 1st byte, cid, pn, tag */;
+    const size_t mtu = 1280;
 
-    /* no out-of-place encryption if space is minimal */
-    ok(calculate_out_of_place_offset(mtu, packet_overhead, 1, mtu, NULL) == 0);
-    ok(calculate_out_of_place_offset(mtu, packet_overhead, 2, mtu * 2, NULL) == 0);
+    /* out-of-place does not apply to a single datagram */
+    ok(calc_scatter_bufsize(mtu, 1) == mtu);
+    /* two datagrams require more buffer than the in-place size of 2 * mtu */
+    ok(calc_scatter_bufsize(mtu, 2) > mtu * 2);
 
-    subtest("frame_size=max", test_calculate_out_of_place_offset_multi, 1 + 8 + 8 + 8);
-    subtest("frame_size=0", test_calculate_out_of_place_offset_multi, 0);
+    subtest("frame_size=max", test_scatter_bufsize_multi, 1 + 8 + 8 + 8);
+    subtest("frame_size=0", test_scatter_bufsize_multi, 0);
 }
 
 static int64_t get_now_cb(quicly_now_t *self)
@@ -1574,7 +1576,7 @@ int main(int argc, char **argv)
     subtest("loss", test_loss);
     subtest("adjust-crypto-frame-layout", test_adjust_crypto_frame_layout);
     subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
-    subtest("calculate-out-of-place-offset", test_calculate_out_of_place_offset);
+    subtest("scatter-bufsize", test_scatter_bufsize);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);

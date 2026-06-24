@@ -1360,6 +1360,14 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
 quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams,
                            size_t *num_datagrams, void *buf, size_t bufsize);
 /**
+ * Returns the size of the buffer that should be supplied to `quicly_send` so that quicly is given the opportunity to use out-of-
+ * place ("scatter") encryption when building the datagrams. Supplying at least this many bytes does not guarantee that the
+ * optimization is used -- quicly still decides per packet (e.g., it is never used for a single packet or during the handshake);
+ * supplying fewer bytes is permitted and simply disables it. The value tracks the connection's current MTU, so it should be queried
+ * per send.
+ */
+size_t quicly_send_scatter_bufsize(quicly_conn_t *conn, size_t num_datagrams);
+/**
  * returns ECN bits to be set for the packets built by the last invocation of `quicly_send`
  */
 uint8_t quicly_send_get_ecn_bits(quicly_conn_t *conn);
