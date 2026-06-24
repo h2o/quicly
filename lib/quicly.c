@@ -5856,7 +5856,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     goto Exit;
                 /* send STREAM frames */
                 if ((ret = conn->super.ctx->stream_scheduler->do_send(conn->super.ctx->stream_scheduler, conn, s)) != 0) {
-                    assert(ret != QUICLY_ERROR_SEND_EMIT_BLOCKED && "blocked emit must be absorbed by a custom stream scheduler");
+                    assert(ret != QUICLY_ERROR_SEND_EMIT_BLOCKED && "blocked emit must be absorbed by the stream scheduler");
                     goto Exit;
                 }
                 /* once more, send control frames related to streams, as the state might have changed */
