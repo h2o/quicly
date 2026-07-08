@@ -24,7 +24,7 @@
 #include <stdlib.h>
 #include <openssl/bio.h>
 #include <openssl/crypto.h>
-#include <openssl/engine.h>
+/* #include <openssl/engine.h> */
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
@@ -1442,6 +1442,51 @@ static void test_stats_foreach(void)
 #undef CHECK
 }
 
+static void test_multipath_negotiation_violation(void)
+{
+    uint64_t orig_initial_max_path_id = quic_ctx.transport_params.initial_max_path_id;
+    quic_ctx.transport_params.initial_max_path_id = 0; /* disable multipath negotiation */
+
+    quicly_conn_t *client, *server;
+    quicly_send_context_t s;
+    struct iovec datagram;
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded;
+    size_t num_decoded;
+    quicly_error_t ret = 0;
+
+    test_setup_connected_peers(&client, &server);
+
+    /* craft packet with PATH_ABANDON frame */
+    test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
+    do_allocate_frame(client, &s, 100, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
+
+    /* encode PATH_ABANDON frame */
+    s.dst = quicly_encodev(s.dst, QUICLY_FRAME_TYPE_PATH_ABANDON);
+    s.dst = quicly_encodev(s.dst, 1); /* path_id = 1 */
+    s.dst = quicly_encodev(s.dst, 0); /* error_code = 0 */
+
+    commit_send_packet(client, &s, 0);
+    unlock_now(client);
+
+    num_decoded = decode_packets(&decoded, &datagram, 1);
+    /* protocol violation expected */
+    ret = quicly_receive(server, NULL, &fake_address.sa, &decoded);
+    ok(ret == 0);
+    ok(quicly_get_state(server) == QUICLY_STATE_CLOSING);
+
+    uint64_t offending_frame_type;
+    const char *reason;
+    int is_remote;
+    ret = quicly_get_close_reason(server, &offending_frame_type, &reason, &is_remote);
+    ok(ret == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -1519,6 +1564,7 @@ int main(int argc, char **argv)
 
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
+    subtest("multipath-negotiation-violation", test_multipath_negotiation_violation);
 
     subtest("stats-foreach", test_stats_foreach);
 

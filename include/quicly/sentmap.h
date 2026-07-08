@@ -49,6 +49,10 @@ typedef struct st_quicly_sent_packet_t {
      */
     uint8_t ack_epoch;
     /**
+     * path id on which the packet was sent
+     */
+    uint8_t path_id;
+    /**
      *
      */
     uint8_t ack_eliciting : 1;

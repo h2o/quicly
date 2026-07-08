@@ -270,6 +270,10 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint16_t max_datagram_frame_size;
+    /**
+     * multipath extension max path id (0 to disable)
+     */
+    uint64_t initial_max_path_id;
 } quicly_transport_parameters_t;
 
 typedef struct st_quicly_salt_t {
@@ -586,7 +590,8 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
             max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
             retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            ack_frequency, immediate_ack;                                                                                          \
+            ack_frequency, immediate_ack, path_ack, path_abandon, path_status, path_new_connection_id, path_retire_connection_id,  \
+            max_path_id, paths_blocked, path_cids_blocked;                                                                         \
     } num_frames_received, num_frames_sent;                                                                                        \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -779,7 +784,15 @@ typedef struct st_quicly_stats_t {
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(handshake_done, dir, apply)                                                                \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(datagram, dir, apply)                                                                      \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply)                                                                 \
-    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(immediate_ack, dir, apply)
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(immediate_ack, dir, apply)                                                                 \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(path_ack, dir, apply)                                                                      \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(path_abandon, dir, apply)                                                                  \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(path_status, dir, apply)                                                                   \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(path_new_connection_id, dir, apply)                                                         \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(path_retire_connection_id, dir, apply)                                                      \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(max_path_id, dir, apply)                                                                   \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(paths_blocked, dir, apply)                                                                 \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(path_cids_blocked, dir, apply)
 
 #define QUICLY_STATS_FOREACH_TRANSPORT_COUNTERS(apply)                                                                             \
     apply(num_paths.created, "num-paths.created")                                                                                  \
