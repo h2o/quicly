@@ -57,7 +57,6 @@ def handle_packet_received(events, idx):
         handler = FRAME_EVENT_HANDLERS.get(ev["type"])
         if handler:
             frames.append(handler(ev))
-
     ret = {
         "time": events[idx]["time"],
         "name": "transport:packet_received",
@@ -167,7 +166,7 @@ def handle_max_stream_data_receive(event):
     return {
         "frame_type": "max_stream_data",
         "stream_id": event["stream-id"],
-        "maximum": event["maximum"]
+        "maximum": event["max-stream-data"]
     }
 
 def handle_max_stream_data_send(event):
@@ -199,7 +198,7 @@ def handle_new_token_receive(event):
     return {
         "frame_type": "new_token",
         "token": event["token"],
-        "generation": event["generation"]
+        # "generation": event["generation"]
     }
 
 def handle_new_token_send(event):
@@ -252,7 +251,7 @@ def handle_stream_receive(event):
     return {
         "frame_type": label,
         "stream_id": event["stream-id"],
-        "length": event["len"],
+        "length": len(event["data"]) / 2 if "data" in event else event["data-len"],
         "offset": event["off"]
     }
 
@@ -261,14 +260,15 @@ def handle_stream_send(event):
     return {
         "frame_type": label,
         "stream_id": event["stream-id"],
-        "length": event["len"],
+        "length": len(event["data"]) / 2 if "data" in event else event["data-len"],
         "offset": event["off"]
     }
 
 def handle_stream_on_send_stop(event):
     return {
         "frame_type": "stop_sending",
-        "stream_id": event["stream-id"]
+        "stream_id": event["stream-id"],
+        "error_code": event["err"]
     }
 
 def handle_streams_blocked_receive(event):
@@ -363,7 +363,14 @@ Usage:
 def load_quicly_events(infile):
     events = []
     for line in infile:
-        events.append(json.loads(line))
+        object = json.loads(line)
+        # normalize the key format to kebab-case
+        normalized_object = {}
+        for key, value in object.items():
+            normalized_object[key.replace("_", "-")] = value
+        if "type" in normalized_object:
+            normalized_object["type"] = normalized_object["type"].replace("_", "-")
+        events.append(normalized_object)
     return events
 
 def main():
@@ -394,11 +401,11 @@ def main():
                 "time_format": "absolute"
             }
         }
-    }))
+    }, separators=(',', ':')))
     for i, event in enumerate(source_events):
         handler = QLOG_EVENT_HANDLERS.get(event["type"])
         if handler:
-            print(json.dumps(handler(source_events, i)))
+            print(json.dumps(handler(source_events, i), separators=(',', ':')))
 
 if __name__ == "__main__":
     main()

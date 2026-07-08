@@ -115,15 +115,15 @@ static int forward_stdin(quicly_conn_t *conn)
     }
 }
 
-static void on_stop_sending(quicly_stream_t *stream, int err)
+static void on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 {
-    fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    fprintf(stderr, "received STOP_SENDING: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
 }
 
-static void on_receive_reset(quicly_stream_t *stream, int err)
+static void on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
 {
-    fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    fprintf(stderr, "received RESET_STREAM: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
     quicly_close(stream->conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
 }
 
@@ -175,7 +175,7 @@ static void process_msg(int is_client, quicly_conn_t **conns, struct msghdr *msg
             quicly_receive(conns[i], NULL, msg->msg_name, &decoded);
         } else if (!is_client) {
             /* assume that the packet is a new connection */
-            quicly_accept(conns + i, &ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL);
+            quicly_accept(conns + i, &ctx, NULL, msg->msg_name, &decoded, NULL, &next_cid, NULL, NULL);
         }
     }
 }
@@ -215,7 +215,7 @@ static int run_loop(int fd, quicly_conn_t *client)
                 tv.tv_sec = delta / 1000;
                 tv.tv_usec = (delta % 1000) * 1000;
             } else {
-                tv.tv_sec = 1000;
+                tv.tv_sec = 0;
                 tv.tv_usec = 0;
             }
             FD_ZERO(&readfds);
@@ -277,7 +277,7 @@ static int run_loop(int fd, quicly_conn_t *client)
     return 0;
 }
 
-static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+static quicly_error_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     static const quicly_stream_callbacks_t stream_callbacks = {
         quicly_streambuf_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_stop_sending, on_receive,
@@ -386,7 +386,7 @@ int main(int argc, char **argv)
         /* initiate a connection, and open a stream */
         int ret;
         if ((ret = quicly_connect(&client, &ctx, host, (struct sockaddr *)&sa, NULL, &next_cid, ptls_iovec_init(NULL, 0), NULL,
-                                  NULL)) != 0) {
+                                  NULL, NULL)) != 0) {
             fprintf(stderr, "quicly_connect failed:%d\n", ret);
             exit(1);
         }

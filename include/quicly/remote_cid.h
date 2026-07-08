@@ -29,23 +29,39 @@ extern "C" {
 #endif
 
 /**
+ * state of `quicly_remote_cid_t`
+ */
+typedef enum en_quicly_remote_cid_state_t {
+    /**
+     * cid and stateless reset token have not been received for the sequence number
+     */
+    QUICLY_REMOTE_CID_UNAVAILABLE,
+    /**
+     * cid is in use
+     */
+    QUICLY_REMOTE_CID_IN_USE,
+    /**
+     * cid has been receive but has not been used yet
+     */
+    QUICLY_REMOTE_CID_AVAILABLE
+} quicly_remote_cid_state_t;
+
+/**
  * records a CID given by the remote peer
  */
 typedef struct st_quicly_remote_cid_t {
     /**
-     * indicates whether this record holds an active (given by remote peer and not retired) CID
+     * state
      */
-    int is_active;
+    quicly_remote_cid_state_t state;
     /**
-     * sequence number of the CID
-     *
-     * If is_active, this represents the sequence number associated with the CID.
-     * If !is_active, this represents a "reserved" slot, meaning that we are expecting to receive a NEW_CONNECTION_ID frame
-     * with this sequence number. This helps determine if a received frame is carrying a CID that is already retired.
+     * sequence number of the CID; if `state` is UNAVAILABLE, this is a reserved slot meaning that we are expecting to receive a
+     * NEW_CONNECTION_ID frame with this sequence number. This helps determine if a received frame is carrying a CID that is already
+     * retired.
      */
     uint64_t sequence;
     /**
-     * CID; only usable if `is_active` is true
+     * CID; available unless `state` is UNAVAILABLE
      */
     struct st_quicly_cid_t cid;
     /**
@@ -59,14 +75,22 @@ typedef struct st_quicly_remote_cid_t {
  */
 typedef struct st_quicly_remote_cid_set_t {
     /**
-     * we retain QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT active connection IDs
-     * cids[0] holds the current (in use) CID which is used when emitting packets
+     * We retain QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT active connection IDs. `cids[0]` used to retain the current DCID, but it is
+     * no longer the case. DCID of the non-probing path should now be obtained via `get_dcid(conn->paths[0])` where `paths[0]` is
+     * the non-probing path.
      */
     quicly_remote_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
     /**
      * we expect to receive CIDs with sequence number smaller than or equal to this number
      */
     uint64_t _largest_sequence_expected;
+    /**
+     * queue containing CID sequence numbers that should be sent using RETIRE_CONNECTION_ID frames
+     */
+    struct {
+        uint64_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * 2];
+        size_t count;
+    } retired;
 } quicly_remote_cid_set_t;
 
 /**
@@ -76,17 +100,24 @@ typedef struct st_quicly_remote_cid_set_t {
  */
 void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *initial_cid, void (*random_bytes)(void *, size_t));
 /**
- * registers received connection ID
- * returns 0 if successful (registered or ignored because of duplication/stale information), transport error code otherwise
+ * Registers received connection ID at the same time pushing CIDs onto the retired queue, if any. Returns 0 if successful (CID set
+ * is either updated or given information is ignored due to being state), or a transport error code if an error occurs.
  */
-int quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
-                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to,
-                               uint64_t unregistered_seqs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT], size_t *num_unregistered_seqs);
+quicly_error_t quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                                          const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to);
 /**
- * unregisters specified CID from the store
- * returns 0 if success, 1 if failure
+ * Unregisters specified CID from the store, pushing the unregistered CID onto the retired queue. The former always succeeds, while
+ * the latter might fail due to state exhaustion, in which case an error is returned.
  */
 int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence);
+/**
+ * pushes a CID sequence number to the retired queue
+ */
+int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequence);
+/**
+ * removed the first `count` sequence numbers from the retired queue
+ */
+void quicly_remote_cid_shift_retired(quicly_remote_cid_set_t *set, size_t count);
 
 #ifdef __cplusplus
 }
