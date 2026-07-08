@@ -2689,6 +2689,17 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                     v = UINT16_MAX;
                 params->max_datagram_frame_size = (uint16_t)v;
             });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_PATH_ID, {
+                if ((params->initial_max_path_id = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+                /* must not exceed 2^32 - 1 */
+                if (params->initial_max_path_id > 4294967295U) {
+                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                    goto Exit;
+                }
+            });
             /* skip unknown extension */
             if (tp_index >= 0)
                 src = end;

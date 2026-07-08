@@ -1452,7 +1452,48 @@ static void test_multipath_negotiation_violation(void)
     struct iovec datagram;
     uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
     quicly_decoded_packet_t decoded;
-    size_t num_decoded;
+    quicly_error_t ret = 0;
+    test_setup_connected_peers(&client, &server);
+
+    /* craft packet with PATH_ABANDON frame */
+    test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
+    do_allocate_frame(client, &s, 100, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
+
+    /* encode PATH_ABANDON frame */
+    s.dst = quicly_encodev(s.dst, QUICLY_FRAME_TYPE_PATH_ABANDON);
+    s.dst = quicly_encodev(s.dst, 1); /* path_id = 1 */
+    s.dst = quicly_encodev(s.dst, 0); /* error_code = 0 */
+
+    commit_send_packet(client, &s, 0);
+    unlock_now(client);
+
+    decode_packets(&decoded, &datagram, 1);
+    /* protocol violation expected */
+    ret = quicly_receive(server, NULL, &fake_address.sa, &decoded);
+    ok(ret == 0);
+    ok(quicly_get_state(server) == QUICLY_STATE_CLOSING);
+
+    uint64_t offending_frame_type;
+    const char *reason;
+    int is_remote;
+    ret = quicly_get_close_reason(server, &offending_frame_type, &reason, &is_remote);
+    ok(ret == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    quicly_free(client);
+    quicly_free(server);
+
+    quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
+}
+
+static void test_multipath_negotiation_success(void)
+{
+    uint64_t orig_initial_max_path_id = quic_ctx.transport_params.initial_max_path_id;
+    quic_ctx.transport_params.initial_max_path_id = 4; /* enable multipath negotiation */
+
+    quicly_conn_t *client, *server;
+    quicly_send_context_t s;
+    struct iovec datagram;
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded;
     quicly_error_t ret = 0;
 
     test_setup_connected_peers(&client, &server);
@@ -1469,23 +1510,18 @@ static void test_multipath_negotiation_violation(void)
     commit_send_packet(client, &s, 0);
     unlock_now(client);
 
-    num_decoded = decode_packets(&decoded, &datagram, 1);
-    /* protocol violation expected */
+    decode_packets(&decoded, &datagram, 1);
+    /* should be received successfully without protocol violation */
     ret = quicly_receive(server, NULL, &fake_address.sa, &decoded);
     ok(ret == 0);
-    ok(quicly_get_state(server) == QUICLY_STATE_CLOSING);
-
-    uint64_t offending_frame_type;
-    const char *reason;
-    int is_remote;
-    ret = quicly_get_close_reason(server, &offending_frame_type, &reason, &is_remote);
-    ok(ret == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
 
     quicly_free(client);
     quicly_free(server);
 
     quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
 }
+
 
 int main(int argc, char **argv)
 {
@@ -1565,6 +1601,7 @@ int main(int argc, char **argv)
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
     subtest("multipath-negotiation-violation", test_multipath_negotiation_violation);
+    subtest("multipath-negotiation-success", test_multipath_negotiation_success);
 
     subtest("stats-foreach", test_stats_foreach);
 
