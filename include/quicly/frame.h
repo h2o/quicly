@@ -62,6 +62,17 @@ extern "C" {
 #define QUICLY_FRAME_TYPE_DATAGRAM_WITHLEN 49
 #define QUICLY_FRAME_TYPE_ACK_FREQUENCY 0xaf
 
+#define QUICLY_FRAME_TYPE_PATH_ACK 0x3e
+#define QUICLY_FRAME_TYPE_PATH_ACK_ECN 0x3f
+#define QUICLY_FRAME_TYPE_PATH_ABANDON 0x3e75
+#define QUICLY_FRAME_TYPE_PATH_STATUS_BACKUP 0x3e76
+#define QUICLY_FRAME_TYPE_PATH_STATUS_AVAILABLE 0x3e77
+#define QUICLY_FRAME_TYPE_PATH_NEW_CONNECTION_ID 0x3e78
+#define QUICLY_FRAME_TYPE_PATH_RETIRE_CONNECTION_ID 0x3e79
+#define QUICLY_FRAME_TYPE_MAX_PATH_ID 0x3e7a
+#define QUICLY_FRAME_TYPE_PATHS_BLOCKED 0x3e7b
+#define QUICLY_FRAME_TYPE_PATH_CIDS_BLOCKED 0x3e7c
+
 #define QUICLY_FRAME_TYPE_STREAM_BITS 0x7
 #define QUICLY_FRAME_TYPE_STREAM_BIT_OFF 0x4
 #define QUICLY_FRAME_TYPE_STREAM_BIT_LEN 0x2
@@ -244,6 +255,8 @@ typedef struct st_quicly_stop_sending_frame_t {
 static quicly_error_t quicly_decode_stop_sending_frame(const uint8_t **src, const uint8_t *end, quicly_stop_sending_frame_t *frame);
 
 uint8_t *quicly_encode_ack_frame(uint8_t *dst, uint8_t *dst_end, quicly_ranges_t *ranges, uint64_t *ecn_counts, uint64_t ack_delay);
+uint8_t *quicly_encode_path_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t path_id, quicly_ranges_t *ranges,
+                                      uint64_t *ecn_counts, uint64_t ack_delay);
 
 typedef struct st_quicly_ack_frame_t {
     uint64_t largest_acknowledged;
