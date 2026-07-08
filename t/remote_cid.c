@@ -86,6 +86,59 @@ static void test_shift_retired(void)
     ok(set.retired.cids[2] == 14);
 }
 
+static void test_multipath_remote_cid(void)
+{
+    quicly_remote_cid_set_t set;
+
+    quicly_remote_cid_init_set(&set, NULL, quic_ctx.tls->random_bytes);
+
+    /* register CIDs on path 0 */
+    for (int i = 1; i < 4; i++) {
+        ok(quicly_remote_cid_register_path(&set, 0, i, cids[i], CID_LEN, srts[i], 0) == 0);
+    }
+
+    /* register CIDs with overlapping sequence numbers on path 1 */
+    for (int i = 0; i < 4; i++) {
+        ok(quicly_remote_cid_register_path(&set, 1, i, cids[i + 4], CID_LEN, srts[i + 4], 0) == 0);
+    }
+
+    /* confirm no conflicts */
+    ok(set.retired.count == 0);
+
+    /* duplicate registration returns 0 */
+    ok(quicly_remote_cid_register_path(&set, 1, 0, cids[4], CID_LEN, srts[4], 0) == 0);
+
+    /* registering sequence with conflicting CID returns PROTOCOL_VIOLATION */
+    ok(quicly_remote_cid_register_path(&set, 1, 0, cids[5], CID_LEN, srts[4], 0) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+
+    /* registering sequence with conflicting SRT returns PROTOCOL_VIOLATION */
+    ok(quicly_remote_cid_register_path(&set, 1, 0, cids[4], CID_LEN, srts[5], 0) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+
+    /* unregister sequence 0 on path 1 */
+    ok(quicly_remote_cid_unregister_path(&set, 1, 0) == 0);
+    /* seq 0 pushed to retired list */
+    ok(set.retired.count == 1);
+    ok(set.retired.cids[0] == 0);
+
+    /* slot for path 1 sequence 0 is UNAVAILABLE */
+    int found_path1_seq0 = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set.cids); i++) {
+        if (set.cids[i].path_id == 1 && set.cids[i].sequence == 0 && set.cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE) {
+            found_path1_seq0 = 1;
+        }
+    }
+    ok(!found_path1_seq0);
+
+    /* slot for path 0 sequence 0 is still IN_USE/AVAILABLE */
+    int found_path0_seq0 = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set.cids); i++) {
+        if (set.cids[i].path_id == 0 && set.cids[i].sequence == 0 && set.cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE) {
+            found_path0_seq0 = 1;
+        }
+    }
+    ok(found_path0_seq0);
+}
+
 void test_received_cid(void)
 {
     quicly_remote_cid_set_t set;
@@ -119,6 +172,7 @@ void test_received_cid(void)
     } while (0)
 
     subtest("shift-retired", test_shift_retired);
+    subtest("multipath-remote-cid", test_multipath_remote_cid);
 
     quicly_remote_cid_init_set(&set, NULL, quic_ctx.tls->random_bytes);
 
@@ -202,6 +256,7 @@ void test_received_cid(void)
     TEST_RETIRED(0, 2, 4, 1, 3, 6, 7, 5);
 
     /* too many outstanding CIDs in retire queue */
+    set.retired.count = PTLS_ELEMENTSOF(set.retired.cids);
     ok(quicly_remote_cid_register(&set, 11, cids[11], CID_LEN, srts[11], 9) == QUICLY_ERROR_STATE_EXHAUSTION);
 
     /* pretend as if RCID frames carrying the retired ones were sent and that all have been acked */
