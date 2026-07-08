@@ -1111,6 +1111,10 @@ typedef struct st_quicly_decoded_packet_t {
         ptls_iovec_t src;
     } cid;
     /**
+     * path ID
+     */
+    uint32_t path_id;
+    /**
      * version; 0 if is a short header packet
      */
     uint32_t version;

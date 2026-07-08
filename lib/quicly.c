@@ -808,6 +808,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
     packet->token = ptls_iovec_init(NULL, 0);
     packet->decrypted.pn = UINT64_MAX;
     packet->ecn = 0; /* non-ECT */
+    packet->path_id = 0;
 
     /* move the cursor to the second byte */
     src += *off + 1;
@@ -3150,7 +3151,7 @@ static void xor_path_id_iv(ptls_aead_context_t *aead, uint32_t path_id)
 
 static size_t aead_decrypt_core(ptls_aead_context_t *aead, uint64_t pn, quicly_decoded_packet_t *packet, size_t aead_off)
 {
-    uint32_t path_id = packet->cid.dest.plaintext.path_id;
+    uint32_t path_id = packet->path_id;
 
     /* temporarily permute the iv for this specific path before decryption */
     if (path_id != 0)
@@ -3819,9 +3820,15 @@ static int setup_path_dcid(quicly_conn_t *conn, size_t path_index)
         /* if peer CID is zero-length, we can send packets to whatever address without the fear of corelation */
         found = 0;
     } else {
+        uint32_t expected_path_id = 0;
+        if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
+            conn->super.remote.transport_params.initial_max_path_id != 0) {
+            expected_path_id = path->path_id;
+        }
+
         /* find the unused entry with a smallest sequence number matching the path's path_id */
         for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); ++i) {
-            if (set->cids[i].state == QUICLY_REMOTE_CID_AVAILABLE && set->cids[i].path_id == path->path_id &&
+            if (set->cids[i].state == QUICLY_REMOTE_CID_AVAILABLE && set->cids[i].path_id == expected_path_id &&
                 (found == SIZE_MAX || set->cids[i].sequence < set->cids[found].sequence))
                 found = i;
         }
@@ -3990,7 +3997,11 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
     datagram_size = s->dst - s->payload_buf.datagram;
     assert(datagram_size <= conn->egress.max_udp_payload_size);
 
-    uint32_t path_id = conn->paths[s->path_index]->path_id;
+    uint32_t path_id = 0;
+    if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
+        conn->super.remote.transport_params.initial_max_path_id != 0) {
+        path_id = conn->paths[s->path_index]->path_id;
+    }
     /* temporarily permute the iv for this specific path before encryption */
     if (path_id != 0 && s->target.cipher->aead != NULL)
         xor_path_id_iv(s->target.cipher->aead, path_id);
@@ -4255,7 +4266,11 @@ Emit: /* emit an ACK frame */
     if ((ret = do_allocate_frame(conn, s, QUICLY_ACK_FRAME_CAPACITY, ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING)) != 0)
         return ret;
     uint8_t *dst = s->dst;
-    uint32_t path_id = conn->paths[s->path_index]->path_id;
+    uint32_t path_id = 0;
+    if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
+        conn->super.remote.transport_params.initial_max_path_id != 0) {
+        path_id = conn->paths[s->path_index]->path_id;
+    }
     if (path_id != 0) {
         dst = quicly_encode_path_ack_frame(dst, s->dst_end, path_id, &space->ack_queue, space->ecn_counts, ack_delay);
     } else {
@@ -7847,6 +7862,14 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         aead.ctx = conn;
         space = (void *)&conn->application;
         epoch = QUICLY_EPOCH_1RTT;
+    }
+
+    if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
+        conn->super.remote.transport_params.initial_max_path_id != 0) {
+        /* If multipath is enabled, try to derive path_id from the DCID. Note that path_index is not yet calculated. */
+        packet->path_id = packet->cid.dest.plaintext.path_id;
+    } else {
+        packet->path_id = 0;
     }
 
     /* decrypt */
