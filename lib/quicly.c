@@ -3936,16 +3936,7 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
             conn->super.stats.num_packets.handshake_sent++;
             break;
         }
-    } else {
-        if (conn->egress.packet_number >= conn->application->cipher.egress.key_update_pn.next) {
-            int ret;
-            if ((ret = update_1rtt_egress_key(conn)) != 0)
-                return ret;
-        }
-        if ((conn->application->cipher.egress.key_phase & 1) != 0)
-            *s->target.first_byte_at |= QUICLY_KEY_PHASE_BIT;
     }
-    quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE, (uint16_t)conn->egress.packet_number);
 
     /* encrypt the packet */
     s->dst += s->target.cipher->aead->algo->tag_size;
