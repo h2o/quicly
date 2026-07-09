@@ -269,6 +269,8 @@ struct st_quicly_conn_path_t {
     struct st_quicly_pn_space_t *pn_space;
     /* max egress udp payload size */
     uint16_t max_udp_payload_size;
+    /* connection back-pointer */
+    quicly_conn_t *conn;
 };
 
 struct st_quicly_delayed_packet_t {
@@ -2086,6 +2088,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
     set_address(&path->address.remote, remote_addr);
     set_address(&path->address.local, local_addr);
     path->path_id = path_index;
+    path->conn = conn;
 
     conn->paths[path_index] = path;
 
