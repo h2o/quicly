@@ -791,6 +791,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             ret = send_pending(fd, conn);
             if (ret != 0) {
                 ech_save_retry_configs();
+                dump_stats(stderr, conn);
                 quicly_free(conn);
                 conn = NULL;
                 if (ret == QUICLY_ERROR_FREE_CONNECTION) {

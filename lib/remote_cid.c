@@ -95,8 +95,8 @@ static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint32_t path_id
             return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
         }
     } else {
-        /* path_id != 0: allocate dynamically */
-        for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
+        /* path_id != 0: allocate dynamically starting after the reserved path_id = 0 slots */
+        for (size_t i = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i < PTLS_ELEMENTSOF(set->cids); i++) {
             if (set->cids[i].state == QUICLY_REMOTE_CID_UNAVAILABLE) {
                 slot_to_use = i;
                 break;

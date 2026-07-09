@@ -7131,6 +7131,7 @@ static quicly_error_t handle_path_retire_connection_id_frame(quicly_conn_t *conn
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
     quicly_remote_cid_unregister_path(&conn->super.remote.cid_set, (uint32_t)path_id, seq);
+    dissociate_cid(conn, seq);
     return 0;
 }
 
@@ -7411,9 +7412,9 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t epoch, size_t p
          *   +------------------+---------------+----+----+----+----+---------------+---------+ */
         FRAME( DATAGRAM_NOLEN   , datagram      ,  0 ,  1,   0,   1 ,             1 ,       0 ),
         FRAME( DATAGRAM_WITHLEN , datagram      ,  0 ,  1,   0,   1 ,             1 ,       0 ),
-        FRAME( ACK_FREQUENCY    , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ,       0 ),
         FRAME( PATH_ACK         , path_ack      ,  0 ,  0,   0,   1 ,             0 ,       0 ),
         FRAME( PATH_ACK_ECN     , path_ack      ,  0 ,  0,   0,   1 ,             0 ,       0 ),
+        FRAME( ACK_FREQUENCY    , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ,       0 ),
         FRAME( PATH_ABANDON     , path_abandon  ,  0 ,  0,   0,   1 ,             1 ,       0 ),
         FRAME( PATH_STATUS_BACKUP , path_status ,  0 ,  0,   0,   1 ,             1 ,       0 ),
         FRAME( PATH_STATUS_AVAILABLE , path_status ,  0 ,  0,   0,   1 ,             1 ,       0 ),
@@ -7864,15 +7865,16 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         epoch = QUICLY_EPOCH_1RTT;
     }
 
-    if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
-        conn->super.remote.transport_params.initial_max_path_id != 0) {
-        /* If multipath is enabled, try to derive path_id from the DCID. Note that path_index is not yet calculated. */
+    if (path_index == 0) {
+        packet->path_id = 0;
+    } else if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
+               conn->super.remote.transport_params.initial_max_path_id != 0) {
+        /* if multipath is enabled, try to derive path_id from the dcid; note that path_index is not yet calculated */
         packet->path_id = packet->cid.dest.plaintext.path_id;
     } else {
         packet->path_id = 0;
     }
 
-    /* decrypt */
     if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, &(*space)->next_expected_packet_number, packet, &pn,
                               &payload)) != 0) {
         ++conn->super.stats.num_packets.decryption_failed;
