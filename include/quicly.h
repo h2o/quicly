@@ -720,6 +720,19 @@ typedef struct st_quicly_stats_t {
     size_t num_sentmap_packets_largest;
 } quicly_stats_t;
 
+typedef struct st_quicly_path_stats_t {
+    uint64_t sent;
+    uint64_t received;
+    uint64_t acked;
+    uint64_t lost;
+    uint64_t bytes_sent;
+    uint64_t bytes_acked;
+    uint32_t rtt_smoothed;
+    quicly_address_t local;
+    quicly_address_t remote;
+} quicly_path_stats_t;
+
+
 /* clang-format off */
 
 #define QUICLY_STATS_FOREACH_NUM_PACKETS(apply)                                                                                    \
@@ -1295,6 +1308,8 @@ static quicly_tracer_t *quicly_get_tracer(quicly_conn_t *conn);
  * destroys a connection object.
  */
 void quicly_free(quicly_conn_t *conn);
+int quicly_get_path_stats(quicly_conn_t *conn, size_t path_index, quicly_path_stats_t *stats);
+quicly_error_t quicly_open_path(quicly_conn_t *conn, struct sockaddr *remote_addr, struct sockaddr *local_addr);
 /**
  * closes the connection.  `err` is the application error code using the coalesced scheme (see QUICLY_ERROR_* macros), or zero (no
  * error; indicating idle close).  An application should continue calling quicly_receive and quicly_send, until they return
@@ -1538,6 +1553,7 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
  * * While the API is designed to look like synchronous, application still has to call `quicly_send` for the time being.
  */
 void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, size_t num_datagrams);
+void quicly_send_datagram_frames_path(quicly_conn_t *conn, size_t path_index, ptls_iovec_t *datagrams, size_t num_datagrams);
 /**
  * Sets CC to the specified type. Returns a boolean indicating if the operation was successful.
  */

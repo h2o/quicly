@@ -294,8 +294,8 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         int64_t _t = (t);                                                                                                          \
         if (is_after_send) {                                                                                                       \
             assert(now < _t);                                                                                                      \
-        } else if (_t < now) {                                                                                                     \
-            _t = now;                                                                                                              \
+        } else if (_t <= now) {                                                                                                    \
+            _t = now + 1;                                                                                                          \
         }                                                                                                                          \
         r->alarm_at = _t;                                                                                                          \
     } while (0)
