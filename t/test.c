@@ -1522,6 +1522,55 @@ static void test_multipath_negotiation_success(void)
     quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
 }
 
+static void test_multipath_state_isolation(void)
+{
+    uint64_t orig_initial_max_path_id = quic_ctx.transport_params.initial_max_path_id;
+    quic_ctx.transport_params.initial_max_path_id = 4; /* enable multipath negotiation */
+
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+
+    /* Initially, only path 0 exists */
+    ok(client->paths[0] != NULL);
+    ok(client->paths[1] == NULL);
+
+    /* Let's manually trigger new_path creation for path 1 on client */
+    struct sockaddr_in remote_addr, local_addr;
+    memset(&remote_addr, 0, sizeof(remote_addr));
+    remote_addr.sin_family = AF_INET;
+    remote_addr.sin_port = htons(12345);
+    remote_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    memset(&local_addr, 0, sizeof(local_addr));
+    local_addr.sin_family = AF_INET;
+    local_addr.sin_port = htons(54321);
+    local_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    /* Open path 1 */
+    size_t path_index = 1;
+    quicly_error_t ret = new_path(client, path_index, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    ok(ret == 0);
+    ok(client->paths[1] != NULL);
+
+    /* Verify path-specific states are allocated and separate from path 0 */
+    ok(client->paths[1]->path_id == 1);
+    ok(client->paths[1]->pn_space != NULL);
+    ok(client->paths[1]->max_udp_payload_size == client->super.ctx->initial_egress_max_udp_payload_size);
+    ok(client->paths[1]->cc.type != NULL);
+    ok(client->paths[1]->loss.sentmap.num_packets == 0);
+
+    /* Modify path 1 cwnd and verify it does not affect path 0 (connection-level egress.cc) */
+    uint32_t orig_cwnd = client->egress.cc.cwnd;
+    client->paths[1]->cc.cwnd = orig_cwnd + 5000;
+    ok(client->egress.cc.cwnd == orig_cwnd);
+    ok(client->paths[1]->cc.cwnd == orig_cwnd + 5000);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -1602,6 +1651,7 @@ int main(int argc, char **argv)
     subtest("migration-during-handshake", test_migration_during_handshake);
     subtest("multipath-negotiation-violation", test_multipath_negotiation_violation);
     subtest("multipath-negotiation-success", test_multipath_negotiation_success);
+    subtest("multipath-state-isolation", test_multipath_state_isolation);
 
     subtest("stats-foreach", test_stats_foreach);
 

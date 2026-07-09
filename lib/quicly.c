@@ -2210,7 +2210,6 @@ static int do_delete_path(quicly_conn_t *conn, struct st_quicly_conn_path_t *pat
             free(path->pacer);
         if (path->pn_space != NULL) {
             do_free_pn_space(path->pn_space);
-            free(path->pn_space);
         }
     }
 
