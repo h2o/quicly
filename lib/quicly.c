@@ -1006,15 +1006,30 @@ static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
         return;
     }
 
-    if (get_loss(conn, NULL)->sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe) {
-        assert(get_loss(conn, NULL)->alarm_at != INT64_MAX);
+    if (quicly_is_multipath(conn)) {
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+            if (conn->paths[i] != NULL) {
+                quicly_loss_t *loss = get_loss(conn, conn->paths[i]);
+                if (loss->sentmap.bytes_in_flight != 0 || (i == 0 && conn->super.remote.address_validation.send_probe)) {
+                    assert(loss->alarm_at != INT64_MAX);
+                } else {
+                    assert(loss->loss_time == INT64_MAX);
+                }
+                if (timer_must_be_in_future && i == 0 && conn->super.remote.address_validation.validated)
+                    assert(conn->stash.now < loss->alarm_at);
+            }
+        }
     } else {
-        assert(get_loss(conn, NULL)->loss_time == INT64_MAX);
+        if (get_loss(conn, NULL)->sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe) {
+            assert(get_loss(conn, NULL)->alarm_at != INT64_MAX);
+        } else {
+            assert(get_loss(conn, NULL)->loss_time == INT64_MAX);
+        }
+        /* Allow timers not in the future when the remote peer is not yet validated, since we may not be able to send packets even when
+         * timers fire. */
+        if (timer_must_be_in_future && conn->super.remote.address_validation.validated)
+            assert(conn->stash.now < get_loss(conn, NULL)->alarm_at);
     }
-    /* Allow timers not in the future when the remote peer is not yet validated, since we may not be able to send packets even when
-     * timers fire. */
-    if (timer_must_be_in_future && conn->super.remote.address_validation.validated)
-        assert(conn->stash.now < get_loss(conn, NULL)->alarm_at);
 }
 
 static quicly_error_t on_invalid_ack(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
