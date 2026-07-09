@@ -2117,6 +2117,41 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
 
     conn->paths[path_index] = path;
 
+    if (path_index > 0) {
+        quicly_loss_init(&path->loss, &conn->super.ctx->loss,
+                         conn->super.ctx->loss.default_initial_rtt,
+                         &conn->super.remote.transport_params.max_ack_delay, &conn->super.remote.transport_params.ack_delay_exponent);
+        uint32_t initcwnd = quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->super.ctx->initial_egress_max_udp_payload_size);
+        conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &path->cc, initcwnd, conn->stash.now);
+        if (path->cc.type->enable_rapid_start != NULL && conn->super.stats.num_rapid_start != 0)
+            path->cc.type->enable_rapid_start(&path->cc, conn->stash.now);
+        if (*get_pacer(conn, conn->paths[0]) != NULL) {
+            if ((path->pacer = malloc(sizeof(*path->pacer))) == NULL) {
+                quicly_loss_dispose(&path->loss);
+                free(path);
+                conn->paths[path_index] = NULL;
+                return PTLS_ERROR_NO_MEMORY;
+            }
+            quicly_pacer_reset(path->pacer);
+        } else {
+            path->pacer = NULL;
+        }
+        path->pn_space = alloc_pn_space(sizeof(struct st_quicly_pn_space_t), QUICLY_DEFAULT_PACKET_TOLERANCE);
+        if (path->pn_space == NULL) {
+            if (path->pacer != NULL)
+                free(path->pacer);
+            quicly_loss_dispose(&path->loss);
+            free(path);
+            conn->paths[path_index] = NULL;
+            return PTLS_ERROR_NO_MEMORY;
+        }
+        path->max_udp_payload_size = conn->super.ctx->initial_egress_max_udp_payload_size;
+    } else {
+        path->pacer = NULL;
+        path->pn_space = NULL;
+        path->max_udp_payload_size = 0;
+    }
+
     PTLS_LOG_DEFINE_POINT(quicly, new_path, new_path_logpoint);
     if (QUICLY_PROBE_ENABLED(NEW_PATH) ||
         (ptls_log_point_maybe_active(&new_path_logpoint) &
@@ -2143,6 +2178,16 @@ static int do_delete_path(quicly_conn_t *conn, struct st_quicly_conn_path_t *pat
         ret = quicly_remote_cid_unregister(&conn->super.remote.cid_set, cid);
         assert(conn->super.remote.cid_set.retired.count != 0);
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    }
+
+    if (path->path_id > 0) {
+        quicly_loss_dispose(&path->loss);
+        if (path->pacer != NULL)
+            free(path->pacer);
+        if (path->pn_space != NULL) {
+            do_free_pn_space(path->pn_space);
+            free(path->pn_space);
+        }
     }
 
     free(path);
@@ -3858,8 +3903,18 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
     /* if something can be sent, return the earliest timeout. Otherwise return the idle timeout. */
     if (amp_window > 0) {
-        if (get_loss(conn, NULL)->alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
-            at = get_loss(conn, NULL)->alarm_at;
+        if (quicly_is_multipath(conn)) {
+            for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+                if (conn->paths[i] != NULL) {
+                    quicly_loss_t *loss = get_loss(conn, conn->paths[i]);
+                    if (loss->alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
+                        at = loss->alarm_at;
+                }
+            }
+        } else {
+            if (get_loss(conn, NULL)->alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
+                at = get_loss(conn, NULL)->alarm_at;
+        }
         if (conn->egress.send_ack_at < at)
             at = conn->egress.send_ack_at;
     }
