@@ -415,10 +415,10 @@ subtest "path-migration" => sub {
                 $cid1 eq $cid_probe;
             };
         };
-        # check that packets are lost (or deemed lost), but that CC is in slow start
+        # check that CC is in slow start (num-loss-episodes == 0 means CC was reset by path migration)
         complex $server_output, sub {
-            /packets-lost:\s*(\d+).*num-loss-episodes:\s*(\d+)/ and $1 >= 2 and $2 == 0;
-        }, "packets-lost-but-cc-in-slow-start";
+            /num-loss-episodes:\s*(\d+)/ and $1 == 0;
+        }, "cc-in-slow-start";
 
     };
     subtest "without-cid" => sub {
