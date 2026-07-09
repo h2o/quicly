@@ -259,6 +259,16 @@ struct st_quicly_conn_path_t {
      * path status
      */
     uint8_t is_backup : 1;
+    /* congestion control */
+    quicly_cc_t cc;
+    /* loss recovery */
+    quicly_loss_t loss;
+    /* pacer */
+    quicly_pacer_t *pacer;
+    /* packet number space */
+    struct st_quicly_pn_space_t *pn_space;
+    /* max egress udp payload size */
+    uint16_t max_udp_payload_size;
 };
 
 struct st_quicly_delayed_packet_t {
