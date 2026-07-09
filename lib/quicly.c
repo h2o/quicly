@@ -6176,16 +6176,8 @@ void quicly_send_datagram_frames_path(quicly_conn_t *conn, size_t path_index, pt
 
 void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, size_t num_datagrams)
 {
-    for (size_t i = 0; i != num_datagrams; ++i) {
-        if (conn->egress.datagram_frame_payloads.count == PTLS_ELEMENTSOF(conn->egress.datagram_frame_payloads.payloads))
-            break;
-        void *copied;
-        if ((copied = malloc(datagrams[i].len)) == NULL)
-            break;
-        memcpy(copied, datagrams[i].base, datagrams[i].len);
-        conn->egress.datagram_frame_payloads.payloads[conn->egress.datagram_frame_payloads.count++] =
-            ptls_iovec_init(copied, datagrams[i].len);
-    }
+    /* delegate to path 0; do_send reads from path->datagram_frame_payloads, not conn->egress */
+    quicly_send_datagram_frames_path(conn, 0, datagrams, num_datagrams);
 }
 
 int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
