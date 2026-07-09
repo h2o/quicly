@@ -565,6 +565,10 @@ struct st_quicly_conn_t {
             } active_acked_cache;
         } on_ack_stream;
     } stash;
+    struct {
+        unsigned paths_blocked : 1;
+        unsigned cids_blocked : 1;
+    } peer_blocked;
 };
 
 /* accessors for connection and path state */
@@ -2320,6 +2324,9 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
 static int open_path(quicly_conn_t *conn, size_t *path_index, struct sockaddr *remote_addr, struct sockaddr *local_addr)
 {
     int ret;
+
+    if (conn->peer_blocked.paths_blocked)
+        return QUICLY_ERROR_PACKET_IGNORED;
 
     /* choose a slot that in unused or the least-recently-used one that has completed validation */
     *path_index = SIZE_MAX;
@@ -5694,9 +5701,11 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         }
 
         /* schedule NEW_CONNECTION_IDs */
-        size_t size = local_cid_size(conn);
-        if (quicly_local_cid_set_size(&conn->super.local.cid_set, size))
-            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        if (!conn->peer_blocked.cids_blocked) {
+            size_t size = local_cid_size(conn);
+            if (quicly_local_cid_set_size(&conn->super.local.cid_set, size))
+                conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        }
     }
 
     return 0;
@@ -5735,19 +5744,21 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
     if ((ret = send_streams_blocked(conn, 0, s)) != 0)
         return ret;
 
-    { /* NEW_CONNECTION_ID */
-        size_t i, size = quicly_local_cid_get_size(&conn->super.local.cid_set);
-        for (i = 0; i < size; i++) {
-            /* PENDING CIDs are located at the front */
-            struct st_quicly_local_cid_t *c = &conn->super.local.cid_set.cids[i];
-            if (c->state != QUICLY_LOCAL_CID_STATE_PENDING)
-                break;
-            if ((ret = send_new_connection_id(conn, s, c)) != 0)
-                break;
+    {
+        if (!conn->peer_blocked.cids_blocked) {
+            size_t i, size = quicly_local_cid_get_size(&conn->super.local.cid_set);
+            for (i = 0; i < size; i++) {
+                /* PENDING CIDs are located at the front */
+                struct st_quicly_local_cid_t *c = &conn->super.local.cid_set.cids[i];
+                if (c->state != QUICLY_LOCAL_CID_STATE_PENDING)
+                    break;
+                if ((ret = send_new_connection_id(conn, s, c)) != 0)
+                    break;
+            }
+            quicly_local_cid_on_sent(&conn->super.local.cid_set, i);
+            if (ret != 0)
+                return ret;
         }
-        quicly_local_cid_on_sent(&conn->super.local.cid_set, i);
-        if (ret != 0)
-            return ret;
     }
 
     { /* RETIRE_CONNECTION_ID */
@@ -7313,6 +7324,7 @@ static quicly_error_t handle_path_retire_connection_id_frame(quicly_conn_t *conn
 
     quicly_remote_cid_unregister_path(&conn->super.remote.cid_set, (uint32_t)path_id, seq);
     dissociate_cid(conn, seq);
+    conn->peer_blocked.cids_blocked = 0;
     return 0;
 }
 
@@ -7337,6 +7349,7 @@ static quicly_error_t handle_paths_blocked_frame(quicly_conn_t *conn, struct st_
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
     /* TODO: handle paths blocked state */
+    conn->peer_blocked.paths_blocked = 1;
     return 0;
 }
 
@@ -7350,6 +7363,7 @@ static quicly_error_t handle_path_cids_blocked_frame(quicly_conn_t *conn, struct
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
     /* TODO: handle path connection ids blocked */
+    conn->peer_blocked.cids_blocked = 1;
     return 0;
 }
 
@@ -7416,6 +7430,7 @@ static quicly_error_t handle_retire_connection_id_frame(quicly_conn_t *conn, str
         return ret;
     if (has_pending)
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    conn->peer_blocked.cids_blocked = 0;
 
     return 0;
 }
