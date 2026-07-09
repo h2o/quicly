@@ -259,6 +259,14 @@ struct st_quicly_conn_path_t {
      * path status
      */
     uint8_t is_backup : 1;
+    /*
+     * NOTE: for the default path (path_id == 0), the following fields (cc, loss,
+     * pacer, pn_space, max_udp_payload_size, next_packet_number) are UNUSED.
+     * they are instead mapped to conn->egress.* or conn->ingress.* to optimize
+     * the non-multipath fast path and preserve backwards compatibility.
+     * developers MUST ALWAYS use the get_* accessors (e.g., get_cc, get_loss)
+     * instead of directly reading these fields to avoid state desynchronization!
+     */
     /* congestion control */
     quicly_cc_t cc;
     /* loss recovery */
@@ -574,10 +582,28 @@ static inline struct st_quicly_conn_path_t *find_path_by_id(quicly_conn_t *conn,
     return NULL;
 }
 
-static inline int quicly_is_multipath(quicly_conn_t *conn)
+int quicly_is_multipath(quicly_conn_t *conn)
 {
     return conn->super.ctx->transport_params.initial_max_path_id != 0 &&
            conn->super.remote.transport_params.initial_max_path_id != 0;
+}
+
+uint64_t quicly_calculate_total_cwnd(quicly_conn_t *conn)
+{
+    uint64_t total = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        if (conn->paths[i] != NULL && !conn->paths[i]->probe_only) {
+            if (conn->paths[i]->path_id != 0) {
+                total += conn->paths[i]->cc.cwnd;
+            } else {
+                total += conn->egress.cc.cwnd;
+            }
+        }
+    }
+    if (total == 0) {
+        total = conn->egress.cc.cwnd;
+    }
+    return total;
 }
 
 static inline quicly_cc_t *get_cc(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
@@ -2147,6 +2173,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
                          &conn->super.remote.transport_params.max_ack_delay, &conn->super.remote.transport_params.ack_delay_exponent);
         uint32_t initcwnd = quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->super.ctx->initial_egress_max_udp_payload_size);
         conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &path->cc, initcwnd, conn->stash.now);
+        path->cc.conn = conn;
         if (path->cc.type->enable_rapid_start != NULL && conn->super.stats.num_rapid_start != 0)
             path->cc.type->enable_rapid_start(&path->cc, conn->stash.now);
         if (*get_pacer(conn, conn->paths[0]) != NULL) {
@@ -2257,6 +2284,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     get_cc(conn, conn->paths[path_index])->type->cc_init->cb(
         get_cc(conn, conn->paths[path_index])->type->cc_init, get_cc(conn, conn->paths[path_index]),
         quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, *get_max_udp_payload_size(conn, conn->paths[path_index])), conn->stash.now);
+    get_cc(conn, conn->paths[path_index])->conn = conn;
     if (conn->super.stats.num_rapid_start != 0 && get_cc(conn, conn->paths[path_index])->type->enable_rapid_start != NULL)
         get_cc(conn, conn->paths[path_index])->type->enable_rapid_start(get_cc(conn, conn->paths[path_index]), conn->stash.now);
 
@@ -2984,6 +3012,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.send_ack_at = INT64_MAX;
     conn->egress.send_probe_at = INT64_MAX;
     conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, get_cc(conn, NULL), initcwnd, conn->stash.now);
+    get_cc(conn, NULL)->conn = conn;
     if (get_cc(conn, NULL)->type->enable_rapid_start != NULL &&
         enable_with_ratio255(conn->super.ctx->enable_ratio.rapid_start, conn->super.ctx->tls->random_bytes)) {
         get_cc(conn, NULL)->type->enable_rapid_start(get_cc(conn, NULL), conn->stash.now);

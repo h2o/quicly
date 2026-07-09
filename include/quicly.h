@@ -1543,6 +1543,14 @@ void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, s
  */
 int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc);
 /**
+ * Checks if multipath is negotiated for the connection.
+ */
+int quicly_is_multipath(quicly_conn_t *conn);
+/**
+ * Calculates total congestion window across all active paths.
+ */
+uint64_t quicly_calculate_total_cwnd(quicly_conn_t *conn);
+/**
  *
  */
 void quicly_amend_ptls_context(ptls_context_t *ptls);

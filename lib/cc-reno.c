@@ -49,11 +49,18 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (!cc_limited)
         return;
     cc->state.reno.stash += bytes;
-    if (cc->state.reno.stash < cc->cwnd)
+
+    uint32_t target = cc->cwnd;
+    if (cc->conn != NULL && quicly_is_multipath(cc->conn)) {
+        uint64_t total = quicly_calculate_total_cwnd(cc->conn);
+        target = total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
+    }
+
+    if (cc->state.reno.stash < target)
         return;
-    /* Increase congestion window by 1 MSS per congestion window acked. */
-    uint32_t count = cc->state.reno.stash / cc->cwnd;
-    cc->state.reno.stash -= count * cc->cwnd;
+    /* increase congestion window by 1 mss scaled by cwnd / total_cwnd */
+    uint32_t count = cc->state.reno.stash / target;
+    cc->state.reno.stash -= count * target;
     cc->cwnd = quicly_u32_add_saturating(cc->cwnd, count * max_udp_payload_size);
     if (cc->cwnd_maximum < cc->cwnd)
         cc->cwnd_maximum = cc->cwnd;

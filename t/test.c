@@ -1571,6 +1571,67 @@ static void test_multipath_state_isolation(void)
     quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
 }
 
+static void test_multipath_coupled_cc(void)
+{
+    uint64_t orig_initial_max_path_id = quic_ctx.transport_params.initial_max_path_id;
+    quic_ctx.transport_params.initial_max_path_id = 4; /* enable multipath negotiation */
+
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+
+    /* Open path 1 */
+    struct sockaddr_in remote_addr, local_addr;
+    memset(&remote_addr, 0, sizeof(remote_addr));
+    remote_addr.sin_family = AF_INET;
+    remote_addr.sin_port = htons(12345);
+    remote_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    memset(&local_addr, 0, sizeof(local_addr));
+    local_addr.sin_family = AF_INET;
+    local_addr.sin_port = htons(54321);
+    local_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    quicly_error_t ret = new_path(client, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    ok(ret == 0);
+    ok(client->paths[1] != NULL);
+
+    /* Set cwnd on both paths */
+    client->egress.cc.cwnd = 10000;
+    client->paths[1]->cc.cwnd = 10000;
+    client->paths[1]->probe_only = 0;
+    /* Move both out of slow start (so we test CA) */
+    client->egress.cc.ssthresh = 5000;
+    client->paths[1]->cc.ssthresh = 5000;
+
+    /* Total cwnd should be 20000 */
+    uint64_t total = quicly_calculate_total_cwnd(client);
+    ok(total == 20000);
+
+    /* Acknowledge bytes on path 1 (in CA).
+     * Standard Reno CA would increase cwnd after 10000 bytes.
+     * Under LIA, it should require 20000 bytes to increase! */
+    quicly_cc_t *cc = &client->paths[1]->cc;
+    cc->type->cc_on_acked(cc, &client->paths[1]->loss, 5000, 100, 5000, 1, 101, client->stash.now, 1200);
+    /* Should accumulate stash, but no increase yet because stash (5000) < target (20000) */
+    ok(cc->cwnd == 10000);
+    ok(cc->state.reno.stash == 5000);
+
+    cc->type->cc_on_acked(cc, &client->paths[1]->loss, 10000, 101, 10000, 1, 102, client->stash.now, 1200);
+    /* stash is now 15000, still < 20000 */
+    ok(cc->cwnd == 10000);
+    ok(cc->state.reno.stash == 15000);
+
+    cc->type->cc_on_acked(cc, &client->paths[1]->loss, 5000, 102, 15000, 1, 103, client->stash.now, 1200);
+    /* stash reaches 20000, should increase cwnd by 1 MSS (1200) and reset stash to 0 */
+    ok(cc->cwnd == 11200);
+    ok(cc->state.reno.stash == 0);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -1652,6 +1713,7 @@ int main(int argc, char **argv)
     subtest("multipath-negotiation-violation", test_multipath_negotiation_violation);
     subtest("multipath-negotiation-success", test_multipath_negotiation_success);
     subtest("multipath-state-isolation", test_multipath_state_isolation);
+    subtest("multipath-coupled-cc", test_multipath_coupled_cc);
 
     subtest("stats-foreach", test_stats_foreach);
 
