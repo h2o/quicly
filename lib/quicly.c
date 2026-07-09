@@ -8018,6 +8018,20 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
     });
 
+    /* route packet to the path matching the decoded path_id if multipath is active */
+    if (quicly_is_multipath(conn)) {
+        size_t found_idx = PTLS_ELEMENTSOF(conn->paths);
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+            if (conn->paths[i] != NULL && conn->paths[i]->path_id == packet->path_id) {
+                found_idx = i;
+                break;
+            }
+        }
+        if (found_idx != PTLS_ELEMENTSOF(conn->paths)) {
+            path_index = found_idx;
+        }
+    }
+
     /* open a new path if necessary, now that decryption succeeded */
     if (path_index == PTLS_ELEMENTSOF(conn->paths) && (ret = open_path(conn, &path_index, src_addr, dest_addr)) != 0)
         goto Exit;
