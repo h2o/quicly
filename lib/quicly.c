@@ -563,6 +563,15 @@ static inline struct st_quicly_conn_path_t *get_path(quicly_conn_t *conn, struct
     return path != NULL ? path : conn->paths[0];
 }
 
+static inline struct st_quicly_conn_path_t *find_path_by_id(quicly_conn_t *conn, uint64_t path_id)
+{
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        if (conn->paths[i] != NULL && conn->paths[i]->path_id == path_id)
+            return conn->paths[i];
+    }
+    return NULL;
+}
+
 static inline quicly_cc_t *get_cc(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
     return &conn->egress.cc;
@@ -2163,7 +2172,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     /* reset CC (FIXME flush sentmap and reset loss recovery) */
     conn->egress.cc.type->cc_init->cb(
         conn->egress.cc.type->cc_init, &conn->egress.cc,
-        quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size), conn->stash.now);
+        quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, *get_max_udp_payload_size(conn, conn->paths[path_index])), conn->stash.now);
     if (conn->super.stats.num_rapid_start != 0 && conn->egress.cc.type->enable_rapid_start != NULL)
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
 
@@ -2884,7 +2893,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_loss_init(&conn->egress.loss, &conn->super.ctx->loss,
                      conn->super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->super.remote.transport_params.max_ack_delay, &conn->super.remote.transport_params.ack_delay_exponent);
-    conn->egress.max_udp_payload_size = conn->super.ctx->initial_egress_max_udp_payload_size;
+    *get_max_udp_payload_size(conn, NULL) = conn->super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->egress.max_streams.uni);
     init_max_streams(&conn->egress.max_streams.bidi);
     conn->egress.ack_frequency.update_at = INT64_MAX;
@@ -3145,14 +3154,14 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     /* update UDP max payload size, as described in the doc-comment of
     `quicly_context_t::initial_egress_max_udp_payload_size` */
     assert(conn->initial != NULL);
-    if (conn->egress.max_udp_payload_size < conn->initial->largest_ingress_udp_payload_size) {
+    if (*get_max_udp_payload_size(conn, NULL) < conn->initial->largest_ingress_udp_payload_size) {
         uint16_t size = conn->initial->largest_ingress_udp_payload_size;
         if (size > conn->super.ctx->transport_params.max_udp_payload_size)
             size = conn->super.ctx->transport_params.max_udp_payload_size;
-        conn->egress.max_udp_payload_size = size;
+        *get_max_udp_payload_size(conn, NULL) = size;
     }
-    if (conn->egress.max_udp_payload_size > conn->super.remote.transport_params.max_udp_payload_size)
-        conn->egress.max_udp_payload_size = conn->super.remote.transport_params.max_udp_payload_size;
+    if (*get_max_udp_payload_size(conn, NULL) > conn->super.remote.transport_params.max_udp_payload_size)
+        *get_max_udp_payload_size(conn, NULL) = conn->super.remote.transport_params.max_udp_payload_size;
 
     /* set transport_parameters extension to be sent in EE */
     assert(properties->additional_extensions == NULL);
@@ -3804,7 +3813,7 @@ static int64_t pacer_can_send_at(quicly_conn_t *conn)
         return 0;
 
     uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
-    return quicly_pacer_can_send_at(conn->egress.pacer, bytes_per_msec, conn->egress.max_udp_payload_size);
+    return quicly_pacer_can_send_at(conn->egress.pacer, bytes_per_msec, *get_max_udp_payload_size(conn, NULL));
 }
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
@@ -3988,6 +3997,11 @@ struct st_quicly_send_context_t {
     unsigned recalc_send_probe_at : 1;
 };
 
+static inline struct st_quicly_conn_path_t *get_send_path(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    return s != NULL ? conn->paths[s->path_index] : conn->paths[0];
+}
+
 static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
 {
     size_t datagram_size, packet_bytes_in_flight;
@@ -4001,8 +4015,8 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
 
     if (!coalesced && s->target.full_size) {
-        assert(s->num_datagrams == 0 || s->datagrams[s->num_datagrams - 1].iov_len == conn->egress.max_udp_payload_size);
-        const size_t max_size = conn->egress.max_udp_payload_size - QUICLY_AEAD_TAG_SIZE;
+        assert(s->num_datagrams == 0 || s->datagrams[s->num_datagrams - 1].iov_len == *get_max_udp_payload_size(conn, get_send_path(conn, s)));
+        const size_t max_size = *get_max_udp_payload_size(conn, get_send_path(conn, s)) - QUICLY_AEAD_TAG_SIZE;
         assert(s->dst - s->payload_buf.datagram <= max_size);
         memset(s->dst, QUICLY_FRAME_TYPE_PADDING, s->payload_buf.datagram + max_size - s->dst);
         s->dst = s->payload_buf.datagram + max_size;
@@ -4039,7 +4053,7 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
     /* encrypt the packet */
     s->dst += s->target.cipher->aead->algo->tag_size;
     datagram_size = s->dst - s->payload_buf.datagram;
-    assert(datagram_size <= conn->egress.max_udp_payload_size);
+    assert(datagram_size <= *get_max_udp_payload_size(conn, get_send_path(conn, s)));
 
     uint32_t path_id = 0;
     if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
@@ -4116,7 +4130,7 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
         quicly_sentmap_commit(&conn->egress.loss.sentmap, 0, 0, 0);
         ++conn->egress.packet_number;
         conn->egress.next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, conn->egress.packet_number, conn->egress.cc.cwnd,
-                                                            conn->egress.max_udp_payload_size);
+                                                            *get_max_udp_payload_size(conn, get_send_path(conn, s)));
     }
 
     return 0;
@@ -4190,12 +4204,12 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         /* note: send_window (ssize_t) can become negative; see doc-comment */
         if (frame_type == ALLOCATE_FRAME_TYPE_ACK_ELICITING && s->send_window <= 0)
             return QUICLY_ERROR_SENDBUF_FULL;
-        if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
+        if (s->payload_buf.end - s->payload_buf.datagram < *get_max_udp_payload_size(conn, get_send_path(conn, s)))
             return QUICLY_ERROR_SENDBUF_FULL;
         s->target.cipher = s->current.cipher;
         s->target.full_size = 0;
         s->dst = s->payload_buf.datagram;
-        s->dst_end = s->dst + conn->egress.max_udp_payload_size;
+        s->dst_end = s->dst + *get_max_udp_payload_size(conn, get_send_path(conn, s));
     }
     s->target.ack_eliciting = 0;
 
@@ -4249,8 +4263,8 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
             if (conn->egress.cc.num_loss_episodes >= QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE && conn->initial == NULL &&
                 conn->handshake == NULL) {
                 uint32_t fraction_of_cwnd = (uint32_t)((uint64_t)conn->egress.cc.cwnd * conn->super.ctx->ack_frequency / 1024);
-                if (fraction_of_cwnd >= conn->egress.max_udp_payload_size * 3) {
-                    uint32_t packet_tolerance = fraction_of_cwnd / conn->egress.max_udp_payload_size;
+                if (fraction_of_cwnd >= *get_max_udp_payload_size(conn, get_send_path(conn, s)) * 3) {
+                    uint32_t packet_tolerance = fraction_of_cwnd / *get_max_udp_payload_size(conn, get_send_path(conn, s));
                     if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
                         packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
                     /* TODO: Discuss (and possibly test) the strategy for choosing max_ack_delay; note the chosen value should be
@@ -4801,7 +4815,7 @@ static void notify_congestion_to_cc(quicly_conn_t *conn, uint16_t lost_bytes, ui
 {
     if (conn->egress.pn_path_start <= lost_pn) {
         conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_bytes, lost_pn, conn->egress.packet_number,
-                                         conn->stash.now, conn->egress.max_udp_payload_size);
+                                         conn->stash.now, *get_max_udp_payload_size(conn, NULL));
         QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, lost_pn + 1, conn->egress.loss.sentmap.bytes_in_flight,
                      conn->egress.cc.cwnd);
         QUICLY_LOG_CONN(cc_congestion, conn, {
@@ -5679,7 +5693,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 PTLS_LOG_ELEMENT_SIGNED(pto_count, conn->egress.loss.pto_count);
             });
             ++conn->super.stats.num_ptos;
-            size_t bytes_to_mark = min_packets_to_send * conn->egress.max_udp_payload_size;
+            size_t bytes_to_mark = min_packets_to_send * *get_max_udp_payload_size(conn, get_send_path(conn, s));
             if (conn->initial != NULL && (ret = mark_frames_on_pto(conn, QUICLY_EPOCH_INITIAL, &bytes_to_mark)) != 0)
                 goto Exit;
             if (bytes_to_mark != 0 && conn->handshake != NULL &&
@@ -5703,9 +5717,9 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         if (conn->egress.pacer != NULL) {
             uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
             pacer_window =
-                quicly_pacer_get_window(conn->egress.pacer, conn->stash.now, bytes_per_msec, conn->egress.max_udp_payload_size);
+                quicly_pacer_get_window(conn->egress.pacer, conn->stash.now, bytes_per_msec, *get_max_udp_payload_size(conn, get_send_path(conn, s)));
         }
-        s->send_window = calc_send_window(conn, min_packets_to_send * conn->egress.max_udp_payload_size,
+        s->send_window = calc_send_window(conn, min_packets_to_send * *get_max_udp_payload_size(conn, get_send_path(conn, s)),
                                           calc_amplification_limit_allowance(conn), pacer_window, restrict_sending);
     }
 
@@ -6539,7 +6553,7 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
     if (bytes_acked > 0) {
         conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame->largest_acknowledged,
                                           (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked), cc_limited,
-                                          conn->egress.packet_number, conn->stash.now, conn->egress.max_udp_payload_size);
+                                          conn->egress.packet_number, conn->stash.now, *get_max_udp_payload_size(conn, find_path_by_id(conn, path_id)));
         QUICLY_PROBE(QUICTRACE_CC_ACK, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                      conn->egress.loss.sentmap.bytes_in_flight);
     }
