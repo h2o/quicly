@@ -572,28 +572,44 @@ static inline struct st_quicly_conn_path_t *find_path_by_id(quicly_conn_t *conn,
     return NULL;
 }
 
+static inline int quicly_is_multipath(quicly_conn_t *conn)
+{
+    return conn->super.ctx->transport_params.initial_max_path_id != 0 &&
+           conn->super.remote.transport_params.initial_max_path_id != 0;
+}
+
 static inline quicly_cc_t *get_cc(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
+    if (quicly_is_multipath(conn) && path != NULL && path->path_id != 0)
+        return &path->cc;
     return &conn->egress.cc;
 }
 
 static inline quicly_loss_t *get_loss(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
+    if (quicly_is_multipath(conn) && path != NULL && path->path_id != 0)
+        return &path->loss;
     return &conn->egress.loss;
 }
 
 static inline quicly_pacer_t **get_pacer(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
+    if (quicly_is_multipath(conn) && path != NULL && path->path_id != 0)
+        return &path->pacer;
     return &conn->egress.pacer;
 }
 
 static inline uint16_t *get_max_udp_payload_size(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
+    if (quicly_is_multipath(conn) && path != NULL && path->path_id != 0)
+        return &path->max_udp_payload_size;
     return &conn->egress.max_udp_payload_size;
 }
 
 static inline struct st_quicly_pn_space_t *get_pn_space(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
+    if (quicly_is_multipath(conn) && path != NULL && path->path_id != 0)
+        return path->pn_space;
     return conn->application != NULL ? &conn->application->super : NULL;
 }
 
