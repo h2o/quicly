@@ -2321,8 +2321,8 @@ void quicly_free(quicly_conn_t *conn)
 
     unlock_now(conn);
 
-    if (conn->egress.pacer != NULL)
-        free(conn->egress.pacer);
+    if (*get_pacer(conn, NULL) != NULL)
+        free(*get_pacer(conn, NULL));
     if (conn->connection_close.reason_phrase != NULL)
         free(conn->connection_close.reason_phrase);
     free(conn->token.base);
@@ -2906,8 +2906,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         conn->super.stats.num_rapid_start = 1;
     }
     if (pacer != NULL) {
-        conn->egress.pacer = pacer;
-        quicly_pacer_reset(conn->egress.pacer);
+        *get_pacer(conn, NULL) = pacer;
+        quicly_pacer_reset(*get_pacer(conn, NULL));
     }
     conn->egress.ecn.state = enable_with_ratio255(conn->super.ctx->enable_ratio.ecn, conn->super.ctx->tls->random_bytes)
                                  ? QUICLY_ECN_PROBING
@@ -3809,11 +3809,11 @@ static int is_point5rtt_with_no_handshake_data_to_send(quicly_conn_t *conn)
 
 static int64_t pacer_can_send_at(quicly_conn_t *conn)
 {
-    if (conn->egress.pacer == NULL)
+    if (*get_pacer(conn, NULL) == NULL)
         return 0;
 
     uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
-    return quicly_pacer_can_send_at(conn->egress.pacer, bytes_per_msec, *get_max_udp_payload_size(conn, NULL));
+    return quicly_pacer_can_send_at(*get_pacer(conn, NULL), bytes_per_msec, *get_max_udp_payload_size(conn, NULL));
 }
 
 int64_t quicly_get_first_timeout(quicly_conn_t *conn)
@@ -4090,8 +4090,8 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
     if (packet_bytes_in_flight != 0) {
         assert(s->path_index == 0 && "CC governs path 0 and data is sent only on that path");
         conn->egress.cc.type->cc_on_sent(&conn->egress.cc, &conn->egress.loss, (uint32_t)packet_bytes_in_flight, conn->stash.now);
-        if (conn->egress.pacer != NULL)
-            quicly_pacer_consume_window(conn->egress.pacer, packet_bytes_in_flight);
+        if (*get_pacer(conn, get_send_path(conn, s)) != NULL)
+            quicly_pacer_consume_window(*get_pacer(conn, get_send_path(conn, s)), packet_bytes_in_flight);
     }
 
     QUICLY_PROBE(PACKET_SENT, conn, conn->stash.now, conn->egress.packet_number, s->dst - s->target.first_byte_at,
@@ -5714,10 +5714,10 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
     { /* calculate send window */
         uint64_t pacer_window = SIZE_MAX;
-        if (conn->egress.pacer != NULL) {
+        if (*get_pacer(conn, get_send_path(conn, s)) != NULL) {
             uint32_t bytes_per_msec = calc_pacer_send_rate(conn);
             pacer_window =
-                quicly_pacer_get_window(conn->egress.pacer, conn->stash.now, bytes_per_msec, *get_max_udp_payload_size(conn, get_send_path(conn, s)));
+                quicly_pacer_get_window(*get_pacer(conn, get_send_path(conn, s)), conn->stash.now, bytes_per_msec, *get_max_udp_payload_size(conn, get_send_path(conn, s)));
         }
         s->send_window = calc_send_window(conn, min_packets_to_send * *get_max_udp_payload_size(conn, get_send_path(conn, s)),
                                           calc_amplification_limit_allowance(conn), pacer_window, restrict_sending);
@@ -5871,7 +5871,7 @@ Exit:
             conn->egress.try_jumpstart = 0;
             conn->super.stats.jumpstart.new_rtt = 0;
             conn->super.stats.jumpstart.cwnd = 0;
-            if (conn->egress.pacer != NULL && conn->egress.cc.type->cc_jumpstart != NULL &&
+            if (*get_pacer(conn, get_send_path(conn, s)) != NULL && conn->egress.cc.type->cc_jumpstart != NULL &&
                 (conn->super.ctx->default_jumpstart_cwnd_packets != 0 || conn->super.ctx->max_jumpstart_cwnd_packets != 0) &&
                 conn->egress.cc.num_loss_episodes == 0) {
                 conn->super.stats.jumpstart.new_rtt = conn->egress.loss.rtt.minimum;
