@@ -555,6 +555,37 @@ struct st_quicly_conn_t {
     } stash;
 };
 
+/* accessors for connection and path state */
+static inline struct st_quicly_conn_path_t *get_path(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
+{
+    return path != NULL ? path : conn->paths[0];
+}
+
+static inline quicly_cc_t *get_cc(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
+{
+    return &conn->egress.cc;
+}
+
+static inline quicly_loss_t *get_loss(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
+{
+    return &conn->egress.loss;
+}
+
+static inline quicly_pacer_t **get_pacer(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
+{
+    return &conn->egress.pacer;
+}
+
+static inline uint16_t *get_max_udp_payload_size(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
+{
+    return &conn->egress.max_udp_payload_size;
+}
+
+static inline struct st_quicly_pn_space_t *get_pn_space(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
+{
+    return conn->application != NULL ? &conn->application->super : NULL;
+}
+
 #if QUICLY_USE_TRACER
 #include "quicly-tracer.h"
 #endif
