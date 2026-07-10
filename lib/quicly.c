@@ -1454,6 +1454,7 @@ static quicly_stream_t *open_stream(quicly_conn_t *conn, uint64_t stream_id, uin
     stream->stream_id = stream_id;
     stream->callbacks = NULL;
     stream->data = NULL;
+    stream->affinity_path_id = UINT32_MAX;
 
     int r;
     khiter_t iter = kh_put(quicly_stream_t, conn->streams, stream_id, &r);
@@ -8631,6 +8632,19 @@ quicly_error_t quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream
     return 0;
 }
 
+int quicly_set_stream_path_affinity(quicly_stream_t *stream, uint32_t path_id)
+{
+    stream->affinity_path_id = path_id;
+    return 0;
+}
+
+uint32_t quicly_get_current_send_path_id(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    if (quicly_is_multipath(conn) && conn->paths[s->path_index] != NULL)
+        return conn->paths[s->path_index]->path_id;
+    return 0;
+}
+
 void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id));
@@ -9037,6 +9051,25 @@ void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, c
 
 const uint32_t quicly_supported_versions[] = {QUICLY_PROTOCOL_VERSION_1, QUICLY_PROTOCOL_VERSION_DRAFT29,
                                               QUICLY_PROTOCOL_VERSION_DRAFT27, 0};
+
+int quicly_get_path_tuple(quicly_conn_t *conn, size_t path_index, quicly_tuple_t *tuple)
+{
+    if (path_index >= QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT || conn->paths[path_index] == NULL)
+        return -1;
+
+    struct st_quicly_conn_path_t *path = conn->paths[path_index];
+    tuple->address.remote = path->address.remote;
+    tuple->address.local = path->address.local;
+    tuple->path_id = path->path_id;
+
+    quicly_cid_t *dcid = get_dcid(conn, path_index);
+    if (dcid != NULL)
+        tuple->dcid = *dcid;
+    else
+        tuple->dcid = (quicly_cid_t){0};
+
+    return 0;
+}
 
 int quicly_get_path_stats(quicly_conn_t *conn, size_t path_index, quicly_path_stats_t *stats)
 {

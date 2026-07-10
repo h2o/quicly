@@ -985,13 +985,12 @@ typedef struct st_quicly_stream_callbacks_t {
      */
     void (*on_send_stop)(quicly_stream_t *stream, quicly_error_t err);
     /**
-     * called when data is newly received.  `off` is the offset within the buffer (the beginning position changes as the application
-     * calls `quicly_stream_sync_recvbuf`.  Applications should consult `quicly_stream_t::recvstate` to see if it has contiguous
-     * input.
+     * called when data within the receive window has been received.  Note that `off` might not exactly match the end of the data
+     * already consumed by the application, since it is up to the application when to call `quicly_stream_sync_recvbuf`.
      */
     void (*on_receive)(quicly_stream_t *stream, size_t off, const void *src, size_t len);
     /**
-     * called when a RESET_STREAM frame is received
+     * called when the receive side of the stream is closed by the peer
      */
     void (*on_receive_reset)(quicly_stream_t *stream, quicly_error_t err);
 } quicly_stream_callbacks_t;
@@ -1082,6 +1081,11 @@ struct st_quicly_stream_t {
          */
         uint32_t max_ranges;
     } _recv_aux;
+    /**
+     * Path ID this stream is bound to (UINT32_MAX if no affinity is set).
+     * Used by the stream scheduler in multipath mode.
+     */
+    uint32_t affinity_path_id;
 };
 
 /**
@@ -1308,6 +1312,21 @@ static quicly_tracer_t *quicly_get_tracer(quicly_conn_t *conn);
  * destroys a connection object.
  */
 void quicly_free(quicly_conn_t *conn);
+typedef struct st_quicly_tuple_t {
+    struct {
+        quicly_address_t remote;
+        quicly_address_t local;
+    } address;
+    quicly_cid_t dcid;
+    uint32_t path_id;
+} quicly_tuple_t;
+
+/**
+ * Gets the tuple (address pair + CID) for a given path index.
+ * @return 0 on success.
+ */
+int quicly_get_path_tuple(quicly_conn_t *conn, size_t path_index, quicly_tuple_t *tuple);
+
 int quicly_get_path_stats(quicly_conn_t *conn, size_t path_index, quicly_path_stats_t *stats);
 quicly_error_t quicly_open_path(quicly_conn_t *conn, struct sockaddr *remote_addr, struct sockaddr *local_addr);
 /**
@@ -1502,6 +1521,20 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
  *
  */
 void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
+
+/**
+ * Sets the path affinity for a stream.
+ * @param stream    the stream
+ * @param path_id   the path_id to bind the stream to. Set to UINT32_MAX to clear the affinity.
+ * @return          0 if successful
+ */
+int quicly_set_stream_path_affinity(quicly_stream_t *stream, uint32_t path_id);
+
+/**
+ * Gets the current path ID being transmitted on from a send context.
+ */
+uint32_t quicly_get_current_send_path_id(quicly_conn_t *conn, quicly_send_context_t *s);
+
 /**
  *
  */
