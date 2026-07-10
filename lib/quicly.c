@@ -2017,6 +2017,14 @@ static quicly_error_t apply_remote_transport_params(quicly_conn_t *conn)
     if ((ret = update_max_streams(&conn->egress.max_streams.bidi, conn->super.remote.transport_params.max_streams_bidi)) != 0)
         return ret;
 
+    /* Endpoints that negotiate the use of multipath MUST NOT use zero-length connection IDs. */
+    if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
+        conn->super.remote.transport_params.initial_max_path_id != 0) {
+        if (conn->super.remote.cid_set.cids[0].cid.len == 0) {
+            return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+        }
+    }
+
     return 0;
 }
 
