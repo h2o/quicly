@@ -262,7 +262,7 @@ struct st_quicly_conn_path_t {
     uint64_t dcid;
     uint32_t path_id;
     struct {
-        ptls_iovec_t payloads[256];
+        ptls_iovec_t payloads[10];
         size_t count;
     } datagram_frame_payloads;
 };
@@ -444,7 +444,7 @@ struct st_quicly_conn_t {
          * payload of DATAGRAM frames to be sent
          */
         struct {
-            ptls_iovec_t payloads[256];
+            ptls_iovec_t payloads[10];
             size_t count;
         } datagram_frame_payloads;
         /**
@@ -1037,29 +1037,19 @@ static void assert_consistency(quicly_conn_t *conn, int timer_must_be_in_future)
         return;
     }
 
-    if (quicly_is_multipath(conn)) {
-        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-            if (conn->paths[i] != NULL) {
-                quicly_loss_t *loss = get_loss(conn, conn->paths[i]);
-                if (loss->sentmap.bytes_in_flight != 0 || (i == 0 && conn->super.remote.address_validation.send_probe)) {
-                    assert(loss->alarm_at != INT64_MAX);
-                } else {
-                    assert(loss->loss_time == INT64_MAX);
-                }
-                if (timer_must_be_in_future && i == 0 && conn->super.remote.address_validation.validated)
-                    assert(conn->stash.now < loss->alarm_at);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+        if (conn->path_spaces[i] != NULL) {
+            quicly_loss_t *loss = &conn->path_spaces[i]->loss;
+            if (loss->sentmap.bytes_in_flight != 0 || (i == 0 && conn->super.remote.address_validation.send_probe)) {
+                assert(loss->alarm_at != INT64_MAX);
+            } else {
+                assert(loss->loss_time == INT64_MAX);
             }
+            /* Allow timers not in the future when the remote peer is not yet validated, since we may not be able to send packets even when
+             * timers fire. */
+            if (timer_must_be_in_future && i == 0 && conn->super.remote.address_validation.validated)
+                assert(conn->stash.now < loss->alarm_at);
         }
-    } else {
-        if (get_loss(conn, NULL)->sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe) {
-            assert(get_loss(conn, NULL)->alarm_at != INT64_MAX);
-        } else {
-            assert(get_loss(conn, NULL)->loss_time == INT64_MAX);
-        }
-        /* Allow timers not in the future when the remote peer is not yet validated, since we may not be able to send packets even when
-         * timers fire. */
-        if (timer_must_be_in_future && conn->super.remote.address_validation.validated)
-            assert(conn->stash.now < get_loss(conn, NULL)->alarm_at);
     }
 }
 
@@ -1675,22 +1665,15 @@ static int scheduler_can_send(quicly_conn_t *conn)
 
 static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int is_after_send)
 {
-    if (quicly_is_multipath(conn)) {
-        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-            if (conn->paths[i] != NULL) {
-                struct st_quicly_conn_path_t *path = conn->paths[i];
-                int has_outstanding = get_loss(conn, path)->sentmap.bytes_in_flight != 0 || (i == 0 && conn->super.remote.address_validation.send_probe),
-                    handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
-                /* can_send_stream_data is masked to path 0: stream data is only scheduled on the primary path for now */
-                quicly_loss_update_alarm(get_loss(conn, path), conn->stash.now, get_last_retransmittable_sent_at(conn, path), has_outstanding,
-                                         can_send_stream_data && i == 0, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
-            }
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+        if (conn->path_spaces[i] != NULL) {
+            quicly_loss_t *loss = &conn->path_spaces[i]->loss;
+            int has_outstanding = loss->sentmap.bytes_in_flight != 0 || (i == 0 && conn->super.remote.address_validation.send_probe),
+                handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
+            /* can_send_stream_data is masked to path 0: stream data is only scheduled on the primary path for now */
+            quicly_loss_update_alarm(loss, conn->stash.now, conn->path_spaces[i]->last_retransmittable_sent_at, has_outstanding,
+                                     can_send_stream_data && i == 0, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
         }
-    } else {
-        int has_outstanding = get_loss(conn, NULL)->sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe,
-            handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
-        quicly_loss_update_alarm(get_loss(conn, NULL), conn->stash.now, get_last_retransmittable_sent_at(conn, NULL), has_outstanding,
-                                 can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
     }
 }
 
@@ -4065,17 +4048,12 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
 
     /* if something can be sent, return the earliest timeout. Otherwise return the idle timeout. */
     if (amp_window > 0) {
-        if (quicly_is_multipath(conn)) {
-            for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-                if (conn->paths[i] != NULL) {
-                    quicly_loss_t *loss = get_loss(conn, conn->paths[i]);
-                    if (loss->alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
-                        at = loss->alarm_at;
-                }
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+            if (conn->path_spaces[i] != NULL) {
+                quicly_loss_t *loss = &conn->path_spaces[i]->loss;
+                if (loss->alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
+                    at = loss->alarm_at;
             }
-        } else {
-            if (get_loss(conn, NULL)->alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
-                at = get_loss(conn, NULL)->alarm_at;
         }
         if (conn->egress.send_ack_at < at)
             at = conn->egress.send_ack_at;
@@ -6711,29 +6689,38 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
 static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state, uint64_t path_id,
                                              quicly_ack_frame_t *frame)
 {
-    quicly_sentmap_iter_t iter[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+    quicly_sentmap_iter_t iter;
     struct {
         uint64_t pn;
         int64_t sent_at;
     } largest_newly_acked = {UINT64_MAX, INT64_MAX};
     uint32_t largest_newly_acked_path_id = 0;
     size_t bytes_acked = 0;
-    size_t bytes_acked_per_path[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT] = {0};
-    int cc_limited_per_path[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT] = {0};
     int includes_ack_eliciting = 0, includes_late_ack = 0;
     uint64_t largest_late_acked = UINT64_MAX;
     quicly_error_t ret;
 
-    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->paths); ++p) {
+    struct st_quicly_conn_path_t *ack_path = find_path_by_id(conn, path_id);
+    if (ack_path == NULL)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
+    size_t bytes_acked_per_path[4] = {0};
+    struct {
+        uint64_t pn;
+        int64_t sent_at;
+    } largest_newly_acked_per_path[4];
+    int cc_limited_per_path[4] = {0};
+    for (size_t p = 0; p < 4; ++p) {
+        largest_newly_acked_per_path[p].pn = UINT64_MAX;
+        largest_newly_acked_per_path[p].sent_at = INT64_MAX;
         if (conn->paths[p] != NULL) {
-            cc_limited_per_path[conn->paths[p]->path_id] = conn->super.stats.num_respected_app_limited == 0 ||
+            cc_limited_per_path[p] = conn->super.stats.num_respected_app_limited == 0 ||
                 get_loss(conn, conn->paths[p])->sentmap.bytes_in_flight >= get_cc(conn, conn->paths[p])->cwnd / 2;
         }
     }
-    largest_newly_acked_path_id = path_id;
 
     /* early bail out if the peer is acking a PN that would have never been sent */
-    if (frame->largest_acknowledged > *get_next_packet_number(conn, find_path_by_id(conn, path_id)))
+    if (frame->largest_acknowledged > *get_next_packet_number(conn, ack_path))
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     uint64_t pn_acked = frame->smallest_acknowledged;
@@ -6748,22 +6735,10 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
         break;
     }
 
-    if (quicly_is_multipath(conn)) {
-        for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->paths); ++p) {
-            if (conn->paths[p] != NULL) {
-                uint64_t pid = conn->paths[p]->path_id;
-                if ((ret = quicly_loss_init_sentmap_iter(get_loss(conn, conn->paths[p]), &iter[pid], conn->stash.now,
-                                                         conn->super.remote.transport_params.max_ack_delay,
-                                                         conn->super.state >= QUICLY_STATE_CLOSING)) != 0)
-                    return ret;
-            }
-        }
-    } else {
-        if ((ret = quicly_loss_init_sentmap_iter(&conn->path_spaces[0]->loss, &iter[0], conn->stash.now,
-                                                 conn->super.remote.transport_params.max_ack_delay,
-                                                 conn->super.state >= QUICLY_STATE_CLOSING)) != 0)
-            return ret;
-    }
+    if ((ret = quicly_loss_init_sentmap_iter(&conn->path_spaces[ack_path->path_id < 4 ? ack_path->path_id : 0]->loss, &iter, conn->stash.now,
+                                             conn->super.remote.transport_params.max_ack_delay,
+                                             conn->super.state >= QUICLY_STATE_CLOSING)) != 0)
+        return ret;
 
     /* TODO log PNs being ACKed too late */
 
@@ -6779,32 +6754,13 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
             PTLS_LOG_ELEMENT_UNSIGNED(ack_block_end, pn_block_max);
         });
 
+        while (quicly_sentmap_get(&iter)->packet_number < pn_acked)
+            quicly_sentmap_skip(&iter);
+
         do {
-            const quicly_sent_packet_t *sent = NULL;
-            quicly_sentmap_iter_t *selected_iter = NULL;
-            uint64_t pn_sent = UINT64_MAX;
-
-            for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->paths); ++p) {
-                if (conn->paths[p] != NULL) {
-                    if (quicly_is_multipath(conn) && conn->paths[p]->path_id != path_id)
-                        continue;
-                    size_t iter_idx = quicly_is_multipath(conn) ? conn->paths[p]->path_id : 0;
-                    while (quicly_sentmap_get(&iter[iter_idx])->packet_number < pn_acked)
-                        quicly_sentmap_skip(&iter[iter_idx]);
-                    uint64_t path_pn = quicly_sentmap_get(&iter[iter_idx])->packet_number;
-                    if (path_pn < pn_sent) {
-                        pn_sent = path_pn;
-                        sent = quicly_sentmap_get(&iter[iter_idx]);
-                        selected_iter = &iter[iter_idx];
-                    }
-                }
-            }
-
-            if (pn_sent == UINT64_MAX) {
-                pn_acked = pn_block_max + 1;
-                break;
-            }
-
+            const quicly_sent_packet_t *sent = quicly_sentmap_get(&iter);
+            uint64_t pn_sent = sent->packet_number;
+            
             assert(pn_acked <= pn_sent);
             if (pn_acked < pn_sent) {
                 /* set pn_acked to pn_sent; or past the end of the ack block, for use with the next ack block */
@@ -6819,19 +6775,8 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
             /* process newly acked packet */
             if (state->epoch != sent->ack_epoch)
                 return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-            if (quicly_is_multipath(conn) && sent->path_id != path_id)
+            if (sent->path_id != path_id)
                 return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-
-            /* resolve the path on which the packet was acked */
-            struct st_quicly_conn_path_t *acked_path = NULL;
-            quicly_path_space_t *acked_ps = NULL;
-            if (quicly_is_multipath(conn)) {
-                acked_path = conn->paths[sent->path_id];
-                acked_ps = conn->path_spaces[sent->path_id];
-            } else {
-                acked_path = conn->paths[0];
-                acked_ps = conn->path_spaces[0];
-            }
 
             int is_late_ack = 0;
             if (sent->ack_eliciting) {
@@ -6841,43 +6786,49 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
                     includes_late_ack = 1;
                     largest_late_acked = pn_acked;
                     ++conn->super.stats.num_packets.late_acked;
-                    if (acked_ps->pn_path_start <= pn_acked && get_cc(conn, acked_path)->type->cc_on_late_ack != NULL)
-                        get_cc(conn, acked_path)->type->cc_on_late_ack(get_cc(conn, acked_path), pn_acked, conn->stash.now);
+                    int should_trigger_late_ack = (conn->path_spaces[sent->path_id < 4 ? sent->path_id : 0]->pn_path_start <= pn_acked);
+                    if (should_trigger_late_ack && get_cc(conn, conn->paths[sent->path_id])->type->cc_on_late_ack != NULL)
+                        get_cc(conn, conn->paths[sent->path_id])->type->cc_on_late_ack(get_cc(conn, conn->paths[sent->path_id]), pn_acked, conn->stash.now);
                 }
             }
             ++conn->super.stats.num_packets.ack_received;
-            if (acked_path != NULL)
-                ++acked_path->num_packets.acked;
+            ++conn->paths[sent->path_id]->num_packets.acked;
             if (sent->promoted_path)
                 ++conn->super.stats.num_packets.ack_received_promoted_paths;
-            if (acked_ps->pn_path_start <= pn_acked) {
-                largest_newly_acked.pn = pn_acked;
-                largest_newly_acked.sent_at = sent->sent_at;
-                largest_newly_acked_path_id = sent->path_id;
+
+            int is_valid_pn = (conn->path_spaces[sent->path_id < 4 ? sent->path_id : 0]->pn_path_start <= pn_acked);
+            if (is_valid_pn) {
+                if (largest_newly_acked.pn == UINT64_MAX || pn_acked > largest_newly_acked.pn) {
+                    largest_newly_acked.pn = pn_acked;
+                    largest_newly_acked.sent_at = sent->sent_at;
+                    largest_newly_acked_path_id = sent->path_id;
+                }
+                if (largest_newly_acked_per_path[sent->path_id].pn == UINT64_MAX || pn_acked > largest_newly_acked_per_path[sent->path_id].pn) {
+                    largest_newly_acked_per_path[sent->path_id].pn = pn_acked;
+                    largest_newly_acked_per_path[sent->path_id].sent_at = sent->sent_at;
+                }
             }
+
             QUICLY_PROBE(PACKET_ACKED, conn, conn->stash.now, pn_acked, is_late_ack);
             QUICLY_LOG_CONN(packet_acked, conn, {
                 PTLS_LOG_ELEMENT_UNSIGNED(pn, pn_acked);
                 PTLS_LOG_ELEMENT_BOOL(is_late_ack, is_late_ack);
             });
             if (sent->cc_bytes_in_flight != 0) {
-                if (acked_ps->pn_path_start <= pn_acked) {
+                if (is_valid_pn) {
                     bytes_acked += sent->cc_bytes_in_flight;
-                    bytes_acked_per_path[acked_path != NULL ? acked_path->path_id : 0] += sent->cc_bytes_in_flight;
-                    if (sent->cc_limited)
-                        cc_limited_per_path[acked_path != NULL ? acked_path->path_id : 0] = 1;
+                    bytes_acked_per_path[sent->path_id] += sent->cc_bytes_in_flight;
                 }
                 conn->super.stats.num_bytes.ack_received += sent->cc_bytes_in_flight;
-                if (acked_path != NULL)
-                    acked_path->num_packets.bytes_acked += sent->cc_bytes_in_flight;
+                conn->paths[sent->path_id]->num_packets.bytes_acked += sent->cc_bytes_in_flight;
             }
-            if ((ret = quicly_sentmap_update(&get_loss(conn, acked_path)->sentmap, selected_iter, QUICLY_SENTMAP_EVENT_ACKED)) != 0)
+            if ((ret = quicly_sentmap_update(&conn->path_spaces[ack_path->path_id < 4 ? ack_path->path_id : 0]->loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED)) != 0)
                 return ret;
             if (state->epoch == QUICLY_EPOCH_1RTT) {
                 struct st_quicly_application_space_t *space = conn->application;
                 if (space->cipher.egress.key_update_pn.last <= pn_acked) {
                     space->cipher.egress.key_update_pn.last = UINT64_MAX;
-                    space->cipher.egress.key_update_pn.next = *get_next_packet_number(conn, find_path_by_id(conn, path_id)) + conn->super.ctx->max_packets_per_key;
+                    space->cipher.egress.key_update_pn.next = *get_next_packet_number(conn, ack_path) + conn->super.ctx->max_packets_per_key;
                     QUICLY_PROBE(CRYPTO_SEND_KEY_UPDATE_CONFIRMED, conn, conn->stash.now, space->cipher.egress.key_update_pn.next);
                     QUICLY_LOG_CONN(crypto_send_key_update_confirmed, conn,
                                     { PTLS_LOG_ELEMENT_UNSIGNED(next_pn, space->cipher.egress.key_update_pn.next); });
@@ -6934,9 +6885,9 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
 
     /* loss-detection  */
     /* run loss detection on all active paths; a new RTT sample may tighten the reorder threshold on any path */
-    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->paths); ++p) {
-        if (conn->paths[p] != NULL) {
-            if ((ret = quicly_loss_detect_loss(get_loss(conn, conn->paths[p]), conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+        if (conn->path_spaces[p] != NULL) {
+            if ((ret = quicly_loss_detect_loss(&conn->path_spaces[p]->loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
                                                conn->initial == NULL && conn->handshake == NULL, on_loss_detected)) != 0)
                 return ret;
         }

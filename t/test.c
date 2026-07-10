@@ -24,7 +24,6 @@
 #include <stdlib.h>
 #include <openssl/bio.h>
 #include <openssl/crypto.h>
-/* #include <openssl/engine.h> */
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
