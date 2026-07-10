@@ -262,7 +262,7 @@ struct st_quicly_conn_path_t {
     uint64_t dcid;
     uint32_t path_id;
     struct {
-        ptls_iovec_t payloads[10];
+        ptls_iovec_t payloads[64];
         size_t count;
     } datagram_frame_payloads;
 };
@@ -304,6 +304,7 @@ struct st_quicly_conn_t {
     struct _st_quicly_conn_public_t super;
     quicly_path_space_t *path_spaces[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
     struct st_quicly_conn_path_t *paths[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+    uint32_t abandoned_paths_mask;
     /**
      * the initial context
      */
@@ -444,7 +445,7 @@ struct st_quicly_conn_t {
          * payload of DATAGRAM frames to be sent
          */
         struct {
-            ptls_iovec_t payloads[10];
+            ptls_iovec_t payloads[256];
             size_t count;
         } datagram_frame_payloads;
         /**
@@ -999,6 +1000,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
             size_t local_cidl = ctx->cid_encryptor->decrypt_cid(ctx->cid_encryptor, &packet->cid.dest.plaintext, src, 0);
             if (local_cidl == SIZE_MAX)
                 goto Error;
+
             packet->cid.dest.encrypted = ptls_iovec_init(src, local_cidl);
             src += local_cidl;
         } else {
@@ -2271,6 +2273,7 @@ static int do_delete_path(quicly_conn_t *conn, size_t path_index)
     quicly_path_space_t *ps = get_path_space_by_path(conn, path);
 
     if (quicly_is_multipath(conn)) {
+        conn->abandoned_paths_mask |= ((uint32_t)1 << path->path_id);
         if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0) {
             uint64_t cid = path->dcid;
             dissociate_cid(conn, cid);
@@ -5633,6 +5636,32 @@ static quicly_error_t send_new_connection_id(quicly_conn_t *conn, quicly_send_co
     uint64_t retire_prior_to = 0; /* TODO */
     quicly_error_t ret;
 
+    if (quicly_is_multipath(conn) && new_cid->sequence > 0) {
+        /* send PATH_NEW_CONNECTION_ID frame for paths > 0 */
+        uint64_t path_id = new_cid->path_id;
+        size_t capacity = 2 + quicly_encodev_capacity(path_id) +
+                          quicly_encodev_capacity(new_cid->sequence) +
+                          quicly_encodev_capacity(retire_prior_to) +
+                          1 + new_cid->cid.len + QUICLY_STATELESS_RESET_TOKEN_LEN;
+
+        if ((ret = allocate_ack_eliciting_frame(conn, s, capacity, &sent, on_ack_new_connection_id)) != 0)
+            return ret;
+        sent->data.new_connection_id.sequence = new_cid->sequence;
+
+        s->dst = quicly_encodev(s->dst, QUICLY_FRAME_TYPE_PATH_NEW_CONNECTION_ID);
+        s->dst = quicly_encodev(s->dst, path_id);
+        s->dst = quicly_encodev(s->dst, new_cid->sequence);
+        s->dst = quicly_encodev(s->dst, retire_prior_to);
+        *s->dst++ = new_cid->cid.len;
+        memcpy(s->dst, new_cid->cid.cid, new_cid->cid.len);
+        s->dst += new_cid->cid.len;
+        memcpy(s->dst, new_cid->stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
+        s->dst += QUICLY_STATELESS_RESET_TOKEN_LEN;
+
+        ++conn->super.stats.num_frames_sent.new_connection_id;
+        return 0;
+    }
+
     if ((ret = allocate_ack_eliciting_frame(
              conn, s, quicly_new_connection_id_frame_capacity(new_cid->sequence, retire_prior_to, new_cid->cid.len), &sent,
              on_ack_new_connection_id)) != 0)
@@ -8334,6 +8363,10 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
 
     /* route packet to the path matching the decoded path_id if multipath is active */
     if (quicly_is_multipath(conn)) {
+        if (packet->path_id < 32 && (conn->abandoned_paths_mask & ((uint32_t)1 << packet->path_id)) != 0) {
+            ret = QUICLY_ERROR_PACKET_IGNORED;
+            goto Exit;
+        }
         size_t found_idx = PTLS_ELEMENTSOF(conn->paths);
         for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
             if (conn->paths[i] != NULL && conn->paths[i]->path_id == packet->path_id) {
@@ -9070,6 +9103,8 @@ int quicly_get_path_stats(quicly_conn_t *conn, size_t path_index, quicly_path_st
     stats->rtt_smoothed = (uint32_t)(get_loss(conn, path)->rtt.smoothed);
     stats->local = path->address.local;
     stats->remote = path->address.remote;
+    stats->cwnd = (uint32_t)get_cc(conn, path)->cwnd;
+    stats->bytes_in_flight = (uint32_t)get_loss(conn, path)->sentmap.bytes_in_flight;
     return 0;
 }
 

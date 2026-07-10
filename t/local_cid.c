@@ -58,7 +58,7 @@ static int verify_cid(const quicly_local_cid_t *cid, quicly_cid_encryptor_t *enc
         return 0;
 
     encryptor->decrypt_cid(encryptor, &plaintext, cid->cid.cid, cid->cid.len);
-    return !(cid->sequence == plaintext.path_id);
+    return !(cid->path_id == plaintext.path_id);
 }
 
 /**

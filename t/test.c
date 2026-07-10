@@ -1729,6 +1729,10 @@ static size_t transmit_multipath(quicly_conn_t *src, quicly_conn_t *dst)
 
     num_datagrams = PTLS_ELEMENTSOF(datagrams);
     ret = quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, datagramsbuf, sizeof(datagramsbuf));
+    if (ret != 0) {
+        printf("DEBUG transmit_multipath: quicly_send returned %ld (0x%lx)\n", (long)ret, (long)ret);
+        fflush(stdout);
+    }
     ok(ret == 0);
 
     if (num_datagrams != 0) {
@@ -1769,20 +1773,7 @@ static void test_multipath_active_use(void)
     server->paths[0]->address.local = fake_address;
     server->paths[0]->address.remote = fake_address;
 
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(client->super.remote.cid_set.cids); ++i) {
-        if (client->super.remote.cid_set.cids[i].sequence >= 1 &&
-            client->super.remote.cid_set.cids[i].sequence <= 3) {
-            client->super.remote.cid_set.cids[i].path_id = client->super.remote.cid_set.cids[i].sequence;
-            client->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
-        }
-    }
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(server->super.remote.cid_set.cids); ++i) {
-        if (server->super.remote.cid_set.cids[i].sequence >= 1 &&
-            server->super.remote.cid_set.cids[i].sequence <= 3) {
-            server->super.remote.cid_set.cids[i].path_id = server->super.remote.cid_set.cids[i].sequence;
-            server->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
-        }
-    }
+
 
     for (size_t i = 0; i < PTLS_ELEMENTSOF(client->super.remote.cid_set.cids); ++i) {
         printf("client CID slot %zu: seq=%lu, path_id=%u, state=%d\n", i,
@@ -1892,20 +1883,7 @@ static void test_multipath_stream_affinity(void)
     server->paths[0]->address.local = fake_address;
     server->paths[0]->address.remote = fake_address;
 
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(client->super.remote.cid_set.cids); ++i) {
-        if (client->super.remote.cid_set.cids[i].sequence >= 1 &&
-            client->super.remote.cid_set.cids[i].sequence <= 3) {
-            client->super.remote.cid_set.cids[i].path_id = client->super.remote.cid_set.cids[i].sequence;
-            client->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
-        }
-    }
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(server->super.remote.cid_set.cids); ++i) {
-        if (server->super.remote.cid_set.cids[i].sequence >= 1 &&
-            server->super.remote.cid_set.cids[i].sequence <= 3) {
-            server->super.remote.cid_set.cids[i].path_id = server->super.remote.cid_set.cids[i].sequence;
-            server->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
-        }
-    }
+
 
     struct sockaddr_in remote_addrs[3], local_addrs[3];
     for (size_t i = 0; i < 3; ++i) {
@@ -2122,21 +2100,7 @@ static void test_multipath_path_loss(void)
     server->paths[0]->address.local = fake_address;
     server->paths[0]->address.remote = fake_address;
 
-    /* set up cids for multipath */
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(client->super.remote.cid_set.cids); ++i) {
-        if (client->super.remote.cid_set.cids[i].sequence >= 1 &&
-            client->super.remote.cid_set.cids[i].sequence <= 3) {
-            client->super.remote.cid_set.cids[i].path_id = client->super.remote.cid_set.cids[i].sequence;
-            client->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
-        }
-    }
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(server->super.remote.cid_set.cids); ++i) {
-        if (server->super.remote.cid_set.cids[i].sequence >= 1 &&
-            server->super.remote.cid_set.cids[i].sequence <= 3) {
-            server->super.remote.cid_set.cids[i].path_id = server->super.remote.cid_set.cids[i].sequence;
-            server->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
-        }
-    }
+
 
     /* open 1 additional path */
     struct sockaddr_in remote_addr1, local_addr1;

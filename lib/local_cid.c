@@ -34,7 +34,10 @@ static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
     if (set->_encryptor == NULL || set->plaintext.path_id >= QUICLY_MAX_PATH_ID)
         return 0;
 
-    set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
+    quicly_cid_plaintext_t tmp_plaintext = set->plaintext;
+    tmp_plaintext.path_id = set->cids[idx].path_id;
+
+    set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &tmp_plaintext);
     set->cids[idx].sequence = set->plaintext.path_id++;
 
     return 1;
@@ -90,6 +93,7 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
     /* initialize cids[0] */
     if (encryptor != NULL) {
         assert(new_cid != NULL && "master CID must be specified when a non-zero length CID is to be used");
+        set->cids[0].path_id = 0;
         generate_cid(set, 0);
     }
     set->cids[0].state =
@@ -106,8 +110,10 @@ int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
     assert(size <= PTLS_ELEMENTSOF(set->cids));
     assert(set->_size <= size);
 
-    for (size_t i = set->_size; i < size; i++)
+    for (size_t i = set->_size; i < size; i++) {
         set->cids[i].state = QUICLY_LOCAL_CID_STATE_IDLE;
+        set->cids[i].path_id = (uint32_t)i;
+    }
 
     set->_size = size;
 

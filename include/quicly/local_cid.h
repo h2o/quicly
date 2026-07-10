@@ -52,6 +52,7 @@ enum en_quicly_local_cid_state_t {
  */
 typedef struct st_quicly_local_cid_t {
     enum en_quicly_local_cid_state_t state;
+    uint32_t path_id;
     uint64_t sequence;
     quicly_cid_t cid;
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];

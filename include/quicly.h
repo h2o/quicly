@@ -747,6 +747,8 @@ typedef struct st_quicly_path_stats_t {
     uint32_t rtt_smoothed;
     quicly_address_t local;
     quicly_address_t remote;
+    uint32_t cwnd;
+    uint32_t bytes_in_flight;
 } quicly_path_stats_t;
 
 
