@@ -253,6 +253,7 @@ struct st_quicly_conn_path_t {
         uint64_t bytes_sent;
         uint64_t bytes_acked;
     } num_packets;
+    uint64_t dcid;
     uint32_t path_id;
     struct {
         ptls_iovec_t payloads[256];
@@ -588,7 +589,7 @@ uint64_t quicly_calculate_total_cwnd(quicly_conn_t *conn)
 
 static inline quicly_path_space_t *get_path_space_by_path(quicly_conn_t *conn, const struct st_quicly_conn_path_t *path)
 {
-    if (path == NULL)
+    if (path == NULL || !quicly_is_multipath(conn))
         return conn->path_spaces[0];
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
         if (conn->path_spaces[i] != NULL && conn->path_spaces[i]->path_id == path->path_id)
@@ -1238,10 +1239,10 @@ static size_t local_cid_size(const quicly_conn_t *conn)
  */
 static void dissociate_cid(quicly_conn_t *conn, uint64_t sequence)
 {
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
-        quicly_path_space_t *ps = conn->path_spaces[i];
-        if (ps != NULL && ps->dcid == sequence)
-            ps->dcid = UINT64_MAX;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        struct st_quicly_conn_path_t *path = conn->paths[i];
+        if (path != NULL && path->dcid == sequence)
+            path->dcid = UINT64_MAX;
     }
 }
 
@@ -2193,14 +2194,16 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
 
     assert(conn->paths[path_index] == NULL);
 
-    if (conn->path_spaces[path_index] == NULL) {
-        uint32_t path_id = quicly_is_multipath(conn) ? (uint32_t)path_index : 0;
-        if ((ret = alloc_path_space(conn, path_index, path_id)) != 0)
-            return ret;
+    if (path_index == 0 || quicly_is_multipath(conn)) {
+        if (conn->path_spaces[path_index] == NULL) {
+            uint32_t path_id = quicly_is_multipath(conn) ? (uint32_t)path_index : 0;
+            if ((ret = alloc_path_space(conn, path_index, path_id)) != 0)
+                return ret;
+        }
     }
 
-    quicly_path_space_t *ps = conn->path_spaces[path_index];
-    assert(ps->addrs[0] == NULL);
+    quicly_path_space_t *ps = conn->path_spaces[quicly_is_multipath(conn) ? path_index : 0];
+    assert(ps->addrs[path_index] == NULL);
 
     if ((path = malloc(sizeof(*path))) == NULL)
         return PTLS_ERROR_NO_MEMORY;
@@ -2211,21 +2214,23 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
             .path_challenge.send_at = INT64_MAX,
             .initial = 1,
             .probe_only = 0,
+            .dcid = 0,
         };
         ps->dcid = 0;
     } else {
         *path = (struct st_quicly_conn_path_t){
             .path_challenge.send_at = 0,
             .probe_only = 1,
+            .dcid = UINT64_MAX,
         };
         conn->super.ctx->tls->random_bytes(path->path_challenge.data, sizeof(path->path_challenge.data));
         conn->super.stats.num_paths.created += 1;
     }
     set_address(&path->address.remote, remote_addr);
     set_address(&path->address.local, local_addr);
-    path->path_id = ps->path_id;
+    path->path_id = quicly_is_multipath(conn) ? (uint32_t)path_index : 0;
 
-    ps->addrs[0] = path;
+    ps->addrs[path_index] = path;
     conn->paths[path_index] = path;
 
     PTLS_LOG_DEFINE_POINT(quicly, new_path, new_path_logpoint);
@@ -2265,21 +2270,41 @@ static void free_path_space(quicly_path_space_t *ps)
 static int do_delete_path(quicly_conn_t *conn, size_t path_index)
 {
     int ret = 0;
-    quicly_path_space_t *ps = conn->path_spaces[path_index];
-    if (ps == NULL)
+    struct st_quicly_conn_path_t *path = conn->paths[path_index];
+    if (path == NULL)
         return 0;
+    quicly_path_space_t *ps = get_path_space_by_path(conn, path);
 
-    if (ps->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0) {
-        uint64_t cid = ps->dcid;
-        dissociate_cid(conn, cid);
-        ret = quicly_remote_cid_unregister_path(&conn->super.remote.cid_set, ps->path_id, cid);
-        assert(conn->super.remote.cid_set.retired.count != 0);
-        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    if (quicly_is_multipath(conn)) {
+        if (ps->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0) {
+            uint64_t cid = ps->dcid;
+            dissociate_cid(conn, cid);
+            ret = quicly_remote_cid_unregister_path(&conn->super.remote.cid_set, ps->path_id, cid);
+            assert(conn->super.remote.cid_set.retired.count != 0);
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        }
     }
 
-    free_path_space(ps);
-    conn->path_spaces[path_index] = NULL;
+    if (ps->addrs[path_index] != NULL) {
+        clear_path_datagram_frame_payloads(ps->addrs[path_index]);
+        free(ps->addrs[path_index]);
+        ps->addrs[path_index] = NULL;
+    }
     conn->paths[path_index] = NULL;
+
+    if (quicly_is_multipath(conn)) {
+        int has_any = 0;
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(ps->addrs); ++i) {
+            if (ps->addrs[i] != NULL) {
+                has_any = 1;
+                break;
+            }
+        }
+        if (!has_any) {
+            free_path_space(ps);
+            conn->path_spaces[path_index] = NULL;
+        }
+    }
 
     return ret;
 }
@@ -2289,8 +2314,8 @@ static int delete_path(quicly_conn_t *conn, size_t path_index)
     QUICLY_PROBE(DELETE_PATH, conn, conn->stash.now, path_index);
     QUICLY_LOG_CONN(delete_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
 
-    quicly_path_space_t *ps = conn->path_spaces[path_index];
-    if (ps != NULL && ps->addrs[0] != NULL && ps->addrs[0]->path_challenge.send_at != INT64_MAX)
+    quicly_path_space_t *ps = get_path_space_by_path(conn, conn->paths[path_index]);
+    if (ps != NULL && ps->addrs[path_index] != NULL && ps->addrs[path_index]->path_challenge.send_at != INT64_MAX)
         conn->super.stats.num_paths.validation_failed += 1;
 
     return do_delete_path(conn, path_index);
@@ -2307,14 +2332,8 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     QUICLY_LOG_CONN(promote_path, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
 
     /* update path mapping first so that get_cc/get_loss resolve to the correct structs */
-    struct st_quicly_conn_path_t *old_primary = conn->paths[0];
-    conn->paths[0] = conn->paths[path_index];
-    conn->paths[path_index] = NULL;
-    conn->path_spaces[0]->addrs[0] = conn->paths[0];
-    conn->super.stats.num_paths.promoted += 1;
-
-    /* mark all packets on the old primary path as lost; use path_spaces[0]->loss which is now the active loss for paths[0] */
-    { /* mark all in-flight packets as lost, as it is unlikely they will be acked after migration */
+    /* mark all in-flight packets on the old primary path as lost, so that their frames are rescheduled for transmission on the new path */
+    {
         quicly_sentmap_iter_t iter;
         if ((ret = quicly_loss_init_sentmap_iter(&conn->path_spaces[0]->loss, &iter, conn->stash.now,
                                                  conn->super.remote.transport_params.max_ack_delay, 0)) != 0)
@@ -2325,6 +2344,16 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
                 goto Exit;
         }
     }
+
+    /* update path mapping first so that get_cc/get_loss resolve to the correct structs */
+    struct st_quicly_conn_path_t *old_primary = conn->paths[0];
+    conn->paths[0] = conn->paths[path_index];
+    conn->paths[path_index] = NULL;
+    conn->paths[0]->path_id = 0;
+
+    conn->path_spaces[0]->addrs[0] = conn->paths[0];
+    conn->path_spaces[0]->addrs[path_index] = NULL;
+    conn->super.stats.num_paths.promoted += 1;
 
     /* reset CC; get_cc(conn, paths[0]) now returns conn->egress.cc */
     get_cc(conn, conn->paths[0])->type->cc_init->cb(
@@ -4054,16 +4083,16 @@ uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn)
 
 static int setup_path_dcid(quicly_conn_t *conn, size_t path_index)
 {
-    quicly_path_space_t *ps = conn->path_spaces[path_index];
+    struct st_quicly_conn_path_t *path = conn->paths[path_index];
     quicly_remote_cid_set_t *set = &conn->super.remote.cid_set;
     size_t found = SIZE_MAX;
 
-    assert(ps->dcid == UINT64_MAX);
+    assert(path->dcid == UINT64_MAX);
 
     uint32_t expected_path_id = 0;
     if (conn->super.ctx->transport_params.initial_max_path_id != 0 &&
         conn->super.remote.transport_params.initial_max_path_id != 0) {
-        expected_path_id = ps->path_id;
+        expected_path_id = path->path_id;
     }
 
     if (set->cids[0].cid.len == 0) {
@@ -4082,21 +4111,25 @@ static int setup_path_dcid(quicly_conn_t *conn, size_t path_index)
     }
 
     /* associate */
-    set->cids[found].state = QUICLY_REMOTE_CID_IN_USE;
-    ps->dcid = set->cids[found].sequence;
+    if (set->cids[0].cid.len != 0) {
+        set->cids[found].state = QUICLY_REMOTE_CID_IN_USE;
+        path->dcid = set->cids[found].sequence;
+    } else {
+        path->dcid = 0;
+    }
 
     return 1;
 }
 
 static quicly_cid_t *get_dcid(quicly_conn_t *conn, size_t path_index)
 {
-    quicly_path_space_t *ps = conn->path_spaces[path_index];
+    struct st_quicly_conn_path_t *path = conn->paths[path_index];
 
-    assert(ps->dcid != UINT64_MAX);
+    assert(path->dcid != UINT64_MAX);
 
     /* lookup DCID and return */
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->super.remote.cid_set.cids); ++i) {
-        if (conn->super.remote.cid_set.cids[i].sequence == ps->dcid &&
+        if (conn->super.remote.cid_set.cids[i].sequence == path->dcid &&
             conn->super.remote.cid_set.cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE)
             return &conn->super.remote.cid_set.cids[i].cid;
     }
@@ -6308,7 +6341,7 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
                 continue;
             }
             /* determine DCID to be used, if not yet been done; upon failure, this path (being secondary) is discarded */
-            if (conn->path_spaces[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
+            if (conn->paths[s.path_index]->dcid == UINT64_MAX && !setup_path_dcid(conn, s.path_index)) {
                 ret = delete_path(conn, s.path_index);
                 assert(ret == 0 && "path->dcid is UINT64_MAX and therefore does not trigger an error");
                 s.recalc_send_probe_at = 1;
