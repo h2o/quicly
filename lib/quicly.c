@@ -243,6 +243,10 @@ struct st_quicly_conn_path_t {
      */
     uint8_t probe_only : 1;
     /**
+     * if the path was abandoned
+     */
+    uint8_t abandoned : 1;
+    /**
      * number of packets being sent / received on the path
      */
     struct {
@@ -6326,7 +6330,7 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
      * more than one path at a time) */
     if (conn->egress.send_probe_at <= conn->stash.now) {
         for (s.path_index = 1; s.path_index < PTLS_ELEMENTSOF(conn->paths); ++s.path_index) {
-            if (conn->paths[s.path_index] == NULL || !(conn->stash.now >= conn->paths[s.path_index]->path_challenge.send_at ||
+            if (conn->paths[s.path_index] == NULL || conn->paths[s.path_index]->abandoned || !(conn->stash.now >= conn->paths[s.path_index]->path_challenge.send_at ||
                                                        conn->paths[s.path_index]->path_response.send_))
                 continue;
             if (conn->paths[s.path_index]->path_challenge.num_sent > conn->super.ctx->max_probe_packets) {
@@ -6364,6 +6368,7 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
                 s.path_index = p;
                 p = (p + 1) % PTLS_ELEMENTSOF(conn->paths);
                 if (conn->paths[s.path_index] == NULL ||
+                    conn->paths[s.path_index]->abandoned ||
                     (conn->paths[s.path_index]->probe_only &&
                      conn->paths[s.path_index]->datagram_frame_payloads.count == 0))
                     continue;
@@ -7465,9 +7470,24 @@ static quicly_error_t handle_path_abandon_frame(quicly_conn_t *conn, struct st_q
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
     /* find and delete path */
-    for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
         if (conn->paths[i] != NULL && conn->paths[i]->path_id == path_id) {
-            delete_path(conn, i);
+            if (i == 0) {
+                int has_other = 0;
+                for (size_t j = 1; j < PTLS_ELEMENTSOF(conn->paths); ++j) {
+                    if (conn->paths[j] != NULL && !conn->paths[j]->abandoned) {
+                        has_other = 1;
+                        break;
+                    }
+                }
+                if (!has_other) {
+                    conn->super.state = QUICLY_STATE_CLOSING;
+                } else {
+                    conn->paths[i]->abandoned = 1;
+                }
+            } else {
+                delete_path(conn, i);
+            }
             break;
         }
     }
