@@ -1632,6 +1632,158 @@ static void test_multipath_coupled_cc(void)
     quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
 }
 
+static size_t transmit_multipath(quicly_conn_t *src, quicly_conn_t *dst)
+{
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[32];
+    uint8_t datagramsbuf[PTLS_ELEMENTSOF(datagrams) * quicly_get_context(src)->transport_params.max_udp_payload_size];
+    size_t num_datagrams, i;
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    quicly_error_t ret;
+
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ret = quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, datagramsbuf, sizeof(datagramsbuf));
+    ok(ret == 0);
+
+    if (num_datagrams != 0) {
+        printf("transmit_multipath: sent %zu datagrams, from port %d to port %d\n", num_datagrams, ntohs(srcaddr.sin.sin_port), ntohs(destaddr.sin.sin_port));
+        fflush(stdout);
+        size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
+        for (i = 0; i != num_packets; ++i) {
+            ret = quicly_receive(dst, &destaddr.sa, &srcaddr.sa, decoded + i);
+            printf("quicly_receive returned: %d (0x%x)\n", ret, ret);
+            fflush(stdout);
+            ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+        }
+    }
+
+    return num_datagrams;
+}
+
+static void test_multipath_active_use(void)
+{
+    uint64_t orig_initial_max_path_id = quic_ctx.transport_params.initial_max_path_id;
+    quic_ctx.transport_params.initial_max_path_id = 4; /* enable multipath negotiation */
+
+    /* Set up cid_encryptor for the test context */
+    quicly_cid_encryptor_t *orig_cid_encryptor = quic_ctx.cid_encryptor;
+    char cid_key[] = "0123456789abcdef";
+    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(
+        &ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+        ptls_iovec_init(cid_key, strlen(cid_key))
+    );
+    ok(quic_ctx.cid_encryptor != NULL);
+
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+
+    /* Initialize path 0 addresses to fake_address to avoid family 0 asserts */
+    client->paths[0]->address.local = fake_address;
+    client->paths[0]->address.remote = fake_address;
+    server->paths[0]->address.local = fake_address;
+    server->paths[0]->address.remote = fake_address;
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(client->super.remote.cid_set.cids); ++i) {
+        if (client->super.remote.cid_set.cids[i].sequence >= 1 &&
+            client->super.remote.cid_set.cids[i].sequence <= 3) {
+            client->super.remote.cid_set.cids[i].path_id = client->super.remote.cid_set.cids[i].sequence;
+            client->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
+        }
+    }
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(server->super.remote.cid_set.cids); ++i) {
+        if (server->super.remote.cid_set.cids[i].sequence >= 1 &&
+            server->super.remote.cid_set.cids[i].sequence <= 3) {
+            server->super.remote.cid_set.cids[i].path_id = server->super.remote.cid_set.cids[i].sequence;
+            server->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
+        }
+    }
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(client->super.remote.cid_set.cids); ++i) {
+        printf("client CID slot %zu: seq=%lu, path_id=%u, state=%d\n", i,
+               (unsigned long)client->super.remote.cid_set.cids[i].sequence,
+               client->super.remote.cid_set.cids[i].path_id,
+               client->super.remote.cid_set.cids[i].state);
+    }
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(server->super.remote.cid_set.cids); ++i) {
+        printf("server CID slot %zu: seq=%lu, path_id=%u, state=%d\n", i,
+               (unsigned long)server->super.remote.cid_set.cids[i].sequence,
+               server->super.remote.cid_set.cids[i].path_id,
+               server->super.remote.cid_set.cids[i].state);
+    }
+    fflush(stdout);
+
+    /* Verify path 0 is active */
+    ok(client->paths[0] != NULL);
+
+    /* Setup 3 additional loopback paths on client to server */
+    struct sockaddr_in remote_addrs[3], local_addrs[3];
+    for (size_t i = 0; i < 3; ++i) {
+        memset(&remote_addrs[i], 0, sizeof(remote_addrs[i]));
+        remote_addrs[i].sin_family = AF_INET;
+        remote_addrs[i].sin_port = htons(10000 + i);
+        remote_addrs[i].sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+        memset(&local_addrs[i], 0, sizeof(local_addrs[i]));
+        local_addrs[i].sin_family = AF_INET;
+        local_addrs[i].sin_port = htons(20000 + i);
+        local_addrs[i].sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+        quicly_error_t ret = quicly_open_path(client, (struct sockaddr *)&remote_addrs[i], (struct sockaddr *)&local_addrs[i]);
+        ok(ret == 0);
+        ok(client->paths[i + 1] != NULL);
+    }
+
+    /* Exchange packets until all paths are validated */
+    for (size_t i = 0; i < 20; ++i) {
+        transmit_multipath(client, server);
+        transmit_multipath(server, client);
+    }
+
+    /* Verify that all paths have been created on the server and are validated (not probe_only) */
+    for (size_t i = 0; i < 4; ++i) {
+        ok(client->paths[i] != NULL);
+        ok(!client->paths[i]->probe_only);
+        ok(server->paths[i] != NULL);
+        ok(!server->paths[i]->probe_only);
+    }
+
+    /* Record the packet count on each path before sending stream data */
+    uint64_t sent_before[4];
+    for (size_t i = 0; i < 4; ++i) {
+        sent_before[i] = client->paths[i]->num_packets.sent;
+        printf("Path %zu sent_before: %lu\n", i, (unsigned long)sent_before[i]);
+        fflush(stdout);
+    }
+
+    /* Send stream data */
+    quicly_stream_t *stream;
+    quicly_error_t ret = quicly_open_stream(client, &stream, 0);
+    ok(ret == 0);
+    for (size_t i = 0; i < 20; ++i) {
+        quicly_streambuf_egress_write(stream, "hello multipath test", 20);
+        transmit_multipath(client, server);
+        transmit_multipath(server, client);
+    }
+
+    /* Verify that additional packets were sent on all paths */
+    int all_paths_used_for_data = 1;
+    for (size_t i = 0; i < 4; ++i) {
+        printf("Path %zu sent_after: %lu\n", i, (unsigned long)client->paths[i]->num_packets.sent);
+        fflush(stdout);
+        if (client->paths[i]->num_packets.sent <= sent_before[i]) {
+            all_paths_used_for_data = 0;
+        }
+    }
+    ok(all_paths_used_for_data);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
+    quic_ctx.cid_encryptor = orig_cid_encryptor;
+    quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -1714,6 +1866,7 @@ int main(int argc, char **argv)
     subtest("multipath-negotiation-success", test_multipath_negotiation_success);
     subtest("multipath-state-isolation", test_multipath_state_isolation);
     subtest("multipath-coupled-cc", test_multipath_coupled_cc);
+    subtest("multipath-active-use", test_multipath_active_use);
 
     subtest("stats-foreach", test_stats_foreach);
 

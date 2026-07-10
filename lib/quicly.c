@@ -548,6 +548,10 @@ struct st_quicly_conn_t {
         unsigned slots_newly_processible;
     } delayed_packets;
     /**
+     * next path index to schedule packets on (for multipath round-robin scheduling)
+     */
+    size_t next_send_path_index;
+    /**
      * structure to hold various data used internally
      */
     struct {
@@ -2267,7 +2271,7 @@ static int do_delete_path(quicly_conn_t *conn, struct st_quicly_conn_path_t *pat
     if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0) {
         uint64_t cid = path->dcid;
         dissociate_cid(conn, cid);
-        ret = quicly_remote_cid_unregister(&conn->super.remote.cid_set, cid);
+        ret = quicly_remote_cid_unregister_path(&conn->super.remote.cid_set, path->path_id, cid);
         assert(conn->super.remote.cid_set.retired.count != 0);
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
@@ -6329,15 +6333,21 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     /* otherwise, emit non-probing packets */
     if (s.num_datagrams == 0) {
         if (conn->super.remote.transport_params.initial_max_path_id != 0) {
-            for (s.path_index = 0; s.path_index < PTLS_ELEMENTSOF(conn->paths); ++s.path_index) {
+            size_t count = 0;
+            size_t p = conn->next_send_path_index;
+            for (count = 0; count < PTLS_ELEMENTSOF(conn->paths); ++count) {
+                s.path_index = p;
+                p = (p + 1) % PTLS_ELEMENTSOF(conn->paths);
                 if (conn->paths[s.path_index] == NULL ||
                     (conn->paths[s.path_index]->probe_only &&
                      conn->paths[s.path_index]->datagram_frame_payloads.count == 0))
                     continue;
                 if ((ret = do_send(conn, &s)) != 0)
                     goto Exit;
-                if (s.num_datagrams != 0)
+                if (s.num_datagrams != 0) {
+                    conn->next_send_path_index = p;
                     break;
+                }
             }
             if (s.num_datagrams == 0)
                 s.path_index = 0;
@@ -6737,6 +6747,8 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
 
             for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->paths); ++p) {
                 if (conn->paths[p] != NULL) {
+                    if (quicly_is_multipath(conn) && conn->paths[p]->path_id != path_id)
+                        continue;
                     size_t iter_idx = quicly_is_multipath(conn) ? conn->paths[p]->path_id : 0;
                     while (quicly_sentmap_get(&iter[iter_idx])->packet_number < pn_acked)
                         quicly_sentmap_skip(&iter[iter_idx]);
@@ -8256,7 +8268,26 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         packet->path_id = 0;
     }
 
-    if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, &(*space)->next_expected_packet_number, packet, &pn,
+    uint64_t dummy_next_expected_pn = 0;
+    uint64_t *next_expected_pn_ptr = NULL;
+
+    if (epoch == QUICLY_EPOCH_1RTT && quicly_is_multipath(conn)) {
+        struct st_quicly_conn_path_t *dec_path = find_path_by_id(conn, packet->path_id);
+        if (dec_path != NULL && dec_path->path_id != 0) {
+            space = (void *)&dec_path->pn_space;
+            next_expected_pn_ptr = &dec_path->pn_space->next_expected_packet_number;
+        } else if (dec_path != NULL && dec_path->path_id == 0) {
+            space = (void *)&conn->application;
+            next_expected_pn_ptr = &conn->application->super.next_expected_packet_number;
+        } else {
+            space = NULL;
+            next_expected_pn_ptr = &dummy_next_expected_pn;
+        }
+    } else {
+        next_expected_pn_ptr = &(*space)->next_expected_packet_number;
+    }
+
+    if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, next_expected_pn_ptr, packet, &pn,
                               &payload)) != 0) {
         ++conn->super.stats.num_packets.decryption_failed;
         QUICLY_PROBE(PACKET_DECRYPTION_FAILED, conn, conn->stash.now, pn);
@@ -8289,6 +8320,14 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         ret = open_path(conn, &path_index, src_addr, dest_addr);
         if (ret != 0)
             goto Exit;
+    }
+
+    if (epoch == QUICLY_EPOCH_1RTT && quicly_is_multipath(conn)) {
+        if (conn->paths[path_index]->path_id != 0) {
+            space = (void *)&conn->paths[path_index]->pn_space;
+        } else {
+            space = (void *)&conn->application;
+        }
     }
 
     /* update states */
