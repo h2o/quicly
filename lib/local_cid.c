@@ -29,13 +29,24 @@ static int has_pending(quicly_local_cid_set_t *set)
 /**
  * generates a new CID and increments path_id. returns true if successfully generated.
  */
-static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
+static int generate_cid(quicly_local_cid_set_t *set, size_t idx, int is_multipath)
 {
     if (set->_encryptor == NULL || set->plaintext.path_id >= QUICLY_MAX_PATH_ID)
         return 0;
 
     quicly_cid_plaintext_t tmp_plaintext = set->plaintext;
-    tmp_plaintext.path_id = set->cids[idx].path_id;
+
+    /* To generate unique CIDs using encrypt_cid, tmp_plaintext must be unique.
+     * We encode the sequence number into tmp_plaintext.path_id so that each CID
+     * generated has a unique plaintext. This implies the decrypted CID will
+     * have path_id = sequence. */
+    tmp_plaintext.path_id = set->plaintext.path_id;
+
+    if (is_multipath) {
+        set->cids[idx].path_id = set->plaintext.path_id;
+    } else {
+        set->cids[idx].path_id = 0;
+    }
 
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &tmp_plaintext);
     set->cids[idx].sequence = set->plaintext.path_id++;
@@ -94,7 +105,7 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
     if (encryptor != NULL) {
         assert(new_cid != NULL && "master CID must be specified when a non-zero length CID is to be used");
         set->cids[0].path_id = 0;
-        generate_cid(set, 0);
+        generate_cid(set, 0, 0);
     }
     set->cids[0].state =
         QUICLY_LOCAL_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the remote peer */
@@ -103,7 +114,7 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
         set->cids[i].sequence = UINT64_MAX;
 }
 
-int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
+int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size, int is_multipath)
 {
     int is_pending = 0;
 
@@ -112,7 +123,6 @@ int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
 
     for (size_t i = set->_size; i < size; i++) {
         set->cids[i].state = QUICLY_LOCAL_CID_STATE_IDLE;
-        set->cids[i].path_id = (uint32_t)i;
     }
 
     set->_size = size;
@@ -124,7 +134,7 @@ int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
         if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE)
             continue;
 
-        if (!generate_cid(set, i))
+        if (!generate_cid(set, i, is_multipath))
             break;
         do_mark_pending(set, i);
         is_pending = 1;
@@ -185,7 +195,7 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence)
     return 1;
 }
 
-quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *_has_pending)
+quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int is_multipath, int *_has_pending)
 {
     /* find the CID to be retired, also check if there is at least one CID that has been issued */
     size_t retired_at = set->_size;
@@ -224,7 +234,7 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
     }
 
     /* generate one new CID */
-    if (generate_cid(set, retired_at)) {
+    if (generate_cid(set, retired_at, is_multipath)) {
         do_mark_pending(set, retired_at);
         *_has_pending = 1;
     } else {
