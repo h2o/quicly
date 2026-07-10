@@ -1220,7 +1220,7 @@ static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **s
     ok(ret == 0);
     num_datagrams = transmit(*server, *client);
     ok(num_datagrams > 0);
-    ok(quicly_get_state(*client) == QUICLY_STATE_CONNECTED);
+    if (quicly_get_state(*client) != QUICLY_STATE_CONNECTED) fprintf(stderr, "TEST_SETUP FAILED FOR CLIENT\n"); ok(quicly_get_state(*client) == QUICLY_STATE_CONNECTED);
     ok(quicly_get_state(*server) == QUICLY_STATE_CONNECTED);
     exchange_until_idle(*client, *server);
 }
@@ -1623,7 +1623,7 @@ static void test_multipath_state_isolation(void)
 
     /* Open path 1 */
     size_t path_index = 1;
-    quicly_error_t ret = new_path(client, path_index, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    quicly_error_t ret = new_path(client, path_index, UINT32_MAX, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
     ok(ret == 0);
     ok(client->paths[1] != NULL);
 
@@ -1675,7 +1675,7 @@ static void test_multipath_coupled_cc(void)
     local_addr.sin_port = htons(54321);
     local_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    quicly_error_t ret = new_path(client, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    quicly_error_t ret = new_path(client, 1, UINT32_MAX, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
     ok(ret == 0);
     ok(client->paths[1] != NULL);
 

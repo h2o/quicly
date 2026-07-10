@@ -36,20 +36,19 @@ static int generate_cid(quicly_local_cid_set_t *set, size_t idx, int is_multipat
 
     quicly_cid_plaintext_t tmp_plaintext = set->plaintext;
 
-    /* To generate unique CIDs using encrypt_cid, tmp_plaintext must be unique.
-     * We encode the sequence number into tmp_plaintext.path_id so that each CID
-     * generated has a unique plaintext. This implies the decrypted CID will
-     * have path_id = sequence. */
-    tmp_plaintext.path_id = set->plaintext.path_id;
-
     if (is_multipath) {
         set->cids[idx].path_id = set->plaintext.path_id;
+        set->cids[idx].sequence = 0;
     } else {
         set->cids[idx].path_id = 0;
+        set->cids[idx].sequence = set->plaintext.path_id;
     }
 
+    tmp_plaintext.path_id = set->cids[idx].path_id;
+    tmp_plaintext.sequence = set->cids[idx].sequence;
+
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &tmp_plaintext);
-    set->cids[idx].sequence = set->plaintext.path_id++;
+    set->plaintext.path_id++;
 
     return 1;
 }
@@ -195,7 +194,7 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence)
     return 1;
 }
 
-quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int is_multipath, int *_has_pending)
+quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint32_t path_id, uint64_t sequence, int is_multipath, int *_has_pending)
 {
     /* find the CID to be retired, also check if there is at least one CID that has been issued */
     size_t retired_at = set->_size;
@@ -203,7 +202,7 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
     for (size_t i = 0; i < set->_size; i++) {
         if (set->cids[i].state == QUICLY_LOCAL_CID_STATE_IDLE)
             continue;
-        if (set->cids[i].sequence == sequence) {
+        if (set->cids[i].sequence == sequence && set->cids[i].path_id == path_id) {
             assert(retired_at == set->_size);
             retired_at = i;
         } else {

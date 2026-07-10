@@ -75,12 +75,12 @@ static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint32_t path_id
                     return 0;
                 } else {
                     /* received a frame that carries conflicting information */
-                    return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+                    if (1) { fprintf(stderr, "PROTOCOL_VIOLATION at line %d\n", __LINE__); return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION; }
                 }
             }
             /* here we know CID is not equal */
             if (set->cids[i].sequence == sequence && set->cids[i].path_id == path_id)
-                return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+                if (1) { fprintf(stderr, "PROTOCOL_VIOLATION at line %d\n", __LINE__); return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION; }
         } else {
             if (path_id == 0 && set->cids[i].sequence == sequence) {
                 slot_to_use = i;

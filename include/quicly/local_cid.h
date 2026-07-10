@@ -116,12 +116,9 @@ void quicly_local_cid_on_acked(quicly_local_cid_set_t *set, uint64_t sequence);
  */
 int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence);
 /**
- * remove the specified CID from the storage.
- *
- * This makes one slot for CIDs empty. The CID generator callback is then called to fill the slot with a new CID.
- * @return 0 if the request was legal, otherwise an error code
+ * retire a CID
  */
-quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int is_multipath, int *_has_pending);
+quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint32_t path_id, uint64_t sequence, int is_multipath, int *_has_pending);
 
 /* inline definitions */
 
