@@ -2225,6 +2225,9 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
     set_address(&path->address.remote, remote_addr);
     set_address(&path->address.local, local_addr);
     path->path_id = quicly_is_multipath(conn) ? (uint32_t)path_index : 0;
+    if (quicly_is_multipath(conn)) {
+        conn->abandoned_paths_mask &= ~((uint32_t)1 << path->path_id);
+    }
 
     ps->addrs[path_index] = path;
     conn->paths[path_index] = path;
@@ -5636,7 +5639,7 @@ static quicly_error_t send_new_connection_id(quicly_conn_t *conn, quicly_send_co
     uint64_t retire_prior_to = 0; /* TODO */
     quicly_error_t ret;
 
-    if (quicly_is_multipath(conn) && new_cid->sequence > 0) {
+    if (quicly_is_multipath(conn) && new_cid->path_id > 0) {
         /* send PATH_NEW_CONNECTION_ID frame for paths > 0 */
         uint64_t path_id = new_cid->path_id;
         size_t capacity = 2 + quicly_encodev_capacity(path_id) +
