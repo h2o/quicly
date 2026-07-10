@@ -218,6 +218,8 @@ struct st_quicly_conn_path_t {
      * to determine the least-recently-used path which will be recycled.
      */
     uint64_t packet_last_received;
+    
+    struct st_quicly_path_space_t *path_space;
     /**
      * `send_at` indicates when a PATH_CHALLENGE frame carrying `data` should be sent, or if the value is INT64_MAX the path is
      * validated
@@ -593,13 +595,9 @@ uint64_t quicly_calculate_total_cwnd(quicly_conn_t *conn)
 
 static inline quicly_path_space_t *get_path_space_by_path(quicly_conn_t *conn, const struct st_quicly_conn_path_t *path)
 {
-    if (path == NULL || !quicly_is_multipath(conn))
+    if (path == NULL)
         return conn->path_spaces[0];
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
-        if (conn->path_spaces[i] != NULL && conn->path_spaces[i]->path_id == path->path_id)
-            return conn->path_spaces[i];
-    }
-    return conn->path_spaces[0];
+    return path->path_space;
 }
 
 static inline quicly_cc_t *get_cc(quicly_conn_t *conn, const struct st_quicly_conn_path_t *path)
@@ -2245,6 +2243,7 @@ static int new_path(quicly_conn_t *conn, size_t path_index, struct sockaddr *rem
 
     ps->addrs[path_index] = path;
     conn->paths[path_index] = path;
+    path->path_space = ps;
 
     PTLS_LOG_DEFINE_POINT(quicly, new_path, new_path_logpoint);
     if (QUICLY_PROBE_ENABLED(NEW_PATH) ||
@@ -2365,6 +2364,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     conn->paths[0]->path_id = 0;
 
     conn->path_spaces[0]->addrs[0] = conn->paths[0];
+    conn->paths[0]->path_space = conn->path_spaces[0];
     conn->path_spaces[0]->addrs[path_index] = NULL;
     conn->super.stats.num_paths.promoted += 1;
 
