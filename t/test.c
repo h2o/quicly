@@ -1651,7 +1651,7 @@ static size_t transmit_multipath(quicly_conn_t *src, quicly_conn_t *dst)
         size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
         for (i = 0; i != num_packets; ++i) {
             ret = quicly_receive(dst, &destaddr.sa, &srcaddr.sa, decoded + i);
-            printf("quicly_receive returned: %d (0x%x)\n", ret, ret);
+            printf("quicly_receive returned: %ld (0x%lx)\n", (long)ret, (long)ret);
             fflush(stdout);
             ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
         }
@@ -1784,6 +1784,173 @@ static void test_multipath_active_use(void)
     quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
 }
 
+/* drops packets sent from drop_src_port to simulate path failure/loss */
+static size_t transmit_multipath_with_loss(quicly_conn_t *src, quicly_conn_t *dst, uint16_t drop_src_port)
+{
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[32];
+    uint8_t datagramsbuf[PTLS_ELEMENTSOF(datagrams) * quicly_get_context(src)->transport_params.max_udp_payload_size];
+    size_t num_datagrams, i;
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    quicly_error_t ret;
+
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ret = quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, datagramsbuf, sizeof(datagramsbuf));
+    ok(ret == 0);
+
+    size_t received_datagrams = 0;
+    if (num_datagrams != 0) {
+        if (ntohs(srcaddr.sin.sin_port) == drop_src_port) {
+            printf("transmit_multipath: dropped %zu datagrams from port %d to port %d\n",
+                   num_datagrams, ntohs(srcaddr.sin.sin_port), ntohs(destaddr.sin.sin_port));
+            fflush(stdout);
+            return 0;
+        }
+
+        printf("transmit_multipath: sent %zu datagrams, from port %d to port %d\n", num_datagrams, ntohs(srcaddr.sin.sin_port), ntohs(destaddr.sin.sin_port));
+        fflush(stdout);
+        size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
+        for (i = 0; i != num_packets; ++i) {
+            ret = quicly_receive(dst, &destaddr.sa, &srcaddr.sa, decoded + i);
+            ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+        }
+        received_datagrams = num_datagrams;
+    }
+
+    return received_datagrams;
+}
+
+/* tests that packets are successfully retransmitted over path 0 when path 1 is completely lossy */
+static void test_multipath_path_loss(void)
+{
+    uint64_t orig_initial_max_path_id = quic_ctx.transport_params.initial_max_path_id;
+    quic_ctx.transport_params.initial_max_path_id = 4;
+
+    quicly_cid_encryptor_t *orig_cid_encryptor = quic_ctx.cid_encryptor;
+    char cid_key[] = "0123456789abcdef";
+    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(
+        &ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+        ptls_iovec_init(cid_key, strlen(cid_key))
+    );
+    ok(quic_ctx.cid_encryptor != NULL);
+
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+
+    client->paths[0]->address.local = fake_address;
+    client->paths[0]->address.remote = fake_address;
+    server->paths[0]->address.local = fake_address;
+    server->paths[0]->address.remote = fake_address;
+
+    /* set up cids for multipath */
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(client->super.remote.cid_set.cids); ++i) {
+        if (client->super.remote.cid_set.cids[i].sequence >= 1 &&
+            client->super.remote.cid_set.cids[i].sequence <= 3) {
+            client->super.remote.cid_set.cids[i].path_id = client->super.remote.cid_set.cids[i].sequence;
+            client->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
+        }
+    }
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(server->super.remote.cid_set.cids); ++i) {
+        if (server->super.remote.cid_set.cids[i].sequence >= 1 &&
+            server->super.remote.cid_set.cids[i].sequence <= 3) {
+            server->super.remote.cid_set.cids[i].path_id = server->super.remote.cid_set.cids[i].sequence;
+            server->super.remote.cid_set.cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
+        }
+    }
+
+    /* open 1 additional path */
+    struct sockaddr_in remote_addr1, local_addr1;
+    memset(&remote_addr1, 0, sizeof(remote_addr1));
+    remote_addr1.sin_family = AF_INET;
+    remote_addr1.sin_port = htons(10000);
+    remote_addr1.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    memset(&local_addr1, 0, sizeof(local_addr1));
+    local_addr1.sin_family = AF_INET;
+    local_addr1.sin_port = htons(20000);
+    local_addr1.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    quicly_error_t ret = quicly_open_path(client, (struct sockaddr *)&remote_addr1, (struct sockaddr *)&local_addr1);
+    ok(ret == 0);
+    ok(client->paths[1] != NULL);
+
+    /* exchange packets until the path is validated */
+    for (size_t i = 0; i < 20; ++i) {
+        transmit_multipath(client, server);
+        transmit_multipath(server, client);
+    }
+
+    ok(!client->paths[0]->probe_only);
+    ok(!client->paths[1]->probe_only);
+
+    /* open stream and write data */
+    quicly_stream_t *stream;
+    ret = quicly_open_stream(client, &stream, 0);
+    ok(ret == 0);
+
+    char data[50000];
+    memset(data, 'a', sizeof(data));
+    quicly_streambuf_egress_write(stream, data, sizeof(data));
+
+    /* transmit a few times, dropping path 1 packets, so they are sent and dropped */
+    for (size_t i = 0; i < 10; ++i) {
+        transmit_multipath_with_loss(client, server, 20000);
+        transmit_multipath(server, client);
+    }
+
+    /* mark all outstanding packets on path 1 as lost, rescheduling them on client */
+    {
+        printf("client path_spaces[0] sentmap packets: %u\n", (unsigned)client->path_spaces[0]->loss.sentmap.num_packets);
+        printf("client path_spaces[1] sentmap packets: %u\n", (unsigned)(client->path_spaces[1] ? client->path_spaces[1]->loss.sentmap.num_packets : 0));
+        fflush(stdout);
+
+        quicly_sentmap_iter_t iter;
+        quicly_loss_init_sentmap_iter(&client->path_spaces[1]->loss, &iter, client->stash.now,
+                                      client->super.remote.transport_params.max_ack_delay, 0);
+        const quicly_sent_packet_t *sent;
+        size_t count = 0;
+        while ((sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
+            printf("Rescheduling path 1 packet PN %lu, bytes %u\n",
+                   (unsigned long)sent->packet_number, (unsigned)sent->cc_bytes_in_flight);
+            quicly_sentmap_update(&client->path_spaces[1]->loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_PTO);
+            count++;
+        }
+        printf("Rescheduled %zu packets on path 1\n", count);
+        fflush(stdout);
+    }
+
+    /* delete path 1 on the client, simulating path abandonment */
+    delete_path(client, 1);
+
+    /* run loop. path 1 is closed, so all remaining data and retransmissions will be sent on path 0 */
+    for (size_t i = 0; i < 200; ++i) {
+        int64_t t1 = quicly_get_first_timeout(client);
+        int64_t t2 = quicly_get_first_timeout(server);
+        int64_t tmin = t1 <= t2 ? t1 : t2;
+        if (tmin > quic_now) {
+            quic_now = tmin;
+        }
+        if (t1 <= t2) {
+            transmit_multipath(client, server);
+        } else {
+            transmit_multipath(server, client);
+        }
+    }
+
+    /* verify the server received the stream data */
+    quicly_stream_t *server_stream = quicly_get_stream(server, 0);
+    ok(server_stream != NULL);
+    ptls_iovec_t buf = quicly_streambuf_ingress_get(server_stream);
+    ok(buf.len >= 50000);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
+    quic_ctx.cid_encryptor = orig_cid_encryptor;
+    quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -1867,6 +2034,7 @@ int main(int argc, char **argv)
     subtest("multipath-state-isolation", test_multipath_state_isolation);
     subtest("multipath-coupled-cc", test_multipath_coupled_cc);
     subtest("multipath-active-use", test_multipath_active_use);
+    subtest("multipath-path-loss", test_multipath_path_loss);
 
     subtest("stats-foreach", test_stats_foreach);
 
