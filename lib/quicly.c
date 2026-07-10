@@ -6272,8 +6272,56 @@ Exit:
     return ret;
 }
 
-quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams,
-                           size_t *num_datagrams, void *buf, size_t bufsize)
+int quicly_is_path_available(quicly_conn_t *conn, size_t path_index)
+{
+    if (path_index >= PTLS_ELEMENTSOF(conn->paths))
+        return 0;
+    if (conn->paths[path_index] == NULL || conn->paths[path_index]->abandoned ||
+        (conn->paths[path_index]->probe_only && conn->paths[path_index]->datagram_frame_payloads.count == 0))
+        return 0;
+    return 1;
+}
+
+quicly_error_t quicly_send_on_path(quicly_conn_t *conn, quicly_send_context_t *s, size_t path_index, size_t *packets_sent)
+{
+    s->path_index = path_index;
+    quicly_error_t ret = do_send(conn, s);
+    if (packets_sent != NULL)
+        *packets_sent = s->num_datagrams;
+    return ret;
+}
+
+static quicly_error_t default_path_scheduler_do_send(struct st_quicly_path_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    quicly_error_t ret = 0;
+    if (conn->super.remote.transport_params.initial_max_path_id != 0) {
+        size_t count = 0;
+        size_t p = conn->next_send_path_index;
+        for (count = 0; count < PTLS_ELEMENTSOF(conn->paths); ++count) {
+            size_t current_p = p;
+            p = (p + 1) % PTLS_ELEMENTSOF(conn->paths);
+            if (!quicly_is_path_available(conn, current_p))
+                continue;
+            
+            size_t packets_sent = 0;
+            if ((ret = quicly_send_on_path(conn, s, current_p, &packets_sent)) != 0)
+                return ret;
+            if (packets_sent != 0) {
+                conn->next_send_path_index = p;
+                break;
+            }
+        }
+        if (s->num_datagrams == 0)
+            s->path_index = 0;
+    } else {
+        ret = quicly_send_on_path(conn, s, 0, NULL);
+    }
+    return ret;
+}
+
+quicly_path_scheduler_t quicly_default_path_scheduler = {default_path_scheduler_do_send};
+
+quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams, size_t *num_datagrams, void *buf, size_t bufsize)
 {
     quicly_send_context_t s = {.current = {.first_byte = -1},
                                .datagrams = datagrams,
@@ -6348,31 +6396,9 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     }
     /* otherwise, emit non-probing packets */
     if (s.num_datagrams == 0) {
-        if (conn->super.remote.transport_params.initial_max_path_id != 0) {
-            size_t count = 0;
-            size_t p = conn->next_send_path_index;
-            for (count = 0; count < PTLS_ELEMENTSOF(conn->paths); ++count) {
-                s.path_index = p;
-                p = (p + 1) % PTLS_ELEMENTSOF(conn->paths);
-                if (conn->paths[s.path_index] == NULL ||
-                    conn->paths[s.path_index]->abandoned ||
-                    (conn->paths[s.path_index]->probe_only &&
-                     conn->paths[s.path_index]->datagram_frame_payloads.count == 0))
-                    continue;
-                if ((ret = do_send(conn, &s)) != 0)
-                    goto Exit;
-                if (s.num_datagrams != 0) {
-                    conn->next_send_path_index = p;
-                    break;
-                }
-            }
-            if (s.num_datagrams == 0)
-                s.path_index = 0;
-        } else {
-            s.path_index = 0;
-            if ((ret = do_send(conn, &s)) != 0)
-                goto Exit;
-        }
+        quicly_path_scheduler_t *sched = conn->super.ctx->path_scheduler != NULL ? conn->super.ctx->path_scheduler : &quicly_default_path_scheduler;
+        if ((ret = sched->do_send(sched, conn, &s)) != 0)
+            goto Exit;
     } else {
         ret = 0;
     }

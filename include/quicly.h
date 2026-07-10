@@ -125,6 +125,19 @@ typedef struct st_quicly_stream_scheduler_t {
 } quicly_stream_scheduler_t;
 
 /**
+ * path scheduler
+ */
+typedef struct st_quicly_path_scheduler_t {
+    /**
+     * Called by quicly to select which path to send data on. 
+     * The scheduler should invoke `quicly_send_on_path` to build datagrams for the chosen path.
+     */
+    quicly_error_t (*do_send)(struct st_quicly_path_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s);
+} quicly_path_scheduler_t;
+
+extern quicly_path_scheduler_t quicly_default_path_scheduler;
+
+/**
  * called when stream is being open. Application is expected to create it's corresponding state and tie it to stream->data.
  */
 QUICLY_CALLBACK_TYPE(quicly_error_t, stream_open, quicly_stream_t *stream);
@@ -400,6 +413,10 @@ struct st_quicly_context_t {
      * callbacks for scheduling stream data
      */
     quicly_stream_scheduler_t *stream_scheduler;
+    /**
+     * callbacks for scheduling multipath datagrams
+     */
+    quicly_path_scheduler_t *path_scheduler;
     /**
      * callback for receiving datagram frame
      */
@@ -1364,6 +1381,15 @@ int quicly_can_send_data(quicly_conn_t *conn, quicly_send_context_t *s);
  * the responsibility of the stream scheduler to maintain a list of such streams.
  */
 quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s);
+/**
+ * Checks if a specific path is available for sending. Called by path scheduler.
+ */
+int quicly_is_path_available(quicly_conn_t *conn, size_t path_index);
+/**
+ * Builds packets on the specified path index. Called by path scheduler.
+ * Optionally populates packets_sent with the number of datagrams generated.
+ */
+quicly_error_t quicly_send_on_path(quicly_conn_t *conn, quicly_send_context_t *s, size_t path_index, size_t *packets_sent);
 /**
  * Builds a Version Negotiation packet. The generated packet might include a greasing version.
  * * @param versions  zero-terminated list of versions to advertise; use `quicly_supported_versions` for sending the list of
