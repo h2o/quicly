@@ -1008,9 +1008,9 @@ static void test_ack_frequency(void)
     server_stream = quicly_get_stream(server, client_stream->stream_id);
     ok(server_stream != NULL);
 
-    // Set some losses to trigger ack frequency path
-    server->egress.cc.num_loss_episodes = 5;
-    client->egress.cc.num_loss_episodes = 5;
+    /* set some losses to trigger ack frequency path */
+    server->path_spaces[0]->cc.num_loss_episodes = 5;
+    client->path_spaces[0]->cc.num_loss_episodes = 5;
 
     ok(server->application->super.reordering_threshold == 1);
     ok(client->application->super.reordering_threshold == 1);
@@ -1554,16 +1554,16 @@ static void test_multipath_state_isolation(void)
 
     /* Verify path-specific states are allocated and separate from path 0 */
     ok(client->paths[1]->path_id == 1);
-    ok(client->paths[1]->pn_space != NULL);
-    ok(client->paths[1]->max_udp_payload_size == client->super.ctx->initial_egress_max_udp_payload_size);
-    ok(client->paths[1]->cc.type != NULL);
-    ok(client->paths[1]->loss.sentmap.num_packets == 0);
+    ok(client->path_spaces[1]->pn_space != NULL);
+    ok(client->path_spaces[1]->max_udp_payload_size == client->super.ctx->initial_egress_max_udp_payload_size);
+    ok(client->path_spaces[1]->cc.type != NULL);
+    ok(client->path_spaces[1]->loss.sentmap.num_packets == 0);
 
-    /* Modify path 1 cwnd and verify it does not affect path 0 (connection-level egress.cc) */
-    uint32_t orig_cwnd = client->egress.cc.cwnd;
-    client->paths[1]->cc.cwnd = orig_cwnd + 5000;
-    ok(client->egress.cc.cwnd == orig_cwnd);
-    ok(client->paths[1]->cc.cwnd == orig_cwnd + 5000);
+    /* Modify path 1 cwnd and verify it does not affect path 0 */
+    uint32_t orig_cwnd = client->path_spaces[0]->cc.cwnd;
+    client->path_spaces[1]->cc.cwnd = orig_cwnd + 5000;
+    ok(client->path_spaces[0]->cc.cwnd == orig_cwnd);
+    ok(client->path_spaces[1]->cc.cwnd == orig_cwnd + 5000);
 
     quicly_free(client);
     quicly_free(server);
@@ -1596,12 +1596,12 @@ static void test_multipath_coupled_cc(void)
     ok(client->paths[1] != NULL);
 
     /* Set cwnd on both paths */
-    client->egress.cc.cwnd = 10000;
-    client->paths[1]->cc.cwnd = 10000;
+    client->path_spaces[0]->cc.cwnd = 10000;
+    client->path_spaces[1]->cc.cwnd = 10000;
     client->paths[1]->probe_only = 0;
     /* Move both out of slow start (so we test CA) */
-    client->egress.cc.ssthresh = 5000;
-    client->paths[1]->cc.ssthresh = 5000;
+    client->path_spaces[0]->cc.ssthresh = 5000;
+    client->path_spaces[1]->cc.ssthresh = 5000;
 
     /* Total cwnd should be 20000 */
     uint64_t total = quicly_calculate_total_cwnd(client);
@@ -1610,18 +1610,18 @@ static void test_multipath_coupled_cc(void)
     /* Acknowledge bytes on path 1 (in CA).
      * Standard Reno CA would increase cwnd after 10000 bytes.
      * Under LIA, it should require 20000 bytes to increase! */
-    quicly_cc_t *cc = &client->paths[1]->cc;
-    cc->type->cc_on_acked(cc, &client->paths[1]->loss, 5000, 100, 5000, 1, 101, client->stash.now, 1200);
+    quicly_cc_t *cc = &client->path_spaces[1]->cc;
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 5000, 100, 5000, 1, 101, client->stash.now, 1200);
     /* Should accumulate stash, but no increase yet because stash (5000) < target (20000) */
     ok(cc->cwnd == 10000);
     ok(cc->state.reno.stash == 5000);
 
-    cc->type->cc_on_acked(cc, &client->paths[1]->loss, 10000, 101, 10000, 1, 102, client->stash.now, 1200);
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 10000, 101, 10000, 1, 102, client->stash.now, 1200);
     /* stash is now 15000, still < 20000 */
     ok(cc->cwnd == 10000);
     ok(cc->state.reno.stash == 15000);
 
-    cc->type->cc_on_acked(cc, &client->paths[1]->loss, 5000, 102, 15000, 1, 103, client->stash.now, 1200);
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 5000, 102, 15000, 1, 103, client->stash.now, 1200);
     /* stash reaches 20000, should increase cwnd by 1 MSS (1200) and reset stash to 0 */
     ok(cc->cwnd == 11200);
     ok(cc->state.reno.stash == 0);
