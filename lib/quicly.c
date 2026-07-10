@@ -2276,8 +2276,8 @@ static int do_delete_path(quicly_conn_t *conn, size_t path_index)
     quicly_path_space_t *ps = get_path_space_by_path(conn, path);
 
     if (quicly_is_multipath(conn)) {
-        if (ps->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0) {
-            uint64_t cid = ps->dcid;
+        if (path->dcid != UINT64_MAX && conn->super.remote.cid_set.cids[0].cid.len != 0) {
+            uint64_t cid = path->dcid;
             dissociate_cid(conn, cid);
             ret = quicly_remote_cid_unregister_path(&conn->super.remote.cid_set, ps->path_id, cid);
             assert(conn->super.remote.cid_set.retired.count != 0);
@@ -3063,7 +3063,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_local_cid_init_set(&conn->super.local.cid_set, ctx->cid_encryptor, local_cid);
     conn->super.local.long_header_src_cid = conn->super.local.cid_set.cids[0].cid;
     quicly_remote_cid_init_set(&conn->super.remote.cid_set, remote_cid, ctx->tls->random_bytes);
-    assert(conn->path_spaces[0]->dcid == 0 && conn->super.remote.cid_set.cids[0].sequence == 0 &&
+    assert(conn->paths[0]->dcid == 0 && conn->super.remote.cid_set.cids[0].sequence == 0 &&
            conn->super.remote.cid_set.cids[0].state == QUICLY_REMOTE_CID_IN_USE && "paths[0].dcid uses cids[0]");
     conn->super.state = QUICLY_STATE_FIRSTFLIGHT;
     if (server_name != NULL) {
@@ -6300,7 +6300,7 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
 
     /* determine DCID of active path; doing so is guaranteed to succeed as the protocol guarantees that there will always be at
      * least one non-retired CID available */
-    if (conn->path_spaces[0]->dcid == UINT64_MAX) {
+    if (conn->paths[0]->dcid == UINT64_MAX) {
         int success = setup_path_dcid(conn, 0);
         assert(success);
     }
