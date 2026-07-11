@@ -2577,7 +2577,36 @@ static quicly_error_t open_path(quicly_conn_t *conn, size_t *path_index, uint32_
                 break;
             }
         }
-        if (slot == SIZE_MAX) {
+
+        if (slot != SIZE_MAX) {
+            /* If the path space exists and its active path is occupied, allocate in a candidate slot */
+            quicly_path_space_t *ps = conn->path_spaces[slot];
+            if (ps->addrs[0] != NULL) {
+                size_t cand_slot = SIZE_MAX;
+                for (size_t j = 1; j < 4; ++j) {
+                    size_t flat_idx = encode_flat_path_index(slot, j);
+                    if (conn->paths[flat_idx] == NULL) {
+                        cand_slot = flat_idx;
+                        break;
+                    }
+                }
+                if (cand_slot == SIZE_MAX) {
+                    for (size_t j = 1; j < 4; ++j) {
+                        size_t flat_idx = encode_flat_path_index(slot, j);
+                        struct st_quicly_conn_path_t *p = conn->paths[flat_idx];
+                        if (p != NULL && p->path_challenge.send_at != INT64_MAX)
+                            continue;
+                        if (p != NULL && (cand_slot == SIZE_MAX || p->packet_last_received < conn->paths[cand_slot]->packet_last_received))
+                            cand_slot = flat_idx;
+                    }
+                }
+                if (cand_slot == SIZE_MAX)
+                    return QUICLY_ERROR_PACKET_IGNORED;
+                *path_index = cand_slot;
+            } else {
+                *path_index = slot;
+            }
+        } else {
             /* If the path space doesn't exist, we must allocate one in an empty slot */
             for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
                 if (conn->path_spaces[i] == NULL) {
@@ -2585,54 +2614,36 @@ static quicly_error_t open_path(quicly_conn_t *conn, size_t *path_index, uint32_
                     break;
                 }
             }
-        }
-        if (slot == SIZE_MAX) {
-            /* If all slots are full, pick the least-recently-used path space to evict */
-            size_t lru_space = SIZE_MAX;
-            for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
-                quicly_path_space_t *ps = conn->path_spaces[i];
-                if (ps == NULL) {
-                    lru_space = i;
-                    break;
-                }
-                if (ps->addrs[0] != NULL && ps->addrs[0]->path_challenge.send_at != INT64_MAX)
-                    continue;
-                if (lru_space == SIZE_MAX ||
-                    (ps->addrs[0] != NULL && conn->path_spaces[lru_space]->addrs[0] != NULL &&
-                     ps->addrs[0]->packet_last_received < conn->path_spaces[lru_space]->addrs[0]->packet_last_received)) {
-                    lru_space = i;
-                }
-            }
-            if (lru_space == SIZE_MAX)
-                return QUICLY_ERROR_PACKET_IGNORED;
-            slot = lru_space;
-        }
-
-        /* If the path space is active and its active path is occupied, allocate in a candidate slot */
-        quicly_path_space_t *ps = conn->path_spaces[slot];
-        if (ps != NULL && ps->addrs[0] != NULL) {
-            size_t cand_slot = SIZE_MAX;
-            for (size_t j = 1; j < 4; ++j) {
-                size_t flat_idx = encode_flat_path_index(slot, j);
-                if (conn->paths[flat_idx] == NULL) {
-                    cand_slot = flat_idx;
-                    break;
-                }
-            }
-            if (cand_slot == SIZE_MAX) {
-                for (size_t j = 1; j < 4; ++j) {
-                    size_t flat_idx = encode_flat_path_index(slot, j);
-                    struct st_quicly_conn_path_t *p = conn->paths[flat_idx];
-                    if (p != NULL && p->path_challenge.send_at != INT64_MAX)
+            if (slot == SIZE_MAX) {
+                /* If all slots are full, pick the least-recently-used path space to evict */
+                size_t lru_space = SIZE_MAX;
+                for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+                    quicly_path_space_t *ps = conn->path_spaces[i];
+                    if (ps->addrs[0] != NULL && ps->addrs[0]->path_challenge.send_at != INT64_MAX)
                         continue;
-                    if (p != NULL && (cand_slot == SIZE_MAX || p->packet_last_received < conn->paths[cand_slot]->packet_last_received))
-                        cand_slot = flat_idx;
+                    if (lru_space == SIZE_MAX ||
+                        (ps->addrs[0] != NULL && conn->path_spaces[lru_space]->addrs[0] != NULL &&
+                         ps->addrs[0]->packet_last_received < conn->path_spaces[lru_space]->addrs[0]->packet_last_received)) {
+                        lru_space = i;
+                    }
                 }
+                if (lru_space == SIZE_MAX)
+                    return QUICLY_ERROR_PACKET_IGNORED;
+                
+                /* Completely evict the chosen path space */
+                for (size_t j = 0; j < 4; ++j) {
+                    size_t flat_idx = encode_flat_path_index(lru_space, j);
+                    if (conn->paths[flat_idx] != NULL) {
+                        quicly_error_t err;
+                        if ((err = delete_path(conn, flat_idx)) != 0)
+                            return err;
+                        if (conn->paths[flat_idx] != NULL)
+                            destroy_path_state(conn, flat_idx);
+                    }
+                }
+                assert(conn->path_spaces[lru_space] == NULL);
+                slot = lru_space;
             }
-            if (cand_slot == SIZE_MAX)
-                return QUICLY_ERROR_PACKET_IGNORED;
-            *path_index = cand_slot;
-        } else {
             *path_index = slot;
         }
     }
