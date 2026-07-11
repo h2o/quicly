@@ -55,10 +55,6 @@ typedef struct st_quicly_remote_cid_t {
      */
     quicly_remote_cid_state_t state;
     /**
-     * path ID associated with the CID
-     */
-    uint32_t path_id;
-    /**
      * sequence number of the CID; if `state` is UNAVAILABLE, this is a reserved slot meaning that we are expecting to receive a
      * NEW_CONNECTION_ID frame with this sequence number. This helps determine if a received frame is carrying a CID that is already
      * retired.
@@ -91,10 +87,7 @@ typedef struct st_quicly_remote_cid_set_t {
      * queue containing CID sequence numbers that should be sent using RETIRE_CONNECTION_ID frames
      */
     struct {
-        struct {
-            uint32_t path_id;
-            uint64_t sequence;
-        } cids[QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT * 2];
+        uint64_t cids[QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT * 2];
         size_t count;
     } retired;
 } quicly_remote_cid_set_t;
@@ -109,15 +102,11 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
  */
 quicly_error_t quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
                                           const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to);
-quicly_error_t quicly_remote_cid_register_path(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence,
-                                               const uint8_t *cid, size_t cid_len,
-                                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to);
 int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence);
-int quicly_remote_cid_unregister_path(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence);
 /**
  * pushes a CID sequence number to the retired queue
  */
-int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence);
+int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequence);
 /**
  * removed the first `count` sequence numbers from the retired queue
  */

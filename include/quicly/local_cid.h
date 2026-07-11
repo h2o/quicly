@@ -52,7 +52,6 @@ enum en_quicly_local_cid_state_t {
  */
 typedef struct st_quicly_local_cid_t {
     enum en_quicly_local_cid_state_t state;
-    uint32_t path_id;
     uint64_t sequence;
     quicly_cid_t cid;
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
@@ -80,7 +79,6 @@ typedef struct st_quicly_local_cid_set_t {
      * how many entries are actually usable in `cids`?
      */
     size_t _size;
-    uint8_t is_multipath;
     quicly_cid_encryptor_t *_encryptor;
 } quicly_local_cid_set_t;
 
@@ -96,7 +94,7 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
  * changes the size of the set. Expected to be called when `active_connection_id_limit` transport parameter is received.
  * Returns boolean indicating if a packet needs to be sent (due to a CID being generated).
  */
-int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size, int is_multipath);
+int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size);
 /**
  * returns true if all entries in the given set is in IDLE state
  */
@@ -118,8 +116,7 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence);
 /**
  * retire a CID
  */
-quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint32_t path_id, uint64_t sequence, int is_multipath,
-                                       int *_has_pending);
+quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *_has_pending);
 
 /* inline definitions */
 

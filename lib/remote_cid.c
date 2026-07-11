@@ -50,7 +50,7 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
     memset(&set->retired, 0, sizeof(set->retired));
 }
 
-static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence, const uint8_t *cid,
+static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid,
                                   size_t cid_len, const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
 {
     size_t slot_to_use = SIZE_MAX;
@@ -69,49 +69,31 @@ static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint32_t path_id
              */
             if (quicly_cid_is_equal(&set->cids[i].cid, ptls_iovec_init(cid, cid_len))) {
                 if (set->cids[i].sequence == sequence &&
-                    memcmp(set->cids[i].stateless_reset_token, srt, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0 &&
-                    set->cids[i].path_id == path_id) {
+                    memcmp(set->cids[i].stateless_reset_token, srt, QUICLY_STATELESS_RESET_TOKEN_LEN) == 0) {
                     /* likely a duplicate due to retransmission */
                     return 0;
                 } else {
                     /* received a frame that carries conflicting information */
-                    if (1) {
-                        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-                    }
+                    return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
                 }
             }
             /* here we know CID is not equal */
-            if (set->cids[i].sequence == sequence && set->cids[i].path_id == path_id)
-                if (1) {
-                    return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-                }
+            if (set->cids[i].sequence == sequence)
+                return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
         } else {
-            if (path_id == 0 && set->cids[i].sequence == sequence) {
+            if (set->cids[i].sequence == sequence) {
                 slot_to_use = i;
             }
         }
     }
 
-    if (path_id == 0) {
-        if (slot_to_use == SIZE_MAX) {
-            if (sequence + QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT <= set->_largest_sequence_expected)
-                return 0;
-            return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
-        }
-    } else {
-        /* path_id != 0: allocate dynamically starting after the reserved path_id = 0 slots */
-        for (size_t i = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; i < PTLS_ELEMENTSOF(set->cids); i++) {
-            if (set->cids[i].state == QUICLY_REMOTE_CID_UNAVAILABLE) {
-                slot_to_use = i;
-                break;
-            }
-        }
-        if (slot_to_use == SIZE_MAX)
-            return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
+    if (slot_to_use == SIZE_MAX) {
+        if (sequence + QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT <= set->_largest_sequence_expected)
+            return 0;
+        return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
     }
 
     set->cids[slot_to_use].sequence = sequence;
-    set->cids[slot_to_use].path_id = path_id;
     quicly_set_cid(&set->cids[slot_to_use].cid, ptls_iovec_init(cid, cid_len));
     memcpy(set->cids[slot_to_use].stateless_reset_token, srt, QUICLY_STATELESS_RESET_TOKEN_LEN);
     set->cids[slot_to_use].state = QUICLY_REMOTE_CID_AVAILABLE;
@@ -122,51 +104,30 @@ static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint32_t path_id
 static int do_unregister(quicly_remote_cid_set_t *set, size_t idx_to_unreg)
 {
     uint64_t seq_to_unreg = set->cids[idx_to_unreg].sequence;
-    uint32_t path_id_to_unreg = set->cids[idx_to_unreg].path_id;
 
     set->cids[idx_to_unreg].state = QUICLY_REMOTE_CID_UNAVAILABLE;
     set->cids[idx_to_unreg].sequence = ++set->_largest_sequence_expected;
 
-    return quicly_remote_cid_push_retired(set, path_id_to_unreg, seq_to_unreg);
+    return quicly_remote_cid_push_retired(set, seq_to_unreg);
 }
 
 int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence)
 {
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        if (sequence == set->cids[i].sequence && set->cids[i].path_id == 0)
+        if (sequence == set->cids[i].sequence)
             return do_unregister(set, i);
     }
     assert(!"invalid CID sequence number");
 }
 
-int quicly_remote_cid_unregister_path(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence)
-{
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        if (sequence == set->cids[i].sequence && set->cids[i].path_id == path_id)
-            return do_unregister(set, i);
-    }
-    assert(!"invalid CID sequence number");
-}
-
-static int unregister_prior_to(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t seq_unreg_prior_to)
+static int unregister_prior_to(quicly_remote_cid_set_t *set, uint64_t seq_unreg_prior_to)
 {
     int ret;
 
     for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
-        if (path_id == 0) {
-            if (set->cids[i].path_id == 0) {
-                while (set->cids[i].sequence < seq_unreg_prior_to) {
-                    if ((ret = do_unregister(set, i)) != 0)
-                        return ret;
-                }
-            }
-        } else {
-            if (set->cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE && set->cids[i].path_id == path_id) {
-                while (set->cids[i].sequence < seq_unreg_prior_to) {
-                    if ((ret = do_unregister(set, i)) != 0)
-                        return ret;
-                }
-            }
+        while (set->cids[i].sequence < seq_unreg_prior_to) {
+            if ((ret = do_unregister(set, i)) != 0)
+                return ret;
         }
     }
 
@@ -176,38 +137,30 @@ static int unregister_prior_to(quicly_remote_cid_set_t *set, uint32_t path_id, u
 quicly_error_t quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
                                           const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to)
 {
-    return quicly_remote_cid_register_path(set, 0, sequence, cid, cid_len, srt, retire_prior_to);
-}
-
-quicly_error_t quicly_remote_cid_register_path(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence,
-                                               const uint8_t *cid, size_t cid_len,
-                                               const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to)
-{
     quicly_remote_cid_set_t backup = *set; /* preserve state to restore on error */
     quicly_error_t ret;
 
     assert(sequence >= retire_prior_to);
 
     /* handle retire_prior_to first and restore state on error */
-    if ((ret = unregister_prior_to(set, path_id, retire_prior_to)) != 0 ||
-        (ret = do_register(set, path_id, sequence, cid, cid_len, srt)) != 0)
+    if ((ret = unregister_prior_to(set, retire_prior_to)) != 0 ||
+        (ret = do_register(set, sequence, cid, cid_len, srt)) != 0)
         *set = backup;
 
     return ret;
 }
 
-int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence)
+int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequence)
 {
     /* do nothing if given sequence is already registered */
     for (size_t i = 0; i < set->retired.count; ++i) {
-        if (set->retired.cids[i].sequence == sequence && set->retired.cids[i].path_id == path_id)
+        if (set->retired.cids[i] == sequence)
             return 0;
     }
 
     if (set->retired.count >= PTLS_ELEMENTSOF(set->retired.cids))
         return QUICLY_ERROR_STATE_EXHAUSTION;
-    set->retired.cids[set->retired.count].path_id = path_id;
-    set->retired.cids[set->retired.count++].sequence = sequence;
+    set->retired.cids[set->retired.count++] = sequence;
     return 0;
 }
 

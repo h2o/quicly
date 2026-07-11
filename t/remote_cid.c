@@ -72,71 +72,47 @@ static void test_shift_retired(void)
     quicly_remote_cid_set_t set = {};
 
     set.retired.count = 5;
-    set.retired.cids[0].sequence = 10;
-    set.retired.cids[1].sequence = 11;
-    set.retired.cids[2].sequence = 12;
-    set.retired.cids[3].sequence = 13;
-    set.retired.cids[4].sequence = 14;
+    set.retired.cids[0] = 10;
+    set.retired.cids[1] = 11;
+    set.retired.cids[2] = 12;
+    set.retired.cids[3] = 13;
+    set.retired.cids[4] = 14;
 
     quicly_remote_cid_shift_retired(&set, 2);
 
     ok(set.retired.count == 3);
-    ok(set.retired.cids[0].sequence == 12);
-    ok(set.retired.cids[1].sequence == 13);
-    ok(set.retired.cids[2].sequence == 14);
+    ok(set.retired.cids[0] == 12);
+    ok(set.retired.cids[1] == 13);
+    ok(set.retired.cids[2] == 14);
 }
 
 static void test_multipath_remote_cid(void)
 {
-    quicly_remote_cid_set_t set;
+    quicly_remote_cid_set_t set1, set2;
 
-    quicly_remote_cid_init_set(&set, NULL, quic_ctx.tls->random_bytes);
+    quicly_remote_cid_init_set(&set1, NULL, quic_ctx.tls->random_bytes);
+    quicly_remote_cid_init_set(&set2, NULL, quic_ctx.tls->random_bytes);
 
-    /* register CIDs on path 0 */
+    /* register CIDs on set1 */
     for (int i = 1; i < 4; i++) {
-        ok(quicly_remote_cid_register_path(&set, 0, i, cids[i], CID_LEN, srts[i], 0) == 0);
+        ok(quicly_remote_cid_register(&set1, i, cids[i], CID_LEN, srts[i], 0) == 0);
     }
 
-    /* register CIDs with overlapping sequence numbers on path 1 */
-    for (int i = 0; i < 4; i++) {
-        ok(quicly_remote_cid_register_path(&set, 1, i, cids[i + 4], CID_LEN, srts[i + 4], 0) == 0);
+    /* register CIDs on set2 */
+    for (int i = 1; i < 4; i++) {
+        ok(quicly_remote_cid_register(&set2, i, cids[i + 4], CID_LEN, srts[i + 4], 0) == 0);
     }
 
     /* confirm no conflicts */
-    ok(set.retired.count == 0);
+    ok(set1.retired.count == 0);
+    ok(set2.retired.count == 0);
 
-    /* duplicate registration returns 0 */
-    ok(quicly_remote_cid_register_path(&set, 1, 0, cids[4], CID_LEN, srts[4], 0) == 0);
-
-    /* registering sequence with conflicting CID returns PROTOCOL_VIOLATION */
-    ok(quicly_remote_cid_register_path(&set, 1, 0, cids[5], CID_LEN, srts[4], 0) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
-
-    /* registering sequence with conflicting SRT returns PROTOCOL_VIOLATION */
-    ok(quicly_remote_cid_register_path(&set, 1, 0, cids[4], CID_LEN, srts[5], 0) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
-
-    /* unregister sequence 0 on path 1 */
-    ok(quicly_remote_cid_unregister_path(&set, 1, 0) == 0);
-    /* seq 0 pushed to retired list */
-    ok(set.retired.count == 1);
-    ok(set.retired.cids[0].sequence == 0);
-
-    /* slot for path 1 sequence 0 is UNAVAILABLE */
-    int found_path1_seq0 = 0;
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(set.cids); i++) {
-        if (set.cids[i].path_id == 1 && set.cids[i].sequence == 0 && set.cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE) {
-            found_path1_seq0 = 1;
-        }
-    }
-    ok(!found_path1_seq0);
-
-    /* slot for path 0 sequence 0 is still IN_USE/AVAILABLE */
-    int found_path0_seq0 = 0;
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(set.cids); i++) {
-        if (set.cids[i].path_id == 0 && set.cids[i].sequence == 0 && set.cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE) {
-            found_path0_seq0 = 1;
-        }
-    }
-    ok(found_path0_seq0);
+    /* unregister sequence 1 on set2 */
+    ok(quicly_remote_cid_unregister(&set2, 1) == 0);
+    /* seq 1 pushed to retired list of set2 */
+    ok(set2.retired.count == 1);
+    ok(set2.retired.cids[0] == 1);
+    ok(set1.retired.count == 0);
 }
 
 void test_received_cid(void)
@@ -168,7 +144,7 @@ void test_received_cid(void)
         static uint64_t expected[] = {__VA_ARGS__};                                                                                \
         ok(set.retired.count == PTLS_ELEMENTSOF(expected));                                                                        \
         for (size_t i = 0; i < PTLS_ELEMENTSOF(expected); ++i)                                                                     \
-            ok(set.retired.cids[i].sequence == expected[i]);                                                                       \
+            ok(set.retired.cids[i] == expected[i]);                                                                       \
     } while (0)
 
     subtest("shift-retired", test_shift_retired);

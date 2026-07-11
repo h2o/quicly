@@ -1765,15 +1765,23 @@ static void test_multipath_active_use(void)
     server->paths[0]->address.local = fake_address;
     server->paths[0]->address.remote = fake_address;
 
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(client->super.remote.cid_set.cids); ++i) {
-        printf("client CID slot %zu: seq=%lu, path_id=%u, state=%d\n", i,
-               (unsigned long)client->super.remote.cid_set.cids[i].sequence, client->super.remote.cid_set.cids[i].path_id,
-               client->super.remote.cid_set.cids[i].state);
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(client->path_spaces); ++p) {
+        if (client->path_spaces[p] != NULL) {
+            quicly_remote_cid_set_t *set = &client->path_spaces[p]->remote_cid_set;
+            for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); ++i) {
+                printf("client path %zu CID slot %zu: seq=%lu, state=%d\n", p, i,
+                       (unsigned long)set->cids[i].sequence, set->cids[i].state);
+            }
+        }
     }
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(server->super.remote.cid_set.cids); ++i) {
-        printf("server CID slot %zu: seq=%lu, path_id=%u, state=%d\n", i,
-               (unsigned long)server->super.remote.cid_set.cids[i].sequence, server->super.remote.cid_set.cids[i].path_id,
-               server->super.remote.cid_set.cids[i].state);
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(server->path_spaces); ++p) {
+        if (server->path_spaces[p] != NULL) {
+            quicly_remote_cid_set_t *set = &server->path_spaces[p]->remote_cid_set;
+            for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); ++i) {
+                printf("server path %zu CID slot %zu: seq=%lu, state=%d\n", p, i,
+                       (unsigned long)set->cids[i].sequence, set->cids[i].state);
+            }
+        }
     }
 
     /* Verify path 0 is active */
