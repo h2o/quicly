@@ -311,6 +311,8 @@ struct st_quicly_conn_t {
     quicly_path_space_t *path_spaces[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
     struct st_quicly_conn_path_t *paths[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
     uint32_t abandoned_paths_mask[8];
+    /* next path id to use for issuing connection ids */
+    uint32_t next_path_id;
     /**
      * the initial context
      */
@@ -2489,32 +2491,13 @@ Exit:
 static quicly_error_t open_path(quicly_conn_t *conn, size_t *path_index, uint32_t path_id, struct sockaddr *remote_addr,
                                 struct sockaddr *local_addr)
 {
+    uint32_t resolved_path_id = path_id;
     int ret;
 
-    /* choose a slot that in unused or the least-recently-used one that has completed validation */
-    *path_index = SIZE_MAX;
-    for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
-        struct st_quicly_conn_path_t *p = conn->paths[i];
-        if (p == NULL) {
-            *path_index = i;
-            break;
-        }
-        if (p->path_challenge.send_at != INT64_MAX)
-            continue;
-        if (*path_index == SIZE_MAX || p->packet_last_received < conn->paths[*path_index]->packet_last_received)
-            *path_index = i;
-    }
-    if (*path_index == SIZE_MAX)
-        return QUICLY_ERROR_PACKET_IGNORED;
-
-    /* free existing path info */
-    if (conn->paths[*path_index] != NULL && (ret = delete_path(conn, *path_index)) != 0)
-        return ret;
-
-    uint32_t resolved_path_id = path_id;
     if (resolved_path_id != UINT32_MAX && resolved_path_id > conn->super.local.max_path_id)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
+    *path_index = SIZE_MAX;
     if (resolved_path_id == UINT32_MAX) {
         /* client opening a path: pick an unused remote CID from path spaces */
         for (size_t i = 1; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; ++i) {
@@ -2537,6 +2520,7 @@ static quicly_error_t open_path(quicly_conn_t *conn, size_t *path_index, uint32_
                     }
                     if (!used) {
                         resolved_path_id = ps->path_id;
+                        *path_index = i;
                         break;
                     }
                 }
@@ -2545,6 +2529,52 @@ static quicly_error_t open_path(quicly_conn_t *conn, size_t *path_index, uint32_
         /* fallback to 0 if no CID is available (e.g. before multipath is active) */
         if (resolved_path_id == UINT32_MAX) {
             resolved_path_id = 0;
+            *path_index = 0;
+        }
+    } else {
+        /* server opening a path or client opening a specific path_id */
+        /* find the slot of the path space */
+        size_t slot = SIZE_MAX;
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+            if (conn->path_spaces[i] != NULL && conn->path_spaces[i]->path_id == resolved_path_id) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot == SIZE_MAX) {
+            /* If the path space doesn't exist, we must allocate one in an empty slot */
+            for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+                if (conn->path_spaces[i] == NULL) {
+                    slot = i;
+                    break;
+                }
+            }
+        }
+        if (slot == SIZE_MAX) {
+            /* If all slots are full, pick the least-recently-used one that has completed validation */
+            for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+                struct st_quicly_conn_path_t *p = conn->paths[i];
+                if (p == NULL) {
+                    slot = i;
+                    break;
+                }
+                if (p->path_challenge.send_at != INT64_MAX)
+                    continue;
+                if (slot == SIZE_MAX || p->packet_last_received < conn->paths[slot]->packet_last_received)
+                    slot = i;
+            }
+        }
+        if (slot == SIZE_MAX)
+            return QUICLY_ERROR_PACKET_IGNORED;
+        *path_index = slot;
+    }
+
+    /* free existing path info */
+    if (conn->paths[*path_index] != NULL) {
+        if ((ret = delete_path(conn, *path_index)) != 0)
+            return ret;
+        if (conn->paths[*path_index] != NULL) {
+            destroy_path_state(conn, *path_index);
         }
     }
 
@@ -3180,6 +3210,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         return NULL;
     }
     memset(conn, 0, sizeof(*conn));
+    conn->next_path_id = 1;
     conn->super.ctx = ctx;
     conn->super.data = appdata;
     lock_now(conn, 0);
@@ -6067,7 +6098,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
         if (quicly_is_multipath(conn)) {
             for (size_t i = 0; i < size; ++i) {
                 if (conn->path_spaces[i] == NULL) {
-                    if ((ret = alloc_path_space(conn, i, i)) != 0)
+                    if ((ret = alloc_path_space(conn, i, conn->next_path_id++)) != 0)
                         return ret;
                 }
                 quicly_path_space_t *ps = conn->path_spaces[i];
@@ -7921,7 +7952,7 @@ static quicly_error_t handle_path_new_connection_id_frame(quicly_conn_t *conn, s
     if (!conn->super.remote.transport_params.initial_max_path_id)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
-    if (path_id >= QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT)
+    if (path_id > conn->super.local.max_path_id)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     if ((ret = quicly_decode_new_connection_id_frame(&state->src, state->end, &frame)) != 0)
@@ -7937,11 +7968,20 @@ static quicly_error_t handle_path_new_connection_id_frame(quicly_conn_t *conn, s
         PTLS_LOG_ELEMENT_HEXDUMP(stateless_reset_token, frame.stateless_reset_token, QUICLY_STATELESS_RESET_TOKEN_LEN);
     });
 
-    quicly_path_space_t *ps = conn->path_spaces[path_id];
+    quicly_path_space_t *ps = find_path_space_by_id(conn, (uint32_t)path_id);
     if (ps == NULL) {
-        if ((ret = alloc_path_space(conn, path_id, path_id)) != 0)
+        size_t slot = SIZE_MAX;
+        for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+            if (conn->path_spaces[i] == NULL) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot == SIZE_MAX)
+            return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+        if ((ret = alloc_path_space(conn, slot, (uint32_t)path_id)) != 0)
             return ret;
-        ps = conn->path_spaces[path_id];
+        ps = conn->path_spaces[slot];
     }
 
     size_t orig_num_retired = ps->remote_cid_set.retired.count;
