@@ -6879,9 +6879,6 @@ static int set_connection_close(quicly_conn_t *conn, quicly_error_t err, uint64_
 
 quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, const char *reason_phrase)
 {
-    fprintf(stderr, "INITIATE_CLOSE: is_client=%d err=%" PRId64 " type=%lu reason=%s\n", quicly_is_client(conn), (int64_t)err,
-            (unsigned long)frame_type, reason_phrase ? reason_phrase : "none");
-    fflush(stderr);
     quicly_error_t ret;
 
     if (conn->super.state >= QUICLY_STATE_CLOSING)

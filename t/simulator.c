@@ -502,19 +502,17 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
     int ch;
     while ((ch = getopt(argc, argv, "c:b:d:i:j:l:pq:r:Rs:th")) != -1) {
         switch (ch) {
-        case 'c':
-            {
-                quicly_cc_type_t **cc;
-                for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
-                    if (strcmp((*cc)->name, optarg) == 0)
-                        break;
-                if (*cc == NULL) {
-                    fprintf(stderr, "unknown congestion controller: %s\n", optarg);
-                    return 0;
-                }
-                quicctx->init_cc = (*cc)->cc_init;
+        case 'c': {
+            quicly_cc_type_t **cc;
+            for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
+                if (strcmp((*cc)->name, optarg) == 0)
+                    break;
+            if (*cc == NULL) {
+                fprintf(stderr, "unknown congestion controller: %s\n", optarg);
+                return 0;
             }
-            break;
+            quicctx->init_cc = (*cc)->cc_init;
+        } break;
         case 'b':
             if (bw == NULL) {
                 fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
