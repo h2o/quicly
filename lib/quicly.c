@@ -6438,6 +6438,17 @@ void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, s
     quicly_send_datagram_frames_path(conn, 0, datagrams, num_datagrams);
 }
 
+int quicly_has_datagram_frames(quicly_conn_t *conn)
+{
+    if (conn->egress.datagram_frame_payloads.count > 0)
+        return 1;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->paths); ++i) {
+        if (conn->paths[i] != NULL && conn->paths[i]->datagram_frame_payloads.count > 0)
+            return 1;
+    }
+    return 0;
+}
+
 int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
 {
     return cc->cc_switch(get_cc(conn, NULL));

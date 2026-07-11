@@ -1617,6 +1617,7 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
  */
 void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, size_t num_datagrams);
 void quicly_send_datagram_frames_path(quicly_conn_t *conn, size_t path_index, ptls_iovec_t *datagrams, size_t num_datagrams);
+int quicly_has_datagram_frames(quicly_conn_t *conn);
 /**
  * Sets CC to the specified type. Returns a boolean indicating if the operation was successful.
  */
