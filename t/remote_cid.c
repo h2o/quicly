@@ -72,18 +72,18 @@ static void test_shift_retired(void)
     quicly_remote_cid_set_t set = {};
 
     set.retired.count = 5;
-    set.retired.cids[0] = 10;
-    set.retired.cids[1] = 11;
-    set.retired.cids[2] = 12;
-    set.retired.cids[3] = 13;
-    set.retired.cids[4] = 14;
+    set.retired.cids[0].sequence = 10;
+    set.retired.cids[1].sequence = 11;
+    set.retired.cids[2].sequence = 12;
+    set.retired.cids[3].sequence = 13;
+    set.retired.cids[4].sequence = 14;
 
     quicly_remote_cid_shift_retired(&set, 2);
 
     ok(set.retired.count == 3);
-    ok(set.retired.cids[0] == 12);
-    ok(set.retired.cids[1] == 13);
-    ok(set.retired.cids[2] == 14);
+    ok(set.retired.cids[0].sequence == 12);
+    ok(set.retired.cids[1].sequence == 13);
+    ok(set.retired.cids[2].sequence == 14);
 }
 
 static void test_multipath_remote_cid(void)
@@ -118,7 +118,7 @@ static void test_multipath_remote_cid(void)
     ok(quicly_remote_cid_unregister_path(&set, 1, 0) == 0);
     /* seq 0 pushed to retired list */
     ok(set.retired.count == 1);
-    ok(set.retired.cids[0] == 0);
+    ok(set.retired.cids[0].sequence == 0);
 
     /* slot for path 1 sequence 0 is UNAVAILABLE */
     int found_path1_seq0 = 0;
@@ -168,7 +168,7 @@ void test_received_cid(void)
         static uint64_t expected[] = {__VA_ARGS__};                                                                                \
         ok(set.retired.count == PTLS_ELEMENTSOF(expected));                                                                        \
         for (size_t i = 0; i < PTLS_ELEMENTSOF(expected); ++i)                                                                     \
-            ok(set.retired.cids[i] == expected[i]);                                                                                \
+            ok(set.retired.cids[i].sequence == expected[i]);                                                                                \
     } while (0)
 
     subtest("shift-retired", test_shift_retired);

@@ -91,7 +91,10 @@ typedef struct st_quicly_remote_cid_set_t {
      * queue containing CID sequence numbers that should be sent using RETIRE_CONNECTION_ID frames
      */
     struct {
-        uint64_t cids[QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT * 2];
+        struct {
+            uint32_t path_id;
+            uint64_t sequence;
+        } cids[QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT * 2];
         size_t count;
     } retired;
 } quicly_remote_cid_set_t;
@@ -114,7 +117,7 @@ int quicly_remote_cid_unregister_path(quicly_remote_cid_set_t *set, uint32_t pat
 /**
  * pushes a CID sequence number to the retired queue
  */
-int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequence);
+int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence);
 /**
  * removed the first `count` sequence numbers from the retired queue
  */

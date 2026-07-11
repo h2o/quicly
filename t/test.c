@@ -1623,7 +1623,7 @@ static void test_multipath_state_isolation(void)
 
     /* Open path 1 */
     size_t path_index = 1;
-    quicly_error_t ret = new_path(client, path_index, UINT32_MAX, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    quicly_error_t ret = new_path(client, path_index, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
     ok(ret == 0);
     ok(client->paths[1] != NULL);
 
@@ -1675,7 +1675,7 @@ static void test_multipath_coupled_cc(void)
     local_addr.sin_port = htons(54321);
     local_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    quicly_error_t ret = new_path(client, 1, UINT32_MAX, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    quicly_error_t ret = new_path(client, 1, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
     ok(ret == 0);
     ok(client->paths[1] != NULL);
 
@@ -1740,6 +1740,7 @@ static size_t transmit_multipath(quicly_conn_t *src, quicly_conn_t *dst)
         fflush(stdout);
         size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
         for (i = 0; i != num_packets; ++i) {
+            printf("DEBUG: dest validated = %d\n", dst->super.remote.address_validation.validated);
             ret = quicly_receive(dst, &destaddr.sa, &srcaddr.sa, decoded + i);
             printf("quicly_receive returned: %ld (0x%lx)\n", (long)ret, (long)ret);
             fflush(stdout);

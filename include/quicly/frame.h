@@ -224,6 +224,10 @@ static quicly_error_t quicly_decode_streams_blocked_frame(const uint8_t **src, c
 static size_t quicly_new_connection_id_frame_capacity(uint64_t sequence, uint64_t retire_prior_to, uint8_t cid_len);
 static uint8_t *quicly_encode_new_connection_id_frame(uint8_t *dst, uint64_t sequence, uint64_t retire_prior_to, const uint8_t *cid,
                                                       uint8_t cid_len, const uint8_t *stateless_reset_token);
+static uint8_t *quicly_encode_max_path_id_frame(uint8_t *dst, uint64_t max_path_id);
+static uint8_t *quicly_encode_paths_blocked_frame(uint8_t *dst, uint64_t max_path_id);
+static uint8_t *quicly_encode_path_cids_blocked_frame(uint8_t *dst, uint64_t path_id, uint64_t seq);
+static uint8_t *quicly_encode_path_status_frame(uint8_t *dst, int is_backup, uint64_t path_id, uint64_t seq);
 
 static size_t quicly_retire_connection_id_frame_capacity(uint64_t sequence);
 static uint8_t *quicly_encode_retire_connection_id_frame(uint8_t *dst, uint64_t sequence);
@@ -594,6 +598,36 @@ inline quicly_error_t quicly_decode_path_challenge_frame(const uint8_t **src, co
     return 0;
 Error:
     return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+}
+
+inline uint8_t *quicly_encode_max_path_id_frame(uint8_t *dst, uint64_t max_path_id)
+{
+    dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_MAX_PATH_ID);
+    dst = quicly_encodev(dst, max_path_id);
+    return dst;
+}
+
+inline uint8_t *quicly_encode_paths_blocked_frame(uint8_t *dst, uint64_t max_path_id)
+{
+    dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_PATHS_BLOCKED);
+    dst = quicly_encodev(dst, max_path_id);
+    return dst;
+}
+
+inline uint8_t *quicly_encode_path_cids_blocked_frame(uint8_t *dst, uint64_t path_id, uint64_t seq)
+{
+    dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_PATH_CIDS_BLOCKED);
+    dst = quicly_encodev(dst, path_id);
+    dst = quicly_encodev(dst, seq);
+    return dst;
+}
+
+inline uint8_t *quicly_encode_path_status_frame(uint8_t *dst, int is_backup, uint64_t path_id, uint64_t seq)
+{
+    dst = quicly_encodev(dst, is_backup ? QUICLY_FRAME_TYPE_PATH_STATUS_BACKUP : QUICLY_FRAME_TYPE_PATH_STATUS_AVAILABLE);
+    dst = quicly_encodev(dst, path_id);
+    dst = quicly_encodev(dst, seq);
+    return dst;
 }
 
 inline uint8_t *quicly_encode_data_blocked_frame(uint8_t *dst, uint64_t offset)

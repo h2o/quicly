@@ -118,11 +118,12 @@ static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint32_t path_id
 static int do_unregister(quicly_remote_cid_set_t *set, size_t idx_to_unreg)
 {
     uint64_t seq_to_unreg = set->cids[idx_to_unreg].sequence;
+    uint32_t path_id_to_unreg = set->cids[idx_to_unreg].path_id;
 
     set->cids[idx_to_unreg].state = QUICLY_REMOTE_CID_UNAVAILABLE;
     set->cids[idx_to_unreg].sequence = ++set->_largest_sequence_expected;
 
-    return quicly_remote_cid_push_retired(set, seq_to_unreg);
+    return quicly_remote_cid_push_retired(set, path_id_to_unreg, seq_to_unreg);
 }
 
 int quicly_remote_cid_unregister(quicly_remote_cid_set_t *set, uint64_t sequence)
@@ -191,17 +192,18 @@ quicly_error_t quicly_remote_cid_register_path(quicly_remote_cid_set_t *set, uin
     return ret;
 }
 
-int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint64_t sequence)
+int quicly_remote_cid_push_retired(quicly_remote_cid_set_t *set, uint32_t path_id, uint64_t sequence)
 {
     /* do nothing if given sequence is already registered */
     for (size_t i = 0; i < set->retired.count; ++i) {
-        if (set->retired.cids[i] == sequence)
+        if (set->retired.cids[i].sequence == sequence && set->retired.cids[i].path_id == path_id)
             return 0;
     }
 
     if (set->retired.count >= PTLS_ELEMENTSOF(set->retired.cids))
         return QUICLY_ERROR_STATE_EXHAUSTION;
-    set->retired.cids[set->retired.count++] = sequence;
+    set->retired.cids[set->retired.count].path_id = path_id;
+    set->retired.cids[set->retired.count++].sequence = sequence;
     return 0;
 }
 

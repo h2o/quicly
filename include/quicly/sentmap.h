@@ -171,6 +171,7 @@ struct st_quicly_sent_t {
             uint64_t sequence;
         } new_connection_id;
         struct {
+            uint32_t path_id;
             uint64_t sequence;
         } retire_connection_id;
     } data;
