@@ -1679,9 +1679,11 @@ static void test_multipath_coupled_cc(void)
     ok(ret == 0);
     ok(client->paths[1] != NULL);
 
-    /* Set cwnd on both paths */
+    /* Set cwnd and rtt on both paths */
     client->path_spaces[0]->cc.cwnd = 10000;
     client->path_spaces[1]->cc.cwnd = 10000;
+    client->path_spaces[0]->loss.rtt.smoothed = 100;
+    client->path_spaces[1]->loss.rtt.smoothed = 100;
     client->paths[1]->probe_only = 0;
     /* Move both out of slow start (so we test CA) */
     client->path_spaces[0]->cc.ssthresh = 5000;
@@ -1693,20 +1695,20 @@ static void test_multipath_coupled_cc(void)
 
     /* Acknowledge bytes on path 1 (in CA).
      * Standard Reno CA would increase cwnd after 10000 bytes.
-     * Under LIA, it should require 20000 bytes to increase! */
+     * Under correct LIA with equal RTTs, alpha = 0.5, so it should require 40000 bytes to increase! */
     quicly_cc_t *cc = &client->path_spaces[1]->cc;
-    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 5000, 100, 5000, 1, 101, client->stash.now, 1200);
-    /* Should accumulate stash, but no increase yet because stash (5000) < target (20000) */
-    ok(cc->cwnd == 10000);
-    ok(cc->state.reno.stash == 5000);
-
-    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 10000, 101, 10000, 1, 102, client->stash.now, 1200);
-    /* stash is now 15000, still < 20000 */
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 15000, 100, 15000, 1, 101, client->stash.now, 1200);
+    /* Should accumulate stash, but no increase yet because stash (15000) < target (40000) */
     ok(cc->cwnd == 10000);
     ok(cc->state.reno.stash == 15000);
 
-    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 5000, 102, 15000, 1, 103, client->stash.now, 1200);
-    /* stash reaches 20000, should increase cwnd by 1 MSS (1200) and reset stash to 0 */
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 20000, 101, 20000, 1, 102, client->stash.now, 1200);
+    /* stash is now 35000, still < 40000 */
+    ok(cc->cwnd == 10000);
+    ok(cc->state.reno.stash == 35000);
+
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 5000, 102, 5000, 1, 103, client->stash.now, 1200);
+    /* stash reaches 40000, should increase cwnd by 1 MSS (1200) and reset stash to 0 */
     ok(cc->cwnd == 11200);
     ok(cc->state.reno.stash == 0);
 

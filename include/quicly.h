@@ -928,6 +928,7 @@ struct _st_quicly_conn_public_t {
          * stream-level limits
          */
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
+        uint64_t max_path_id;
     } local;
     struct {
         /**
@@ -940,6 +941,7 @@ struct _st_quicly_conn_public_t {
             unsigned validated : 1;
             unsigned send_probe : 1;
         } address_validation;
+        uint64_t max_path_id;
     } remote;
     /**
      * Retains the original DCID used by the client. Servers use this to route incoming packets. Clients use this when validating
@@ -1627,6 +1629,7 @@ int quicly_is_multipath(quicly_conn_t *conn);
  * Calculates total congestion window across all active paths.
  */
 uint64_t quicly_calculate_total_cwnd(quicly_conn_t *conn);
+uint64_t quicly_calculate_lia_target(quicly_conn_t *conn);
 /**
  *
  */

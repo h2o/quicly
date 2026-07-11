@@ -52,7 +52,7 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     uint32_t target = cc->cwnd;
     if (cc->conn != NULL && quicly_is_multipath(cc->conn)) {
-        uint64_t total = quicly_calculate_total_cwnd(cc->conn);
+        uint64_t total = quicly_calculate_lia_target(cc->conn);
         target = total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
     }
 
