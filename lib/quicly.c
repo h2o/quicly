@@ -2486,32 +2486,34 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     conn->path_spaces[ps_index]->addrs[cand_index] = NULL;
     conn->super.stats.num_paths.promoted += 1;
 
-    if (ps_index == 0) {
-        /* reset CC; get_cc(conn, paths[0]) now returns conn->egress.cc */
-        get_cc(conn, conn->paths[0])
-            ->type->cc_init->cb(
-                get_cc(conn, conn->paths[0])->type->cc_init, get_cc(conn, conn->paths[0]),
-                quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, *get_max_udp_payload_size(conn, conn->paths[0])),
-                conn->stash.now);
-        get_cc(conn, conn->paths[0])->conn = conn;
-        if (conn->super.stats.num_rapid_start != 0 && get_cc(conn, conn->paths[0])->type->enable_rapid_start != NULL)
-            get_cc(conn, conn->paths[0])->type->enable_rapid_start(get_cc(conn, conn->paths[0]), conn->stash.now);
+    /* reset CC */
+    get_cc(conn, conn->paths[active_idx])
+        ->type->cc_init->cb(
+            get_cc(conn, conn->paths[active_idx])->type->cc_init, get_cc(conn, conn->paths[active_idx]),
+            quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, *get_max_udp_payload_size(conn, conn->paths[active_idx])),
+            conn->stash.now);
+    get_cc(conn, conn->paths[active_idx])->conn = conn;
+    if (conn->super.stats.num_rapid_start != 0 && get_cc(conn, conn->paths[active_idx])->type->enable_rapid_start != NULL)
+        get_cc(conn, conn->paths[active_idx])->type->enable_rapid_start(get_cc(conn, conn->paths[active_idx]), conn->stash.now);
 
+    if (ps_index == 0) {
         /* set jumpstart target */
         calc_resume_sendrate(conn, &conn->super.stats.jumpstart.prev_rate, &conn->super.stats.jumpstart.prev_rtt);
+    }
 
-        /* reset RTT estimate; get_loss(conn, paths[0]) now returns &conn->egress.loss */
-        quicly_rtt_init(&get_loss(conn, conn->paths[0])->rtt, &conn->super.ctx->loss,
-                        get_loss(conn, conn->paths[0])->rtt.smoothed < conn->super.ctx->loss.default_initial_rtt
-                            ? get_loss(conn, conn->paths[0])->rtt.smoothed
-                            : conn->super.ctx->loss.default_initial_rtt);
+    /* reset RTT estimate */
+    quicly_rtt_init(&get_loss(conn, conn->paths[active_idx])->rtt, &conn->super.ctx->loss,
+                    get_loss(conn, conn->paths[active_idx])->rtt.smoothed < conn->super.ctx->loss.default_initial_rtt
+                        ? get_loss(conn, conn->paths[active_idx])->rtt.smoothed
+                        : conn->super.ctx->loss.default_initial_rtt);
 
+    if (ps_index == 0) {
         /* reset ratemeter */
         quicly_ratemeter_init(&conn->egress.ratemeter);
-
-        /* remember PN when the path was promoted; get_next_packet_number now returns the connection-level PN */
-        conn->path_spaces[0]->pn_path_start = *get_next_packet_number(conn, conn->paths[0]);
     }
+
+    /* remember PN when the path was promoted */
+    conn->path_spaces[ps_index]->pn_path_start = *get_next_packet_number(conn, conn->paths[active_idx]);
 
     if (old_active != NULL) {
         clear_path_datagram_frame_payloads(old_active);
