@@ -44,8 +44,7 @@ static void acked(quicly_loss_t *loss, uint64_t pn, size_t epoch)
     int64_t sent_at = sent->sent_at;
     ok(quicly_sentmap_update(&loss->sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED) == 0);
 
-    quicly_loss_on_ack_received(loss, pn, UINT64_MAX, pn + 1, epoch, now, sent_at, 0,
-                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    quicly_loss_on_ack_received(loss, pn, UINT64_MAX, pn + 1, epoch, now, sent_at, 0, QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
 }
 
 static void test_time_detection(void)

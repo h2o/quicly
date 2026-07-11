@@ -168,7 +168,7 @@ void test_received_cid(void)
         static uint64_t expected[] = {__VA_ARGS__};                                                                                \
         ok(set.retired.count == PTLS_ELEMENTSOF(expected));                                                                        \
         for (size_t i = 0; i < PTLS_ELEMENTSOF(expected); ++i)                                                                     \
-            ok(set.retired.cids[i].sequence == expected[i]);                                                                                \
+            ok(set.retired.cids[i].sequence == expected[i]);                                                                       \
     } while (0)
 
     subtest("shift-retired", test_shift_retired);

@@ -118,7 +118,8 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence);
 /**
  * retire a CID
  */
-quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint32_t path_id, uint64_t sequence, int is_multipath, int *_has_pending);
+quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint32_t path_id, uint64_t sequence, int is_multipath,
+                                       int *_has_pending);
 
 /* inline definitions */
 

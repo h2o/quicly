@@ -183,8 +183,8 @@ static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 /**
  * called when an ACK is received
  */
-static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, uint64_t largest_late_acked, uint64_t next_pn,
-                                        size_t epoch, int64_t now, int64_t sent_at, uint64_t ack_delay_encoded,
+static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, uint64_t largest_late_acked,
+                                        uint64_t next_pn, size_t epoch, int64_t now, int64_t sent_at, uint64_t ack_delay_encoded,
                                         quicly_loss_ack_received_kind_t kind);
 /* This function updates the loss detection timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
@@ -384,7 +384,6 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     if (ack_delay_millisecs > *r->max_ack_delay)
         ack_delay_millisecs = *r->max_ack_delay;
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
-
 }
 
 inline quicly_error_t quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, int is_1rtt_only,
