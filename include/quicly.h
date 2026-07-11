@@ -129,13 +129,14 @@ typedef struct st_quicly_stream_scheduler_t {
  */
 typedef struct st_quicly_path_scheduler_t {
     /**
-     * Called by quicly to select which path to send data on. 
+     * Called by quicly to select which path to send data on.
      * The scheduler should invoke `quicly_send_on_path` to build datagrams for the chosen path.
      */
     quicly_error_t (*do_send)(struct st_quicly_path_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s);
 } quicly_path_scheduler_t;
 
 extern quicly_path_scheduler_t quicly_default_path_scheduler;
+extern quicly_path_scheduler_t quicly_round_robin_path_scheduler;
 
 /**
  * called when stream is being open. Application is expected to create it's corresponding state and tie it to stream->data.
@@ -750,7 +751,6 @@ typedef struct st_quicly_path_stats_t {
     uint32_t cwnd;
     uint32_t bytes_in_flight;
 } quicly_path_stats_t;
-
 
 /* clang-format off */
 

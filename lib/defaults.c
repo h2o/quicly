@@ -329,8 +329,7 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
     uint32_t current_path_id = quicly_get_current_send_path_id(conn, s);
 
     while (quicly_can_send_data((quicly_conn_t *)conn, s) && node != &sched->active) {
-        quicly_stream_t *stream =
-            (void *)((char *)node - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler));
+        quicly_stream_t *stream = (void *)((char *)node - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler));
         quicly_linklist_t *next_node = node->next;
 
         if (quicly_is_multipath(conn) && stream->affinity_path_id != UINT32_MAX && stream->affinity_path_id != current_path_id) {
@@ -359,7 +358,7 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
         conn_is_blocked = quicly_is_blocked(conn);
         if (quicly_stream_can_send(stream, 1))
             link_stream(sched, stream, conn_is_blocked);
-        
+
         node = sched->active.next;
     }
 
