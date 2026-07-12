@@ -1402,7 +1402,7 @@ static void test_stats_foreach_field(size_t off, size_t size)
      * that "might" have such padding on some architectures. */
     static const size_t gaps[] = {
 #define GAP(after, before) offsetof(quicly_stats_t, after), offsetof(quicly_stats_t, before)
-        GAP(jumpstart.cwnd, token_sent.at),
+        GAP(handshake_confirmed_msec, token_sent.at),
         GAP(token_sent.rtt, rtt.minimum),
         GAP(loss_thresholds.use_packet_based, loss_thresholds.time_based_percentile),
         GAP(loss_thresholds.time_based_percentile, cc.cwnd),
@@ -1599,8 +1599,8 @@ static void test_multipath_state_isolation(void)
     test_setup_connected_peers(&client, &server);
 
     /* Initially, only path 0 exists */
-    ok(client->paths[0] != NULL);
-    ok(client->paths[1] == NULL);
+    ok(get_path(client, 0) != NULL);
+    ok(get_path(client, 1) == NULL);
 
     /* Let's manually trigger new_path creation for path 1 on client */
     struct sockaddr_in remote_addr, local_addr;
@@ -1618,10 +1618,10 @@ static void test_multipath_state_isolation(void)
     size_t path_index = 1;
     quicly_error_t ret = new_path(client, path_index, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
     ok(ret == 0);
-    ok(client->paths[1] != NULL);
+    ok(get_path(client, 1) != NULL);
 
     /* Verify path-specific states are allocated and separate from path 0 */
-    ok(client->paths[1]->path_id == 1);
+    ok(get_path(client, 1)->path_id == 1);
     ok(client->path_spaces[1]->pn_space != NULL);
     ok(client->path_spaces[1]->max_udp_payload_size == client->super.ctx->initial_egress_max_udp_payload_size);
     ok(client->path_spaces[1]->cc.type != NULL);
@@ -1668,14 +1668,14 @@ static void test_multipath_coupled_cc(void)
 
     quicly_error_t ret = new_path(client, 1, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
     ok(ret == 0);
-    ok(client->paths[1] != NULL);
+    ok(get_path(client, 1) != NULL);
 
     /* Set cwnd and rtt on both paths */
     client->path_spaces[0]->cc.cwnd = 10000;
     client->path_spaces[1]->cc.cwnd = 10000;
     client->path_spaces[0]->loss.rtt.smoothed = 100;
     client->path_spaces[1]->loss.rtt.smoothed = 100;
-    client->paths[1]->probe_only = 0;
+    get_path(client, 1)->probe_only = 0;
     /* Move both out of slow start (so we test CA) */
     client->path_spaces[0]->cc.ssthresh = 5000;
     client->path_spaces[1]->cc.ssthresh = 5000;
@@ -1760,10 +1760,10 @@ static void test_multipath_active_use(void)
     test_setup_connected_peers(&client, &server);
 
     /* Initialize path 0 addresses to fake_address to avoid family 0 asserts */
-    client->paths[0]->address.local = fake_address;
-    client->paths[0]->address.remote = fake_address;
-    server->paths[0]->address.local = fake_address;
-    server->paths[0]->address.remote = fake_address;
+    get_path(client, 0)->address.local = fake_address;
+    get_path(client, 0)->address.remote = fake_address;
+    get_path(server, 0)->address.local = fake_address;
+    get_path(server, 0)->address.remote = fake_address;
 
     for (size_t p = 0; p < PTLS_ELEMENTSOF(client->path_spaces); ++p) {
         if (client->path_spaces[p] != NULL) {
@@ -1785,7 +1785,7 @@ static void test_multipath_active_use(void)
     }
 
     /* Verify path 0 is active */
-    ok(client->paths[0] != NULL);
+    ok(get_path(client, 0) != NULL);
 
     /* Setup 3 additional loopback paths on client to server */
     struct sockaddr_in remote_addrs[3], local_addrs[3];
@@ -1802,7 +1802,7 @@ static void test_multipath_active_use(void)
 
         quicly_error_t ret = quicly_open_path(client, (struct sockaddr *)&remote_addrs[i], (struct sockaddr *)&local_addrs[i]);
         ok(ret == 0);
-        ok(client->paths[i + 1] != NULL);
+        ok(get_path(client, i + 1) != NULL);
     }
 
     /* Exchange packets until all paths are validated */
@@ -1813,16 +1813,16 @@ static void test_multipath_active_use(void)
 
     /* Verify that all paths have been created on the server and are validated (not probe_only) */
     for (size_t i = 0; i < 4; ++i) {
-        ok(client->paths[i] != NULL);
-        ok(!client->paths[i]->probe_only);
-        ok(server->paths[i] != NULL);
-        ok(!server->paths[i]->probe_only);
+        ok(get_path(client, i) != NULL);
+        ok(!get_path(client, i)->probe_only);
+        ok(get_path(server, i) != NULL);
+        ok(!get_path(server, i)->probe_only);
     }
 
     /* Record the packet count on each path before sending stream data */
     uint64_t sent_before[4];
     for (size_t i = 0; i < 4; ++i) {
-        sent_before[i] = client->paths[i]->num_packets.sent;
+        sent_before[i] = get_path(client, i)->num_packets.sent;
         printf("Path %zu sent_before: %lu\n", i, (unsigned long)sent_before[i]);
     }
 
@@ -1839,8 +1839,8 @@ static void test_multipath_active_use(void)
     /* Verify that additional packets were sent on all paths */
     int all_paths_used_for_data = 1;
     for (size_t i = 0; i < 4; ++i) {
-        printf("Path %zu sent_after: %lu\n", i, (unsigned long)client->paths[i]->num_packets.sent);
-        if (client->paths[i]->num_packets.sent <= sent_before[i]) {
+        printf("Path %zu sent_after: %lu\n", i, (unsigned long)get_path(client, i)->num_packets.sent);
+        if (get_path(client, i)->num_packets.sent <= sent_before[i]) {
             all_paths_used_for_data = 0;
         }
     }
@@ -1870,10 +1870,10 @@ static void test_multipath_stream_affinity(void)
     quicly_conn_t *client, *server;
     test_setup_connected_peers(&client, &server);
 
-    client->paths[0]->address.local = fake_address;
-    client->paths[0]->address.remote = fake_address;
-    server->paths[0]->address.local = fake_address;
-    server->paths[0]->address.remote = fake_address;
+    get_path(client, 0)->address.local = fake_address;
+    get_path(client, 0)->address.remote = fake_address;
+    get_path(server, 0)->address.local = fake_address;
+    get_path(server, 0)->address.remote = fake_address;
 
     struct sockaddr_in remote_addrs[3], local_addrs[3];
     for (size_t i = 0; i < 3; ++i) {
@@ -1912,7 +1912,7 @@ static void test_multipath_stream_affinity(void)
 
     uint64_t bytes_sent_before[4];
     for (size_t i = 0; i < 4; ++i) {
-        bytes_sent_before[i] = client->paths[i]->num_packets.bytes_sent;
+        bytes_sent_before[i] = get_path(client, i)->num_packets.bytes_sent;
     }
 
     for (size_t i = 0; i < 20; ++i) {
@@ -1926,7 +1926,7 @@ static void test_multipath_stream_affinity(void)
 
     uint64_t bytes_sent_after[4];
     for (size_t i = 0; i < 4; ++i) {
-        bytes_sent_after[i] = client->paths[i]->num_packets.bytes_sent;
+        bytes_sent_after[i] = get_path(client, i)->num_packets.bytes_sent;
     }
 
     for (size_t i = 0; i < 4; ++i) {
@@ -2080,10 +2080,10 @@ static void test_multipath_path_loss(void)
     quicly_conn_t *client, *server;
     test_setup_connected_peers(&client, &server);
 
-    client->paths[0]->address.local = fake_address;
-    client->paths[0]->address.remote = fake_address;
-    server->paths[0]->address.local = fake_address;
-    server->paths[0]->address.remote = fake_address;
+    get_path(client, 0)->address.local = fake_address;
+    get_path(client, 0)->address.remote = fake_address;
+    get_path(server, 0)->address.local = fake_address;
+    get_path(server, 0)->address.remote = fake_address;
 
     /* open 1 additional path */
     struct sockaddr_in remote_addr1, local_addr1;
@@ -2099,7 +2099,7 @@ static void test_multipath_path_loss(void)
 
     quicly_error_t ret = quicly_open_path(client, (struct sockaddr *)&remote_addr1, (struct sockaddr *)&local_addr1);
     ok(ret == 0);
-    ok(client->paths[1] != NULL);
+    ok(get_path(client, 1) != NULL);
 
     /* exchange packets until the path is validated */
     for (size_t i = 0; i < 20; ++i) {
@@ -2107,8 +2107,8 @@ static void test_multipath_path_loss(void)
         transmit_multipath(server, client);
     }
 
-    ok(!client->paths[0]->probe_only);
-    ok(!client->paths[1]->probe_only);
+    ok(!get_path(client, 0)->probe_only);
+    ok(!get_path(client, 1)->probe_only);
 
     /* make path 0 seem worse so MinRTT scheduler picks path 1 */
     client->path_spaces[0]->loss.rtt.latest = 1;
