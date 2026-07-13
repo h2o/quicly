@@ -2765,8 +2765,6 @@ void quicly_free(quicly_conn_t *conn)
     quicly_maxsender_dispose(&conn->ingress.max_streams.bidi);
     quicly_loss_dispose(get_loss(conn, NULL));
 
-    kh_destroy(quicly_stream_t, conn->streams);
-
     assert(!quicly_linklist_is_linked(&conn->egress.pending_streams.blocked.uni));
     assert(!quicly_linklist_is_linked(&conn->egress.pending_streams.blocked.bidi));
     assert(!quicly_linklist_is_linked(&conn->egress.pending_streams.control));
@@ -2789,6 +2787,8 @@ void quicly_free(quicly_conn_t *conn)
             conn->path_spaces[i] = NULL;
         }
     }
+
+    kh_destroy(quicly_stream_t, conn->streams);
 
     /* `crytpo.tls` is disposed late, because logging relies on `ptls_skip_tracing` */
     if (conn->crypto.async_in_progress) {
@@ -6308,65 +6308,6 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
     return 0;
 }
 
-    ps->max_udp_payload_size = next_probe_size;
-
-    quicly_error_t ret;
-    /* Commit any existing packet first so our probe is in its own packet! */
-    if (s->target.first_byte_at != NULL) {
-        s->target.full_size = 1;
-        if ((ret = commit_send_packet(conn, s, 0)) != 0) {
-            ps->max_udp_payload_size = orig_max;
-            return ret;
-        }
-    }
-
-    /* Allocate the probe packet */
-    if ((ret = do_allocate_frame(conn, s, 1, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0) {
-        ps->max_udp_payload_size = orig_max;
-        return ret;
-    }
-
-    /* Add PING frame */
-    *s->dst++ = QUICLY_FRAME_TYPE_PING;
-    ++conn->super.stats.num_frames_sent.ping;
-    s->target.ack_eliciting = 1;
-    s->target.full_size = 1;
-
-    /* Remember next PN to be assigned to this probe */
-    uint64_t probe_pn = *get_next_packet_number(conn, get_send_path(conn, s));
-
-    /* Commit the probe packet! */
-    if ((ret = commit_send_packet(conn, s, 0)) != 0) {
-        ps->max_udp_payload_size = orig_max;
-        return ret;
-    }
-
-    /* Record probe info */
-    ps->pmtud.probe_pn = probe_pn;
-    ps->pmtud.probe_size = next_probe_size;
-    ps->pmtud.lost_probes = 0;
-
-    /* Restore max_udp_payload_size to the current verified MTU! */
-    ps->max_udp_payload_size = orig_max;
-
-    return 0;
-}
-
-static int has_large_inflight_packets(quicly_loss_t *loss, uint16_t threshold)
-{
-    quicly_sentmap_iter_t iter;
-    const quicly_sent_packet_t *sent;
-
-    quicly_sentmap_init_iter(&loss->sentmap, &iter);
-    while ((sent = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
-        if (sent->cc_bytes_in_flight > threshold)
-            return 1;
-        quicly_sentmap_skip(&iter);
-    }
-    return 0;
-}
-
->>>>>>> ea82292c (fix lossy test flakiness and support dynamic connection id limit)
 static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     int restrict_sending = 0, ack_only = 0;
