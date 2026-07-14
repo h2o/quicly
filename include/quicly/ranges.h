@@ -70,6 +70,10 @@ void quicly_ranges_drop_by_range_indices(quicly_ranges_t *ranges, size_t begin_i
  * of slots traversed before finding the next missing number. We traverse slots in reverse order.
  */
 uint64_t quicly_ranges_next_missing(quicly_ranges_t *ranges, uint64_t lower_bound, size_t *slots_traversed);
+/**
+ * returns if `n` is covered by one of the ranges
+ */
+int quicly_ranges_exists(quicly_ranges_t *ranges, uint64_t n);
 
 /* inline functions */
 

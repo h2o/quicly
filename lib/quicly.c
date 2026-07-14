@@ -7394,7 +7394,7 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
     size_t epoch, path_index;
     ptls_iovec_t payload;
     uint64_t pn, offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
-    int is_ack_only, is_probe_only;
+    int is_ack_only, is_probe_only, is_duplicate;
     quicly_error_t ret;
 
     assert(src_addr->sa_family == AF_INET || src_addr->sa_family == AF_INET6);
@@ -7600,6 +7600,9 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         goto Exit;
     }
 
+    /* duplicate check must happen after decryption; see RFC 9000 12.3, RFC 9001 9.5 */
+    is_duplicate = quicly_ranges_exists(&(*space)->ack_queue, pn);
+
     QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, conn, {
         PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
@@ -7654,10 +7657,15 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         break;
     }
 
-    /* handle the payload */
-    if ((ret = handle_payload(conn, epoch, path_index, payload.base, payload.len, &offending_frame_type, &is_ack_only,
-                              &is_probe_only)) != 0)
+    /* handle the payload, unless the packet is a duplicate; still record receipt of a duplicate so that an ACK is
+     * generated in case the peer did not receive ours for the original packet */
+    if (is_duplicate) {
+        is_ack_only = 0;
+        is_probe_only = 1;
+    } else if ((ret = handle_payload(conn, epoch, path_index, payload.base, payload.len, &offending_frame_type, &is_ack_only,
+                                     &is_probe_only)) != 0) {
         goto Exit;
+    }
     if (!is_probe_only && conn->paths[path_index]->probe_only) {
         assert(path_index != 0);
         conn->paths[path_index]->probe_only = 0;
