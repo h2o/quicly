@@ -1769,8 +1769,8 @@ static void test_multipath_active_use(void)
         if (client->path_spaces[p] != NULL) {
             quicly_remote_cid_set_t *set = &client->path_spaces[p]->remote_cid_set;
             for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); ++i) {
-                printf("client path %zu CID slot %zu: seq=%lu, state=%d\n", p, i,
-                       (unsigned long)set->cids[i].sequence, set->cids[i].state);
+                printf("client path %zu CID slot %zu: seq=%lu, state=%d\n", p, i, (unsigned long)set->cids[i].sequence,
+                       set->cids[i].state);
             }
         }
     }
@@ -1778,8 +1778,8 @@ static void test_multipath_active_use(void)
         if (server->path_spaces[p] != NULL) {
             quicly_remote_cid_set_t *set = &server->path_spaces[p]->remote_cid_set;
             for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); ++i) {
-                printf("server path %zu CID slot %zu: seq=%lu, state=%d\n", p, i,
-                       (unsigned long)set->cids[i].sequence, set->cids[i].state);
+                printf("server path %zu CID slot %zu: seq=%lu, state=%d\n", p, i, (unsigned long)set->cids[i].sequence,
+                       set->cids[i].state);
             }
         }
     }

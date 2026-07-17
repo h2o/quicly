@@ -80,7 +80,6 @@
  */
 #define QUICLY_MAX_DELAYED_PACKETS 10
 
-
 KHASH_MAP_INIT_INT64(quicly_stream_t, quicly_stream_t *)
 
 #if QUICLY_USE_TRACER
@@ -271,7 +270,6 @@ struct st_quicly_conn_path_t {
         size_t count;
     } datagram_frame_payloads;
 };
-
 
 typedef struct st_quicly_path_space_t {
     /* monotonic path_id, never reused */
@@ -3565,8 +3563,9 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
     /* handshake (we always encode authentication CIDs, as we do not (yet) regenerate ClientHello when receiving Retry) */
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     if ((ret = quicly_encode_transport_parameter_list(
-             &conn->crypto.transport_params.buf, &conn->super.ctx->transport_params, NULL, &conn->path_spaces[0]->local_cid_set.cids[0].cid,
-             NULL, NULL, conn->super.ctx->expand_client_hello ? conn->super.ctx->initial_egress_max_udp_payload_size : 0)) != 0)
+             &conn->crypto.transport_params.buf, &conn->super.ctx->transport_params, NULL,
+             &conn->path_spaces[0]->local_cid_set.cids[0].cid, NULL, NULL,
+             conn->super.ctx->expand_client_hello ? conn->super.ctx->initial_egress_max_udp_payload_size : 0)) != 0)
         goto Exit;
     conn->crypto.transport_params.ext[0] =
         (ptls_raw_extension_t){get_transport_parameters_extension_id(conn->super.version),

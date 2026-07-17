@@ -126,7 +126,7 @@ void test_received_cid(void)
             uint64_t seq;                                                                                                          \
             quicly_remote_cid_state_t state;                                                                                       \
         } expected[] = {__VA_ARGS__};                                                                                              \
-        PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(expected) == 4);                                   \
+        PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(expected) == 4);                                                                         \
         for (size_t i = 0; i < PTLS_ELEMENTSOF(expected); ++i) {                                                                   \
             ok(set.cids[i].state == expected[i].state);                                                                            \
             ok(set.cids[i].sequence == expected[i].seq);                                                                           \
@@ -144,7 +144,7 @@ void test_received_cid(void)
         static uint64_t expected[] = {__VA_ARGS__};                                                                                \
         ok(set.retired.count == PTLS_ELEMENTSOF(expected));                                                                        \
         for (size_t i = 0; i < PTLS_ELEMENTSOF(expected); ++i)                                                                     \
-            ok(set.retired.cids[i] == expected[i]);                                                                       \
+            ok(set.retired.cids[i] == expected[i]);                                                                                \
     } while (0)
 
     subtest("shift-retired", test_shift_retired);

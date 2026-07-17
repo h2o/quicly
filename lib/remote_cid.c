@@ -50,8 +50,8 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
     memset(&set->retired, 0, sizeof(set->retired));
 }
 
-static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid,
-                                  size_t cid_len, const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
+static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
+                                  const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
 {
     size_t slot_to_use = SIZE_MAX;
 
@@ -143,8 +143,7 @@ quicly_error_t quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t
     assert(sequence >= retire_prior_to);
 
     /* handle retire_prior_to first and restore state on error */
-    if ((ret = unregister_prior_to(set, retire_prior_to)) != 0 ||
-        (ret = do_register(set, sequence, cid, cid_len, srt)) != 0)
+    if ((ret = unregister_prior_to(set, retire_prior_to)) != 0 || (ret = do_register(set, sequence, cid, cid_len, srt)) != 0)
         *set = backup;
 
     return ret;
