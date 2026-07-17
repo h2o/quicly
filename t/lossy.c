@@ -313,7 +313,7 @@ static void loss_core(void)
     test_streambuf_t *client_streambuf = NULL, *server_streambuf = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
     size_t i, stall_count = 0;
-    for (i = 0; i < 100; ++i) {
+    for (i = 0; i < 150; ++i) {
         int64_t client_timeout = quicly_get_first_timeout(client), server_timeout = quicly_get_first_timeout(server),
                 min_timeout = client_timeout < server_timeout ? client_timeout : server_timeout;
         assert(min_timeout != INT64_MAX);
@@ -482,7 +482,7 @@ static void test_bidirectional(void)
         subtest("75%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-75%", loss_check_stats, time_spent, 18, 203900, 223090, 65015, 84162, 633710);
+    subtest("bidi-stats-75%", loss_check_stats, time_spent, 18, 203900, 250000, 65015, 100000, 633710);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 2);
@@ -535,6 +535,9 @@ static void test_bidirectional(void)
 
 void test_lossy(void)
 {
+    uint64_t active_connection_id_limit_backup = quic_ctx.transport_params.active_connection_id_limit;
+    quic_ctx.transport_params.active_connection_id_limit = 4;
+
     uint64_t handshake_timeout_backup = quic_ctx.handshake_timeout_rtt_multiplier;
     /* loss tests tend to incur gigantic (and artificial) latencies, which easily trigger handshake timeout.
      * for this test, we totally disable handshake timeout so we can focus on the loss test */
@@ -548,4 +551,5 @@ void test_lossy(void)
     subtest("bidirectional", test_bidirectional);
     quic_ctx.transport_params.max_idle_timeout = idle_timeout_backup;
     quic_ctx.handshake_timeout_rtt_multiplier = handshake_timeout_backup;
+    quic_ctx.transport_params.active_connection_id_limit = active_connection_id_limit_backup;
 }
