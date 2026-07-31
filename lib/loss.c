@@ -30,6 +30,7 @@ void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t
                          .max_ack_delay = max_ack_delay,
                          .ack_delay_exponent = ack_delay_exponent,
                          .thresholds = {.use_packet_based = 1, .time_based_percentile = 1024 / 8 /* start from 1/8 RTT */},
+                         .min_pn_to_relax_reorder_tolerance = 0,
                          .pto_count = 0,
                          .time_of_last_packet_sent = 0,
                          .largest_acked_packet_plus1 = {.per_epoch = {0}, .all_ = 0},
