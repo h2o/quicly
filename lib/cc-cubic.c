@@ -114,9 +114,35 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 {
     quicly_cc__update_ecn_episodes(cc, bytes, lost_pn);
 
-    /* Nothing to do if loss is in recovery window. */
-    if (lost_pn < cc->recovery_end)
+    /* Nothing to do if loss is in recovery window, other than counting the packet so that the episode is undone only once every
+     * packet deemed lost has been late-ACKed. */
+    if (lost_pn < cc->recovery_end) {
+        if (bytes != 0 && cc->state.cubic.undo.num_packets_lost != 0)
+            ++cc->state.cubic.undo.num_packets_lost;
         return;
+    }
+
+    /* Zero-byte congestion reports are ECN signals, not lost packets. They still enter recovery below, but cannot be undone by
+     * late ACKs because no packet was deemed lost. Values are captured before quicly_cc_jumpstart_on_first_loss(), which adjusts
+     * CWND itself. */
+    if (bytes != 0) {
+        cc->state.cubic.undo.num_packets_lost = 1;
+        cc->state.cubic.undo.start_pn = lost_pn;
+        cc->state.cubic.undo.cwnd = cc->cwnd;
+        if (quicly_cc_in_jumpstart(cc)) {
+            cc->state.cubic.undo.cwnd /= 2;
+            if (cc->state.cubic.undo.cwnd < cc->cwnd_initial)
+                cc->state.cubic.undo.cwnd = cc->cwnd_initial;
+        }
+        cc->state.cubic.undo.ssthresh = cc->ssthresh;
+        cc->state.cubic.undo.k = cc->state.cubic.k;
+        cc->state.cubic.undo.w_max = cc->state.cubic.w_max;
+        cc->state.cubic.undo.w_last_max = cc->state.cubic.w_last_max;
+        cc->state.cubic.undo.avoidance_start = cc->state.cubic.avoidance_start;
+    } else {
+        cc->state.cubic.undo.num_packets_lost = 0;
+    }
+
     cc->recovery_end = next_pn;
 
     /* if detected loss before receiving all acks for jumpstart, restore original CWND */
@@ -150,6 +176,34 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     if (cc->cwnd_minimum > cc->cwnd)
         cc->cwnd_minimum = cc->cwnd;
+}
+
+static void cubic_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
+{
+    if (!(cc->state.cubic.undo.start_pn <= pn && pn < cc->recovery_end))
+        return;
+    if (cc->state.cubic.undo.num_packets_lost == 0)
+        return;
+
+    if (--cc->state.cubic.undo.num_packets_lost != 0)
+        return;
+
+    int was_in_startup = cc->state.cubic.undo.ssthresh == UINT32_MAX;
+    cc->cwnd = cc->state.cubic.undo.cwnd;
+    cc->ssthresh = cc->state.cubic.undo.ssthresh;
+    cc->state.cubic.k = cc->state.cubic.undo.k;
+    cc->state.cubic.w_max = cc->state.cubic.undo.w_max;
+    cc->state.cubic.w_last_max = cc->state.cubic.undo.w_last_max;
+    cc->state.cubic.avoidance_start = cc->state.cubic.undo.avoidance_start;
+    cc->recovery_end = 0;
+    --cc->num_loss_episodes;
+    ++cc->num_loss_episodes_undone;
+    if (was_in_startup) {
+        ++cc->num_loss_episodes_undone_in_startup;
+        cc->cwnd_exiting_slow_start = 0;
+        cc->exit_slow_start_at = INT64_MAX;
+        quicly_cc_jumpstart_reset(cc);
+    }
 }
 
 static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
@@ -192,6 +246,9 @@ static int cubic_on_switch(quicly_cc_t *cc)
         /* When in slow start, state can be reused as-is; otherwise, restart. */
         if (cc->cwnd_exiting_slow_start == 0) {
             cc->type = &quicly_cc_type_cubic;
+            /* The union held another algorithm's state; zero the cubic arm so those bytes are not read as congestion avoidance or
+             * undo state. Being still in slow start, none of the cubic-specific fields have been used yet. */
+            memset(&cc->state.cubic, 0, sizeof(cc->state.cubic));
         } else {
             cubic_reset(cc, cc->cwnd_initial);
         }
@@ -213,6 +270,6 @@ quicly_cc_type_t quicly_cc_type_cubic = {"cubic",
                                          cubic_on_persistent_congestion,
                                          cubic_on_sent,
                                          cubic_on_switch,
-                                         NULL,
+                                         cubic_on_late_ack,
                                          quicly_cc_jumpstart_enter};
 quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};

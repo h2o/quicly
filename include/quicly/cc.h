@@ -155,6 +155,24 @@ typedef struct st_quicly_cc_t {
              * Timestamp of the most recent send operation.
              */
             int64_t last_sent_time;
+            /**
+             * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
+             * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
+             * declared lost and have not yet been late-ACKed. Other fields retain the values to be restored when
+             * `num_packets_lost` becomes zero. `k` is retained rather than recomputed, as `cc_on_late_ack` does not receive
+             * `max_udp_payload_size`. Both `w_max` and `w_last_max` must be restored, as fast convergence (RFC 8312 4.6) derives
+             * one from the other asymmetrically.
+             */
+            struct {
+                uint64_t start_pn;
+                uint32_t num_packets_lost;
+                uint32_t cwnd;
+                uint32_t ssthresh;
+                double k;
+                uint32_t w_max;
+                uint32_t w_last_max;
+                int64_t avoidance_start;
+            } undo;
         } cubic;
     } state;
     /**
