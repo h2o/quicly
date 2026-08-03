@@ -220,20 +220,3 @@ uint64_t quicly_ranges_next_missing(quicly_ranges_t *ranges, uint64_t lower_boun
         *slots_traversed = ranges->num_ranges - (slot + 1);
     return result;
 }
-
-int quicly_ranges_exists(quicly_ranges_t *ranges, uint64_t n)
-{
-    size_t lo = 0, hi = ranges->num_ranges;
-
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if (n < ranges->ranges[mid].start) {
-            hi = mid;
-        } else if (n >= ranges->ranges[mid].end) {
-            lo = mid + 1;
-        } else {
-            return 1;
-        }
-    }
-    return 0;
-}
