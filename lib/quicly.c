@@ -7617,6 +7617,12 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         goto Exit;
     }
     if (is_duplicate_pn(&(*space)->ack_queue, pn, (*space)->next_expected_packet_number)) {
+        ++conn->super.stats.num_packets.received_duplicate;
+        QUICLY_PROBE(PACKET_RECEIVED_DUPLICATE, conn, conn->stash.now, pn, get_epoch(packet->octets.base[0]));
+        QUICLY_LOG_CONN(packet_received_duplicate, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
+            PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
+        });
         ret = QUICLY_ERROR_PACKET_IGNORED;
         goto Exit;
     }
