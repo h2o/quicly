@@ -173,8 +173,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
      * overshoot by 2x (note: after 0.5x reduction, CWND is still as large as BDP+QUEUE, so further reduction is preferable).
      *
-     * In rapid start, upon the first loss we set CWND to 0.7x (QUICLY_RENO_BETA), then reduce proportionally to the bytes deemed
-     * lost during recovery, with a lower bound of 1/3 * beta.
+     * In rapid start, upon the first loss we multiply CWND by QUICLY_RAPID_START_LOSS_FACTOR (0.9x when beta is 0.7), then reduce
+     * proportionally to the bytes acked and deemed lost during recovery, with a lower bound of 1/3 * beta.
      * Rationale: at a small loss, reducing by beta mirrors CA's single signal behavior. With up to ~67% loss (typical for 3x
      * growth under tail-drop), CWND upon loss detection is 3 * (BDP + Q); therefore clamping to 1/3 * beta reproduces the CA
      * target. For loss >67% (i.e., beyond queue overflow), we keep the lower bound to avoid over-shrinking. */
