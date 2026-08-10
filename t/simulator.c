@@ -157,7 +157,8 @@ struct net_random_loss {
  * `NET_AQM_CODEL` combined with isolation.
  * `NET_AQM_STEP` marks every ECT packet whose sojourn time exceeds `target`. It is not a discipline that anybody deploys; being
  * deterministic, it tells exactly when a CE mark is supposed to be emitted.
- * `NET_AQM_CODEL` is CoDel (RFC 8289).
+ * `NET_AQM_CODEL` is CoDel (RFC 8289), following the ECN handling of the Linux implementation; the pseudocode of the RFC only
+ * drops, whereas the packet that is marked is delivered.
  */
 struct net_aqm {
     enum { NET_AQM_NONE, NET_AQM_STEP, NET_AQM_CODEL } type;
@@ -412,7 +413,7 @@ static struct net_packet *net_codel_take(struct net_bottleneck *self, struct net
     packet = net_queue_dequeue(queue);
     self->size -= packet->size;
 
-    /* the queue is not considered standing while it holds less than one packet worth of bytes */
+    /* the queue is not considered standing while it holds less than one packet worth of bytes; the quantum stands in for the MTU */
     if (now - packet->enter_at < self->target || queue->size <= NET_BOTTLENECK_QUANTUM) {
         queue->codel.above_target_since = 0;
     } else if (queue->codel.above_target_since == 0) {
@@ -442,19 +443,23 @@ static struct net_packet *net_codel_dequeue(struct net_bottleneck *self, struct 
         if (!ok_to_mark) {
             queue->codel.marking = 0;
         } else {
-            while (now >= queue->codel.mark_next) {
+            while (queue->codel.marking && now >= queue->codel.mark_next) {
                 ++queue->codel.count;
-                queue->codel.mark_next = net_codel_mark_next(self, queue->codel.mark_next, queue->codel.count);
-                if (net_bottleneck_mark(self, packet))
+                /* a packet that can be marked is delivered, the schedule being advanced all the same */
+                if (net_bottleneck_mark(self, packet)) {
+                    queue->codel.mark_next = net_codel_mark_next(self, queue->codel.mark_next, queue->codel.count);
                     break;
+                }
                 net_bottleneck_drop(self, packet);
                 if ((packet = net_codel_take(self, queue, &ok_to_mark)) == NULL) {
                     queue->codel.marking = 0;
                     return NULL;
                 }
+                /* the schedule is advanced only while the queue is still standing; leaving the state must not push it back */
                 if (!ok_to_mark) {
                     queue->codel.marking = 0;
-                    break;
+                } else {
+                    queue->codel.mark_next = net_codel_mark_next(self, queue->codel.mark_next, queue->codel.count);
                 }
             }
         }
