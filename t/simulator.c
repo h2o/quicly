@@ -735,7 +735,9 @@ int main(int argc, char **argv)
     for (int seg_start = first_sep + 1; seg_start < argc;) {
         int seg_end = find_next_separator(argc, argv, seg_start);
         if (seg_end > seg_start) {
-            quicly_context_t flow_ctx = quicctx;
+            /* the context is retained by the connection being created below, therefore it has to be allocated on heap */
+            quicly_context_t *flow_ctx = malloc(sizeof(*flow_ctx));
+            *flow_ctx = quicctx;
             double flow_delay = delay, flow_start = start;
 
             int flow_argc = seg_end - seg_start + 1;
@@ -746,7 +748,7 @@ int main(int argc, char **argv)
             if (seg_end < argc)
                 argv[seg_end] = NULL;
 
-            if (!parse_options(flow_argc, flow_argv, &flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL))
+            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL))
                 exit(1);
             flow_argv[0] = saved_argv0;
             if (seg_end < argc)
@@ -760,7 +762,7 @@ int main(int argc, char **argv)
             struct net_endpoint *client_node = malloc(sizeof(*client_node));
             net_endpoint_init(client_node);
             client_node->start_at = now + flow_start;
-            int ret = quicly_connect(&client_node->conns[0].quic, &flow_ctx, "hello.example.com", &server_node.node.addr.sa,
+            int ret = quicly_connect(&client_node->conns[0].quic, flow_ctx, "hello.example.com", &server_node.node.addr.sa,
                                      &client_node->addr.sa, &next_quic_cid, ptls_iovec_init(NULL, 0), NULL, NULL, NULL);
             ++next_quic_cid.master_id;
             assert(ret == 0);
