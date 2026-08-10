@@ -540,7 +540,9 @@ inline void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t 
 #undef ENTRY
     };
 
-    *cwnd -= factors[rs->recovery.by_ecn].ack * bytes_acked + factors[rs->recovery.by_ecn].loss * bytes_lost;
+    uint32_t reduction = factors[rs->recovery.by_ecn].ack * bytes_acked + factors[rs->recovery.by_ecn].loss * bytes_lost;
+    assert(reduction <= *cwnd && "CWND never underflows");
+    *cwnd -= reduction;
     if (*cwnd < rs->recovery.cwnd_floor)
         *cwnd = rs->recovery.cwnd_floor;
 }
