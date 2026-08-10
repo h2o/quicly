@@ -73,6 +73,10 @@ struct net_packet {
      */
     double enter_at;
     /**
+     * ECN codepoint being carried by the IP header; the AQM of the bottleneck turns ECT(0) into CE when congestion is observed
+     */
+    uint8_t ecn;
+    /**
      * size of the packet
      */
     size_t size;
@@ -106,6 +110,15 @@ struct net_random_loss {
     double loss_ratio;
 };
 
+/**
+ * The AQM being run by the bottleneck. `NET_AQM_STEP` marks every ECT packet whose sojourn time exceeds `target`; it is not a
+ * realistic discipline, but being deterministic it tells exactly when a CE mark is supposed to be emitted.
+ */
+struct net_aqm {
+    enum { NET_AQM_NONE, NET_AQM_STEP } type;
+    double target;
+};
+
 struct net_bottleneck {
     struct net_node super;
     struct net_node *next_node;
@@ -113,6 +126,7 @@ struct net_bottleneck {
     double next_emit_at;
     double bytes_per_sec;
     size_t capacity;
+    struct net_aqm aqm;
 };
 
 struct net_endpoint {
@@ -126,7 +140,7 @@ struct net_endpoint {
     quicly_context_t *accept_ctx;
 };
 
-static struct net_packet *net_packet_create(struct net_endpoint *src, quicly_address_t *dest, ptls_iovec_t vec)
+static struct net_packet *net_packet_create(struct net_endpoint *src, quicly_address_t *dest, ptls_iovec_t vec, uint8_t ecn)
 {
     struct net_packet *p = malloc(offsetof(struct net_packet, bytes) + vec.len);
 
@@ -134,6 +148,7 @@ static struct net_packet *net_packet_create(struct net_endpoint *src, quicly_add
     p->src = src;
     p->dest = *dest;
     p->enter_at = now;
+    p->ecn = ecn;
     p->size = vec.len;
     memcpy(p->bytes, vec.base, vec.len);
 
@@ -243,6 +258,41 @@ static void net_bottleneck_forward(struct net_node *_self, struct net_packet *pa
     net_queue_enqueue(&self->queue, packet);
 }
 
+#define NET_ECN_NOT_ECT 0
+#define NET_ECN_ECT1 1
+#define NET_ECN_ECT0 2
+#define NET_ECN_CE 3
+
+/**
+ * Turns ECT into CE, returning if the packet is ECN-capable. Packets that are not ECN-capable have to be dropped instead, as there
+ * is no way of signalling congestion to their sender.
+ */
+static int net_bottleneck_mark(struct net_bottleneck *self, struct net_packet *packet)
+{
+    if (packet->ecn == NET_ECN_NOT_ECT)
+        return 0;
+
+    if (packet->ecn != NET_ECN_CE) {
+        packet->ecn = NET_ECN_CE;
+        net_bottleneck_print_stats(self, "mark", packet);
+    }
+    return 1;
+}
+
+static void net_bottleneck_run_aqm(struct net_bottleneck *self, struct net_packet *packet)
+{
+    switch (self->aqm.type) {
+    case NET_AQM_STEP:
+        /* Mark-only; packets that are not ECN-capable are left to the tail drop that happens when the queue becomes full. This
+         * discipline exists for observing the ECN signalling path, not for being a faithful AQM. */
+        if (now - packet->enter_at > self->aqm.target)
+            net_bottleneck_mark(self, packet);
+        break;
+    default:
+        break;
+    }
+}
+
 static double net_bottleneck_next_run_at(struct net_node *_self)
 {
     struct net_bottleneck *self = (struct net_bottleneck *)_self;
@@ -266,6 +316,7 @@ static void net_bottleneck_run(struct net_node *_self)
 
     /* detach packet */
     struct net_packet *packet = net_queue_dequeue(&self->queue);
+    net_bottleneck_run_aqm(self, packet);
     net_bottleneck_print_stats(self, "dequeue", packet);
 
     /* update next emission timer */
@@ -275,13 +326,14 @@ static void net_bottleneck_run(struct net_node *_self)
     self->next_node->forward_(self->next_node, packet);
 }
 
-static void net_bottleneck_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec)
+static void net_bottleneck_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec, struct net_aqm aqm)
 {
     *self = (struct net_bottleneck){
         .super = {net_bottleneck_forward, net_bottleneck_next_run_at, net_bottleneck_run},
         .queue = {.append_at = &self->queue.first},
         .bytes_per_sec = bytes_per_sec,
         .capacity = (size_t)(bytes_per_sec * capacity_in_sec),
+        .aqm = aqm,
     };
 }
 
@@ -298,6 +350,7 @@ static void net_endpoint_forward(struct net_node *_self, struct net_packet *pack
         if (quicly_decode_packet(self->conns[0].quic != NULL ? quicly_get_context(self->conns[0].quic) : self->accept_ctx, &qp,
                                  packet->bytes, packet->size, &off) == SIZE_MAX)
             break;
+        qp.ecn = packet->ecn; /* the value is reset by `quicly_decode_packet`, as it is provided by the IP stack */
         /* find the matching connection, or where new state should be created */
         struct net_endpoint_conn *conn;
         for (conn = self->conns; conn->quic != NULL; ++conn)
@@ -355,9 +408,10 @@ static void net_endpoint_run(struct net_node *_self)
         uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
         int ret;
         if ((ret = quicly_send(conn->quic, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf))) == 0) {
+            uint8_t ecn = quicly_send_get_ecn_bits(conn->quic);
             for (size_t i = 0; i < num_datagrams; ++i) {
                 struct net_packet *packet =
-                    net_packet_create(self, &dest, ptls_iovec_init(datagrams[i].iov_base, datagrams[i].iov_len));
+                    net_packet_create(self, &dest, ptls_iovec_init(datagrams[i].iov_base, datagrams[i].iov_len), ecn);
                 conn->egress->forward_(conn->egress, packet);
             }
         } else {
@@ -464,10 +518,14 @@ static void usage(const char *cmd)
            "  -d <delay_secs>     delay added between the sender and the botteneck\n"
            "                      (default: 0.1)\n"
            "  -i <packets>        sets initial CWND (default: %" PRIu32 ")\n"
+           "  -E                  turns off ECN, which is otherwise used by every flow\n"
            "  -j <packets>        enables use of jumpstart using given window size\n"
            "  -l <seconds>        number of seconds to simulate (default: 100)\n"
            "  -p                  turns on pacing\n"
            "  -q <seconds>        max depth of the bottleneck queue (default: 0.1)\n"
+           "  -A <aqm>            AQM of the bottleneck: `none` (default) or `step[:target]`,\n"
+           "                      the latter marking CE on the packets whose sojourn time\n"
+           "                      exceeds target seconds (default: 0.005)\n"
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
            "  -R                  turns on rapid start\n"
            "  -s <seconds>        delay until the sender is added to the simulation\n"
@@ -495,24 +553,51 @@ static int find_next_separator(int argc, char **argv, int start)
     return argc;
 }
 
+/**
+ * Parses the AQM spec, which is `none` or `step[:target_in_seconds]`.
+ */
+static int parse_aqm(const char *spec, struct net_aqm *aqm)
+{
+    if (strcmp(spec, "none") == 0) {
+        *aqm = (struct net_aqm){.type = NET_AQM_NONE};
+        return 1;
+    }
+    if (strncmp(spec, "step", 4) == 0 && (spec[4] == '\0' || spec[4] == ':')) {
+        *aqm = (struct net_aqm){.type = NET_AQM_STEP, .target = 0.005};
+        if (spec[4] == ':' && (sscanf(spec + 5, "%lf", &aqm->target) != 1 || aqm->target <= 0))
+            return 0;
+        return 1;
+    }
+    return 0;
+}
+
 static int parse_options(int argc, char **argv, quicly_context_t *quicctx, double *delay, double *start, double *bw, double *depth,
-                         double *length, double *random_loss, FILE **trace_fp)
+                         double *length, double *random_loss, struct net_aqm *aqm, FILE **trace_fp)
 {
     reset_getopt_state();
     int ch;
-    while ((ch = getopt(argc, argv, "c:b:d:i:j:l:pq:r:Rs:th")) != -1) {
+    while ((ch = getopt(argc, argv, "A:c:b:d:Ei:j:l:pq:r:Rs:th")) != -1) {
+
         switch (ch) {
-        case 'c':
-            {
-                quicly_cc_type_t **cc;
-                for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
-                    if (strcmp((*cc)->name, optarg) == 0)
-                        break;
-                if (*cc == NULL) {
-                    fprintf(stderr, "unknown congestion controller: %s\n", optarg);
-                    return 0;
-                }
-                quicctx->init_cc = (*cc)->cc_init;
+        case 'c': {
+            quicly_cc_type_t **cc;
+            for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
+                if (strcmp((*cc)->name, optarg) == 0)
+                    break;
+            if (*cc == NULL) {
+                fprintf(stderr, "unknown congestion controller: %s\n", optarg);
+                return 0;
+            }
+            quicctx->init_cc = (*cc)->cc_init;
+        } break;
+        case 'A':
+            if (aqm == NULL) {
+                fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
+                return 0;
+            }
+            if (!parse_aqm(optarg, aqm)) {
+                fprintf(stderr, "invalid AQM: %s\n", optarg);
+                return 0;
             }
             break;
         case 'b':
@@ -575,6 +660,9 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                 fprintf(stderr, "invalid random loss rate: %s\n", optarg);
                 return 0;
             }
+            break;
+        case 'E':
+            quicctx->enable_ratio.ecn = 0;
             break;
         case 'R':
             quicctx->enable_ratio.rapid_start = 255;
@@ -716,6 +804,7 @@ int main(int argc, char **argv)
     *node_insert_at++ = &server_node.node.super;
 
     /* parse args */
+    struct net_aqm aqm = {.type = NET_AQM_NONE};
     double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
     double length = 100;
     int first_sep = find_next_separator(argc, argv, 1);
@@ -727,7 +816,7 @@ int main(int argc, char **argv)
     }
 
     argv[first_sep] = NULL;
-    if (!parse_options(first_sep, argv, &quicctx, &delay, &start, &bw, &depth, &length, &random_loss, &quicly_trace_fp))
+    if (!parse_options(first_sep, argv, &quicctx, &delay, &start, &bw, &depth, &length, &random_loss, &aqm, &quicly_trace_fp))
         exit(1);
     argv[first_sep] = "--";
 
@@ -748,7 +837,7 @@ int main(int argc, char **argv)
             if (seg_end < argc)
                 argv[seg_end] = NULL;
 
-            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL))
+            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL, NULL))
                 exit(1);
             flow_argv[0] = saved_argv0;
             if (seg_end < argc)
@@ -783,7 +872,7 @@ int main(int argc, char **argv)
     }
 
     /* setup bottleneck */
-    net_bottleneck_init(&bottleneck_node, bw, depth);
+    net_bottleneck_init(&bottleneck_node, bw, depth, aqm);
     bottleneck_node.next_node = &server_node.node.super;
     *node_insert_at++ = &bottleneck_node.super;
 
