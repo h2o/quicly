@@ -1706,6 +1706,28 @@ static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t large
            slots_traversed_for_next_missing > QUICLY_MAX_ACK_BLOCKS / 4;
 }
 
+/**
+ * Returns if the packet number has already been processed, or if it is too old for us to tell, as specified in RFC 9000 Section
+ * 12.3. `ack_queue` is pruned by ACK-ACKs, therefore packets arriving more than a round-trip late could be misidentified.
+ */
+static int is_duplicate_pn(quicly_ranges_t *ack_queue, uint64_t pn, uint64_t next_expected_pn)
+{
+    /* fast path that is taken when we receive a packet in-order */
+    if (pn >= next_expected_pn)
+        return 0;
+
+    /* fast rejection for PNs too small */
+    if (ack_queue->num_ranges == 0 || pn < ack_queue->ranges[0].start)
+        return 1;
+
+    /* The PN is no less than `ranges[0].start`. Scan the ranges in descending order, as the packet number in question is likely to
+     * be close to the ones received most recently. */
+    size_t i = ack_queue->num_ranges;
+    while (pn < ack_queue->ranges[--i].start)
+        ;
+    return pn < ack_queue->ranges[i].end;
+}
+
 static quicly_error_t record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
 {
     quicly_error_t ret;
@@ -3180,7 +3202,7 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
 
 static quicly_error_t do_decrypt_packet(ptls_cipher_context_t *header_protection,
                                         int (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t, size_t *),
-                                        void *aead_ctx, uint64_t *next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn,
+                                        void *aead_ctx, uint64_t next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn,
                                         ptls_iovec_t *payload)
 {
     size_t encrypted_len = packet->octets.len - packet->encrypted_off;
@@ -3203,15 +3225,13 @@ static quicly_error_t do_decrypt_packet(ptls_cipher_context_t *header_protection
     }
 
     size_t aead_off = packet->encrypted_off + pnlen;
-    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
+    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, next_expected_pn);
 
     /* AEAD decryption */
     int ret;
     if ((ret = (*aead_cb)(aead_ctx, *pn, packet, aead_off, &ptlen)) != 0) {
         return ret;
     }
-    if (*next_expected_pn <= *pn)
-        *next_expected_pn = *pn + 1;
 
     *payload = ptls_iovec_init(packet->octets.base + aead_off, ptlen);
     return 0;
@@ -3219,7 +3239,7 @@ static quicly_error_t do_decrypt_packet(ptls_cipher_context_t *header_protection
 
 static quicly_error_t decrypt_packet(ptls_cipher_context_t *header_protection,
                                      int (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t, size_t *), void *aead_ctx,
-                                     uint64_t *next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn,
+                                     uint64_t next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn,
                                      ptls_iovec_t *payload)
 {
     quicly_error_t ret;
@@ -3238,8 +3258,6 @@ static quicly_error_t decrypt_packet(ptls_cipher_context_t *header_protection,
                     return ret;
             }
         }
-        if (*next_expected_pn < *pn)
-            *next_expected_pn = *pn + 1;
     }
 
     /* check reserved bits after AEAD decryption */
@@ -7243,7 +7261,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
         int alive;
     } cipher = {};
     ptls_iovec_t payload;
-    uint64_t next_expected_pn, pn, offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
+    uint64_t pn, offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
     int is_ack_only, is_probe_only;
     quicly_error_t ret;
 
@@ -7270,9 +7288,8 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
                                         ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL)) != 0)
         goto Exit;
     cipher.alive = 1;
-    next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
-    if ((ret = decrypt_packet(cipher.ingress.header_protection, aead_decrypt_fixed_key, cipher.ingress.aead, &next_expected_pn,
-                              packet, &pn, &payload)) != 0) {
+    if ((ret = decrypt_packet(cipher.ingress.header_protection, aead_decrypt_fixed_key, cipher.ingress.aead, 0, packet, &pn,
+                              &payload)) != 0) {
         ret = QUICLY_ERROR_DECRYPTION_FAILED;
         goto Exit;
     }
@@ -7310,7 +7327,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
     }
     if ((ret = setup_handshake_space_and_flow(*conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
-    (*conn)->initial->super.next_expected_packet_number = next_expected_pn;
+    (*conn)->initial->super.next_expected_packet_number = pn + 1;
     (*conn)->initial->cipher.ingress = cipher.ingress;
     (*conn)->initial->cipher.egress = cipher.egress;
     cipher.alive = 0;
@@ -7592,13 +7609,25 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         epoch = QUICLY_EPOCH_1RTT;
     }
 
-    /* decrypt */
-    if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, &(*space)->next_expected_packet_number, packet, &pn,
+    /* decrypt, discarding duplicates */
+    if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, (*space)->next_expected_packet_number, packet, &pn,
                               &payload)) != 0) {
         ++conn->super.stats.num_packets.decryption_failed;
         QUICLY_PROBE(PACKET_DECRYPTION_FAILED, conn, conn->stash.now, pn);
         goto Exit;
     }
+    if (is_duplicate_pn(&(*space)->ack_queue, pn, (*space)->next_expected_packet_number)) {
+        ++conn->super.stats.num_packets.received_duplicate;
+        QUICLY_PROBE(PACKET_RECEIVED_DUPLICATE, conn, conn->stash.now, pn, get_epoch(packet->octets.base[0]));
+        QUICLY_LOG_CONN(packet_received_duplicate, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
+            PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
+        });
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
+    if ((*space)->next_expected_packet_number <= pn)
+        (*space)->next_expected_packet_number = pn + 1;
 
     QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, conn, {
