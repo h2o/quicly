@@ -71,6 +71,22 @@ struct st_quicly_cc_rapid_start_t {
     };
 };
 
+/**
+ * State used exclusively by Cuback; see `quicly_cc_type_cuback`.
+ */
+struct st_quicly_cc_cuback_t {
+    /**
+     * Delivery rate in bytes per second observed at the last congestion event. As the bottleneck remains saturated, this is what
+     * converts the bytes being acked into the passage of time, which is the ack-driven substitute for the clock that Cubic reads.
+     * Set to 0 if bandwidth is unknown due to switching from another CC.
+     */
+    double bandwidth;
+    /**
+     * Cubic's W_max, the full BDP estimate, in bytes.
+     */
+    uint32_t w_max;
+};
+
 typedef struct st_quicly_cc_t {
     /**
      * Congestion controller type.
@@ -114,9 +130,14 @@ typedef struct st_quicly_cc_t {
              */
             uint32_t stash;
             /**
-             * Number of bytes required to be acked in order to increase CWND by 1 MTU.
+             * Number of bytes required to be acked in order to increase CWND by 1 MTU. Used by Pico; Cuback recalculates the value
+             * for every MTU of increase.
              */
             uint32_t bytes_per_mtu_increase;
+            /**
+             * State used exclusively by Cuback.
+             */
+            struct st_quicly_cc_cuback_t cuback;
             /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
              * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
@@ -129,6 +150,7 @@ typedef struct st_quicly_cc_t {
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_per_mtu_increase;
+                struct st_quicly_cc_cuback_t cuback;
             } undo;
         } pico;
         /**
@@ -270,11 +292,11 @@ struct st_quicly_cc_type_t {
 /**
  * The type objects for each CC. These can be used for testing the type of each `quicly_cc_t`.
  */
-extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_pico;
+extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_pico, quicly_cc_type_cuback;
 /**
  * The factory methods for each CC.
  */
-extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_pico_init;
+extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_pico_init, quicly_cc_cuback_init;
 
 /**
  * A null-terminated list of all CC types.

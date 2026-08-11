@@ -25,9 +25,32 @@
 #include "quicly.h"
 
 /**
+ * C of Cubic
+ */
+#define QUICLY_CUBIC_C 0.4
+
+/**
+ * Cubic obtains Reno-friendliness (RFC 9438, Section 4.3) by tracking a window that grows by this many MTUs per RTT. The value is
+ * the additive increase that is throughput-equivalent to Reno for a multiplicative decrease of beta; it is one for the 0.5 that
+ * Reno uses, and 0.529 for the 0.7 used here.
+ */
+#define QUICLY_CUBIC_RENO_FRIENDLY_ALPHA (3 * (1 - QUICLY_RENO_BETA) / (1 + QUICLY_RENO_BETA))
+
+/**
+ * Fast convergence reduces Wmax to (1 + beta) / 2 of before, and therefore K to the cube root of that; as the cubic curve is point
+ * symmetric at the point it reaches the reduced Wmax, reaching the original Wmax takes twice as long. On a path of stable
+ * capacity, fast convergence is triggered at half of the congestion events, hence the congestion period of Cubic is, on average,
+ * ((1 + ((1 + beta) / 2)^(1/3) * 2) / 2) = 1.447 times of K; see also `pico_bytes_per_mtu_increase`.
+ *
+ * Rather than adjusting Wmax, Pico applies this factor to its rate of increase and Cuback to its time axis, both thereby
+ * remaining fair against Cubic while retaining no state for fast convergence.
+ */
+#define QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST ((1 + cbrt((1 + QUICLY_RENO_BETA) / 2) * 2) / 2)
+
+/**
  * Calculates the increase ratio to be used in congestion avoidance phase.
  */
-static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_t mtu)
+static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_t mtu)
 {
     /* Reno: CWND size after reduction */
     uint32_t reno = cwnd * QUICLY_RENO_BETA;
@@ -55,9 +78,72 @@ static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
      *
      *   bytes_per_mtu_increase = ((1 + 0.85^(1/3) * 2) / 2) * K * MTU / (0.3 * RTT_at_Wmax)
      */
-    uint32_t cubic = 1.447 / 0.3 * 1000 * cbrt(0.3 / 0.4 * cwnd / mtu) / rtt * mtu;
+    uint32_t cubic = QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST / 0.3 * 1000 * cbrt(0.3 / 0.4 * cwnd / mtu) / rtt * mtu;
 
     return reno < cubic ? reno : cubic;
+}
+
+/**
+ * Returns the time at which CWND reaches `w`, that being the inverse of `max(W_cubic, W_reno)`. Both curves increase monotonically,
+ * hence so does their maximum, and the inverse of a maximum is the minimum of the inverses.
+ */
+static double cuback_time_at(const struct st_quicly_cc_cuback_t *state, double w, double anchor, double alpha, double k,
+                             uint32_t mtu)
+{
+    double t_cubic = (k + cbrt((w - (double)state->w_max) / (QUICLY_CUBIC_C * mtu))) * QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST;
+    double t_reno = (w * w - anchor * anchor) / (2 * alpha * state->bandwidth);
+    double t = t_cubic < t_reno ? t_cubic : t_reno;
+    return t > 0 ? t : 0;
+}
+
+/**
+ * Calculates the number of bytes that have to be acked for incrementing CWND by one MTU, when Cuback is used.
+ *
+ * Cuback is an ACK-driven variant of Cubic. It traces the same two curves as Cubic - W_cubic and the Reno-friendly W_reno - but
+ * drives them by the bytes being acked rather than by the clock.
+ *
+ * Both curves being monotonically increasing, CWND - being their maximum - is monotonically increasing as well, hence the position
+ * on the time axis can be recovered from CWND, the inverse of a maximum being the minimum of the inverses:
+ *
+ *   W_cubic(t)    = C * MSS * (t / adjust - K)^3 + W_max
+ *   W_reno(t)     = sqrt(anchor^2 + 2 * alpha * MSS * bandwidth * t)
+ *   W^-1_cubic(w) = adjust * (K + cbrt((w - W_max) / (C * MSS)))
+ *   W^-1_reno(w)  = (w^2 - anchor^2) / (2 * alpha * MSS * bandwidth)
+ *
+ * That leaves W_max and the delivery rate observed at the last congestion event as the only state to retain. The amount to be acked
+ * for incrementing CWND by one MTU is the time the curve takes to climb that far, converted by the latter:
+ *
+ *   bytes_per_mtu_increase = (W^-1(cwnd + MTU) - W^-1(cwnd)) * bandwidth
+ *
+ * Being expressed in bytes to be acked, it does not advance while the sender is limited by anything other than CWND; this is the
+ * property that Cubic obtains by excluding application-limited periods from its clock.
+ *
+ * Also, use of ACK-clock mitigates the need for fast convergence, because if a competing flow grows faster, the clock naturally
+ * slows down, yielding more bandwidth to the competition.
+ */
+static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t mtu)
+{
+    double anchor = (double)state->w_max * QUICLY_RENO_BETA; /* CWND after reduction; where both curves depart from */
+    double alpha = QUICLY_CUBIC_RENO_FRIENDLY_ALPHA * mtu;   /* bytes by which Reno grows per RTT */
+    /* Seconds taken by the cubic curve to climb from `anchor` back to W_max; the fast convergence adjustment stretches the time
+     * axis rather than K, so that the curve still departs from `anchor` at t == 0. */
+    double k = cbrt((double)state->w_max * ((1 - QUICLY_RENO_BETA) / QUICLY_CUBIC_C) / mtu);
+
+    double t0 = cuback_time_at(state, cwnd, anchor, alpha, k, mtu);
+    double t1 = cuback_time_at(state, (double)cwnd + mtu, anchor, alpha, k, mtu);
+    double bytes = (t1 - t0) * state->bandwidth;
+
+    /* Past W_max the curve grows without bound, therefore the increase is capped at 50% of CWND per RTT as RFC 9438 does. Below
+     * W_max the cap is not applied, it being the climb back to a window that the path had already sustained. */
+    if (cwnd > state->w_max && bytes < (double)mtu * 2)
+        bytes = (double)mtu * 2;
+
+    /* Return the value capping the bounds so to avoid infinite loop or overflow. */
+    if (bytes < 1)
+        return 1;
+    if (bytes > 0x7fffffff)
+        return 0x7fffffff;
+    return (uint32_t)bytes;
 }
 
 /* TODO: Avoid increase if sender was application limited. */
@@ -91,6 +177,23 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             quicly_cc_rapid_start_update_rtt(&cc->rapid_start, &loss->rtt, now);
         bytes_per_mtu_increase =
             quicly_cc_rapid_start_use_3x(&cc->rapid_start, &loss->rtt) ? max_udp_payload_size / 2 : max_udp_payload_size;
+    } else if (cc->type == &quicly_cc_type_cuback) {
+        /* Cuback: bytes_per_mtu_increase is a function of CWND; adjust stash and cwnd while recalculating the value for every time
+         * CWND += mtu. */
+        if (cc->state.pico.cuback.bandwidth > 0) {
+            while (1) {
+                uint32_t step = cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, max_udp_payload_size);
+                if (cc->state.pico.stash < step)
+                    break;
+                cc->state.pico.stash -= step;
+                cc->cwnd = quicly_u32_add_saturating(cc->cwnd, max_udp_payload_size);
+            }
+            goto UpdateMaximum;
+        } else {
+            /* The curve remains undefined until the first congestion event; this is reachable only when the CC has been switched
+             * while in congestion avoidance. Use Reno until then. */
+            bytes_per_mtu_increase = cc->cwnd;
+        }
     } else {
         bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
     }
@@ -99,11 +202,13 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (cc->state.pico.stash < bytes_per_mtu_increase)
         return;
 
-    /* Update CWND, reducing stash relative to the amount we've adjusted the CWND */
-    uint32_t count = cc->state.pico.stash / bytes_per_mtu_increase;
-    cc->cwnd = quicly_u32_add_saturating(cc->cwnd, count * max_udp_payload_size);
-    cc->state.pico.stash -= count * bytes_per_mtu_increase;
+    { /* Update CWND, reducing stash relative to the amount we've adjusted the CWND */
+        uint32_t count = cc->state.pico.stash / bytes_per_mtu_increase;
+        cc->cwnd = quicly_u32_add_saturating(cc->cwnd, count * max_udp_payload_size);
+        cc->state.pico.stash -= count * bytes_per_mtu_increase;
+    }
 
+UpdateMaximum:
     if (cc->cwnd_maximum < cc->cwnd)
         cc->cwnd_maximum = cc->cwnd;
 }
@@ -138,6 +243,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         }
         cc->state.pico.undo.ssthresh = cc->ssthresh;
         cc->state.pico.undo.bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+        cc->state.pico.undo.cuback = cc->state.pico.cuback;
     } else {
         cc->state.pico.undo.num_packets_lost = 0;
     }
@@ -167,7 +273,14 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             if (bdp < cc->cwnd_initial)
                 bdp = cc->cwnd_initial;
         }
-        cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size);
+        if (cc->type == &quicly_cc_type_cuback) {
+            /* Retain the two values that define the curves: the target window and the throughput. */
+            cc->state.pico.cuback.w_max = bdp;
+            cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
+            cc->state.pico.stash = 0;
+        } else {
+            cc->state.pico.bytes_per_mtu_increase = pico_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size);
+        }
     }
 
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
@@ -216,6 +329,7 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     cc->ssthresh = cc->state.pico.undo.ssthresh;
     cc->state.pico.stash = 0;
     cc->state.pico.bytes_per_mtu_increase = cc->state.pico.undo.bytes_per_mtu_increase;
+    cc->state.pico.cuback = cc->state.pico.undo.cuback;
     cc->recovery_end = 0;
     --cc->num_loss_episodes;
     ++cc->num_loss_episodes_undone;
@@ -241,13 +355,16 @@ static void pico_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 static void pico_init_pico_state(quicly_cc_t *cc, uint32_t stash)
 {
     cc->state.pico.stash = stash;
-    cc->state.pico.bytes_per_mtu_increase = cc->cwnd * QUICLY_RENO_BETA; /* use Reno, for simplicity */
+
+    /* both pico and cuback acts as reno until congestion is observed, including when switching from a different CC */
+    cc->state.pico.bytes_per_mtu_increase = cc->cwnd * QUICLY_RENO_BETA;
+    cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
 }
 
-static void pico_reset(quicly_cc_t *cc, uint32_t initcwnd)
+static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd)
 {
     *cc = (quicly_cc_t){
-        .type = &quicly_cc_type_pico,
+        .type = type,
         .cwnd = initcwnd,
         .cwnd_initial = initcwnd,
         .cwnd_maximum = initcwnd,
@@ -260,26 +377,39 @@ static void pico_reset(quicly_cc_t *cc, uint32_t initcwnd)
     quicly_cc_jumpstart_reset(cc);
 }
 
-static int pico_on_switch(quicly_cc_t *cc)
+/**
+ * Switches to `type`, which is either Pico or Cuback; the two share their state representation.
+ */
+static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
 {
-    if (cc->type == &quicly_cc_type_pico) {
+    if (cc->type == type) {
         return 1; /* nothing to do */
     } else if (cc->type == &quicly_cc_type_reno) {
-        cc->type = &quicly_cc_type_pico;
+        cc->type = type;
         pico_init_pico_state(cc, cc->state.reno.stash);
         return 1;
-    } else if (cc->type == &quicly_cc_type_cubic) {
+    } else if (cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_pico || cc->type == &quicly_cc_type_cuback) {
         /* When in slow start, state can be reused as-is; otherwise, restart. */
         if (cc->cwnd_exiting_slow_start == 0) {
-            cc->type = &quicly_cc_type_pico;
+            cc->type = type;
             pico_init_pico_state(cc, 0);
         } else {
-            pico_reset(cc, cc->cwnd_initial);
+            pico_reset(cc, type, cc->cwnd_initial);
         }
         return 1;
     }
 
     return 0;
+}
+
+static int pico_on_switch(quicly_cc_t *cc)
+{
+    return switch_to(cc, &quicly_cc_type_pico);
+}
+
+static int cuback_on_switch(quicly_cc_t *cc)
+{
+    return switch_to(cc, &quicly_cc_type_cuback);
 }
 
 static void pico_enable_rapid_start(quicly_cc_t *cc, int64_t now)
@@ -289,7 +419,12 @@ static void pico_enable_rapid_start(quicly_cc_t *cc, int64_t now)
 
 static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
-    pico_reset(cc, initcwnd);
+    pico_reset(cc, &quicly_cc_type_pico, initcwnd);
+}
+
+static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+{
+    pico_reset(cc, &quicly_cc_type_cuback, initcwnd);
 }
 
 quicly_cc_type_t quicly_cc_type_pico = {"pico",
@@ -303,3 +438,15 @@ quicly_cc_type_t quicly_cc_type_pico = {"pico",
                                         quicly_cc_jumpstart_enter,
                                         pico_enable_rapid_start};
 quicly_init_cc_t quicly_cc_pico_init = {pico_init};
+
+quicly_cc_type_t quicly_cc_type_cuback = {"cuback",
+                                          &quicly_cc_cuback_init,
+                                          pico_on_acked,
+                                          pico_on_lost,
+                                          pico_on_persistent_congestion,
+                                          pico_on_sent,
+                                          cuback_on_switch,
+                                          pico_on_late_ack,
+                                          quicly_cc_jumpstart_enter,
+                                          pico_enable_rapid_start};
+quicly_init_cc_t quicly_cc_cuback_init = {cuback_init};
