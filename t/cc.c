@@ -182,6 +182,25 @@ static void test_cubic_target_bounds(void)
     ok(cc.cwnd == initcwnd);
 }
 
+static void test_cuback_reno_friendly_post_w_max(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, w_max = 2 * mtu;
+
+    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, w_max, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.pico.cuback.w_max = w_max;
+    cc.state.pico.cuback.bandwidth = w_max * 1000. / loss.rtt.smoothed;
+
+    /* Above W_max, RFC 9438 uses alpha == 1. Moving from 2 to 3 MTUs therefore requires (3^2 - 2^2) / 2 == 2.5 MTUs
+     * to be acknowledged. */
+    cc.type->cc_on_acked(&cc, &loss, 5 * mtu / 2 - 1, 1, 5 * mtu / 2 - 1, 1, 2, 100, mtu);
+    ok(cc.cwnd == w_max);
+    cc.type->cc_on_acked(&cc, &loss, 1, 2, 1, 1, 3, 100, mtu);
+    ok(cc.cwnd == w_max + mtu);
+}
+
 static void test_rapid_start(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
@@ -220,6 +239,7 @@ void test_cc(void)
     subtest("rapid-start", test_rapid_start);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
+    subtest("cuback-reno-friendly-post-w-max", test_cuback_reno_friendly_post_w_max);
     subtest("pico-undo-loss", test_pico_undo_loss);
     subtest("pico-undo-multiple-losses", test_pico_undo_multiple_losses);
     subtest("pico-undo-rapid-start-loss", test_pico_undo_rapid_start_loss);

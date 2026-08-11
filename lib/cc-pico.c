@@ -81,7 +81,12 @@ static double cuback_time_at(const struct st_quicly_cc_cuback_t *state, double w
                              uint32_t mtu)
 {
     double t_cubic = (k + cbrt((w - (double)state->w_max) / (QUICLY_CUBIC_C * mtu))) * QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST;
-    double t_reno = (w * w - anchor * anchor) / (2 * alpha * state->bandwidth);
+    /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
+     * reduction (W_max here). The inverse curve is therefore piecewise at W_max. */
+    double w_friendly = w < state->w_max ? w : state->w_max;
+    double t_reno = (w_friendly * w_friendly - anchor * anchor) / (2 * alpha * state->bandwidth);
+    if (w > state->w_max)
+        t_reno += (w * w - (double)state->w_max * state->w_max) / (2 * mtu * state->bandwidth);
     double t = t_cubic < t_reno ? t_cubic : t_reno;
     return t > 0 ? t : 0;
 }
@@ -96,9 +101,11 @@ static double cuback_time_at(const struct st_quicly_cc_cuback_t *state, double w
  * on the time axis can be recovered from CWND, the inverse of a maximum being the minimum of the inverses:
  *
  *   W_cubic(t)    = C * MSS * (t / adjust - K)^3 + W_max
- *   W_reno(t)     = sqrt(anchor^2 + 2 * alpha * MSS * bandwidth * t)
+ *   W_reno(t)     = sqrt(anchor^2 + 2 * alpha * MSS * bandwidth * t), switching alpha to 1 at W_max
  *   W^-1_cubic(w) = adjust * (K + cbrt((w - W_max) / (C * MSS)))
- *   W^-1_reno(w)  = (w^2 - anchor^2) / (2 * alpha * MSS * bandwidth)
+ *   W^-1_reno(w)  = (w^2 - anchor^2) / (2 * alpha * MSS * bandwidth),                  w <= W_max
+ *                   (W_max^2 - anchor^2) / (2 * alpha * MSS * bandwidth)
+ *                     + (w^2 - W_max^2) / (2 * MSS * bandwidth),                      w > W_max
  *
  * That leaves W_max and the delivery rate observed at the last congestion event as the only state to retain. The amount to be acked
  * for incrementing CWND by one MTU is the time the curve takes to climb that far, converted by the latter:
