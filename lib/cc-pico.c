@@ -43,19 +43,21 @@ static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
      *     = (K * Wmax / RTT_at_Wmax) / (0.3 * Wmax) * MTU
      *     = K * MTU / (0.3 * RTT_at_Wmax)
      *
-     * In addition, we have to adjust the value to take fast convergence into account. On a path with stable capacity, 50% of
-     * congestion events adjust Wmax to 0.85x of before calculating K. If that happens, the modified K (K') is:
+     * In addition, we have to adjust the value to take fast convergence into account. When competition causes congestion peaks to
+     * decline gradually, fast-convergence and normal epochs are expected to alternate: a peak below the retained Wmax triggers fast
+     * convergence, while the resulting Wmax of 0.85x makes the next peak a normal event unless it declines by more than 15%.
      *
-     *   K' = (0.3 / 0.4 * 0.85 * Wmax / MTU)^(1/3) = 0.85^(1/3) * K
+     * When fast convergence occurs, Wmax becomes 0.85x while cwnd_epoch remains 0.7x. The modified K (K') is therefore:
      *
-     * where K' represents the time to reach 0.85 * Wmax. As the cubic curve is point symmetric at the point where this curve
-     * reaches 0.85 * Wmax, it would take 2 * K' seconds to reach Wmax.
+     *   K' = ((0.85 - 0.7) / 0.4 * Wmax / MTU)^(1/3) = 0.5^(1/3) * K
      *
-     * Therefore, by amortizing the two modes, the congestion period of Cubic with fast convergence is calculated as:
+     * where K' represents the time to reach 0.85 * Wmax. As the cubic curve is point symmetric around that point, reaching the
+     * original Wmax takes 2 * K'. Amortizing one fast-convergence period and one normal period gives:
      *
-     *   bytes_per_mtu_increase = ((1 + 0.85^(1/3) * 2) / 2) * K * MTU / (0.3 * RTT_at_Wmax)
+     *   bytes_per_mtu_increase = ((1 + 0.5^(1/3) * 2) / 2) * K * MTU / (0.3 * RTT_at_Wmax)
+     *                          ~= 1.293700525984 * K * MTU / (0.3 * RTT_at_Wmax)
      */
-    uint32_t cubic = 1.447 / 0.3 * 1000 * cbrt(0.3 / 0.4 * cwnd / mtu) / rtt * mtu;
+    uint32_t cubic = 1.293700525984 / 0.3 * 1000 * cbrt(0.3 / 0.4 * cwnd / mtu) / rtt * mtu;
 
     return reno < cubic ? reno : cubic;
 }
