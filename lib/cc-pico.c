@@ -146,6 +146,16 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
     return (uint32_t)bytes;
 }
 
+/**
+ * Updates the estimate of the BDP that the congestion controller holds. Called when rapid start adjusts CWND (its estimate) during
+ * recovery, which needs to be reflected to that of cuback.
+ */
+static void update_bdp_estimate(quicly_cc_t *cc)
+{
+    if (cc->type == &quicly_cc_type_cuback)
+        cc->state.pico.cuback.w_max = cc->cwnd / QUICLY_RENO_BETA;
+}
+
 /* TODO: Avoid increase if sender was application limited. */
 static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
                           int cc_limited, uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
@@ -155,8 +165,10 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
         if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
-            if (cc->num_loss_episodes == 1)
+            if (cc->num_loss_episodes == 1) {
                 quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, bytes, 0);
+                update_bdp_estimate(cc);
+            }
         } else {
             quicly_cc_jumpstart_on_acked(cc, 1, bytes, largest_acked, inflight, next_pn);
         }
@@ -225,6 +237,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             ++cc->state.pico.undo.num_packets_lost;
         if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
             quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, 0, bytes);
+            update_bdp_estimate(cc);
             goto ClampMinAndUpdateMetrics;
         }
         return;
@@ -261,17 +274,21 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->exit_slow_start_at = now;
     }
 
-    { /* Calculate increase rate based on CWND before reduction. When rapid start is on but the loss is observed while jump start is
-       * in action, CWND is not adjusted in the code above, therefore jumpstart.bytes_acked is adopted here. */
+    { /* calculate increase rate based on current estimate of BDP (usually from CWND before reduction) */
         uint32_t bdp = cc->cwnd;
-        if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+        if (cc->num_loss_episodes == 1) {
             if (quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
                 bdp = cc->jumpstart.bytes_acked;
-            } else {
+            } else if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+                /* Rapid Start might have already switched to 2x, but it's unclear if the entire RT was in 2x. Therefore, use a
+                 * conservative estimate of BDP. It could make the next CA epoch slightly aggressive, but nowhere near as aggressive
+                 * as startup, so we're fine. */
                 bdp = cc->cwnd / 3;
+            } else {
+                bdp = cc->cwnd / 2;
             }
-            if (bdp < cc->cwnd_initial)
-                bdp = cc->cwnd_initial;
+            if (bdp < QUICLY_MIN_CWND * max_udp_payload_size)
+                bdp = QUICLY_MIN_CWND * max_udp_payload_size;
         }
         if (cc->type == &quicly_cc_type_cuback) {
             /* Retain the two values that define the curves: the target window and the throughput. */
@@ -297,6 +314,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             if (base < cc->jumpstart.bytes_acked)
                 base = cc->jumpstart.bytes_acked;
             quicly_cc_rapid_start_on_first_lost(&cc->rapid_start, &cc->cwnd, base * 0.5);
+            update_bdp_estimate(cc);
         } else {
             cc->cwnd *= 0.5;
         }
