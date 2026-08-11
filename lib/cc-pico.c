@@ -29,13 +29,6 @@
  */
 #define QUICLY_CUBIC_C 0.4
 
-/**
- * Cubic obtains Reno-friendliness (RFC 9438, Section 4.3) by tracking a window that grows by this many MTUs per RTT. The value is
- * the additive increase that is throughput-equivalent to Reno for a multiplicative decrease of beta; it is one for the 0.5 that
- * Reno uses, and 0.529 for the 0.7 used here.
- */
-#define QUICLY_CUBIC_RENO_FRIENDLY_ALPHA (3 * (1 - QUICLY_RENO_BETA) / (1 + QUICLY_RENO_BETA))
-
 /* Cubic reaches original CWND (i.e., Wmax) in K seconds, therefore:
  *   amount_to_increase = (1 - beta) * Wmax
  *   amount_to_be_acked = K * Wmax / RTT_at_Wmax
@@ -77,14 +70,15 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  * Returns the time at which CWND reaches `w`, that being the inverse of `max(W_cubic, W_reno)`. Both curves increase monotonically,
  * hence so does their maximum, and the inverse of a maximum is the minimum of the inverses.
  */
-static double cuback_time_at(const struct st_quicly_cc_cuback_t *state, double w, double anchor, double alpha, double k,
-                             uint32_t mtu)
+static double cuback_time_at(const struct st_quicly_cc_cuback_t *state, double w, double anchor, double k, uint32_t mtu)
 {
+    static const double friendly_alpha = 3 * (1 - QUICLY_RENO_BETA) / (1 + QUICLY_RENO_BETA);
+
     double t_cubic = (k + cbrt((w - (double)state->w_max) / (QUICLY_CUBIC_C * mtu))) * QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST;
     /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
      * reduction (W_max here). The inverse curve is therefore piecewise at W_max. */
     double w_friendly = w < state->w_max ? w : state->w_max;
-    double t_reno = (w_friendly * w_friendly - anchor * anchor) / (2 * alpha * state->bandwidth);
+    double t_reno = (w_friendly * w_friendly - anchor * anchor) / (2 * friendly_alpha * mtu * state->bandwidth);
     if (w > state->w_max)
         t_reno += (w * w - (double)state->w_max * state->w_max) / (2 * mtu * state->bandwidth);
     double t = t_cubic < t_reno ? t_cubic : t_reno;
@@ -121,13 +115,12 @@ static double cuback_time_at(const struct st_quicly_cc_cuback_t *state, double w
 static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t mtu)
 {
     double anchor = (double)state->w_max * QUICLY_RENO_BETA; /* CWND after reduction; where both curves depart from */
-    double alpha = QUICLY_CUBIC_RENO_FRIENDLY_ALPHA * mtu;   /* bytes by which Reno grows per RTT */
     /* Seconds taken by the cubic curve to climb from `anchor` back to W_max; the fast convergence adjustment stretches the time
      * axis rather than K, so that the curve still departs from `anchor` at t == 0. */
     double k = cbrt((double)state->w_max * ((1 - QUICLY_RENO_BETA) / QUICLY_CUBIC_C) / mtu);
 
-    double t0 = cuback_time_at(state, cwnd, anchor, alpha, k, mtu);
-    double t1 = cuback_time_at(state, (double)cwnd + mtu, anchor, alpha, k, mtu);
+    double t0 = cuback_time_at(state, cwnd, anchor, k, mtu);
+    double t1 = cuback_time_at(state, (double)cwnd + mtu, anchor, k, mtu);
     double bytes = (t1 - t0) * state->bandwidth;
 
     /* Past W_max the curve grows without bound, therefore the increase is capped at 50% of CWND per RTT as RFC 9438 does. Below
