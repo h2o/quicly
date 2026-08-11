@@ -140,13 +140,17 @@ typedef struct st_quicly_cc_t {
              */
             double k;
             /**
-             * Last cwnd value before the latest congestion event.
+             * Effective W_max retained from the latest congestion event.
              */
             uint32_t w_max;
             /**
-             * W_max value from the previous congestion event.
+             * Congestion window before the reduction at the latest congestion event.
              */
-            uint32_t w_last_max;
+            uint32_t cwnd_prior;
+            /**
+             * Reno-friendly congestion window estimate.
+             */
+            double w_est;
             /**
              * Timestamp of the latest congestion event.
              */
