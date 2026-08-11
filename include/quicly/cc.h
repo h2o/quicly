@@ -122,22 +122,27 @@ typedef struct st_quicly_cc_t {
             uint32_t stash;
         } reno;
         /**
-         * State information for Pico.
+         * State information shared by Pico and Cuback.
          */
         struct {
             /**
-             * Stash of acknowledged bytes, used during congestion avoidance.
+             * Number of additional bytes that need to be acknowledged before increasing CWND by one MTU; zero means that the
+             * value needs to be initialized.
              */
-            uint32_t stash;
+            uint32_t bytes_to_mtu_increase;
             /**
-             * Number of bytes required to be acked in order to increase CWND by 1 MTU. Used by Pico; Cuback recalculates the value
-             * for every MTU of increase.
+             * State used exclusively by each congestion controller.
              */
-            uint32_t bytes_per_mtu_increase;
-            /**
-             * State used exclusively by Cuback.
-             */
-            struct st_quicly_cc_cuback_t cuback;
+            union {
+                /**
+                 * Size of the ACK interval after which CWND is increased by one MTU. Used exclusively by Pico.
+                 */
+                uint32_t bytes_per_mtu_increase;
+                /**
+                 * State used exclusively by Cuback.
+                 */
+                struct st_quicly_cc_cuback_t cuback;
+            };
             /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
              * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
