@@ -36,16 +36,28 @@
  */
 #define QUICLY_CUBIC_RENO_FRIENDLY_ALPHA (3 * (1 - QUICLY_RENO_BETA) / (1 + QUICLY_RENO_BETA))
 
-/**
- * Fast convergence reduces Wmax to (1 + beta) / 2 of before, and therefore K to the cube root of that; as the cubic curve is point
- * symmetric at the point it reaches the reduced Wmax, reaching the original Wmax takes twice as long. On a path of stable
- * capacity, fast convergence is triggered at half of the congestion events, hence the congestion period of Cubic is, on average,
- * ((1 + ((1 + beta) / 2)^(1/3) * 2) / 2) = 1.447 times of K; see also `pico_bytes_per_mtu_increase`.
+/* Cubic reaches original CWND (i.e., Wmax) in K seconds, therefore:
+ *   amount_to_increase = (1 - beta) * Wmax
+ *   amount_to_be_acked = K * Wmax / RTT_at_Wmax
+ * where
+ *   K = ((1 - beta) / 0.4 * Wmax / MTU)^(1/3)
  *
- * Rather than adjusting Wmax, Pico applies this factor to its rate of increase and Cuback to its time axis, both thereby
- * remaining fair against Cubic while retaining no state for fast convergence.
+ * In addition, when competition causes congestion peaks to decline gradually, fast-convergence and normal epochs are expected to
+ * alternate: a peak below the retained Wmax triggers fast convergence, while the resulting Wmax of (1 + beta) / 2 (typically 0.85x)
+ * makes the next peak a normal event unless it declines by more than 15%.
+ *
+ * When fast convergence occurs, Wmax becomes (1 + beta) / 2 while cwnd_epoch remains beta. The modified K (K') is therefore:
+ *
+ *   K' = ((1 - beta) / 2 / 0.4 * Wmax / MTU)^(1/3) = 0.5^(1/3) * K
+ *
+ * where K' represents the time to reach 0.85 * Wmax. As the cubic curve is point symmetric around that point, reaching the
+ * original Wmax takes 2 * K'.
+ *
+ * Therefore, amortizing one fast-convergence period and one normal period gives:
+ *
+ *   K_amortized = (K + 2K') / 2 = (1 + 2 * 0.5^(1/3)) / 2 * K = 1.2937..
  */
-#define QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST ((1 + cbrt((1 + QUICLY_RENO_BETA) / 2) * 2) / 2)
+#define QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST ((1 + 2 * cbrt(0.5)) / 2)
 
 /**
  * Calculates the increase ratio to be used in congestion avoidance phase.
@@ -55,29 +67,7 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
     /* Reno: CWND size after reduction */
     uint32_t reno = cwnd * QUICLY_RENO_BETA;
 
-    /* Cubic: Cubic reaches original CWND (i.e., Wmax) in K seconds, therefore:
-     *   amount_to_increase = 0.3 * Wmax
-     *   amount_to_be_acked = K * Wmax / RTT_at_Wmax
-     * where
-     *   K = (0.3 / 0.4 * Wmax / MTU)^(1/3)
-     *
-     * Hence:
-     *   bytes_per_mtu_increase = amount_to_be_acked / amount_to_increase * MTU
-     *     = (K * Wmax / RTT_at_Wmax) / (0.3 * Wmax) * MTU
-     *     = K * MTU / (0.3 * RTT_at_Wmax)
-     *
-     * In addition, we have to adjust the value to take fast convergence into account. On a path with stable capacity, 50% of
-     * congestion events adjust Wmax to 0.85x of before calculating K. If that happens, the modified K (K') is:
-     *
-     *   K' = (0.3 / 0.4 * 0.85 * Wmax / MTU)^(1/3) = 0.85^(1/3) * K
-     *
-     * where K' represents the time to reach 0.85 * Wmax. As the cubic curve is point symmetric at the point where this curve
-     * reaches 0.85 * Wmax, it would take 2 * K' seconds to reach Wmax.
-     *
-     * Therefore, by amortizing the two modes, the congestion period of Cubic with fast convergence is calculated as:
-     *
-     *   bytes_per_mtu_increase = ((1 + 0.85^(1/3) * 2) / 2) * K * MTU / (0.3 * RTT_at_Wmax)
-     */
+    /* Cubic: Cubic reaches Wmax in K seconds */
     uint32_t cubic = QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST / 0.3 * 1000 * cbrt(0.3 / 0.4 * cwnd / mtu) / rtt * mtu;
 
     return reno < cubic ? reno : cubic;
