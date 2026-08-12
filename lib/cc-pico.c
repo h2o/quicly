@@ -27,37 +27,38 @@
 /**
  * Calculates the increase ratio to be used in congestion avoidance phase.
  */
-static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_t mtu)
+static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_t mtu, double beta)
 {
     /* Reno: CWND size after reduction */
-    uint32_t reno = cwnd * QUICLY_RENO_BETA;
+    uint32_t reno = cwnd * beta;
 
     /* Cubic: Cubic reaches original CWND (i.e., Wmax) in K seconds, therefore:
-     *   amount_to_increase = 0.3 * Wmax
+     *   amount_to_increase = (1 - beta) * Wmax
      *   amount_to_be_acked = K * Wmax / RTT_at_Wmax
      * where
-     *   K = (0.3 / 0.4 * Wmax / MTU)^(1/3)
+     *   K = ((1 - beta) / 0.4 * Wmax / MTU)^(1/3)
      *
      * Hence:
      *   bytes_per_mtu_increase = amount_to_be_acked / amount_to_increase * MTU
-     *     = (K * Wmax / RTT_at_Wmax) / (0.3 * Wmax) * MTU
-     *     = K * MTU / (0.3 * RTT_at_Wmax)
+     *     = (K * Wmax / RTT_at_Wmax) / ((1 - beta) * Wmax) * MTU
+     *     = K * MTU / ((1 - beta) * RTT_at_Wmax)
      *
      * In addition, we have to adjust the value to take fast convergence into account. When competition causes congestion peaks to
      * decline gradually, fast-convergence and normal epochs are expected to alternate: a peak below the retained Wmax triggers fast
-     * convergence, while the resulting Wmax of 0.85x makes the next peak a normal event unless it declines by more than 15%.
+     * convergence, while the resulting Wmax of (1 + beta) / 2 makes the next peak a normal event unless it declines further.
      *
-     * When fast convergence occurs, Wmax becomes 0.85x while cwnd_epoch remains 0.7x. The modified K (K') is therefore:
+     * When fast convergence occurs, Wmax becomes (1 + beta) / 2 * Wmax while cwnd_epoch remains beta * Wmax. The modified K (K')
+     * is therefore:
      *
-     *   K' = ((0.85 - 0.7) / 0.4 * Wmax / MTU)^(1/3) = 0.5^(1/3) * K
+     *   K' = (((1 - beta) / 2) / 0.4 * Wmax / MTU)^(1/3) = 0.5^(1/3) * K
      *
-     * where K' represents the time to reach 0.85 * Wmax. As the cubic curve is point symmetric around that point, reaching the
-     * original Wmax takes 2 * K'. Amortizing one fast-convergence period and one normal period gives:
+     * where K' represents the time to reach (1 + beta) / 2 * Wmax. As the cubic curve is point symmetric around that point,
+     * reaching the original Wmax takes 2 * K'. Amortizing one fast-convergence period and one normal period gives:
      *
-     *   bytes_per_mtu_increase = ((1 + 0.5^(1/3) * 2) / 2) * K * MTU / (0.3 * RTT_at_Wmax)
-     *                          ~= 1.293700525984 * K * MTU / (0.3 * RTT_at_Wmax)
+     *   bytes_per_mtu_increase = ((1 + 0.5^(1/3) * 2) / 2) * K * MTU / ((1 - beta) * RTT_at_Wmax)
+     *                          ~= 1.293700525984 * K * MTU / ((1 - beta) * RTT_at_Wmax)
      */
-    uint32_t cubic = 1.293700525984 / 0.3 * 1000 * cbrt(0.3 / 0.4 * cwnd / mtu) / rtt * mtu;
+    uint32_t cubic = 1.293700525984 / (1 - beta) * 1000 * cbrt((1 - beta) / 0.4 * cwnd / mtu) / rtt * mtu;
 
     return reno < cubic ? reno : cubic;
 }
@@ -127,6 +128,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         return;
     }
 
+    double beta = bytes == 0 ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+
     /* Zero-byte congestion reports are ECN signals, not lost packets. They still enter recovery below, but cannot be undone by
      * late ACKs because no packet was deemed lost. */
     if (bytes != 0) {
@@ -169,14 +172,17 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             if (bdp < cc->cwnd_initial)
                 bdp = cc->cwnd_initial;
         }
-        cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size);
+        cc->state.pico.bytes_per_mtu_increase = calc_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size, beta);
     }
 
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
-     * overshoot by 2x (note: after 0.5x reduction, CWND is still as large as BDP+QUEUE, so further reduction is preferable).
+     * overshoot by 2x (note: after 0.5x reduction, CWND is still as large as BDP+QUEUE, so further reduction is preferable). That
+     * 2x overshoot builds up regardless of if congestion is signalled by a CE mark or by a packet loss, therefore `beta` is not
+     * used here.
      *
-     * In rapid start, upon the first loss we multiply CWND by QUICLY_RAPID_START_LOSS_FACTOR (0.9x when beta is 0.7), then reduce
-     * proportionally to the bytes acked and deemed lost during recovery, with a lower bound of 1/3 * beta.
+     * In rapid start, upon the first congestion signal we multiply CWND by QUICLY_RAPID_START_LOSS_FACTOR (0.9x when beta is 0.7,
+     * 0.95x when it is 0.85), then reduce proportionally to the bytes acked and deemed lost during recovery, with a lower bound of
+     * 1/3 * beta.
      * Rationale: at a small loss, reducing by beta mirrors CA's single signal behavior. With up to ~67% loss (typical for 3x
      * growth under tail-drop), CWND upon loss detection is 3 * (BDP + Q); therefore clamping to 1/3 * beta reproduces the CA
      * target. For loss >67% (i.e., beyond queue overflow), we keep the lower bound to avoid over-shrinking. */
@@ -185,12 +191,12 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             uint32_t base = cc->cwnd_initial;
             if (base < cc->jumpstart.bytes_acked)
                 base = cc->jumpstart.bytes_acked;
-            quicly_cc_rapid_start_on_first_lost(&cc->rapid_start, &cc->cwnd, base * 0.5);
+            quicly_cc_rapid_start_on_first_lost(&cc->rapid_start, &cc->cwnd, bytes == 0, base * 0.5);
         } else {
             cc->cwnd *= 0.5;
         }
     } else {
-        cc->cwnd *= QUICLY_RENO_BETA;
+        cc->cwnd *= beta;
     }
 
 ClampMinAndUpdateMetrics:
@@ -243,7 +249,7 @@ static void pico_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 static void pico_init_pico_state(quicly_cc_t *cc, uint32_t stash)
 {
     cc->state.pico.stash = stash;
-    cc->state.pico.bytes_per_mtu_increase = cc->cwnd * QUICLY_RENO_BETA; /* use Reno, for simplicity */
+    cc->state.pico.bytes_per_mtu_increase = cc->cwnd * QUICLY_BETA_LOSS; /* use Reno, for simplicity */
 }
 
 static void pico_reset(quicly_cc_t *cc, uint32_t initcwnd)

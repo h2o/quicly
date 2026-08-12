@@ -73,6 +73,10 @@ struct net_packet {
      */
     double enter_at;
     /**
+     * ECN codepoint being carried by the IP header; the AQM of the bottleneck turns ECT(0) into CE when congestion is observed
+     */
+    uint8_t ecn;
+    /**
      * size of the packet
      */
     size_t size;
@@ -82,9 +86,52 @@ struct net_packet {
     uint8_t bytes[1];
 };
 
+/**
+ * A lossy FIFO of packets. Every queue of the simulator is one of these; the discipline that determines when (and if) a packet
+ * leaves is carried as part of it, rather than being a type of its own.
+ */
 struct net_queue {
     struct net_packet *first, **append_at;
     size_t size;
+    /**
+     * Number of bytes the queue is still allowed to send in the current round, and which of the two rounds it belongs to. Used
+     * when the queue is one of several being served by deficit round robin; queues that have just become active are served
+     * before the ones that have been, as fq_codel does.
+     */
+    int32_t deficit;
+    enum { NET_QUEUE_INACTIVE, NET_QUEUE_NEW, NET_QUEUE_OLD } sched;
+    /**
+     * The discipline; the union carries whatever that discipline needs.
+     */
+    enum { NET_QUEUE_PLAIN, NET_QUEUE_DELAY, NET_QUEUE_STEP, NET_QUEUE_CODEL } type;
+    union {
+        /**
+         * NET_QUEUE_DELAY: the duration for which each packet is withheld.
+         */
+        double delay;
+        /**
+         * NET_QUEUE_CODEL: the state of CoDel.
+         */
+        struct {
+            /**
+             * Time at which the sojourn time is going to have been above target for `interval`; zero if it is below target.
+             */
+            double above_target_since;
+            /**
+             * Time at which the next packet is to be marked (or dropped), while in the marking state.
+             */
+            double mark_next;
+            /**
+             * Number of packets marked since entering the marking state, and the value it had when the state was left the
+             * previous time.
+             */
+            uint32_t count, last_count;
+            /**
+             * If being in the marking state.
+             */
+            int marking;
+        } codel;
+    };
 };
 
 struct net_node {
@@ -97,7 +144,6 @@ struct net_delay {
     struct net_node super;
     struct net_node *next_node;
     struct net_queue queue;
-    double delay;
 };
 
 struct net_random_loss {
@@ -106,13 +152,49 @@ struct net_random_loss {
     double loss_ratio;
 };
 
+/**
+ * The discipline the queues of the bottleneck run. It is orthogonal to whether the flows are isolated; fq_codel (RFC 8290) is
+ * `NET_AQM_CODEL` combined with isolation.
+ * `NET_AQM_STEP` marks every ECT packet whose sojourn time exceeds `target`. It is not a discipline that anybody deploys; being
+ * deterministic, it tells exactly when a CE mark is supposed to be emitted.
+ * `NET_AQM_CODEL` is CoDel (RFC 8289), following the ECN handling of the Linux implementation; the pseudocode of the RFC only
+ * drops, whereas the packet that is marked is delivered.
+ */
+struct net_aqm {
+    enum { NET_AQM_NONE, NET_AQM_STEP, NET_AQM_CODEL } type;
+    double target;
+    double interval;
+};
+
+/**
+ * Maximum number of queues of the bottleneck. When the flows are isolated there is one for each of them, and as the endpoints are
+ * given addresses sequentially, the address is used as the index.
+ */
+#define NET_BOTTLENECK_MAX_QUEUES 20
+/**
+ * Number of bytes a queue is allowed to send in one round of deficit round robin.
+ */
+#define NET_BOTTLENECK_QUANTUM 1514
+
 struct net_bottleneck {
     struct net_node super;
     struct net_node *next_node;
-    struct net_queue queue;
+    /**
+     * The queues. `num_queues` is one unless the flows are isolated, in which case the packets are placed into the queue that
+     * corresponds to their sender.
+     */
+    struct net_queue queues[NET_BOTTLENECK_MAX_QUEUES];
+    size_t num_queues;
+    /**
+     * Total number of bytes being held, and the size of the buffer that holds them.
+     */
+    size_t size, capacity;
     double next_emit_at;
     double bytes_per_sec;
-    size_t capacity;
+    /**
+     * Parameters of the discipline the queues run; shared by all of them, unlike the state each queue keeps.
+     */
+    double target, interval;
 };
 
 struct net_endpoint {
@@ -126,7 +208,7 @@ struct net_endpoint {
     quicly_context_t *accept_ctx;
 };
 
-static struct net_packet *net_packet_create(struct net_endpoint *src, quicly_address_t *dest, ptls_iovec_t vec)
+static struct net_packet *net_packet_create(struct net_endpoint *src, quicly_address_t *dest, ptls_iovec_t vec, uint8_t ecn)
 {
     struct net_packet *p = malloc(offsetof(struct net_packet, bytes) + vec.len);
 
@@ -134,6 +216,7 @@ static struct net_packet *net_packet_create(struct net_endpoint *src, quicly_add
     p->src = src;
     p->dest = *dest;
     p->enter_at = now;
+    p->ecn = ecn;
     p->size = vec.len;
     memcpy(p->bytes, vec.base, vec.len);
 
@@ -173,14 +256,14 @@ static void net_delay_forward(struct net_node *_self, struct net_packet *packet)
 static double net_delay_next_run_at(struct net_node *_self)
 {
     struct net_delay *self = (struct net_delay *)_self;
-    return self->queue.first != NULL ? self->queue.first->enter_at + self->delay : INFINITY;
+    return self->queue.first != NULL ? self->queue.first->enter_at + self->queue.delay : INFINITY;
 }
 
 static void net_delay_run(struct net_node *_self)
 {
     struct net_delay *self = (struct net_delay *)_self;
 
-    while (self->queue.first != NULL && self->queue.first->enter_at + self->delay <= now) {
+    while (self->queue.first != NULL && self->queue.first->enter_at + self->queue.delay <= now) {
         struct net_packet *packet = net_queue_dequeue(&self->queue);
         self->next_node->forward_(self->next_node, packet);
     }
@@ -190,8 +273,7 @@ static void net_delay_init(struct net_delay *self, double delay)
 {
     *self = (struct net_delay){
         .super = {net_delay_forward, net_delay_next_run_at, net_delay_run},
-        .queue = {.append_at = &self->queue.first},
-        .delay = delay,
+        .queue = {.append_at = &self->queue.first, .type = NET_QUEUE_DELAY, .delay = delay},
     };
 }
 
@@ -225,32 +307,256 @@ static void net_random_loss_init(struct net_random_loss *self, double loss_ratio
 static void net_bottleneck_print_stats(struct net_bottleneck *self, const char *event, struct net_packet *packet)
 {
     printf("{\"bottleneck\": \"%s\", \"at\": %f, \"queue-size\": %zu, \"packet-src\": %" PRIu32 ", \"packet-size\": %zu}\n", event,
-           now, self->queue.size, ntohl(packet->src->addr.sin.sin_addr.s_addr), packet->size);
+           now, self->size, ntohl(packet->src->addr.sin.sin_addr.s_addr), packet->size);
+}
+
+#define NET_ECN_NOT_ECT 0
+#define NET_ECN_ECT1 1
+#define NET_ECN_ECT0 2
+#define NET_ECN_CE 3
+
+/**
+ * Turns ECT into CE, returning if the packet is ECN-capable. Packets that are not ECN-capable have to be dropped instead, as there
+ * is no way of signalling congestion to their sender.
+ */
+static int net_bottleneck_mark(struct net_bottleneck *self, struct net_packet *packet)
+{
+    if (packet->ecn == NET_ECN_NOT_ECT)
+        return 0;
+
+    if (packet->ecn != NET_ECN_CE) {
+        packet->ecn = NET_ECN_CE;
+        net_bottleneck_print_stats(self, "mark", packet);
+    }
+    return 1;
+}
+
+static void net_bottleneck_drop(struct net_bottleneck *self, struct net_packet *packet)
+{
+    net_bottleneck_print_stats(self, "drop", packet);
+    net_packet_destroy(packet);
+}
+
+/**
+ * Returns the queue the packet belongs to; all of them share one when the flows are not isolated.
+ */
+static struct net_queue *net_bottleneck_classify(struct net_bottleneck *self, struct net_packet *packet)
+{
+    if (self->num_queues == 1)
+        return &self->queues[0];
+
+    uint32_t index = ntohl(packet->src->addr.sin.sin_addr.s_addr);
+    assert(index < self->num_queues && "the endpoints are given addresses sequentially, starting from one");
+    return &self->queues[index];
+}
+
+static struct net_queue *net_bottleneck_longest(struct net_bottleneck *self)
+{
+    struct net_queue *longest = &self->queues[0];
+
+    for (size_t i = 1; i < self->num_queues; ++i)
+        if (self->queues[i].size > longest->size)
+            longest = &self->queues[i];
+
+    return longest;
 }
 
 static void net_bottleneck_forward(struct net_node *_self, struct net_packet *packet)
 {
     struct net_bottleneck *self = (struct net_bottleneck *)_self;
+    struct net_queue *queue = net_bottleneck_classify(self, packet);
 
-    /* drop the packet if the queue is full */
-    if (self->queue.size + packet->size > self->capacity) {
-        net_bottleneck_print_stats(self, "drop", packet);
-        net_packet_destroy(packet);
-        return;
+    /* a queue that has been idle becomes a new one, obtaining the right to send one quantum before the old ones do */
+    if (queue->sched == NET_QUEUE_INACTIVE) {
+        queue->deficit = NET_BOTTLENECK_QUANTUM;
+        queue->sched = NET_QUEUE_NEW;
+    }
+
+    /* When the buffer is full, room is made by dropping from the head of the longest queue, so that a flow that does not slow
+     * down cannot push the others out. Should the arrival belong to that queue itself there is nothing to be protected, hence it
+     * is refused; that is what always happens when the flows are not isolated. */
+    while (self->size + packet->size > self->capacity) {
+        struct net_queue *longest = net_bottleneck_longest(self);
+        if (longest == queue || longest->first == NULL) {
+            net_bottleneck_drop(self, packet);
+            return;
+        }
+        struct net_packet *victim = net_queue_dequeue(longest);
+        self->size -= victim->size;
+        net_bottleneck_drop(self, victim);
     }
 
     net_bottleneck_print_stats(self, "enqueue", packet);
-    net_queue_enqueue(&self->queue, packet);
+    net_queue_enqueue(queue, packet);
+    self->size += packet->size;
+}
+
+static double net_codel_mark_next(struct net_bottleneck *self, double from, uint32_t count)
+{
+    return from + self->interval / sqrt((double)count);
+}
+
+/**
+ * Takes the packet at the head of the queue, telling if CoDel considers the queue to have been standing for long enough that the
+ * sender has to be told to slow down.
+ */
+static struct net_packet *net_codel_take(struct net_bottleneck *self, struct net_queue *queue, int *ok_to_mark)
+{
+    struct net_packet *packet;
+
+    *ok_to_mark = 0;
+
+    if (queue->first == NULL) {
+        queue->codel.above_target_since = 0;
+        return NULL;
+    }
+    packet = net_queue_dequeue(queue);
+    self->size -= packet->size;
+
+    /* the queue is not considered standing while it holds less than one packet worth of bytes; the quantum stands in for the MTU */
+    if (now - packet->enter_at < self->target || queue->size <= NET_BOTTLENECK_QUANTUM) {
+        queue->codel.above_target_since = 0;
+    } else if (queue->codel.above_target_since == 0) {
+        queue->codel.above_target_since = now + self->interval;
+    } else if (now >= queue->codel.above_target_since) {
+        *ok_to_mark = 1;
+    }
+
+    return packet;
+}
+
+/**
+ * Dequeues one packet from the queue being given, running CoDel. Packets that are ECN-capable are marked and delivered; the ones
+ * that are not are dropped, there being no other way of telling their sender to slow down.
+ */
+static struct net_packet *net_codel_dequeue(struct net_bottleneck *self, struct net_queue *queue)
+{
+    struct net_packet *packet;
+    int ok_to_mark;
+
+    if ((packet = net_codel_take(self, queue, &ok_to_mark)) == NULL) {
+        queue->codel.marking = 0;
+        return NULL;
+    }
+
+    if (queue->codel.marking) {
+        if (!ok_to_mark) {
+            queue->codel.marking = 0;
+        } else {
+            while (queue->codel.marking && now >= queue->codel.mark_next) {
+                ++queue->codel.count;
+                /* a packet that can be marked is delivered, the schedule being advanced all the same */
+                if (net_bottleneck_mark(self, packet)) {
+                    queue->codel.mark_next = net_codel_mark_next(self, queue->codel.mark_next, queue->codel.count);
+                    break;
+                }
+                net_bottleneck_drop(self, packet);
+                if ((packet = net_codel_take(self, queue, &ok_to_mark)) == NULL) {
+                    queue->codel.marking = 0;
+                    return NULL;
+                }
+                /* the schedule is advanced only while the queue is still standing; leaving the state must not push it back */
+                if (!ok_to_mark) {
+                    queue->codel.marking = 0;
+                } else {
+                    queue->codel.mark_next = net_codel_mark_next(self, queue->codel.mark_next, queue->codel.count);
+                }
+            }
+        }
+    } else if (ok_to_mark) {
+        if (!net_bottleneck_mark(self, packet)) {
+            net_bottleneck_drop(self, packet);
+            if ((packet = net_codel_take(self, queue, &ok_to_mark)) == NULL)
+                return NULL;
+        }
+        queue->codel.marking = 1;
+        /* if the queue was left recently, resume from the rate that was being used back then */
+        uint32_t delta = queue->codel.count - queue->codel.last_count;
+        queue->codel.count = delta > 1 && now - queue->codel.mark_next < 16 * self->interval ? delta : 1;
+        queue->codel.mark_next = net_codel_mark_next(self, now, queue->codel.count);
+        queue->codel.last_count = queue->codel.count;
+    }
+
+    return packet;
+}
+
+/**
+ * Dequeues one packet from the queue being given, applying whichever discipline it runs.
+ */
+static struct net_packet *net_bottleneck_dequeue_one(struct net_bottleneck *self, struct net_queue *queue)
+{
+    struct net_packet *packet;
+
+    if (queue->type == NET_QUEUE_CODEL)
+        return net_codel_dequeue(self, queue);
+
+    if (queue->first == NULL)
+        return NULL;
+    packet = net_queue_dequeue(queue);
+    self->size -= packet->size;
+
+    /* mark-only; the packets that are not ECN-capable are left to the drop that happens when the buffer becomes full */
+    if (queue->type == NET_QUEUE_STEP && now - packet->enter_at > self->target)
+        net_bottleneck_mark(self, packet);
+
+    return packet;
+}
+
+/**
+ * Picks the queue to be served by deficit round robin, then dequeues one packet from it. The queues being few, they are scanned
+ * rather than being kept in the lists that the real implementations of fq_codel maintain.
+ */
+static struct net_packet *net_bottleneck_dequeue(struct net_bottleneck *self)
+{
+    while (1) {
+        struct net_queue *found = NULL;
+
+        /* serve the queues that have just become active before the ones that have been */
+        for (int sched = NET_QUEUE_NEW; sched <= NET_QUEUE_OLD && found == NULL; ++sched)
+            for (size_t i = 0; i < self->num_queues; ++i)
+                if (self->queues[i].sched == sched && self->queues[i].deficit > 0) {
+                    found = &self->queues[i];
+                    break;
+                }
+
+        if (found == NULL) {
+            /* none of the active queues is allowed to send; start the next round, unless there is nothing to send at all */
+            int any = 0;
+            for (size_t i = 0; i < self->num_queues; ++i) {
+                if (self->queues[i].sched != NET_QUEUE_INACTIVE) {
+                    self->queues[i].deficit += NET_BOTTLENECK_QUANTUM;
+                    any = 1;
+                }
+            }
+            if (!any)
+                return NULL;
+            continue;
+        }
+
+        struct net_packet *packet;
+        if ((packet = net_bottleneck_dequeue_one(self, found)) == NULL) {
+            /* a new queue that has become empty becomes an old one rather than going idle, so that it does not obtain the
+             * priority given to the new ones again as soon as it receives the next packet */
+            found->sched = found->sched == NET_QUEUE_NEW ? NET_QUEUE_OLD : NET_QUEUE_INACTIVE;
+            continue;
+        }
+
+        found->deficit -= (int32_t)packet->size;
+        return packet;
+    }
 }
 
 static double net_bottleneck_next_run_at(struct net_node *_self)
 {
     struct net_bottleneck *self = (struct net_bottleneck *)_self;
+    double emit_at = INFINITY;
 
-    if (self->queue.first == NULL)
+    for (size_t i = 0; i < self->num_queues; ++i)
+        if (self->queues[i].first != NULL && self->queues[i].first->enter_at < emit_at)
+            emit_at = self->queues[i].first->enter_at;
+
+    if (emit_at == INFINITY)
         return INFINITY;
-
-    double emit_at = self->queue.first->enter_at;
     if (emit_at < self->next_emit_at)
         emit_at = self->next_emit_at;
 
@@ -265,7 +571,9 @@ static void net_bottleneck_run(struct net_node *_self)
         return;
 
     /* detach packet */
-    struct net_packet *packet = net_queue_dequeue(&self->queue);
+    struct net_packet *packet;
+    if ((packet = net_bottleneck_dequeue(self)) == NULL)
+        return;
     net_bottleneck_print_stats(self, "dequeue", packet);
 
     /* update next emission timer */
@@ -275,14 +583,35 @@ static void net_bottleneck_run(struct net_node *_self)
     self->next_node->forward_(self->next_node, packet);
 }
 
-static void net_bottleneck_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec)
+static void net_bottleneck_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec, struct net_aqm aqm,
+                                int isolate_flows)
 {
     *self = (struct net_bottleneck){
-        .super = {net_bottleneck_forward, net_bottleneck_next_run_at, net_bottleneck_run},
-        .queue = {.append_at = &self->queue.first},
-        .bytes_per_sec = bytes_per_sec,
+        .num_queues = isolate_flows ? NET_BOTTLENECK_MAX_QUEUES : 1,
         .capacity = (size_t)(bytes_per_sec * capacity_in_sec),
+        .bytes_per_sec = bytes_per_sec,
+        .target = aqm.target,
+        .interval = aqm.interval,
+        .super = {net_bottleneck_forward, net_bottleneck_next_run_at, net_bottleneck_run},
     };
+
+    int queue_type;
+    switch (aqm.type) {
+    case NET_AQM_STEP:
+        queue_type = NET_QUEUE_STEP;
+        break;
+    case NET_AQM_CODEL:
+        queue_type = NET_QUEUE_CODEL;
+        break;
+    default:
+        queue_type = NET_QUEUE_PLAIN;
+        break;
+    }
+
+    for (size_t i = 0; i < self->num_queues; ++i) {
+        self->queues[i].append_at = &self->queues[i].first;
+        self->queues[i].type = queue_type;
+    }
 }
 
 static quicly_cid_plaintext_t next_quic_cid;
@@ -298,6 +627,7 @@ static void net_endpoint_forward(struct net_node *_self, struct net_packet *pack
         if (quicly_decode_packet(self->conns[0].quic != NULL ? quicly_get_context(self->conns[0].quic) : self->accept_ctx, &qp,
                                  packet->bytes, packet->size, &off) == SIZE_MAX)
             break;
+        qp.ecn = packet->ecn; /* the value is reset by `quicly_decode_packet`, as it is provided by the IP stack */
         /* find the matching connection, or where new state should be created */
         struct net_endpoint_conn *conn;
         for (conn = self->conns; conn->quic != NULL; ++conn)
@@ -355,9 +685,10 @@ static void net_endpoint_run(struct net_node *_self)
         uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
         int ret;
         if ((ret = quicly_send(conn->quic, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf))) == 0) {
+            uint8_t ecn = quicly_send_get_ecn_bits(conn->quic);
             for (size_t i = 0; i < num_datagrams; ++i) {
                 struct net_packet *packet =
-                    net_packet_create(self, &dest, ptls_iovec_init(datagrams[i].iov_base, datagrams[i].iov_len));
+                    net_packet_create(self, &dest, ptls_iovec_init(datagrams[i].iov_base, datagrams[i].iov_len), ecn);
                 conn->egress->forward_(conn->egress, packet);
             }
         } else {
@@ -464,10 +795,17 @@ static void usage(const char *cmd)
            "  -d <delay_secs>     delay added between the sender and the botteneck\n"
            "                      (default: 0.1)\n"
            "  -i <packets>        sets initial CWND (default: %" PRIu32 ")\n"
+           "  -E                  turns off ECN, which is otherwise used by every flow\n"
            "  -j <packets>        enables use of jumpstart using given window size\n"
            "  -l <seconds>        number of seconds to simulate (default: 100)\n"
            "  -p                  turns on pacing\n"
            "  -q <seconds>        max depth of the bottleneck queue (default: 0.1)\n"
+           "  -A <aqm>            queue discipline of the bottleneck: `none` (default),\n"
+           "                      `step[:target]` marking CE on the packets whose sojourn\n"
+           "                      time exceeds target seconds (default: 0.005), or\n"
+           "                      `codel[:target[:interval]]` (defaults: 0.005, 0.1)\n"
+           "  -F                  gives each flow a queue of its own; `-A codel -F` is\n"
+           "                      fq_codel\n"
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
            "  -R                  turns on rapid start\n"
            "  -s <seconds>        delay until the sender is added to the simulation\n"
@@ -495,24 +833,61 @@ static int find_next_separator(int argc, char **argv, int start)
     return argc;
 }
 
+/**
+ * Parses the AQM spec, which is `none` or `step[:target_in_seconds]`.
+ */
+static int parse_aqm(const char *spec, struct net_aqm *aqm)
+{
+    if (strcmp(spec, "none") == 0) {
+        *aqm = (struct net_aqm){.type = NET_AQM_NONE};
+        return 1;
+    }
+    if (strncmp(spec, "step", 4) == 0 && (spec[4] == '\0' || spec[4] == ':')) {
+        *aqm = (struct net_aqm){.type = NET_AQM_STEP, .target = 0.005};
+        if (spec[4] == ':' && (sscanf(spec + 5, "%lf", &aqm->target) != 1 || aqm->target <= 0))
+            return 0;
+        return 1;
+    }
+    if (strncmp(spec, "codel", 5) == 0 && (spec[5] == '\0' || spec[5] == ':')) {
+        *aqm = (struct net_aqm){.type = NET_AQM_CODEL, .target = 0.005, .interval = 0.1};
+        if (spec[5] == ':') {
+            if (sscanf(spec + 6, "%lf:%lf", &aqm->target, &aqm->interval) < 1)
+                return 0;
+            if (aqm->target <= 0 || aqm->interval <= 0)
+                return 0;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static int parse_options(int argc, char **argv, quicly_context_t *quicctx, double *delay, double *start, double *bw, double *depth,
-                         double *length, double *random_loss, FILE **trace_fp)
+                         double *length, double *random_loss, struct net_aqm *aqm, int *isolate_flows, FILE **trace_fp)
 {
     reset_getopt_state();
     int ch;
-    while ((ch = getopt(argc, argv, "c:b:d:i:j:l:pq:r:Rs:th")) != -1) {
+    while ((ch = getopt(argc, argv, "A:c:b:d:EFi:j:l:pq:r:Rs:th")) != -1) {
+
         switch (ch) {
-        case 'c':
-            {
-                quicly_cc_type_t **cc;
-                for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
-                    if (strcmp((*cc)->name, optarg) == 0)
-                        break;
-                if (*cc == NULL) {
-                    fprintf(stderr, "unknown congestion controller: %s\n", optarg);
-                    return 0;
-                }
-                quicctx->init_cc = (*cc)->cc_init;
+        case 'c': {
+            quicly_cc_type_t **cc;
+            for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
+                if (strcmp((*cc)->name, optarg) == 0)
+                    break;
+            if (*cc == NULL) {
+                fprintf(stderr, "unknown congestion controller: %s\n", optarg);
+                return 0;
+            }
+            quicctx->init_cc = (*cc)->cc_init;
+        } break;
+        case 'A':
+            if (aqm == NULL) {
+                fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
+                return 0;
+            }
+            if (!parse_aqm(optarg, aqm)) {
+                fprintf(stderr, "invalid AQM: %s\n", optarg);
+                return 0;
             }
             break;
         case 'b':
@@ -575,6 +950,16 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                 fprintf(stderr, "invalid random loss rate: %s\n", optarg);
                 return 0;
             }
+            break;
+        case 'F':
+            if (isolate_flows == NULL) {
+                fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
+                return 0;
+            }
+            *isolate_flows = 1;
+            break;
+        case 'E':
+            quicctx->enable_ratio.ecn = 0;
             break;
         case 'R':
             quicctx->enable_ratio.rapid_start = 255;
@@ -716,6 +1101,8 @@ int main(int argc, char **argv)
     *node_insert_at++ = &server_node.node.super;
 
     /* parse args */
+    struct net_aqm aqm = {.type = NET_AQM_NONE};
+    int isolate_flows = 0;
     double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
     double length = 100;
     int first_sep = find_next_separator(argc, argv, 1);
@@ -727,7 +1114,8 @@ int main(int argc, char **argv)
     }
 
     argv[first_sep] = NULL;
-    if (!parse_options(first_sep, argv, &quicctx, &delay, &start, &bw, &depth, &length, &random_loss, &quicly_trace_fp))
+    if (!parse_options(first_sep, argv, &quicctx, &delay, &start, &bw, &depth, &length, &random_loss, &aqm, &isolate_flows,
+                       &quicly_trace_fp))
         exit(1);
     argv[first_sep] = "--";
 
@@ -748,7 +1136,7 @@ int main(int argc, char **argv)
             if (seg_end < argc)
                 argv[seg_end] = NULL;
 
-            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL))
+            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
                 exit(1);
             flow_argv[0] = saved_argv0;
             if (seg_end < argc)
@@ -783,7 +1171,7 @@ int main(int argc, char **argv)
     }
 
     /* setup bottleneck */
-    net_bottleneck_init(&bottleneck_node, bw, depth);
+    net_bottleneck_init(&bottleneck_node, bw, depth, aqm, isolate_flows);
     bottleneck_node.next_node = &server_node.node.super;
     *node_insert_at++ = &bottleneck_node.super;
 

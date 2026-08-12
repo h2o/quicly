@@ -38,11 +38,20 @@ extern "C" {
 #include "quicly/loss.h"
 
 #define QUICLY_MIN_CWND 2
-#define QUICLY_RENO_BETA 0.7
+/**
+ * Beta used when a packet is lost; to achieve fairness with Cubic, 0.7 is used throughout.
+ */
+#define QUICLY_BETA_LOSS 0.7
+/**
+ * Beta used when congestion is signalled by ECN-CE alone; 0.85 is the value recommended by RFC 8511 for congestion controllers
+ * using 0.7 as the loss-based factor.
+ */
+#define QUICLY_BETA_ECN 0.85
 
+/* factors defined by Rapid Start (see the I-D) */
 #define QUICLY_RAPID_START_K (2. / 3)
-#define QUICLY_RAPID_START_ACK_FACTOR (QUICLY_RAPID_START_K * (1 - QUICLY_RENO_BETA))
-#define QUICLY_RAPID_START_LOSS_FACTOR (QUICLY_RENO_BETA + QUICLY_RAPID_START_ACK_FACTOR)
+#define QUICLY_RAPID_START_ACK_FACTOR(beta) (QUICLY_RAPID_START_K * (1 - (beta)))
+#define QUICLY_RAPID_START_LOSS_FACTOR(beta) ((beta) + QUICLY_RAPID_START_ACK_FACTOR(beta))
 
 /**
  * Holds pointers to concrete congestion control implementation functions.
@@ -54,8 +63,8 @@ typedef const struct st_quicly_cc_type_t quicly_cc_type_t;
  */
 struct st_quicly_cc_rapid_start_t {
     /**
-     * Until when the newest sample (i.e., `rtt_samples[0]`) is to be updated. 0 if rapid start is disabled. Once loss is observed,
-     * this field is set to -1 and `cwnd_floor` is sed.
+     * Until when the newest sample (i.e., `rtt_samples[0]`) is to be updated. 0 if rapid start is disabled. Once congestion is
+     * observed, this field is set to -1 and `recovery` is used.
      */
     int64_t newest_rtt_sample_until;
     union {
@@ -65,9 +74,18 @@ struct st_quicly_cc_rapid_start_t {
          */
         uint32_t rtt_samples[4];
         /**
-         * Retains the lower limit CWND can be reduced during the first recovery phase.
+         * Values retained for the duration of the first recovery period.
          */
-        uint32_t cwnd_floor;
+        struct {
+            /**
+             * The cause of the recovery entry. Different factors are used based on the cause.
+             */
+            unsigned by_ecn : 1;
+            /**
+             * Retains the lower limit CWND can be reduced.
+             */
+            uint32_t cwnd_floor;
+        } recovery;
     };
 };
 
@@ -325,9 +343,10 @@ static void quicly_cc_rapid_start_update_rtt(struct st_quicly_cc_rapid_start_t *
  */
 static int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt);
 /**
- *
+ * Ends rapid start and enters the first recovery period.
  */
-static void quicly_cc_rapid_start_on_first_lost(struct st_quicly_cc_rapid_start_t *rs, uint32_t *cwnd, uint32_t cwnd_floor);
+static void quicly_cc_rapid_start_on_first_lost(struct st_quicly_cc_rapid_start_t *rs, uint32_t *cwnd, int by_ecn,
+                                                uint32_t cwnd_floor);
 /**
  * During the first recovery period, updates CWND. Must only be called during the first recovery period.
  */
@@ -391,9 +410,9 @@ inline void quicly_cc_jumpstart_on_acked(quicly_cc_t *cc, int in_recovery, uint3
     if (in_recovery) {
         /* Propotional Rate Reduction: if a loss is observed due to jumpstart, CWND is adjusted so that it would become bytes that
          * passed through to the client during the jumpstart phase of exactly 1 RTT, when the last ACK for the jumpstart phase is
-         * received */
-        if (is_jumpstart_ack && cc->cwnd < cc->jumpstart.bytes_acked * QUICLY_RENO_BETA)
-            cc->cwnd = cc->jumpstart.bytes_acked * QUICLY_RENO_BETA;
+         * received (TODO use QUICLY_BETA_ECN?) */
+        if (is_jumpstart_ack && cc->cwnd < cc->jumpstart.bytes_acked * QUICLY_BETA_LOSS)
+            cc->cwnd = cc->jumpstart.bytes_acked * QUICLY_BETA_LOSS;
         return;
     }
 
@@ -486,21 +505,26 @@ inline int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, c
     return floor <= threshold;
 }
 
-inline void quicly_cc_rapid_start_on_first_lost(struct st_quicly_cc_rapid_start_t *rs, uint32_t *cwnd, uint32_t cwnd_floor)
+inline void quicly_cc_rapid_start_on_first_lost(struct st_quicly_cc_rapid_start_t *rs, uint32_t *cwnd, int by_ecn,
+                                                uint32_t cwnd_floor)
 {
     if (rs->newest_rtt_sample_until == 0)
         return;
 
     assert(rs->newest_rtt_sample_until > 0);
     rs->newest_rtt_sample_until = -1;
+    rs->recovery.by_ecn = by_ecn != 0;
 
-    rs->cwnd_floor = *cwnd * (1. / 3) * QUICLY_RENO_BETA;
-    if (rs->cwnd_floor < cwnd_floor)
-        rs->cwnd_floor = cwnd_floor;
+    double beta = rs->recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
 
-    *cwnd *= QUICLY_RAPID_START_LOSS_FACTOR;
-    if (*cwnd < rs->cwnd_floor)
-        *cwnd = rs->cwnd_floor;
+    rs->recovery.cwnd_floor = *cwnd * (1. / 3) * beta;
+    if (rs->recovery.cwnd_floor < cwnd_floor)
+        rs->recovery.cwnd_floor = cwnd_floor;
+
+    /* the silence factor is identical to the loss factor */
+    *cwnd *= QUICLY_RAPID_START_LOSS_FACTOR(beta);
+    if (*cwnd < rs->recovery.cwnd_floor)
+        *cwnd = rs->recovery.cwnd_floor;
 }
 
 inline void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t *rs, uint32_t *cwnd, uint32_t bytes_acked,
@@ -511,9 +535,20 @@ inline void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t 
 
     assert(rs->newest_rtt_sample_until == -1);
 
-    *cwnd -= QUICLY_RAPID_START_ACK_FACTOR * bytes_acked + QUICLY_RAPID_START_LOSS_FACTOR * bytes_lost;
-    if (*cwnd < rs->cwnd_floor)
-        *cwnd = rs->cwnd_floor;
+    static const struct {
+        double ack, loss;
+    } factors[] = {
+#define ENTRY(beta) {QUICLY_RAPID_START_ACK_FACTOR(beta), QUICLY_RAPID_START_LOSS_FACTOR(beta)}
+        ENTRY(QUICLY_BETA_LOSS),
+        ENTRY(QUICLY_BETA_ECN),
+#undef ENTRY
+    };
+
+    uint32_t reduction = factors[rs->recovery.by_ecn].ack * bytes_acked + factors[rs->recovery.by_ecn].loss * bytes_lost;
+    assert(reduction <= *cwnd && "CWND never underflows");
+    *cwnd -= reduction;
+    if (*cwnd < rs->recovery.cwnd_floor)
+        *cwnd = rs->recovery.cwnd_floor;
 }
 
 #ifdef __cplusplus
