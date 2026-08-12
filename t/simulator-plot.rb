@@ -228,6 +228,8 @@ cc = "pico"
 length = 1.0
 network_name = "DSL"
 show_queue = false
+aqm = nil
+isolate = false
 throughput = false
 bucket = nil
 output_prefix = "simulator"
@@ -250,6 +252,8 @@ OptionParser.new do |opt|
     network_name = v
   end
   opt.on("--queue") { show_queue = true }
+  opt.on("-A SPEC") { |v| aqm = v }
+  opt.on("-F") { isolate = true }
   opt.on("--throughput") { throughput = true }
   opt.on("--bucket=SECONDS", Float) { |v| bucket = v }
   opt.on("--output=PREFIX") { |v| output_prefix = v }
@@ -281,6 +285,9 @@ cmd = [
   "-l", length.to_s,
   "-c", cc
 ]
+# `-A` and `-F` are global options of the simulator, and the global part of the command line is the part this script builds
+cmd.push("-A", aqm) if aqm
+cmd.push("-F") if isolate
 flows.each do |_label, flow_opts|
   cmd << "--"
   cmd.concat(flow_opts)
