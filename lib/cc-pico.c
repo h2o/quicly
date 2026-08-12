@@ -100,7 +100,7 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  * * Wmax
  * * bandwidth observed at the last congestion event
  * * (cwnd_prior as a value separate from Wmax, if fast convergence is needed)
- * * (alpha, if ABE is supported)
+ * * (alpha, if ABE is supported and uses a different alpha when reacting to ECN-CE)
  *
  * These values remain immutable during each epoch. The congestion-avoidance trajectory is expressed entirely as pure functions
  * using them, taking CWND as the only parameter.
