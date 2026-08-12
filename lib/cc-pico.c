@@ -164,16 +164,21 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
 /**
  * Calculates the size of the next ACK interval from the current congestion-control state.
  */
-static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t max_udp_payload_size)
+static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t max_udp_payload_size,
+                                            uint32_t *bytes_available)
 {
     if (cc->cwnd < cc->ssthresh) {
         return quicly_cc_rapid_start_use_3x(&cc->rapid_start, &loss->rtt) ? max_udp_payload_size / 2 : max_udp_payload_size;
     } else if (cc->type == &quicly_cc_type_cuback) {
-        if (cc->state.pico.cuback.bandwidth > 0)
-            return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size);
-        /* The curve remains undefined until the first congestion event; this is reachable only when the CC has been switched while
-         * in congestion avoidance. Use Reno until then. */
-        return cc->cwnd;
+        if (cc->state.pico.cuback.bandwidth == 0) {
+            /* The curve remains undefined until the first congestion event; this is reachable only when the CC has been switched
+             * while in congestion avoidance. Use Reno until then. */
+            return cc->cwnd;
+        }
+        /* When exiting recovery, Cubic's CWND is W(t), so to be on par, run Cuback's clock for the same amount. */
+        if (bytes_available != NULL)
+            *bytes_available += cc->cwnd;
+        return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size);
     } else {
         assert(cc->type == &quicly_cc_type_pico);
         return cc->state.pico.bytes_per_mtu_increase;
@@ -211,15 +216,14 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (cc->cwnd < cc->ssthresh && cc->num_loss_episodes == 0)
         quicly_cc_rapid_start_update_rtt(&cc->rapid_start, &loss->rtt, now);
 
-    if (cc->state.pico.bytes_to_mtu_increase == 0)
-        cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size);
-
     /* Apply this ACK to the current interval. One ACK can span multiple intervals. */
     uint32_t bytes_available = bytes;
+    if (cc->state.pico.bytes_to_mtu_increase == 0)
+        cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size, &bytes_available);
     while (bytes_available >= cc->state.pico.bytes_to_mtu_increase) {
         bytes_available -= cc->state.pico.bytes_to_mtu_increase;
         cc->cwnd = quicly_u32_add_saturating(cc->cwnd, max_udp_payload_size);
-        cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size);
+        cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size, NULL);
     }
     cc->state.pico.bytes_to_mtu_increase -= bytes_available;
     assert(cc->state.pico.bytes_to_mtu_increase != 0);
