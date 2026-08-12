@@ -110,10 +110,8 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  *   yielding bandwidth. Fast convergence could be still helpful.
  */
 static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, double cwnd_prior, double bandwidth, double k,
-                                        uint32_t mtu)
+                                        uint32_t mtu, double friendly_alpha)
 {
-    static const double friendly_alpha = 3 * (1 - QUICLY_BETA_LOSS) / (1 + QUICLY_BETA_LOSS);
-
     double bytes_cubic = (k + cbrt((w - w_max) / (QUICLY_CUBIC_C * mtu))) * bandwidth;
     /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
      * reduction. Bandwidth cancels when converting the Reno time to bytes sent. */
@@ -131,6 +129,10 @@ static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, 
 static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t cwnd_epoch,
                                               uint32_t mtu)
 {
+#define CALC_FRIENDLY_ALPHA(Breno, Bcubic) (((1 + Breno) * (1 - Bcubic)) / ((1 - Breno) * (1 + Bcubic)))
+    static const double friendly_alpha[2] = {CALC_FRIENDLY_ALPHA(0.5, QUICLY_BETA_LOSS), CALC_FRIENDLY_ALPHA(0.8, QUICLY_BETA_ECN)};
+#undef CALC_FRIENDLY_ALPHA
+
     /* Fast convergence: derive Wmax as the midpoint of cwnd_prior and cwnd_epoch rather than hard-coding it to 0.85 * cwnd_prior.
      * Otherwise, with ABE using QUICLY_BETA_ECN (0.85), Wmax equals cwnd_epoch and K becomes zero, causing the CC to skip the
      * concave region and start at the plateau. */
@@ -139,8 +141,10 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
      * from W_max alone, as fast convergence and the varying reduction ratios move them apart. */
     double k = cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
 
-    double bytes0 = cuback_cwnd_to_bytes_sent(cwnd, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu);
-    double bytes1 = cuback_cwnd_to_bytes_sent((double)cwnd + mtu, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu);
+    double bytes0 = cuback_cwnd_to_bytes_sent(cwnd, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu,
+                                              friendly_alpha[state->by_ecn]);
+    double bytes1 = cuback_cwnd_to_bytes_sent((double)cwnd + mtu, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu,
+                                              friendly_alpha[state->by_ecn]);
     double bytes = bytes1 - bytes0;
 
     /* Past W_max the curve grows without bound, therefore the increase is capped at 50% of CWND per RTT as RFC 9438 does. Below
@@ -299,6 +303,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
                 cc->state.pico.cuback.cwnd_prior = bdp;
                 cc->state.pico.cuback.fast_convergence = bdp < previous_w_max;
             }
+            cc->state.pico.cuback.by_ecn = bytes == 0;
             cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
             cc->state.pico.bytes_to_mtu_increase = 0;
         } else {

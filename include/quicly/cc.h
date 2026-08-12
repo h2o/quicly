@@ -108,6 +108,10 @@ struct st_quicly_cc_cuback_t {
      * cwnd_epoch.
      */
     unsigned fast_convergence : 1;
+    /**
+     * Whether the reduction that began the current epoch used QUICLY_BETA_ECN (i.e., ABE).
+     */
+    unsigned by_ecn : 1;
 };
 
 typedef struct st_quicly_cc_t {
