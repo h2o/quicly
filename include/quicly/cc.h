@@ -100,9 +100,14 @@ struct st_quicly_cc_cuback_t {
      */
     double bandwidth;
     /**
-     * Cubic's W_max, in bytes. Ordinarily the full BDP estimate, but fast convergence could adopt a smaller value.
+     * Cubic's cwnd_prior, in bytes.
      */
-    uint32_t w_max;
+    uint32_t cwnd_prior;
+    /**
+     * Whether fast convergence is applied to the current epoch. When set, W_max is the midpoint between the cwnd_prior and
+     * cwnd_epoch.
+     */
+    unsigned fast_convergence : 1;
 };
 
 typedef struct st_quicly_cc_t {

@@ -75,28 +75,28 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  * Cuback is an ACK-driven variant of Cubic. It traces the same two curves as Cubic - W_cubic and the Reno-friendly W_reno shown
  * below - but drives them by the bytes being acked rather than by the clock.
  *
- * Let Tr be the time at which the Reno-friendly curve reaches Wmax:
+ * Let Tr be the time at which the Reno-friendly curve reaches cwnd_prior:
  *
- *   Tr = (Wmax^2 - Wepoch^2) / (2 * alpha * MSS * bandwidth)
+ *   Tr = (cwnd_prior^2 - Wepoch^2) / (2 * alpha * MSS * bandwidth)
  *
  * The two time-domain curves are:
  *
  *   W_cubic(t) = C * MSS * (t - K)^3 + Wmax
  *   W_reno(t)  = sqrt(Wepoch^2 + 2 * alpha * MSS * bandwidth * t),                   t <= Tr
- *                sqrt(Wmax^2 + 2 * MSS * bandwidth * (t - Tr)),                      t > Tr
+ *                sqrt(cwnd_prior^2 + 2 * MSS * bandwidth * (t - Tr)),                t > Tr
  *
  * As both curves are monotonically increasing, CWND - being their maximum - is monotonically increasing as well. Therefore, the
  * amount sent can be recovered from CWND, the inverse of a maximum being the minimum of the inverses. Inverting the curves gives
  * the time at which each reaches `w`. Multiplying that time by bandwidth converts the result to bytes sent since the epoch began:
  *
  *   bytes_cubic(w) = bandwidth * (K + cbrt((w - Wmax) / (C * MSS)))
- *   bytes_reno(w)  = (w^2 - Wepoch^2) / (2 * alpha * MSS),                           w <= Wmax
- *                    (Wmax^2 - Wepoch^2) / (2 * alpha * MSS)
- *                      + (w^2 - Wmax^2) / (2 * MSS),                                 w > Wmax
+ *   bytes_reno(w)  = (w^2 - Wepoch^2) / (2 * alpha * MSS),                           w <= cwnd_prior
+ *                    (cwnd_prior^2 - Wepoch^2) / (2 * alpha * MSS)
+ *                      + (w^2 - cwnd_prior^2) / (2 * MSS),                           w > cwnd_prior
  *   bytes_sent(w)  = min(bytes_cubic(w), bytes_reno(w))
  *
- * Wepoch is equal to ssthresh, therefore Wmax and the delivery rate observed at the last congestion event are the only Cuback-
- * specific states that need to be retained. The congestion-avoidance trajectory is expressed entirely as pure functions of
+ * Wepoch is equal to ssthresh, therefore cwnd_prior, Wmax, and the delivery rate observed at the last congestion event are the only
+ * Cuback-specific states that need to be retained. The congestion-avoidance trajectory is expressed entirely as pure functions of
  * immutable per-epoch parameters and CWND.
  *
  * Using the `bytes_sent` function, the congestion controller calculates bytes needed to be acked before incrementing the CWND
@@ -109,18 +109,18 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  * * Because the clock is the ack stream, a flow whose share is being taken advances more slowly than one that is taking, thereby
  *   yielding bandwidth. Fast convergence could be still helpful.
  */
-static double cuback_cwnd_to_bytes_sent(const struct st_quicly_cc_cuback_t *state, double w, double w_epoch, double k, uint32_t mtu)
+static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, double cwnd_prior, double bandwidth, double k,
+                                        uint32_t mtu)
 {
     static const double friendly_alpha = 3 * (1 - QUICLY_BETA_LOSS) / (1 + QUICLY_BETA_LOSS);
 
-    double bytes_cubic = (k + cbrt((w - state->w_max) / (QUICLY_CUBIC_C * mtu))) * state->bandwidth;
+    double bytes_cubic = (k + cbrt((w - w_max) / (QUICLY_CUBIC_C * mtu))) * bandwidth;
     /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
-     * reduction (W_max here). The inverse curve is therefore piecewise at W_max. Bandwidth cancels when converting the Reno time
-     * to bytes sent. */
-    double w_friendly = w < state->w_max ? w : state->w_max;
+     * reduction. Bandwidth cancels when converting the Reno time to bytes sent. */
+    double w_friendly = w < cwnd_prior ? w : cwnd_prior;
     double bytes_reno = (w_friendly * w_friendly - w_epoch * w_epoch) / (2 * friendly_alpha * mtu);
-    if (w > state->w_max)
-        bytes_reno += (w * w - (double)state->w_max * state->w_max) / (2 * mtu);
+    if (w > cwnd_prior)
+        bytes_reno += (w * w - cwnd_prior * cwnd_prior) / (2 * mtu);
     double bytes = bytes_cubic < bytes_reno ? bytes_cubic : bytes_reno;
     return bytes > 0 ? bytes : 0;
 }
@@ -131,17 +131,18 @@ static double cuback_cwnd_to_bytes_sent(const struct st_quicly_cc_cuback_t *stat
 static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t cwnd_epoch,
                                               uint32_t mtu)
 {
+    double w_max = state->fast_convergence ? ((double)state->cwnd_prior + cwnd_epoch) / 2 : state->cwnd_prior;
     /* Seconds taken by the cubic curve to climb from `cwnd_epoch` back to W_max. Derived from the gap between the two rather than
      * from W_max alone, as fast convergence and the varying reduction ratios move them apart. */
-    double k = cbrt(((double)state->w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
+    double k = cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
 
-    double bytes0 = cuback_cwnd_to_bytes_sent(state, cwnd, cwnd_epoch, k, mtu);
-    double bytes1 = cuback_cwnd_to_bytes_sent(state, (double)cwnd + mtu, cwnd_epoch, k, mtu);
+    double bytes0 = cuback_cwnd_to_bytes_sent(cwnd, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu);
+    double bytes1 = cuback_cwnd_to_bytes_sent((double)cwnd + mtu, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu);
     double bytes = bytes1 - bytes0;
 
     /* Past W_max the curve grows without bound, therefore the increase is capped at 50% of CWND per RTT as RFC 9438 does. Below
      * W_max the cap is not applied, it being the climb back to a window that the path had already sustained. */
-    if (cwnd > state->w_max && bytes < (double)mtu * 2)
+    if (cwnd > w_max && bytes < (double)mtu * 2)
         bytes = (double)mtu * 2;
 
     return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
@@ -190,10 +191,9 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (!cc_limited)
         return;
 
-    /* When W_max was deferred for Rapid Start, derive it from the final recovery-adjusted CWND. */
-    if (cc->type == &quicly_cc_type_cuback && cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.w_max == 0)
-        cc->state.pico.cuback.w_max =
-            cc->cwnd / (cc->rapid_start.recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
+    /* When Rapid Start is used, setting cwnd_prior is deferred, as the BDP estimate becomes available only after recovery ends. */
+    if (cc->type == &quicly_cc_type_cuback && cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.cwnd_prior == 0)
+        cc->state.pico.cuback.cwnd_prior = cc->cwnd / (cc->rapid_start.recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
 
     if (cc->cwnd < cc->ssthresh && cc->num_loss_episodes == 0)
         quicly_cc_rapid_start_update_rtt(&cc->rapid_start, &loss->rtt, now);
@@ -285,12 +285,16 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         }
         if (cc->type == &quicly_cc_type_cuback) {
             if (cc->num_loss_episodes == 1) {
-                /* Exiting startup: adopt the calculated BDP or defer until the exiting recovery */
-                cc->state.pico.cuback.w_max = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
+                /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
+                cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
+                cc->state.pico.cuback.fast_convergence = 0;
             } else {
-                /* Fast convergence (RFC 9438, Section 4.7): when the BDP estimate comes out below the retained W_max, the path is
-                 * yielding to somebody. Compare against the retained value and decide the new w_max. */
-                cc->state.pico.cuback.w_max = bdp < cc->state.pico.cuback.w_max ? bdp * ((1 + QUICLY_BETA_LOSS) / 2) : bdp;
+                /* Fast convergence kicks in if the BDP estimate comes out below the previous W_max (RFC 9438, Section 4.7). */
+                double previous_w_max = cc->state.pico.cuback.fast_convergence
+                                            ? ((double)cc->state.pico.cuback.cwnd_prior + cc->ssthresh) / 2
+                                            : cc->state.pico.cuback.cwnd_prior;
+                cc->state.pico.cuback.cwnd_prior = bdp;
+                cc->state.pico.cuback.fast_convergence = bdp < previous_w_max;
             }
             cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
             cc->state.pico.bytes_to_mtu_increase = 0;

@@ -297,7 +297,7 @@ static void test_pico_switch_resets_ack_credit(void)
     ok(cc.state.reno.stash == 0);
 }
 
-static void test_cuback_reno_friendly_post_w_max(void)
+static void test_cuback_reno_friendly_post_bdp_estimate(void)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
@@ -305,7 +305,7 @@ static void test_cuback_reno_friendly_post_w_max(void)
 
     quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, w_max, 0);
     cc.ssthresh = cc.cwnd;
-    cc.state.pico.cuback.w_max = w_max;
+    cc.state.pico.cuback.cwnd_prior = w_max;
     cc.state.pico.cuback.bandwidth = w_max * 1000. / loss.rtt.smoothed;
     cc.state.pico.bytes_to_mtu_increase = 0;
 
@@ -319,7 +319,7 @@ static void test_cuback_reno_friendly_post_w_max(void)
     ok(cc.state.pico.bytes_to_mtu_increase == 7 * mtu / 2);
 }
 
-static void test_cuback_deferred_w_max(void)
+static void test_cuback_deferred_bdp_estimate(void)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
@@ -328,19 +328,19 @@ static void test_cuback_deferred_w_max(void)
     /* An ordinary first loss retains the estimated BDP as W_max, matching HEAD's special 0.5 startup reduction. */
     quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0);
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
-    ok(cc.state.pico.cuback.w_max == initcwnd / 2);
+    ok(cc.state.pico.cuback.cwnd_prior == initcwnd / 2);
 
     /* Rapid Start continues adjusting CWND throughout recovery, so W_max is derived from the final CWND afterward. */
     quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0);
     cc.type->enable_rapid_start(&cc, 900);
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     ok(cc.state.pico.cuback.bandwidth > 0);
-    ok(cc.state.pico.cuback.w_max == 0);
+    ok(cc.state.pico.cuback.cwnd_prior == 0);
     ok(cc.state.pico.bytes_to_mtu_increase == 0);
 
     uint32_t cwnd_after_recovery = cc.cwnd;
     cc.type->cc_on_acked(&cc, &loss, 1, 20, 1, 1, 21, 1100, mtu);
-    ok(cc.state.pico.cuback.w_max == (uint32_t)(cwnd_after_recovery / QUICLY_BETA_LOSS));
+    ok(cc.state.pico.cuback.cwnd_prior == (uint32_t)(cwnd_after_recovery / QUICLY_BETA_LOSS));
     ok(cc.state.pico.bytes_to_mtu_increase != 0);
 }
 
@@ -384,8 +384,8 @@ void test_cc(void)
     subtest("cubic-target-bounds", test_cubic_target_bounds);
     subtest("pico-ack-countdown", test_pico_ack_countdown);
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
-    subtest("cuback-reno-friendly-post-w-max", test_cuback_reno_friendly_post_w_max);
-    subtest("cuback-deferred-w-max", test_cuback_deferred_w_max);
+    subtest("cuback-reno-friendly-post-bdp-estimate", test_cuback_reno_friendly_post_bdp_estimate);
+    subtest("cuback-deferred-bdp-estimate", test_cuback_deferred_bdp_estimate);
     subtest("pico-undo-loss", test_pico_undo_loss);
     subtest("pico-undo-multiple-losses", test_pico_undo_multiple_losses);
     subtest("pico-undo-rapid-start-loss", test_pico_undo_rapid_start_loss);
