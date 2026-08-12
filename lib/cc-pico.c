@@ -95,9 +95,15 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  *                      + (w^2 - cwnd_prior^2) / (2 * MSS),                           w > cwnd_prior
  *   bytes_sent(w)  = min(bytes_cubic(w), bytes_reno(w))
  *
- * Wepoch is equal to ssthresh, therefore cwnd_prior, Wmax, and the delivery rate observed at the last congestion event are the only
- * Cuback-specific states that need to be retained. The congestion-avoidance trajectory is expressed entirely as pure functions of
- * immutable per-epoch parameters and CWND.
+ * Wepoch is equal to ssthresh, therefore the only Cuback-specific states that need to be retained are:
+ *
+ * * Wmax
+ * * bandwidth observed at the last congestion event
+ * * (cwnd_prior as a value separate from Wmax, if fast convergence is needed)
+ * * (alpha, if ABE is supported)
+ *
+ * These values remain immutable during each epoch. The congestion-avoidance trajectory is expressed entirely as pure functions
+ * using them, taking CWND as the only parameter.
  *
  * Using the `bytes_sent` function, the congestion controller calculates bytes needed to be acked before incrementing the CWND
  * (`bytes_sent(cwnd + mtu) - bytes_sent(cwnd)`) and drives congestion avoidance, the same way as in the case of Reno.
