@@ -63,9 +63,10 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
      *   bytes_per_mtu_increase = ((1 + 0.5^(1/3) * 2) / 2) * K * MTU / ((1 - beta) * RTT_at_Wmax)
      *                          ~= 1.293700525984 * K * MTU / ((1 - beta) * RTT_at_Wmax)
      */
-    uint32_t cubic = 1.293700525984 / (1 - beta) * 1000 * cbrt((1 - beta) / 0.4 * cwnd / mtu) / rtt * mtu;
+    double cubic = 1.293700525984 / (1 - beta) * 1000 * cbrt((1 - beta) / 0.4 * cwnd / mtu) / rtt * mtu;
 
-    return reno < cubic ? reno : cubic;
+    double bytes = reno < cubic ? reno : cubic;
+    return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
 }
 
 /**
@@ -143,12 +144,7 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
     if (cwnd > state->w_max && bytes < (double)mtu * 2)
         bytes = (double)mtu * 2;
 
-    /* Return the value capping the bounds so to avoid infinite loop or overflow. */
-    if (bytes < 1)
-        return 1;
-    if (bytes > 0x7fffffff)
-        return 0x7fffffff;
-    return (uint32_t)bytes;
+    return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
 }
 
 /**
