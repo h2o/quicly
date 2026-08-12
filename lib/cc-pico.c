@@ -76,16 +76,14 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  * sent can be recovered from CWND, the inverse of a maximum being the minimum of the inverses:
  *
  *   bytes_sent(w)  = min(bytes_cubic(w), bytes_reno(w))
- *   bytes_cubic(w) = adjust * (K + cbrt((w - W_max) / (C * MSS))) * bandwidth
- *   bytes_reno(w)  = (w^2 - anchor^2) / (2 * alpha * MSS),                            w <= W_max
- *                    (W_max^2 - anchor^2) / (2 * alpha * MSS)
- *                      + (w^2 - W_max^2) / (2 * MSS),                                 w > W_max
+ *   bytes_cubic(w) = (K + cbrt((w - Wmax) / (C * MSS))) * bandwidth
+ *   bytes_reno(w)  = (w^2 - Wepoch^2) / (2 * alpha * MSS),                           w <= Wmax
+ *                    (Wmax^2 - Wepoch^2) / (2 * alpha * MSS)
+ *                      + (w^2 - Wmax^2) / (2 * MSS),                                 w > Wmax
  *
- * where adjust is a constant of 1.2937... ((1 + 2 * 0.5^(1/3)) / 2) if fairness against Cubic with Fast Convergence is needed;
- * otherwise adjust is 1.
- *
- * W_max and the delivery rate (e.g., that observed at the last congestion event) as the only states to retain. As can be seen, the
- * congestion-avoidance trajectory is expressed entirely as pure functions of immutable per-epoch parameters and CWND.
+ * Wepoch is equal to ssthresh, therefore Wmax and the delivery rate observed at the last congestion event are the only Cuback-
+ * specific states that need to be retained. The congestion-avoidance trajectory is expressed entirely as pure functions of
+ * immutable per-epoch parameters and CWND.
  *
  * Using the `bytes_sent` function, the congestion controller calculates bytes needed to be acked before incrementing the CWND
  * (`bytes_sent(cwnd + mtu) - bytes_sent(cwnd)`) and drives congestion avoidance, the same way as in the case of Reno.
@@ -94,20 +92,19 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  *
  * * As CWND is driven by acks rather than by time, CWND does not advance while nothing is inflight. Congestion control becomes
  *   safer without accurate app-limited tracking.
- * * Use of ACK-clock mitigates the need for fast convergence, because if a competing flow grows faster, the clock naturally slows
- *   down, yielding more bandwidth to the competition.
+ * * Because the clock is the ack stream, a flow whose share is being taken advances more slowly than one that is taking, thereby
+ *   yielding bandwidth. Fast convergence could be still helpful.
  */
-static double cuback_cwnd_to_bytes_sent(const struct st_quicly_cc_cuback_t *state, double w, double anchor, double k, uint32_t mtu)
+static double cuback_cwnd_to_bytes_sent(const struct st_quicly_cc_cuback_t *state, double w, double w_epoch, double k, uint32_t mtu)
 {
     static const double friendly_alpha = 3 * (1 - QUICLY_RENO_BETA) / (1 + QUICLY_RENO_BETA);
 
-    double bytes_cubic = (k + cbrt((w - (double)state->w_max) / (QUICLY_CUBIC_C * mtu))) *
-                         QUICLY_CUBIC_FAST_CONVERGENCE_ADJUST * state->bandwidth;
+    double bytes_cubic = (k + cbrt((w - state->w_max) / (QUICLY_CUBIC_C * mtu))) * state->bandwidth;
     /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
      * reduction (W_max here). The inverse curve is therefore piecewise at W_max. Bandwidth cancels when converting the Reno time
      * to bytes sent. */
     double w_friendly = w < state->w_max ? w : state->w_max;
-    double bytes_reno = (w_friendly * w_friendly - anchor * anchor) / (2 * friendly_alpha * mtu);
+    double bytes_reno = (w_friendly * w_friendly - w_epoch * w_epoch) / (2 * friendly_alpha * mtu);
     if (w > state->w_max)
         bytes_reno += (w * w - (double)state->w_max * state->w_max) / (2 * mtu);
     double bytes = bytes_cubic < bytes_reno ? bytes_cubic : bytes_reno;
@@ -117,15 +114,15 @@ static double cuback_cwnd_to_bytes_sent(const struct st_quicly_cc_cuback_t *stat
 /**
  * Calculates the number of bytes that have to be acked for incrementing CWND by one MTU, when Cuback is used.
  */
-static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t mtu)
+static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t cwnd_epoch,
+                                              uint32_t mtu)
 {
-    double anchor = (double)state->w_max * QUICLY_RENO_BETA; /* CWND after reduction; where both curves depart from */
-    /* Seconds taken by the cubic curve to climb from `anchor` back to W_max; the fast convergence adjustment stretches the time
-     * axis rather than K, so that the curve still departs from `anchor` at t == 0. */
-    double k = cbrt((double)state->w_max * ((1 - QUICLY_RENO_BETA) / QUICLY_CUBIC_C) / mtu);
+    /* Seconds taken by the cubic curve to climb from `cwnd_epoch` back to W_max. Derived from the gap between the two rather than
+     * from W_max alone, as fast convergence and the varying reduction ratios move them apart. */
+    double k = cbrt(((double)state->w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
 
-    double bytes0 = cuback_cwnd_to_bytes_sent(state, cwnd, anchor, k, mtu);
-    double bytes1 = cuback_cwnd_to_bytes_sent(state, (double)cwnd + mtu, anchor, k, mtu);
+    double bytes0 = cuback_cwnd_to_bytes_sent(state, cwnd, cwnd_epoch, k, mtu);
+    double bytes1 = cuback_cwnd_to_bytes_sent(state, (double)cwnd + mtu, cwnd_epoch, k, mtu);
     double bytes = bytes1 - bytes0;
 
     /* Past W_max the curve grows without bound, therefore the increase is capped at 50% of CWND per RTT as RFC 9438 does. Below
@@ -150,7 +147,7 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
         return quicly_cc_rapid_start_use_3x(&cc->rapid_start, &loss->rtt) ? max_udp_payload_size / 2 : max_udp_payload_size;
     } else if (cc->type == &quicly_cc_type_cuback) {
         if (cc->state.pico.cuback.bandwidth > 0)
-            return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, max_udp_payload_size);
+            return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size);
         /* The curve remains undefined until the first congestion event; this is reachable only when the CC has been switched while
          * in congestion avoidance. Use Reno until then. */
         return cc->cwnd;
@@ -275,10 +272,14 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
                 bdp = QUICLY_MIN_CWND * max_udp_payload_size;
         }
         if (cc->type == &quicly_cc_type_cuback) {
-            /* During the first Rapid Start recovery, defer W_max until CWND has received all recovery adjustments. In every other
-             * case, the BDP estimate is final already. */
-            cc->state.pico.cuback.w_max =
-                cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
+            if (cc->num_loss_episodes == 1) {
+                /* Exiting startup: adopt the calculated BDP or defer until the exiting recovery */
+                cc->state.pico.cuback.w_max = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
+            } else {
+                /* Fast convergence (RFC 9438, Section 4.7): when the BDP estimate comes out below the retained W_max, the path is
+                 * yielding to somebody. Compare against the retained value and decide the new w_max. */
+                cc->state.pico.cuback.w_max = bdp < cc->state.pico.cuback.w_max ? bdp * ((1 + QUICLY_RENO_BETA) / 2) : bdp;
+            }
             cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
             cc->state.pico.bytes_to_mtu_increase = 0;
         } else {

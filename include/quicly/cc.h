@@ -82,7 +82,7 @@ struct st_quicly_cc_cuback_t {
      */
     double bandwidth;
     /**
-     * Cubic's W_max, the full BDP estimate, in bytes.
+     * Cubic's W_max, in bytes. Ordinarily the full BDP estimate, but fast convergence could adopt a smaller value.
      */
     uint32_t w_max;
 };
