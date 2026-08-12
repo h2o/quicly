@@ -207,6 +207,51 @@ static void test_pico_ecn_rapid_start(void)
     ok(cwnd_is(cc.cwnd, cwnd_after_ack - QUICLY_RAPID_START_LOSS_FACTOR(QUICLY_BETA_ECN) * mtu));
 }
 
+static void test_cubic_fast_convergence(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.cubic.w_max == 100 * mtu);
+
+    cc.cwnd = 90 * mtu;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1100, mtu);
+    ok(cc.state.cubic.w_max == 90 * mtu * 85 / 100);
+
+    /* The effective W_max is 76.5 MTUs, so an 80-MTU congestion window does not trigger fast convergence again. */
+    cc.cwnd = 80 * mtu;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 30, 40, 1200, mtu);
+    ok(cc.state.cubic.w_max == 80 * mtu);
+    ok(cc.state.cubic.cwnd_prior == 80 * mtu);
+    ok(cc.state.cubic.w_est == cc.cwnd);
+}
+
+static void test_cubic_target_bounds(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.cubic.w_max = cc.cwnd;
+    cc.state.cubic.w_est = cc.cwnd;
+    cc.state.cubic.cwnd_prior = cc.cwnd;
+
+    cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 1000000, mtu);
+    ok(cc.cwnd == initcwnd + mtu / 2);
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.cubic.w_max = cc.cwnd / 2;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 0, mtu);
+    ok(cc.cwnd == initcwnd);
+}
+
 static void test_rapid_start(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
@@ -243,6 +288,8 @@ static void test_rapid_start(void)
 void test_cc(void)
 {
     subtest("rapid-start", test_rapid_start);
+    subtest("cubic-fast-convergence", test_cubic_fast_convergence);
+    subtest("cubic-target-bounds", test_cubic_target_bounds);
     subtest("pico-undo-loss", test_pico_undo_loss);
     subtest("pico-undo-multiple-losses", test_pico_undo_multiple_losses);
     subtest("pico-undo-rapid-start-loss", test_pico_undo_rapid_start_loss);

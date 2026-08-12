@@ -43,21 +43,22 @@ static uint32_t calc_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
      *     = (K * Wmax / RTT_at_Wmax) / ((1 - beta) * Wmax) * MTU
      *     = K * MTU / ((1 - beta) * RTT_at_Wmax)
      *
-     * In addition, we have to adjust the value to take fast convergence into account. On a path with stable capacity, 50% of
-     * congestion events adjust Wmax to (1 + beta) / 2 (i.e., 0.85x when beta is 0.7) of before calculating K. If that happens, the
-     * modified K (K') is:
+     * In addition, we have to adjust the value to take fast convergence into account. When competition causes congestion peaks to
+     * decline gradually, fast-convergence and normal epochs are expected to alternate: a peak below the retained Wmax triggers fast
+     * convergence, while the resulting Wmax of (1 + beta) / 2 makes the next peak a normal event unless it declines further.
      *
-     *   K' = ((1 - beta) / 0.4 * (1 + beta) / 2 * Wmax / MTU)^(1/3) = ((1 + beta) / 2)^(1/3) * K
+     * When fast convergence occurs, Wmax becomes (1 + beta) / 2 * Wmax while cwnd_epoch remains beta * Wmax. The modified K (K')
+     * is therefore:
      *
-     * where K' represents the time to reach (1 + beta) / 2 * Wmax. As the cubic curve is point symmetric at the point where this
-     * curve reaches (1 + beta) / 2 * Wmax, it would take 2 * K' seconds to reach Wmax.
+     *   K' = (((1 - beta) / 2) / 0.4 * Wmax / MTU)^(1/3) = 0.5^(1/3) * K
      *
-     * Therefore, by amortizing the two modes, the congestion period of Cubic with fast convergence is calculated as:
+     * where K' represents the time to reach (1 + beta) / 2 * Wmax. As the cubic curve is point symmetric around that point,
+     * reaching the original Wmax takes 2 * K'. Amortizing one fast-convergence period and one normal period gives:
      *
-     *   bytes_per_mtu_increase = ((1 + ((1 + beta) / 2)^(1/3) * 2) / 2) * K * MTU / ((1 - beta) * RTT_at_Wmax)
+     *   bytes_per_mtu_increase = ((1 + 0.5^(1/3) * 2) / 2) * K * MTU / ((1 - beta) * RTT_at_Wmax)
+     *                          ~= 1.293700525984 * K * MTU / ((1 - beta) * RTT_at_Wmax)
      */
-    double fast_convergence_adjust = (1 + cbrt((1 + beta) / 2) * 2) / 2; /* 1.447 when beta is 0.7 */
-    uint32_t cubic = fast_convergence_adjust / (1 - beta) * 1000 * cbrt((1 - beta) / 0.4 * cwnd / mtu) / rtt * mtu;
+    uint32_t cubic = 1.293700525984 / (1 - beta) * 1000 * cbrt((1 - beta) / 0.4 * cwnd / mtu) / rtt * mtu;
 
     return reno < cubic ? reno : cubic;
 }
