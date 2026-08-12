@@ -131,6 +131,9 @@ static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, 
 static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t cwnd_epoch,
                                               uint32_t mtu)
 {
+    /* Fast convergence: derive Wmax as the midpoint of cwnd_prior and cwnd_epoch rather than hard-coding it to 0.85 * cwnd_prior.
+     * Otherwise, with ABE using QUICLY_BETA_ECN (0.85), Wmax equals cwnd_epoch and K becomes zero, causing the CC to skip the
+     * concave region and start at the plateau. */
     double w_max = state->fast_convergence ? ((double)state->cwnd_prior + cwnd_epoch) / 2 : state->cwnd_prior;
     /* Seconds taken by the cubic curve to climb from `cwnd_epoch` back to W_max. Derived from the gap between the two rather than
      * from W_max alone, as fast convergence and the varying reduction ratios move them apart. */
