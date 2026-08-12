@@ -171,6 +171,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
             if (cc->num_loss_episodes == 1) {
                 quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, bytes, 0);
+                cc->ssthresh = cc->cwnd;
             }
         } else {
             quicly_cc_jumpstart_on_acked(cc, 1, bytes, largest_acked, inflight, next_pn);
