@@ -84,10 +84,13 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_
  * where adjust is a constant of 1.2937... ((1 + 2 * 0.5^(1/3)) / 2) if fairness against Cubic with Fast Convergence is needed;
  * otherwise adjust is 1.
  *
- * Using this function, the congestion controller calculates bytes needed to be acked before incrementing the CWND
- * (`bytes_sent(cwnd + mtu) - bytes_sent(cwnd)`) and drives congestion avoidance.
+ * W_max and the delivery rate (e.g., that observed at the last congestion event) as the only states to retain. As can be seen, the
+ * congestion-avoidance trajectory is expressed entirely as pure functions of immutable per-epoch parameters and CWND.
  *
- * In addition to being simple, there are two nice side-effects of using acks:
+ * Using the `bytes_sent` function, the congestion controller calculates bytes needed to be acked before incrementing the CWND
+ * (`bytes_sent(cwnd + mtu) - bytes_sent(cwnd)`) and drives congestion avoidance, the same way as in the case of Reno.
+ *
+ * In addition to being simple, the approach has two positive side-effects:
  *
  * * As CWND is driven by acks rather than by time, CWND does not advance while nothing is inflight. Congestion control becomes
  *   safer without accurate app-limited tracking.
