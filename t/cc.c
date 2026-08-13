@@ -310,8 +310,9 @@ static void test_cuback_reno_friendly_post_bdp_estimate(void)
     cc.state.pico.bytes_to_mtu_increase = 0;
 
     /* Above W_max, RFC 9438 uses alpha == 1. Moving from 2 to 3 MTUs therefore requires (3^2 - 2^2) / 2 == 2.5 MTUs
-     * to be acknowledged. */
-    cc.type->cc_on_acked(&cc, &loss, 5 * mtu / 2 - 1, 1, 5 * mtu / 2 - 1, 1, 2, 100, mtu);
+     * to be acknowledged. As the first ACK of an epoch also receives CWND bytes of credit (Cubic being at W(RTT) when it
+     * exits recovery), only the remainder has to be supplied here. */
+    cc.type->cc_on_acked(&cc, &loss, 5 * mtu / 2 - 1 - w_max, 1, 5 * mtu / 2 - 1 - w_max, 1, 2, 100, mtu);
     ok(cc.cwnd == w_max);
     ok(cc.state.pico.bytes_to_mtu_increase == 1);
     cc.type->cc_on_acked(&cc, &loss, 1, 2, 1, 1, 3, 100, mtu);
