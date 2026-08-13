@@ -182,6 +182,21 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
     return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
 }
 
+static int cuback_should_fast_converge(struct st_quicly_cc_cuback_t *state, uint32_t peak, uint32_t cwnd_epoch)
+{
+    const double previous_w_max = state->fast_convergence ? ((double)state->cwnd_prior + cwnd_epoch) / 2 : state->cwnd_prior;
+    const int is_fc_candidate = peak < previous_w_max;
+    const int is_rising = !is_fc_candidate && peak > 1.01 * state->cwnd_prior;
+    const unsigned rising_epochs = state->rising_epochs;
+
+    /* A flow that gained share while its peer was reduced can retain an elevated bandwidth estimate. As the peer recovers, that
+     * estimate slows the flow's ACK-driven clock and CWND increase, thereby raising the chance of Cuback observing a loss before
+     * it reaches Wmax. To avoid entering fast convergence under such circumstances, suppress one apparent fast convergence after
+     * two rising epochs. */
+    state->rising_epochs = is_rising ? rising_epochs + (rising_epochs < 2) : 0;
+    return is_fc_candidate && rising_epochs < 2;
+}
+
 /**
  * Calculates the size of the next ACK interval from the current congestion-control state.
  */
@@ -327,12 +342,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
                 cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
                 cc->state.pico.cuback.fast_convergence = 0;
             } else {
-                /* Fast convergence kicks in if the BDP estimate comes out below the previous W_max (RFC 9438, Section 4.7). */
-                double previous_w_max = cc->state.pico.cuback.fast_convergence
-                                            ? ((double)cc->state.pico.cuback.cwnd_prior + cc->ssthresh) / 2
-                                            : cc->state.pico.cuback.cwnd_prior;
+                cc->state.pico.cuback.fast_convergence = cuback_should_fast_converge(&cc->state.pico.cuback, bdp, cc->ssthresh);
                 cc->state.pico.cuback.cwnd_prior = bdp;
-                cc->state.pico.cuback.fast_convergence = bdp < previous_w_max;
             }
             cc->state.pico.cuback.by_ecn = bytes == 0;
             cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;

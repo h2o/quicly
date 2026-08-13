@@ -104,6 +104,11 @@ struct st_quicly_cc_cuback_t {
      */
     uint32_t cwnd_prior;
     /**
+     * Number of consecutive non-fast-convergence epochs whose congestion peaks increased by more than 1%, saturated at two. A
+     * streak of two suppresses fast convergence once, protecting a flow whose bandwidth share has been growing.
+     */
+    unsigned rising_epochs : 2;
+    /**
      * Whether fast convergence is applied to the current epoch. When set, W_max is the midpoint between the cwnd_prior and
      * cwnd_epoch.
      */

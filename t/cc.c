@@ -345,6 +345,51 @@ static void test_cuback_deferred_bdp_estimate(void)
     ok(cc.state.pico.bytes_to_mtu_increase != 0);
 }
 
+static void test_cuback_fast_convergence_rising_epochs(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 200 * mtu;
+    uint64_t pn = 10;
+
+    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0);
+
+    /* The startup reduction establishes a 100-MTU raw peak. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1000, mtu);
+    pn += 10;
+    ok(cc.state.pico.cuback.cwnd_prior == 100 * mtu);
+    ok(cc.state.pico.cuback.rising_epochs == 0);
+
+    /* Exactly 1% is treated as noise and does not begin a rising streak. */
+    cc.cwnd = cc.state.pico.cuback.cwnd_prior * 101 / 100;
+    cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1100, mtu);
+    pn += 10;
+    ok(!cc.state.pico.cuback.fast_convergence);
+    ok(cc.state.pico.cuback.rising_epochs == 0);
+
+    /* Two non-FC peaks rising by more than 1% arm one-shot suppression. */
+    cc.cwnd = 1.01 * cc.state.pico.cuback.cwnd_prior + 1;
+    cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1200, mtu);
+    pn += 10;
+    ok(!cc.state.pico.cuback.fast_convergence);
+    ok(cc.state.pico.cuback.rising_epochs == 1);
+    cc.cwnd = 1.01 * cc.state.pico.cuback.cwnd_prior + 1;
+    cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1300, mtu);
+    pn += 10;
+    ok(!cc.state.pico.cuback.fast_convergence);
+    ok(cc.state.pico.cuback.rising_epochs == 2);
+
+    /* The first lower peak does not enter FC, but consumes the protection. A further reduction enters FC normally. */
+    cc.cwnd = cc.state.pico.cuback.cwnd_prior - mtu;
+    cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1400, mtu);
+    pn += 10;
+    ok(!cc.state.pico.cuback.fast_convergence);
+    ok(cc.state.pico.cuback.rising_epochs == 0);
+    cc.cwnd = cc.state.pico.cuback.cwnd_prior - mtu;
+    cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1500, mtu);
+    ok(cc.state.pico.cuback.fast_convergence);
+}
+
 static void test_rapid_start(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
@@ -387,6 +432,7 @@ void test_cc(void)
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
     subtest("cuback-reno-friendly-post-bdp-estimate", test_cuback_reno_friendly_post_bdp_estimate);
     subtest("cuback-deferred-bdp-estimate", test_cuback_deferred_bdp_estimate);
+    subtest("cuback-fast-convergence-rising-epochs", test_cuback_fast_convergence_rising_epochs);
     subtest("pico-undo-loss", test_pico_undo_loss);
     subtest("pico-undo-multiple-losses", test_pico_undo_multiple_losses);
     subtest("pico-undo-rapid-start-loss", test_pico_undo_rapid_start_loss);
