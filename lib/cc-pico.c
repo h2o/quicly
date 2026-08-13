@@ -132,9 +132,9 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
  * the two, so the concave climb owns the first part of every epoch. As more packets would be inflight than with Reno, the ack clock
  * runs faster, and this becomes a compound effect.
  *
- * The two biases unique to each are of comparable magnitude and opposite sign, and empirically Cuback and Cubic land within about
- * a point of each other when measured against a common competitor. Therefore, the biases are left uncorrected, since the design
- * goal of Cuback is to create a controller in parity with Cubic.
+ * The two biases unique to each are of comparable magnitude, and empirically Cuback and Cubic land within about a point of each
+ * other when measured against a common competitor. Therefore, the biases are left uncorrected, since the design goal of Cuback is
+ * to create a controller in parity with Cubic.
  */
 static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, double cwnd_prior, double bandwidth, double k,
                                         uint32_t mtu, double friendly_alpha)
