@@ -253,7 +253,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
 
 inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto)
 {
-    return (uint32_t)(rtt->smoothed + (rtt->variance != 0 ? rtt->variance * 4 : (float)min_pto)) + max_ack_delay;
+    return (uint32_t)(rtt->smoothed + (rtt->variance * 4 >= min_pto ? rtt->variance * 4 : min_pto)) + max_ack_delay;
 }
 
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
