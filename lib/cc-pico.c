@@ -114,6 +114,27 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
  *   safer without accurate app-limited tracking.
  * * Because the clock is the ack stream, a flow whose share is being taken advances more slowly than one that is taking, thereby
  *   yielding bandwidth. Fast convergence could be still helpful.
+ *
+ * __Note on the reno-friendly region__
+ *
+ * Neither Cubic nor Cuback tracks Reno exactly; they are both more aggressive than Reno.
+ *
+ * Cubic accumulates W_est += alpha * segments_acked / cwnd. Those bytes are delivered along the cubic curve, which sits above the
+ * reno curve early in the epoch, so W_est is credited with volume that a Reno flow would not yet have sent, and therefore reaches
+ * cwnd_prior sooner than it ought to.
+ *
+ * Cuback evaluates the reno curve as a pure function of the bytes sent since the epoch began and so carries no such drift, but it
+ * has the opposite bias. The one RT of credit granted when the epoch begins - which exists because Cubic aims at W_cubic(t + RTT)
+ * - advances the byte counter and therefore both curves, whereas Cubic applies that lookahead to W_cubic alone. Cancelling it for
+ * this branch alone would mean departing from `cwnd_epoch - alpha * MSS`.
+ *
+ * Both also share a bias that no such adjustment removes: immediately after the reduction the cubic curve is often the cheaper of
+ * the two, so the concave climb owns the first part of every epoch. As more packets would be inflight than with Reno, the ack clock
+ * runs faster, and this becomes a compound effect.
+ *
+ * The two biases unique to each are of comparable magnitude and opposite sign, and empirically Cuback and Cubic land within about
+ * a point of each other when measured against a common competitor. Therefore, the biases are left uncorrected, since the design
+ * goal of Cuback is to create a controller in parity with Cubic.
  */
 static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, double cwnd_prior, double bandwidth, double k,
                                         uint32_t mtu, double friendly_alpha)
