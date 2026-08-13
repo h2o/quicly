@@ -2141,8 +2141,8 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
 
     /* reset RTT estimate, adopting SRTT of the original path as initial RTT (TODO calculate RTT based on path challenge RT) */
     quicly_rtt_init(&conn->egress.loss.rtt, &conn->super.ctx->loss,
-                    conn->egress.loss.rtt.smoothed < conn->super.ctx->loss.default_initial_rtt
-                        ? conn->egress.loss.rtt.smoothed
+                    (uint32_t)conn->egress.loss.rtt.smoothed < conn->super.ctx->loss.default_initial_rtt
+                        ? (uint32_t)conn->egress.loss.rtt.smoothed
                         : conn->super.ctx->loss.default_initial_rtt);
 
     /* reset ratemeter */
@@ -3653,7 +3653,7 @@ static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
         multiplier = 2;
     }
 
-    return quicly_pacer_calc_send_rate(multiplier, conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed);
+    return quicly_pacer_calc_send_rate(multiplier, conn->egress.cc.cwnd, (uint32_t)conn->egress.loss.rtt.smoothed);
 }
 
 static int should_send_datagram_frame(quicly_conn_t *conn)
@@ -5537,12 +5537,13 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     }
     /* handle handshake timeouts */
     if ((conn->initial != NULL || conn->handshake != NULL) &&
-        conn->created_at + (uint64_t)conn->super.ctx->handshake_timeout_rtt_multiplier * conn->egress.loss.rtt.smoothed <=
+        conn->created_at + (int64_t)(conn->super.ctx->handshake_timeout_rtt_multiplier * conn->egress.loss.rtt.smoothed) <=
             conn->stash.now) {
-        QUICLY_PROBE(HANDSHAKE_TIMEOUT, conn, conn->stash.now, conn->stash.now - conn->created_at, conn->egress.loss.rtt.smoothed);
+        QUICLY_PROBE(HANDSHAKE_TIMEOUT, conn, conn->stash.now, conn->stash.now - conn->created_at,
+                     (uint32_t)conn->egress.loss.rtt.smoothed);
         QUICLY_LOG_CONN(handshake_timeout, conn, {
             PTLS_LOG_ELEMENT_SIGNED(elapsed, conn->stash.now - conn->created_at);
-            PTLS_LOG_ELEMENT_UNSIGNED(rtt_smoothed, conn->egress.loss.rtt.smoothed);
+            PTLS_LOG_ELEMENT_UNSIGNED(rtt_smoothed, (uint32_t)conn->egress.loss.rtt.smoothed);
         });
         conn->super.stats.num_handshake_timeouts++;
         goto CloseNow;
@@ -5588,7 +5589,8 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     }
 
     /* disable ECN if zero packets where acked in the first 3 PTO of the connection during which all sent packets are ECT(0) */
-    if (conn->egress.ecn.state == QUICLY_ECN_PROBING && conn->created_at + conn->egress.loss.rtt.smoothed * 3 < conn->stash.now) {
+    if (conn->egress.ecn.state == QUICLY_ECN_PROBING &&
+        conn->created_at + (int64_t)(conn->egress.loss.rtt.smoothed * 3) < conn->stash.now) {
         update_ecn_state(conn, QUICLY_ECN_OFF);
         /* TODO reset CC? */
     }

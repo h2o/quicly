@@ -32,7 +32,7 @@
 /**
  * Calculates the increase ratio to be used in congestion avoidance phase.
  */
-static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, uint32_t rtt, uint32_t mtu, double beta)
+static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t mtu, double beta)
 {
     /* Reno: CWND size after reduction */
     uint32_t reno = cwnd * beta;
