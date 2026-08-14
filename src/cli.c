@@ -153,9 +153,9 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             ", initial-packets-sent: %" PRIu64 ", 0rtt-packets-sent: %" PRIu64 ", handshake-packets-sent: %" PRIu64
             ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", ack-ecn-ect0: %" PRIu64 ", ack-ecn-ect1: %" PRIu64
             ", ack-ecn-ce: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64
-            ", paths-created %" PRIu64 ", paths-validated %" PRIu64 ", paths-promoted: %" PRIu64 ", srtt: %" PRIu32
-            ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 ", delivery-rate: %" PRIu64 ", cwnd: %" PRIu32
-            ", cwnd-exiting-slow-start: %" PRIu32 ", slow-start-exit-at: %" PRId64 ", jumpstart-cwnd: %" PRIu32
+            ", paths-created %" PRIu64 ", paths-validated %" PRIu64 ", paths-promoted: %" PRIu64
+            ", srtt: %f, num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 ", delivery-rate: %" PRIu64
+            ", cwnd: %" PRIu32 ", cwnd-exiting-slow-start: %" PRIu32 ", slow-start-exit-at: %" PRId64 ", jumpstart-cwnd: %" PRIu32
             ", jumpstart-exit: %" PRIu32 ", jumpstart-prev-rate: %" PRIu64 ", jumpstart-prev-rtt: %" PRIu32
             ", token-sent-rate: %" PRIu64 ", token-sent-rtt: %" PRIu32 ", ack-frequency-frames-sent: %" PRIu64
             ", ack-frequency-frames-received: %" PRIu64 "\n",
