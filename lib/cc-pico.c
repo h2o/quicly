@@ -420,42 +420,43 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->exit_slow_start_at = now;
     }
 
-    uint32_t bdp;
-    { /* calculate increase rate based on current estimate of BDP (usually from CWND before reduction) */
-        bdp = cc->cwnd;
-        if (cc->num_loss_episodes == 1) {
-            if (quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
-                bdp = cc->jumpstart.bytes_acked;
-            } else if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
-                /* Rapid Start might have already switched to 2x, but it's unclear if the entire RT was in 2x. Therefore, use a
-                 * conservative estimate of BDP. It could make the next CA epoch slightly aggressive, but nowhere near as aggressive
-                 * as startup, so we're fine. */
-                bdp = cc->cwnd / 3;
-            } else {
-                bdp = cc->cwnd / 2;
-            }
-            if (bdp < QUICLY_MIN_CWND * max_udp_payload_size)
-                bdp = QUICLY_MIN_CWND * max_udp_payload_size;
-        }
-        if (cc->type == &quicly_cc_type_cuback) {
-            if (cc->num_loss_episodes == 1) {
-                /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
-                cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
-                cc->state.pico.cuback.fast_convergence = 0;
-            } else {
-                cc->state.pico.cuback.fast_convergence = cuback_should_fast_converge(&cc->state.pico.cuback, bdp, cc->ssthresh);
-                cc->state.pico.cuback.cwnd_prior = bdp;
-            }
-            cc->state.pico.cuback.by_ecn = bytes == 0;
-            cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
-            cc->state.pico.bytes_to_mtu_increase = 0;
-        } else if (cc->type == &quicly_cc_type_cubic) {
-            cc->state.pico.bytes_to_mtu_increase = 0;
+    /* estimate BDP (usually from CWND before reduction) */
+    uint32_t bdp = cc->cwnd;
+    if (cc->num_loss_episodes == 1) {
+        if (quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
+            bdp = cc->jumpstart.bytes_acked;
+        } else if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+            /* Rapid Start might have already switched to 2x, but it's unclear if the entire RT was in 2x. Therefore, use a
+             * conservative estimate of BDP. It could make the next CA epoch slightly aggressive, but nowhere near as aggressive as
+             * startup, so we're fine. */
+            bdp = cc->cwnd / 3;
         } else {
-            cc->state.pico.bytes_per_mtu_increase =
-                pico_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size, beta);
-            cc->state.pico.bytes_to_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+            bdp = cc->cwnd / 2;
         }
+        if (bdp < QUICLY_MIN_CWND * max_udp_payload_size)
+            bdp = QUICLY_MIN_CWND * max_udp_payload_size;
+    }
+
+    /* calculate the increase rate based on the BDP (or defer the calculation) */
+    if (cc->type == &quicly_cc_type_cuback) {
+        if (cc->num_loss_episodes == 1) {
+            /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
+            cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
+            cc->state.pico.cuback.fast_convergence = 0;
+        } else {
+            cc->state.pico.cuback.fast_convergence = cuback_should_fast_converge(&cc->state.pico.cuback, bdp, cc->ssthresh);
+            cc->state.pico.cuback.cwnd_prior = bdp;
+        }
+        cc->state.pico.cuback.by_ecn = bytes == 0;
+        cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
+        cc->state.pico.bytes_to_mtu_increase = 0;
+    } else if (cc->type == &quicly_cc_type_cubic) {
+        /* Cubic: reset bytes_to_mtu_increase (which will no longer be used); rest is done further below, after reducing CWND */
+        cc->state.pico.bytes_to_mtu_increase = 0;
+    } else {
+        cc->state.pico.bytes_per_mtu_increase =
+            pico_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size, beta);
+        cc->state.pico.bytes_to_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
     }
 
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
