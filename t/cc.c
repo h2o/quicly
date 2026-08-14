@@ -216,18 +216,20 @@ static void test_cubic_fast_convergence(void)
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
 
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
-    ok(cc.state.cubic.w_max == 100 * mtu);
+    ok(cc.state.pico.cubic.w_max == 50 * mtu);
+    ok(cc.state.pico.cubic.w_est == 0);
 
-    cc.cwnd = 90 * mtu;
+    cc.cwnd = 45 * mtu;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1100, mtu);
-    ok(cc.state.cubic.w_max == 90 * mtu * 85 / 100);
+    ok(cc.state.pico.cubic.w_max == 45 * mtu * 85 / 100);
+    ok(cc.state.pico.cubic.w_est == 0);
 
-    /* The effective W_max is 76.5 MTUs, so an 80-MTU congestion window does not trigger fast convergence again. */
-    cc.cwnd = 80 * mtu;
+    /* The effective W_max is 38.25 MTUs, so a 40-MTU congestion window does not trigger fast convergence again. */
+    cc.cwnd = 40 * mtu;
     cc.type->cc_on_lost(&cc, &loss, mtu, 30, 40, 1200, mtu);
-    ok(cc.state.cubic.w_max == 80 * mtu);
-    ok(cc.state.cubic.cwnd_prior == 80 * mtu);
-    ok(cc.state.cubic.w_est == cc.cwnd);
+    ok(cc.state.pico.cubic.w_max == 40 * mtu);
+    ok(cc.state.pico.cubic.cwnd_prior == 40 * mtu);
+    ok(cc.state.pico.cubic.w_est == 0);
 }
 
 static void test_cubic_target_bounds(void)
@@ -238,18 +240,109 @@ static void test_cubic_target_bounds(void)
 
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
     cc.ssthresh = cc.cwnd;
-    cc.state.cubic.w_max = cc.cwnd;
-    cc.state.cubic.w_est = cc.cwnd;
-    cc.state.cubic.cwnd_prior = cc.cwnd;
+    cc.state.pico.cubic.w_max = cc.cwnd;
+    cc.state.pico.cubic.w_est = cc.cwnd;
+    cc.state.pico.cubic.cwnd_prior = cc.cwnd;
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 1000000, mtu);
     ok(cc.cwnd == initcwnd + mtu / 2);
 
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
     cc.ssthresh = cc.cwnd;
-    cc.state.cubic.w_max = cc.cwnd / 2;
-    cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 0, mtu);
+    cc.state.pico.cubic.w_max = cc.cwnd / 2;
+    cc.state.pico.cubic.cwnd_prior = cc.cwnd;
+    cc.state.pico.cubic.w_est = cc.state.pico.cubic.w_max - 1;
+    cc.type->cc_on_acked(&cc, &loss, 0, 1, cc.cwnd, 1, 2, 0, mtu);
     ok(cc.cwnd == initcwnd);
+}
+
+static void test_cubic_rapid_start_epoch(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.type->enable_rapid_start(&cc, 900);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.cubic.w_max != 0);
+    ok(cc.state.pico.cubic.cwnd_prior != 0);
+    ok(cc.state.pico.cubic.w_est == 0);
+    ok(cc.state.pico.cubic.epoch_start == 1000);
+
+    cc.type->cc_on_acked(&cc, &loss, 4 * mtu, 15, 8 * mtu, 1, 20, 1100, mtu);
+    uint32_t cwnd_prior_during_recovery = cc.state.pico.cubic.cwnd_prior;
+    ok(cc.state.pico.cubic.w_est == 0);
+    ok(cc.state.pico.cubic.epoch_start == 1000);
+
+    /* Further reduction during recovery does not initialize or restart the epoch. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 16, 20, 1150, mtu);
+    ok(cc.state.pico.cubic.w_est == 0);
+    ok(cc.state.pico.cubic.epoch_start == 1000);
+    uint32_t cwnd_epoch = cc.cwnd;
+
+    /* The first ACK beyond recovery establishes the Cubic epoch from Rapid Start's progressively reduced CWND. */
+    cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1200, mtu);
+    ok(cc.state.pico.cubic.cwnd_prior == (uint32_t)(cwnd_epoch / QUICLY_BETA_LOSS));
+    ok(cc.state.pico.cubic.cwnd_prior != cwnd_prior_during_recovery);
+    ok(cc.state.pico.cubic.w_max == cc.state.pico.cubic.cwnd_prior);
+    ok(cc.state.pico.cubic.w_est == cwnd_epoch);
+    ok(cc.state.pico.cubic.epoch_start == 1000);
+}
+
+static void test_cubic_abe(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+
+    /* Establish a 50-MTU W_max when leaving ordinary slow start. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.cubic.w_max == 50 * mtu);
+
+    /* An ECN event below W_max reduces by 0.85 and applies FC using (1 + 0.85) / 2, i.e. 0.925. */
+    cc.cwnd = 45 * mtu;
+    cc.type->cc_on_lost(&cc, &loss, 0, 20, 30, 1100, mtu);
+    ok(cc.state.pico.cubic.by_ecn);
+    ok(cc.cwnd == (uint32_t)(45 * mtu * QUICLY_BETA_ECN));
+    ok(cc.state.pico.cubic.w_max == (uint32_t)(45 * mtu * (1 + QUICLY_BETA_ECN) / 2));
+    ok(cc.state.pico.cubic.k > 0);
+
+    /* The ECN epoch uses alpha_ecn ~= 0.729, and Cubic intentionally ignores cc_limited for now. */
+    uint32_t cwnd_epoch = cc.cwnd;
+    double expected_w_est =
+        cwnd_epoch + (1 + 0.8) * (1 - QUICLY_BETA_ECN) / ((1 - 0.8) * (1 + QUICLY_BETA_ECN)) * mtu / cwnd_epoch * mtu;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 0, 31, 1200, mtu);
+    ok((uint32_t)cc.state.pico.cubic.w_est == (uint32_t)expected_w_est);
+}
+
+static void test_cubic_undo_loss(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.cubic.cwnd_prior != 0);
+
+    cc.type->cc_on_late_ack(&cc, 10, 1100);
+    ok(cc.cwnd == initcwnd);
+    ok(cc.ssthresh == UINT32_MAX);
+    ok(cc.recovery_end == 0);
+    ok(cc.state.pico.cubic.cwnd_prior == 0);
+    ok(cc.num_loss_episodes_undone == 1);
+}
+
+static void test_cubic_legacy_name(void)
+{
+    quicly_cc_t cc;
+
+    quicly_cc_cubic_legacy_init.cb(&quicly_cc_cubic_legacy_init, &cc, 12000, 0);
+    ok(cc.type == &quicly_cc_type_cubic_legacy);
+    ok(strcmp(cc.type->name, "cubic-legacy") == 0);
 }
 
 static void test_pico_ack_countdown(void)
@@ -428,6 +521,10 @@ void test_cc(void)
     subtest("rapid-start", test_rapid_start);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
+    subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);
+    subtest("cubic-abe", test_cubic_abe);
+    subtest("cubic-undo-loss", test_cubic_undo_loss);
+    subtest("cubic-legacy-name", test_cubic_legacy_name);
     subtest("pico-ack-countdown", test_pico_ack_countdown);
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
     subtest("cuback-reno-friendly-post-bdp-estimate", test_cuback_reno_friendly_post_bdp_estimate);

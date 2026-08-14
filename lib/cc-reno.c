@@ -118,7 +118,7 @@ static int reno_on_switch(quicly_cc_t *cc)
         cc->type = &quicly_cc_type_reno;
         cc->state.reno.stash = 0;
         return 1;
-    } else if (cc->type == &quicly_cc_type_cubic) {
+    } else if (cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cubic_legacy) {
         /* When in slow start, state can be reused as-is; otherwise, restart. */
         if (cc->cwnd_exiting_slow_start == 0) {
             cc->type = &quicly_cc_type_reno;
@@ -147,8 +147,8 @@ quicly_cc_type_t quicly_cc_type_reno = {"reno",
                                         quicly_cc_jumpstart_enter};
 quicly_init_cc_t quicly_cc_reno_init = {reno_init};
 
-quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno, &quicly_cc_type_cubic, &quicly_cc_type_pico,
-                                           &quicly_cc_type_cuback, NULL};
+quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno,  &quicly_cc_type_cubic, &quicly_cc_type_cubic_legacy,
+                                           &quicly_cc_type_pico, &quicly_cc_type_cuback, NULL};
 
 uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size)
 {

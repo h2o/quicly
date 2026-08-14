@@ -119,6 +119,37 @@ struct st_quicly_cc_cuback_t {
     unsigned by_ecn : 1;
 };
 
+/**
+ * State used by the Cubic policy implemented by cc-pico.c; see `quicly_cc_type_cubic`.
+ */
+struct st_quicly_cc_cubic_t {
+    /**
+     * Time offset from the latest congestion event until cwnd reaches W_max again.
+     */
+    double k;
+    /**
+     * Effective W_max retained from the latest congestion event.
+     */
+    uint32_t w_max;
+    /**
+     * Congestion window before the reduction at the latest congestion event.
+     */
+    uint32_t cwnd_prior;
+    /**
+     * Reno-friendly congestion window estimate. Zero indicates that the epoch has not yet been initialized from the post-recovery
+     * congestion window.
+     */
+    double w_est;
+    /**
+     * Timestamp of the congestion event that began the current epoch.
+     */
+    int64_t epoch_start;
+    /**
+     * Whether the reduction that began the current epoch used QUICLY_BETA_ECN (i.e., ABE).
+     */
+    unsigned by_ecn : 1;
+};
+
 typedef struct st_quicly_cc_t {
     /**
      * Congestion controller type.
@@ -154,7 +185,7 @@ typedef struct st_quicly_cc_t {
             uint32_t stash;
         } reno;
         /**
-         * State information shared by Pico and Cuback.
+         * State information shared by Pico, Cubic, and Cuback.
          */
         struct {
             /**
@@ -174,6 +205,10 @@ typedef struct st_quicly_cc_t {
                  * State used exclusively by Cuback.
                  */
                 struct st_quicly_cc_cuback_t cuback;
+                /**
+                 * State used exclusively by Cubic.
+                 */
+                struct st_quicly_cc_cubic_t cubic;
             };
             /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
@@ -186,12 +221,15 @@ typedef struct st_quicly_cc_t {
                 uint32_t num_packets_lost;
                 uint32_t cwnd;
                 uint32_t ssthresh;
-                uint32_t bytes_per_mtu_increase;
-                struct st_quicly_cc_cuback_t cuback;
+                union {
+                    uint32_t bytes_per_mtu_increase;
+                    struct st_quicly_cc_cuback_t cuback;
+                    struct st_quicly_cc_cubic_t cubic;
+                };
             } undo;
         } pico;
         /**
-         * State information for CUBIC congestion control.
+         * State information for the legacy CUBIC congestion controller.
          */
         struct {
             /**
@@ -333,11 +371,13 @@ struct st_quicly_cc_type_t {
 /**
  * The type objects for each CC. These can be used for testing the type of each `quicly_cc_t`.
  */
-extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_pico, quicly_cc_type_cuback;
+extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_cubic_legacy, quicly_cc_type_pico,
+    quicly_cc_type_cuback;
 /**
  * The factory methods for each CC.
  */
-extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_pico_init, quicly_cc_cuback_init;
+extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_cubic_legacy_init, quicly_cc_pico_init,
+    quicly_cc_cuback_init;
 
 /**
  * A null-terminated list of all CC types.
