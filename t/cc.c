@@ -19,6 +19,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#include <math.h>
 #include "quicly.h"
 #include "test.h"
 
@@ -243,6 +244,7 @@ static void test_cubic_target_bounds(void)
     cc.state.pico.cubic.w_max = cc.cwnd;
     cc.state.pico.cubic.w_est = cc.cwnd;
     cc.state.pico.cubic.cwnd_prior = cc.cwnd;
+    cc.state.pico.cubic.epoch_start = 1;
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 1000000, mtu);
     ok(cc.cwnd == initcwnd + mtu / 2);
@@ -252,8 +254,58 @@ static void test_cubic_target_bounds(void)
     cc.state.pico.cubic.w_max = cc.cwnd / 2;
     cc.state.pico.cubic.cwnd_prior = cc.cwnd;
     cc.state.pico.cubic.w_est = cc.state.pico.cubic.w_max - 1;
-    cc.type->cc_on_acked(&cc, &loss, 0, 1, cc.cwnd, 1, 2, 0, mtu);
+    cc.state.pico.cubic.epoch_start = 1;
+    cc.state.pico.cubic.k = 0;
+    cc.type->cc_on_acked(&cc, &loss, 1, 1, cc.cwnd, 0, 2, 1, mtu);
     ok(cc.cwnd == initcwnd);
+}
+
+static void test_cubic_cc_limited(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.pico.cubic.w_max = 50 * mtu;
+    cc.state.pico.cubic.cwnd_prior = 50 * mtu;
+    cc.state.pico.cubic.epoch_start = 1000;
+    cc.state.pico.cubic.k = -5;
+    cc.state.pico.cubic.w_est = cc.cwnd;
+
+    /* Entering the app-limited state stops the wall clock without resetting the ACK-clocked Reno estimate. An ACK from the
+     * preceding CC-limited region advances W_est, but neither restarts the epoch nor grows CWND. */
+    ok(!isnan(cc.state.pico.cubic.k));
+    cc.type->cc_update_cc_limited(&cc, 0, 2000);
+    ok(!cc.state.pico.cubic.cc_limited);
+    ok(isnan(cc.state.pico.cubic.k));
+    ok(cc.state.pico.cubic.epoch_start == 0);
+    ok(cc.state.pico.cubic.w_est == initcwnd);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 1, mtu, 1, 2, 2100, mtu);
+    ok(cc.cwnd == initcwnd);
+    ok(cc.state.pico.cubic.epoch_start == 0);
+    ok(cc.state.pico.cubic.w_est > initcwnd);
+
+    /* Resumption starts the wall clock. An ACK that is not locally CC-limited advances W_cubic but not W_est. */
+    double w_est_before = cc.state.pico.cubic.w_est;
+    cc.type->cc_update_cc_limited(&cc, 1, 3000);
+    ok(cc.state.pico.cubic.cc_limited);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 2, mtu, 0, 3, 3100, mtu);
+    ok(cc.cwnd > initcwnd);
+    ok(cc.state.pico.cubic.epoch_start == 3000);
+    ok(!isnan(cc.state.pico.cubic.k));
+    ok(cc.state.pico.cubic.w_est == w_est_before);
+    ok(cc.state.pico.cubic.k < 0);
+    double tk = -cc.state.pico.cubic.k;
+    ok(cwnd_is(0.4 * tk * tk * tk * mtu + cc.state.pico.cubic.w_max, initcwnd));
+
+    /* The next locally CC-limited ACK advances both clocks. */
+    uint32_t cwnd_before = cc.cwnd;
+    w_est_before = cc.state.pico.cubic.w_est;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 3, mtu, 1, 4, 3100, mtu);
+    ok(cc.cwnd > cwnd_before);
+    ok(cc.state.pico.cubic.w_est > w_est_before);
 }
 
 static void test_cubic_rapid_start_epoch(void)
@@ -269,25 +321,29 @@ static void test_cubic_rapid_start_epoch(void)
     ok(cc.state.pico.cubic.cwnd_prior != 0);
     ok(cc.state.pico.cubic.w_est == 0);
     ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(isnan(cc.state.pico.cubic.k));
 
     cc.type->cc_on_acked(&cc, &loss, 4 * mtu, 15, 8 * mtu, 1, 20, 1100, mtu);
     uint32_t cwnd_prior_during_recovery = cc.state.pico.cubic.cwnd_prior;
     ok(cc.state.pico.cubic.w_est == 0);
     ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(isnan(cc.state.pico.cubic.k));
 
     /* Further reduction during recovery does not initialize or restart the epoch. */
     cc.type->cc_on_lost(&cc, &loss, mtu, 16, 20, 1150, mtu);
     ok(cc.state.pico.cubic.w_est == 0);
     ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(isnan(cc.state.pico.cubic.k));
     uint32_t cwnd_epoch = cc.cwnd;
 
-    /* The first ACK beyond recovery establishes the Cubic epoch from Rapid Start's progressively reduced CWND. */
+    /* The first ACK beyond recovery initializes the increase function from Rapid Start's progressively reduced CWND. */
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1200, mtu);
     ok(cc.state.pico.cubic.cwnd_prior == (uint32_t)(cwnd_epoch / QUICLY_BETA_LOSS));
     ok(cc.state.pico.cubic.cwnd_prior != cwnd_prior_during_recovery);
     ok(cc.state.pico.cubic.w_max == cc.state.pico.cubic.cwnd_prior);
     ok(cc.state.pico.cubic.w_est == cwnd_epoch);
     ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(!isnan(cc.state.pico.cubic.k));
 }
 
 static void test_cubic_abe(void)
@@ -308,13 +364,13 @@ static void test_cubic_abe(void)
     ok(cc.state.pico.cubic.by_ecn);
     ok(cc.cwnd == (uint32_t)(45 * mtu * QUICLY_BETA_ECN));
     ok(cc.state.pico.cubic.w_max == (uint32_t)(45 * mtu * (1 + QUICLY_BETA_ECN) / 2));
-    ok(cc.state.pico.cubic.k == 0);
+    ok(isnan(cc.state.pico.cubic.k));
 
-    /* The ECN epoch uses alpha_ecn ~= 0.729, and Cubic intentionally ignores cc_limited for now. */
+    /* The ECN epoch uses alpha_ecn ~= 0.729. */
     uint32_t cwnd_epoch = cc.cwnd;
     double expected_w_est =
         cwnd_epoch + (1 + 0.8) * (1 - QUICLY_BETA_ECN) / ((1 - 0.8) * (1 + QUICLY_BETA_ECN)) * mtu / cwnd_epoch * mtu;
-    cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 0, 31, 1200, mtu);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1200, mtu);
     ok(cc.state.pico.cubic.k > 0);
     ok((uint32_t)cc.state.pico.cubic.w_est == (uint32_t)expected_w_est);
 }
@@ -557,6 +613,7 @@ void test_cc(void)
     subtest("reno", test_reno);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
+    subtest("cubic-cc-limited", test_cubic_cc_limited);
     subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);
     subtest("cubic-abe", test_cubic_abe);
     subtest("cubic-undo-loss", test_cubic_undo_loss);

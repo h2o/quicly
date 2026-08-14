@@ -128,30 +128,38 @@ struct st_quicly_cc_cuback_t {
  */
 struct st_quicly_cc_cubic_t {
     /**
-     * Time offset from the latest congestion event until cwnd reaches W_max again.
+     * Reno-friendly congestion window estimate. Zero indicates that congestion avoidance has not yet been initialized from the
+     * post-recovery congestion window; until then, the remaining fields do not define a usable increase function.
      */
-    double k;
-    /**
-     * Effective W_max retained from the latest congestion event.
-     */
-    uint32_t w_max;
+    double w_est;
     /**
      * Congestion window before the reduction at the latest congestion event.
      */
     uint32_t cwnd_prior;
     /**
-     * Reno-friendly congestion window estimate. Zero indicates that the epoch has not yet been initialized from the post-recovery
-     * congestion window.
+     * W_max retained from the latest congestion event (BDP estimate unless during fast convergence). This value is used when K is
+     * lazily evaluated post-recovery, and therefore is mutated until recovery exit (cf., Rapid Start).
      */
-    double w_est;
+    uint32_t w_max;
     /**
-     * Timestamp of the congestion event that began the current epoch.
+     * Timestamp at which the current epoch began. Zero while the CUBIC clock is stopped. When resuming, `epoch_start` is set to the
+     * current time and `k` is recalculated.
      */
     int64_t epoch_start;
     /**
-     * Whether the reduction that began the current epoch used QUICLY_BETA_ECN (i.e., ABE).
+     * Time offset from the beginning of the epoch until cwnd reaches W_max. NaN indicates that (re)calculation is needed, either
+     * because its initialization is deferred or because the clock has been stopped (see above). Once calculated, K is negative when
+     * the epoch begins above W_max.
+     */
+    double k;
+    /**
+     * Whether the epoch adopted QUICLY_BETA_ECN (i.e., ABE).
      */
     unsigned by_ecn : 1;
+    /**
+     * Whether the sender is currently CC-limited.
+     */
+    unsigned cc_limited : 1;
 };
 
 typedef struct st_quicly_cc_t {
@@ -361,6 +369,10 @@ struct st_quicly_cc_type_t {
      * [optional] turns on rapid start
      */
     void (*enable_rapid_start)(quicly_cc_t *cc, int64_t now);
+    /**
+     * [optional] updates whether the sender is CC-limited
+     */
+    void (*cc_update_cc_limited)(quicly_cc_t *cc, int cc_limited, int64_t now);
 };
 
 /**
