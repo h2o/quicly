@@ -377,7 +377,9 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             ++cc->state.pico.undo.num_packets_lost;
         if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
             quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, 0, bytes);
-            goto ClampMinAndUpdateMetrics;
+            if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
+                cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+            goto UpdateMetrics;
         }
         return;
     }
@@ -437,28 +439,6 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             bdp = QUICLY_MIN_CWND * max_udp_payload_size;
     }
 
-    /* calculate the increase rate based on the BDP (or defer the calculation) */
-    if (cc->type == &quicly_cc_type_cuback) {
-        if (cc->num_loss_episodes == 1) {
-            /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
-            cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
-            cc->state.pico.cuback.fast_convergence = 0;
-        } else {
-            cc->state.pico.cuback.fast_convergence = cuback_should_fast_converge(&cc->state.pico.cuback, bdp, cc->ssthresh);
-            cc->state.pico.cuback.cwnd_prior = bdp;
-        }
-        cc->state.pico.cuback.by_ecn = bytes == 0;
-        cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
-        cc->state.pico.bytes_to_mtu_increase = 0;
-    } else if (cc->type == &quicly_cc_type_cubic) {
-        /* Cubic: reset bytes_to_mtu_increase (which will no longer be used); rest is done further below, after reducing CWND */
-        cc->state.pico.bytes_to_mtu_increase = 0;
-    } else {
-        cc->state.pico.bytes_per_mtu_increase =
-            pico_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size, beta);
-        cc->state.pico.bytes_to_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
-    }
-
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
      * overshoot by 2x (note: after 0.5x reduction, CWND is still as large as BDP+QUEUE, so further reduction is preferable). That
      * 2x overshoot builds up regardless of if congestion is signalled by a CE mark or by a packet loss, therefore `beta` is not
@@ -485,19 +465,31 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
-    if (cc->type == &quicly_cc_type_cubic)
+
+    /* Update policy-specific state using the estimated BDP and reduced CWND. */
+    if (cc->type == &quicly_cc_type_cuback) {
+        if (cc->num_loss_episodes == 1) {
+            /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
+            cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
+            cc->state.pico.cuback.fast_convergence = 0;
+        } else {
+            cc->state.pico.cuback.fast_convergence = cuback_should_fast_converge(&cc->state.pico.cuback, bdp, cc->ssthresh);
+            cc->state.pico.cuback.cwnd_prior = bdp;
+        }
+        cc->state.pico.cuback.by_ecn = bytes == 0;
+        cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
+        cc->state.pico.bytes_to_mtu_increase = 0;
+    } else if (cc->type == &quicly_cc_type_cubic) {
         cubic_on_congestion(&cc->state.pico.cubic, bdp, cc->cwnd, cc->num_loss_episodes == 1, bytes == 0, now);
-
-    goto UpdateMetrics;
-
-ClampMinAndUpdateMetrics:
-    /* After CWND has been reduced, adjust if it is below permitted minimum and update metrics. */
-    if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
-        cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+        cc->state.pico.bytes_to_mtu_increase = 0;
+    } else {
+        cc->state.pico.bytes_per_mtu_increase =
+            pico_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size, beta);
+        cc->state.pico.bytes_to_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+    }
 
 UpdateMetrics:
     cc->ssthresh = cc->cwnd;
-
     if (cc->cwnd_minimum > cc->cwnd)
         cc->cwnd_minimum = cc->cwnd;
 }
