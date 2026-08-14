@@ -337,6 +337,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
+    /* Cubic: unlike other policies, congestion avoidance cannot be driven by bytes_to_mtu_increase. */
     if (cc->type == &quicly_cc_type_cubic && cc->cwnd >= cc->ssthresh) {
         struct st_quicly_cc_cubic_t *state = &cc->state.pico.cubic;
         if (state->w_est == 0) {
@@ -354,10 +355,9 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (!cc_limited)
         return;
 
-    /* Cuback defers cwnd_prior under Rapid Start, as its BDP estimate becomes available only after recovery ends. */
-    if (cc->type == &quicly_cc_type_cuback && cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.cwnd_prior == 0) {
+    /* Cuback: set cwnd_prior deferred under Rapid Start, as its BDP estimate becomes available only after recovery ends. */
+    if (cc->type == &quicly_cc_type_cuback && cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.cwnd_prior == 0)
         cc->state.pico.cuback.cwnd_prior = cc->cwnd / (cc->rapid_start.recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
-    }
 
     /* Rapid Start: update its RTT_floor measurement used for detecting queue build-up */
     if (cc->cwnd < cc->ssthresh && cc->num_loss_episodes == 0)
@@ -529,16 +529,17 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     int was_in_startup = cc->state.pico.undo.ssthresh == UINT32_MAX;
     cc->cwnd = cc->state.pico.undo.cwnd;
     cc->ssthresh = cc->state.pico.undo.ssthresh;
-    if (cc->type == &quicly_cc_type_cuback)
+    if (cc->type == &quicly_cc_type_cuback) {
         cc->state.pico.cuback = cc->state.pico.undo.cuback;
-    else if (cc->type == &quicly_cc_type_cubic) {
+    } else if (cc->type == &quicly_cc_type_cubic) {
         int cc_limited = cc->state.pico.cubic.cc_limited;
         cc->state.pico.cubic = cc->state.pico.undo.cubic;
         cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
-    } else if (cc->type == &quicly_cc_type_pico)
+    } else if (cc->type == &quicly_cc_type_pico) {
         cc->state.pico.bytes_per_mtu_increase = cc->state.pico.undo.bytes_per_mtu_increase;
-    else
+    } else {
         assert(cc->type == &quicly_cc_type_reno);
+    }
     cc->state.pico.bytes_to_mtu_increase = 0;
     cc->recovery_end = 0;
     --cc->num_loss_episodes;

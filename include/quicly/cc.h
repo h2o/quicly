@@ -201,16 +201,10 @@ typedef struct st_quicly_cc_t {
              */
             union {
                 /**
-                 * Size of the ACK interval after which CWND is increased by one MTU. Used exclusively by Pico.
+                 * [pico] size of the ACK interval after which CWND is increased by one MTU
                  */
                 uint32_t bytes_per_mtu_increase;
-                /**
-                 * State used exclusively by Cuback.
-                 */
                 struct st_quicly_cc_cuback_t cuback;
-                /**
-                 * State used exclusively by Cubic.
-                 */
                 struct st_quicly_cc_cubic_t cubic;
             };
             /**
