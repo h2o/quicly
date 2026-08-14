@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021 Fastly, Kazuho Oku
+ * Copyright (c) 2019-2026 Fastly, Janardhan Iyengar, Kazuho Oku
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -39,6 +39,11 @@ static double cubic_fast_convergence_w_max(double cwnd_prior, double cwnd_epoch)
 {
     /* Equivalent to (1 + beta) / 2 * cwnd_prior when cwnd_epoch is beta * cwnd_prior, including with ABE. */
     return (cwnd_prior + cwnd_epoch) / 2;
+}
+
+static int is_reno_policy(const quicly_cc_type_t *type)
+{
+    return type == &quicly_cc_type_reno || type == &quicly_cc_type_reno5;
 }
 
 /**
@@ -286,9 +291,11 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
         /* Cubic congestion avoidance bypasses the byte-counter path below. */
         assert(cc->state.pico.cubic.w_est == 0);
         return cc->cwnd;
-    } else {
-        assert(cc->type == &quicly_cc_type_pico);
+    } else if (cc->type == &quicly_cc_type_pico) {
         return cc->state.pico.bytes_per_mtu_increase;
+    } else {
+        assert(is_reno_policy(cc->type));
+        return cc->cwnd;
     }
 }
 
@@ -384,7 +391,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         return;
     }
 
-    double beta = bytes == 0 ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    double beta =
+        is_reno_policy(cc->type) ? cc->state.pico.reno.beta : (bytes == 0 ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
 
     /* Zero-byte congestion reports are ECN signals, not lost packets. They still enter recovery below, but cannot be undone by
      * late ACKs because no packet was deemed lost. */
@@ -402,8 +410,10 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             cc->state.pico.undo.cuback = cc->state.pico.cuback;
         } else if (cc->type == &quicly_cc_type_cubic) {
             cc->state.pico.undo.cubic = cc->state.pico.cubic;
-        } else {
+        } else if (cc->type == &quicly_cc_type_pico) {
             cc->state.pico.undo.bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+        } else {
+            assert(is_reno_policy(cc->type));
         }
     } else {
         cc->state.pico.undo.num_packets_lost = 0;
@@ -482,10 +492,14 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     } else if (cc->type == &quicly_cc_type_cubic) {
         cubic_on_congestion(&cc->state.pico.cubic, bdp, cc->cwnd, cc->num_loss_episodes == 1, bytes == 0, now);
         cc->state.pico.bytes_to_mtu_increase = 0;
-    } else {
-        cc->state.pico.bytes_per_mtu_increase =
-            pico_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size, beta);
+    } else if (cc->type == &quicly_cc_type_pico) {
+        /* Pico: Rapid Start might adjust CWND to a smaller value than `bdp`, but the increase is calculated using `bdp` regardless.
+         * Doing so makes the 1st CA aggressive, but not too aggressive to observe the 2nd loss immediately. */
+        cc->state.pico.bytes_per_mtu_increase = pico_bytes_per_mtu_increase(bdp, loss->rtt.smoothed, max_udp_payload_size, beta);
         cc->state.pico.bytes_to_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+    } else {
+        assert(is_reno_policy(cc->type));
+        cc->state.pico.bytes_to_mtu_increase = 0;
     }
 
 UpdateMetrics:
@@ -511,8 +525,10 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
         cc->state.pico.cuback = cc->state.pico.undo.cuback;
     else if (cc->type == &quicly_cc_type_cubic)
         cc->state.pico.cubic = cc->state.pico.undo.cubic;
-    else
+    else if (cc->type == &quicly_cc_type_pico)
         cc->state.pico.bytes_per_mtu_increase = cc->state.pico.undo.bytes_per_mtu_increase;
+    else
+        assert(is_reno_policy(cc->type));
     cc->state.pico.bytes_to_mtu_increase = 0;
     cc->recovery_end = 0;
     --cc->num_loss_episodes;
@@ -544,8 +560,13 @@ static void pico_init_pico_state(quicly_cc_t *cc)
         cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
     } else if (cc->type == &quicly_cc_type_cubic) {
         cc->state.pico.cubic = (struct st_quicly_cc_cubic_t){0};
-    } else {
+    } else if (cc->type == &quicly_cc_type_pico) {
         cc->state.pico.bytes_per_mtu_increase = cc->cwnd * QUICLY_BETA_LOSS;
+    } else if (cc->type == &quicly_cc_type_reno) {
+        cc->state.pico.reno.beta = QUICLY_BETA_LOSS;
+    } else {
+        assert(cc->type == &quicly_cc_type_reno5);
+        cc->state.pico.reno.beta = QUICLY_BETA_RENO5;
     }
 }
 
@@ -566,19 +587,18 @@ static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwn
 }
 
 /**
- * Switches to a controller implemented by this file; all three share their state representation.
+ * Switches to a controller implemented by this file; all five share their state representation.
  */
 static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
 {
     if (cc->type == type) {
         return 1; /* nothing to do */
-    } else if (cc->type == &quicly_cc_type_reno && (type != &quicly_cc_type_cubic || cc->cwnd_exiting_slow_start == 0)) {
+    } else if (is_reno_policy(cc->type) && (type != &quicly_cc_type_cubic || cc->cwnd_exiting_slow_start == 0)) {
         cc->type = type;
         pico_init_pico_state(cc);
         return 1;
-    } else if (cc->type == &quicly_cc_type_reno || cc->type == &quicly_cc_type_cubic ||
-               cc->type == &quicly_cc_type_cubic_legacy || cc->type == &quicly_cc_type_pico ||
-               cc->type == &quicly_cc_type_cuback) {
+    } else if (is_reno_policy(cc->type) || cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cubic_legacy ||
+               cc->type == &quicly_cc_type_pico || cc->type == &quicly_cc_type_cuback) {
         /* When in slow start, state can be reused as-is; otherwise, restart. */
         if (cc->cwnd_exiting_slow_start == 0) {
             cc->type = type;
@@ -595,6 +615,16 @@ static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
 static int pico_on_switch(quicly_cc_t *cc)
 {
     return switch_to(cc, &quicly_cc_type_pico);
+}
+
+static int reno_on_switch(quicly_cc_t *cc)
+{
+    return switch_to(cc, &quicly_cc_type_reno);
+}
+
+static int reno5_on_switch(quicly_cc_t *cc)
+{
+    return switch_to(cc, &quicly_cc_type_reno5);
 }
 
 static int cubic_on_switch(quicly_cc_t *cc)
@@ -615,6 +645,16 @@ static void pico_enable_rapid_start(quicly_cc_t *cc, int64_t now)
 static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
 {
     pico_reset(cc, &quicly_cc_type_pico, initcwnd);
+}
+
+static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+{
+    pico_reset(cc, &quicly_cc_type_reno, initcwnd);
+}
+
+static void reno5_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+{
+    pico_reset(cc, &quicly_cc_type_reno5, initcwnd);
 }
 
 static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
@@ -639,6 +679,30 @@ quicly_cc_type_t quicly_cc_type_pico = {"pico",
                                         pico_enable_rapid_start};
 quicly_init_cc_t quicly_cc_pico_init = {pico_init};
 
+quicly_cc_type_t quicly_cc_type_reno = {"reno",
+                                        &quicly_cc_reno_init,
+                                        pico_on_acked,
+                                        pico_on_lost,
+                                        pico_on_persistent_congestion,
+                                        pico_on_sent,
+                                        reno_on_switch,
+                                        pico_on_late_ack,
+                                        quicly_cc_jumpstart_enter,
+                                        pico_enable_rapid_start};
+quicly_init_cc_t quicly_cc_reno_init = {reno_init};
+
+quicly_cc_type_t quicly_cc_type_reno5 = {"reno5",
+                                         &quicly_cc_reno5_init,
+                                         pico_on_acked,
+                                         pico_on_lost,
+                                         pico_on_persistent_congestion,
+                                         pico_on_sent,
+                                         reno5_on_switch,
+                                         pico_on_late_ack,
+                                         quicly_cc_jumpstart_enter,
+                                         pico_enable_rapid_start};
+quicly_init_cc_t quicly_cc_reno5_init = {reno5_init};
+
 quicly_cc_type_t quicly_cc_type_cubic = {"cubic",
                                          &quicly_cc_cubic_init,
                                          pico_on_acked,
@@ -662,3 +726,21 @@ quicly_cc_type_t quicly_cc_type_cuback = {"cuback",
                                           quicly_cc_jumpstart_enter,
                                           pico_enable_rapid_start};
 quicly_init_cc_t quicly_cc_cuback_init = {cuback_init};
+
+quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno,         &quicly_cc_type_reno5,
+                                           &quicly_cc_type_cubic,        &quicly_cc_type_cubic_legacy,
+                                           &quicly_cc_type_pico,         &quicly_cc_type_cuback,
+                                           NULL};
+
+uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size)
+{
+    static const uint32_t mtu_max = 1472;
+
+    if (max_packets < QUICLY_MIN_CWND)
+        max_packets = QUICLY_MIN_CWND;
+    if (max_udp_payload_size > mtu_max)
+        max_udp_payload_size = mtu_max;
+
+    uint64_t cwnd_bytes = (uint64_t)max_packets * max_udp_payload_size;
+    return cwnd_bytes <= UINT32_MAX ? (uint32_t)cwnd_bytes : UINT32_MAX;
+}

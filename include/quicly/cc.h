@@ -39,9 +39,13 @@ extern "C" {
 
 #define QUICLY_MIN_CWND 2
 /**
- * Beta used when a packet is lost; to achieve fairness with Cubic, 0.7 is used throughout.
+ * Default beta used when a packet is lost; 0.7 is used to achieve fairness with Cubic.
  */
 #define QUICLY_BETA_LOSS 0.7
+/**
+ * Beta used by the Reno5 policy.
+ */
+#define QUICLY_BETA_RENO5 0.5
 /**
  * Beta used when congestion is signalled by ECN-CE alone; 0.85 is the value recommended by RFC 8511 for congestion controllers
  * using 0.7 as the loss-based factor.
@@ -176,16 +180,7 @@ typedef struct st_quicly_cc_t {
      */
     union {
         /**
-         * State information for Reno congestion control.
-         */
-        struct {
-            /**
-             * Stash of acknowledged bytes, used during congestion avoidance.
-             */
-            uint32_t stash;
-        } reno;
-        /**
-         * State information shared by Pico, Cubic, and Cuback.
+         * State information shared by Reno, Reno5, Pico, Cubic, and Cuback.
          */
         struct {
             /**
@@ -197,6 +192,15 @@ typedef struct st_quicly_cc_t {
              * State used exclusively by each congestion controller.
              */
             union {
+                /**
+                 * State used exclusively by the Reno policies.
+                 */
+                struct {
+                    /**
+                     * Multiplicative decrease factor.
+                     */
+                    double beta;
+                } reno;
                 /**
                  * Size of the ACK interval after which CWND is increased by one MTU. Used exclusively by Pico.
                  */
@@ -371,13 +375,13 @@ struct st_quicly_cc_type_t {
 /**
  * The type objects for each CC. These can be used for testing the type of each `quicly_cc_t`.
  */
-extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_cubic, quicly_cc_type_cubic_legacy, quicly_cc_type_pico,
-    quicly_cc_type_cuback;
+extern quicly_cc_type_t quicly_cc_type_reno, quicly_cc_type_reno5, quicly_cc_type_cubic, quicly_cc_type_cubic_legacy,
+    quicly_cc_type_pico, quicly_cc_type_cuback;
 /**
  * The factory methods for each CC.
  */
-extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_cubic_init, quicly_cc_cubic_legacy_init, quicly_cc_pico_init,
-    quicly_cc_cuback_init;
+extern struct st_quicly_init_cc_t quicly_cc_reno_init, quicly_cc_reno5_init, quicly_cc_cubic_init,
+    quicly_cc_cubic_legacy_init, quicly_cc_pico_init, quicly_cc_cuback_init;
 
 /**
  * A null-terminated list of all CC types.
@@ -389,10 +393,6 @@ extern quicly_cc_type_t *quicly_cc_all_types[];
  */
 uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size);
 
-void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
-                            int64_t now, uint32_t max_udp_payload_size);
-void quicly_cc_reno_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
-void quicly_cc_reno_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
 /**
  * Updates ECN counter when loss is observed.
  */
