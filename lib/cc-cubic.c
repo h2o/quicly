@@ -191,8 +191,8 @@ static int cubic_on_switch(quicly_cc_t *cc)
     if (cc->type == &quicly_cc_type_cubic_legacy)
         return 1;
 
-    if (cc->type == &quicly_cc_type_reno || cc->type == &quicly_cc_type_reno5 || cc->type == &quicly_cc_type_cubic ||
-        cc->type == &quicly_cc_type_pico || cc->type == &quicly_cc_type_cuback) {
+    if (cc->type == &quicly_cc_type_reno || cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_pico ||
+        cc->type == &quicly_cc_type_cuback) {
         /* When in slow start, state can be reused as-is; otherwise, restart. */
         if (cc->cwnd_exiting_slow_start == 0) {
             cc->type = &quicly_cc_type_cubic_legacy;

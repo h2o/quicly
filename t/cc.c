@@ -389,21 +389,16 @@ static void test_pico_switch_resets_ack_credit(void)
 
     ok(quicly_cc_type_reno.cc_switch(&cc));
     ok(cc.state.pico.bytes_to_mtu_increase == 0);
-    ok(cc.state.pico.reno.beta == QUICLY_BETA_LOSS);
-
-    ok(quicly_cc_type_reno5.cc_switch(&cc));
-    ok(cc.state.pico.reno.beta == QUICLY_BETA_RENO5);
 }
 
-static void test_reno_policy(quicly_init_cc_t *init, double beta)
+static void test_reno(void)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
 
     /* Reno grows by one MTU for each current-CWND bytes acknowledged. */
-    init->cb(init, &cc, initcwnd, 0);
-    ok(cc.state.pico.reno.beta == beta);
+    quicly_cc_reno_init.cb(&quicly_cc_reno_init, &cc, initcwnd, 0);
     cc.ssthresh = cc.cwnd;
     cc.type->cc_on_acked(&cc, &loss, initcwnd - 1, 1, initcwnd - 1, 1, 2, 100, mtu);
     ok(cc.cwnd == initcwnd);
@@ -412,22 +407,22 @@ static void test_reno_policy(quicly_init_cc_t *init, double beta)
     ok(cc.cwnd == initcwnd + mtu);
 
     /* Startup uses the shared 0.5 reduction; subsequent loss uses the policy beta. */
-    init->cb(init, &cc, initcwnd, 0);
+    quicly_cc_reno_init.cb(&quicly_cc_reno_init, &cc, initcwnd, 0);
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     ok(cc.cwnd == initcwnd / 2);
     cc.cwnd = 40 * mtu;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1100, mtu);
-    ok(cwnd_is(cc.cwnd, 40 * mtu * beta));
+    ok(cwnd_is(cc.cwnd, 40 * mtu * QUICLY_BETA_RENO));
     ok(cc.state.pico.bytes_to_mtu_increase == 0);
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1200, mtu);
     ok(cc.state.pico.bytes_to_mtu_increase == cc.cwnd - mtu);
 
-    /* Reno policies use the same beta for ECN and packet loss. */
-    init->cb(init, &cc, initcwnd, 0);
+    /* Reno uses the same beta for ECN and packet loss. */
+    quicly_cc_reno_init.cb(&quicly_cc_reno_init, &cc, initcwnd, 0);
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     cc.cwnd = 40 * mtu;
     cc.type->cc_on_lost(&cc, &loss, 0, 20, 30, 1100, mtu);
-    ok(cwnd_is(cc.cwnd, 40 * mtu * beta));
+    ok(cwnd_is(cc.cwnd, 40 * mtu * QUICLY_BETA_RENO));
 }
 
 static void test_cuback_reno_friendly_post_bdp_estimate(void)
@@ -559,8 +554,7 @@ static void test_rapid_start(void)
 void test_cc(void)
 {
     subtest("rapid-start", test_rapid_start);
-    subtest("reno", test_reno_policy, &quicly_cc_reno_init, QUICLY_BETA_LOSS);
-    subtest("reno5", test_reno_policy, &quicly_cc_reno5_init, QUICLY_BETA_RENO5);
+    subtest("reno", test_reno);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
     subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);
