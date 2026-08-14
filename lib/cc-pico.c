@@ -163,7 +163,8 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
     /* Fast convergence: derive Wmax as the midpoint of cwnd_prior and cwnd_epoch rather than hard-coding it to 0.85 * cwnd_prior.
      * Otherwise, with ABE using QUICLY_BETA_ECN (0.85), Wmax equals cwnd_epoch and K becomes zero, causing the CC to skip the
      * concave region and start at the plateau. */
-    double w_max = state->fast_convergence ? ((double)state->cwnd_prior + cwnd_epoch) / 2 : state->cwnd_prior;
+    double w_max =
+        state->trend == QUICLY_CUBIC_TREND_FAST_CONVERGENCE ? ((double)state->cwnd_prior + cwnd_epoch) / 2 : state->cwnd_prior;
     /* Seconds taken by the cubic curve to climb from `cwnd_epoch` back to W_max. Derived from the gap between the two rather than
      * from W_max alone, as fast convergence and the varying reduction ratios move them apart. */
     double k = cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
@@ -182,19 +183,21 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
     return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
 }
 
-static int cuback_should_fast_converge(struct st_quicly_cc_cuback_t *state, uint32_t peak, uint32_t cwnd_epoch)
+static void cuback_update_trend(struct st_quicly_cc_cuback_t *state, uint32_t peak, uint32_t cwnd_epoch)
 {
-    const double previous_w_max = state->fast_convergence ? ((double)state->cwnd_prior + cwnd_epoch) / 2 : state->cwnd_prior;
-    const int is_fc_candidate = peak < previous_w_max;
-    const int is_rising = !is_fc_candidate && peak > 1.01 * state->cwnd_prior;
-    const unsigned rising_epochs = state->rising_epochs;
+    static const uint8_t transitions[][3] = {{QUICLY_CUBIC_TREND_FAST_CONVERGENCE, 0, 1},
+                                             {QUICLY_CUBIC_TREND_FAST_CONVERGENCE, 0, 2},
+                                             {0, 0, 2},
+                                             {QUICLY_CUBIC_TREND_FAST_CONVERGENCE, 0, 1}};
+    const double previous_w_max =
+        state->trend == QUICLY_CUBIC_TREND_FAST_CONVERGENCE ? ((double)state->cwnd_prior + cwnd_epoch) / 2 : state->cwnd_prior;
+    const int trend_index = peak < previous_w_max ? 0 : peak <= 1.01 * state->cwnd_prior ? 1 : 2;
 
     /* A flow that gained share while its peer was reduced can retain an elevated bandwidth estimate. As the peer recovers, that
      * estimate slows the flow's ACK-driven clock and CWND increase, thereby raising the chance of Cuback observing a loss before
      * it reaches Wmax. To avoid entering fast convergence under such circumstances, suppress one apparent fast convergence after
      * two rising epochs. */
-    state->rising_epochs = is_rising ? rising_epochs + (rising_epochs < 2) : 0;
-    return is_fc_candidate && rising_epochs < 2;
+    state->trend = transitions[state->trend][trend_index];
 }
 
 /**
@@ -340,9 +343,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             if (cc->num_loss_episodes == 1) {
                 /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
                 cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
-                cc->state.pico.cuback.fast_convergence = 0;
             } else {
-                cc->state.pico.cuback.fast_convergence = cuback_should_fast_converge(&cc->state.pico.cuback, bdp, cc->ssthresh);
+                cuback_update_trend(&cc->state.pico.cuback, bdp, cc->ssthresh);
                 cc->state.pico.cuback.cwnd_prior = bdp;
             }
             cc->state.pico.cuback.by_ecn = bytes == 0;
