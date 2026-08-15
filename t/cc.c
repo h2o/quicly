@@ -542,36 +542,38 @@ static void test_cuback_fast_convergence_rising_epochs(void)
     cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1000, mtu);
     pn += 10;
     ok(cc.state.pico.cuback.cwnd_prior == 100 * mtu);
-    ok(cc.state.pico.cuback.rising_epochs == 0);
+    ok(cc.state.pico.cuback.trend == 0);
 
     /* Exactly 1% is treated as noise and does not begin a rising streak. */
     cc.cwnd = cc.state.pico.cuback.cwnd_prior * 101 / 100;
     cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1100, mtu);
     pn += 10;
-    ok(!cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.cuback.rising_epochs == 0);
+    ok(cc.state.pico.cuback.trend == 0);
 
     /* Two non-FC peaks rising by more than 1% arm one-shot suppression. */
     cc.cwnd = 1.01 * cc.state.pico.cuback.cwnd_prior + 1;
     cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1200, mtu);
     pn += 10;
-    ok(!cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.cuback.rising_epochs == 1);
+    ok(cc.state.pico.cuback.trend == 1);
     cc.cwnd = 1.01 * cc.state.pico.cuback.cwnd_prior + 1;
     cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1300, mtu);
     pn += 10;
-    ok(!cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.cuback.rising_epochs == 2);
+    ok(cc.state.pico.cuback.trend == 2);
 
     /* The first lower peak does not enter FC, but consumes the protection. A further reduction enters FC normally. */
     cc.cwnd = cc.state.pico.cuback.cwnd_prior - mtu;
     cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1400, mtu);
     pn += 10;
-    ok(!cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.cuback.rising_epochs == 0);
+    ok(cc.state.pico.cuback.trend == 0);
     cc.cwnd = cc.state.pico.cuback.cwnd_prior - mtu;
     cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1500, mtu);
-    ok(cc.state.pico.cuback.fast_convergence);
+    pn += 10;
+    ok(cc.state.pico.cuback.trend == QUICLY_CUBIC_TREND_FAST_CONVERGENCE);
+
+    /* A rising peak following fast convergence starts a new rising streak. */
+    cc.cwnd = 1.01 * cc.state.pico.cuback.cwnd_prior + 1;
+    cc.type->cc_on_lost(&cc, &loss, mtu, pn, pn + 10, 1600, mtu);
+    ok(cc.state.pico.cuback.trend == 1);
 }
 
 static void test_rapid_start(void)

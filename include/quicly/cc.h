@@ -93,6 +93,8 @@ struct st_quicly_cc_rapid_start_t {
     };
 };
 
+#define QUICLY_CUBIC_TREND_FAST_CONVERGENCE 3
+
 /**
  * State used exclusively by Cuback; see `quicly_cc_type_cuback`.
  */
@@ -108,15 +110,11 @@ struct st_quicly_cc_cuback_t {
      */
     uint32_t cwnd_prior;
     /**
-     * Number of consecutive non-fast-convergence epochs whose congestion peaks increased by more than 1%, saturated at two. A
-     * streak of two suppresses fast convergence once, protecting a flow whose bandwidth share has been growing.
+     * Congestion trend. `QUICLY_CUBIC_TREND_FAST_CONVERGENCE` indicates that fast convergence is applied to the current epoch;
+     * lower values count consecutive epochs whose congestion peaks increased by more than 1%, saturated at two. A count of two
+     * suppresses fast convergence once, protecting a flow whose bandwidth share has been growing.
      */
-    unsigned rising_epochs : 2;
-    /**
-     * Whether fast convergence is applied to the current epoch. When set, W_max is the midpoint between the cwnd_prior and
-     * cwnd_epoch.
-     */
-    unsigned fast_convergence : 1;
+    unsigned trend : 2;
     /**
      * Whether the reduction that began the current epoch used QUICLY_BETA_ECN (i.e., ABE).
      */
@@ -218,6 +216,7 @@ typedef struct st_quicly_cc_t {
                 uint32_t num_packets_lost;
                 uint32_t cwnd;
                 uint32_t ssthresh;
+                uint32_t bytes_to_mtu_increase;
                 union {
                     uint32_t bytes_per_mtu_increase;
                     struct st_quicly_cc_cuback_t cuback;
