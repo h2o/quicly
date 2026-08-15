@@ -1218,7 +1218,7 @@ static void usage(const char *cmd)
            "  -k key-file               specifies the credentials to be used for running the\n"
            "                            server. If omitted, the command runs as a client.\n"
            "  -C <algo>[:<iw>[:<p>]]    specifies the congestion control algorithm (\"reno\"\n"
-           "                            (default), \"cubic\", or \"pico\"), as well as\n"
+           "                            (default), \"cubic\", \"pico\", or \"cuback\"), as well as\n"
            "                            initial congestion window size (in packets, default:\n"
            "                            10) and use of pacing.\n"
            "  -d draft-number           specifies the draft version number to be used (e.g.,\n"
