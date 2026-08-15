@@ -557,7 +557,14 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
 
-    /* Update policy-specific state using the estimated BDP and reduced CWND. */
+    /* Update policy-specific state using the estimated BDP and reduced CWND.
+     *
+     * Note on Cubic/Cuback: When ordinary slow start is used, both Wmax and post-recovery CWND are set to the estimated BDP and K
+     * becomes 0, therefore the cubic curve will only have the convex region. CWND is not reduced beyond x0.5, because doing so
+     * risks bottleneck queue underflow. Compared to setting Wmax to CWND_at_loss, when there is no competing traffic, 2nd recovery
+     * is delayed due to increasing CWND only gradually immediately after exiting recovery. When competing traffic exists, it is
+     * likely to reach equilibrium earlier due to the convex region stealing bandwidth faster, once CWND goes past CWND_loss. When
+     * rapid start is used, BDP, Wmax, and K are determined upon exitting recovery. */
     if (cc->type == &quicly_cc_type_cuback) {
         cuback_update_trend(&cc->state.pico.cuback, bdp, cc->ssthresh);
         if (cc->num_loss_episodes == 1) {
