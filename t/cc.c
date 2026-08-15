@@ -362,6 +362,15 @@ static void test_cubic_rapid_start_epoch(void)
     ok(cc.state.pico.cubic.w_est == cwnd_epoch);
     ok(cc.state.pico.cubic.epoch_start == 1000);
     ok(!isnan(cc.state.pico.cubic.k));
+    ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+
+    /* Losses from the completed recovery no longer revise CWND or the initialized Cubic epoch. */
+    uint32_t cwnd_after_recovery = cc.cwnd, ssthresh_after_recovery = cc.ssthresh;
+    struct st_quicly_cc_cubic_t cubic_after_recovery = cc.state.pico.cubic;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 19, 21, 1250, mtu);
+    ok(cc.cwnd == cwnd_after_recovery);
+    ok(cc.ssthresh == ssthresh_after_recovery);
+    ok(memcmp(&cc.state.pico.cubic, &cubic_after_recovery, sizeof(cubic_after_recovery)) == 0);
 }
 
 static void test_cubic_abe(void)
@@ -544,8 +553,21 @@ static void test_cuback_deferred_bdp_estimate(void)
     ok(cc.state.pico.bytes_to_mtu_increase == 0);
 
     uint32_t cwnd_after_recovery = cc.cwnd;
-    cc.type->cc_on_acked(&cc, &loss, 1, 20, 1, 1, 21, 1100, mtu);
+    cc.type->cc_on_acked(&cc, &loss, 1, 20, 1, 0, 21, 1100, mtu);
     ok(cc.state.pico.cuback.cwnd_prior == (uint32_t)(cwnd_after_recovery / QUICLY_BETA_LOSS));
+    ok(cc.state.pico.bytes_to_mtu_increase == 0);
+    ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+
+    /* Losses from the completed recovery no longer revise CWND or the initialized Cuback epoch. */
+    cwnd_after_recovery = cc.cwnd;
+    uint32_t ssthresh_after_recovery = cc.ssthresh;
+    struct st_quicly_cc_cuback_t cuback_after_recovery = cc.state.pico.cuback;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 19, 21, 1150, mtu);
+    ok(cc.cwnd == cwnd_after_recovery);
+    ok(cc.ssthresh == ssthresh_after_recovery);
+    ok(memcmp(&cc.state.pico.cuback, &cuback_after_recovery, sizeof(cuback_after_recovery)) == 0);
+
+    cc.type->cc_on_acked(&cc, &loss, 1, 21, 1, 1, 22, 1200, mtu);
     ok(cc.state.pico.bytes_to_mtu_increase != 0);
 }
 
