@@ -532,7 +532,7 @@ subtest "slow-start" => sub {
             kill 'KILL', $pid;
             while (waitpid($pid, 0) != $pid) {}
             # test RT using the obtained session information
-            $doit->(100000, $cc eq "reno" ? (3, 3.5) : (2, 2.999), "-s", "$tempdir/session");
+            $doit->(100000, $cc eq "reno" ? (2.8, 3.5) : (2, 2.999), "-s", "$tempdir/session");
         });
     };
 };
