@@ -302,10 +302,12 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
                 cc->state.pico.undo.cwnd = cc->cwnd_initial;
         }
         cc->state.pico.undo.ssthresh = cc->ssthresh;
-        if (cc->type == &quicly_cc_type_cuback)
+        cc->state.pico.undo.bytes_to_mtu_increase = cc->state.pico.bytes_to_mtu_increase;
+        if (cc->type == &quicly_cc_type_cuback) {
             cc->state.pico.undo.cuback = cc->state.pico.cuback;
-        else
+        } else {
             cc->state.pico.undo.bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+        }
     } else {
         cc->state.pico.undo.num_packets_lost = 0;
     }
@@ -404,11 +406,12 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     int was_in_startup = cc->state.pico.undo.ssthresh == UINT32_MAX;
     cc->cwnd = cc->state.pico.undo.cwnd;
     cc->ssthresh = cc->state.pico.undo.ssthresh;
-    if (cc->type == &quicly_cc_type_cuback)
+    cc->state.pico.bytes_to_mtu_increase = cc->state.pico.undo.bytes_to_mtu_increase;
+    if (cc->type == &quicly_cc_type_cuback) {
         cc->state.pico.cuback = cc->state.pico.undo.cuback;
-    else
+    } else {
         cc->state.pico.bytes_per_mtu_increase = cc->state.pico.undo.bytes_per_mtu_increase;
-    cc->state.pico.bytes_to_mtu_increase = 0;
+    }
     cc->recovery_end = 0;
     --cc->num_loss_episodes;
     ++cc->num_loss_episodes_undone;

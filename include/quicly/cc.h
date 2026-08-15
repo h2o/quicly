@@ -184,8 +184,11 @@ typedef struct st_quicly_cc_t {
                 uint32_t num_packets_lost;
                 uint32_t cwnd;
                 uint32_t ssthresh;
-                uint32_t bytes_per_mtu_increase;
-                struct st_quicly_cc_cuback_t cuback;
+                uint32_t bytes_to_mtu_increase;
+                union {
+                    uint32_t bytes_per_mtu_increase;
+                    struct st_quicly_cc_cuback_t cuback;
+                };
             } undo;
         } pico;
         /**
