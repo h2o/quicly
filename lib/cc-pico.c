@@ -185,6 +185,10 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
 
 static void cuback_update_trend(struct st_quicly_cc_cuback_t *state, uint32_t peak, uint32_t cwnd_epoch)
 {
+    /* When exiting startup or switching from another policy, we do not have the prior CWND. If so, preserve trend. */
+    if (state->cwnd_prior == 0)
+        return;
+
     static const uint8_t transitions[][3] = {{QUICLY_CUBIC_TREND_FAST_CONVERGENCE, 0, 1},
                                              {QUICLY_CUBIC_TREND_FAST_CONVERGENCE, 0, 2},
                                              {0, 0, 2},
@@ -342,11 +346,11 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
                 bdp = QUICLY_MIN_CWND * max_udp_payload_size;
         }
         if (cc->type == &quicly_cc_type_cuback) {
+            cuback_update_trend(&cc->state.pico.cuback, bdp, cc->ssthresh);
             if (cc->num_loss_episodes == 1) {
                 /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
                 cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
             } else {
-                cuback_update_trend(&cc->state.pico.cuback, bdp, cc->ssthresh);
                 cc->state.pico.cuback.cwnd_prior = bdp;
             }
             cc->state.pico.cuback.by_ecn = bytes == 0;
