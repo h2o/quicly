@@ -19,6 +19,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include "quicly/pacer.h"
@@ -29,6 +30,71 @@
  * C of Cubic
  */
 #define QUICLY_CUBIC_C 0.4
+
+/**
+ * Fast approximation of cbrt(). The input is reduced to a mantissa in [1, 2), to which a fourth-degree polynomial is applied.
+ * The polynomial's value and slope join smoothly at powers of two; continuity of the slope is important to Cuback, which
+ * subtracts the inverse curve at adjacent CWNDs to calculate each per-MTU increase. The maximum relative error of the result is
+ * about 3.5e-5, which becomes about 1.1e-4 when K is cubed by Cubic. The relative slope error is below 8.5e-4, keeping Cuback's
+ * per-MTU inverse-curve calculation accurate to roughly 0.1%.
+ *
+ * Throughput on Zen 3 is ~9 clocks per call. Cuback currently invokes cbrt 3 times for each CWND increment, therefore if CWND grows
+ * by one MTU per MTU acknowledged (i.e., the worst case), the overhead relative to QUIC packet encryption becomes ~3% (throughput
+ * of an optimized aes-gcm-128 pipeline is 1.6 bytes / clock). Ordinary CWND grows much more slowly, making the overhead negligible.
+ *
+ * Inputs whose double representation is not IEEE 754 binary64, as well as subnormal and non-finite values, are handled by libc's
+ * cbrt().
+ */
+static double fast_cbrt(double x)
+{
+#define DBL2BITS(x)                                                                                                                \
+    (((union {                                                                                                                     \
+         double f;                                                                                                                 \
+         uint64_t u;                                                                                                               \
+     }){x})                                                                                                                        \
+         .u)
+#define BITS2DBL(x)                                                                                                                \
+    (((union {                                                                                                                     \
+         uint64_t u;                                                                                                               \
+         double f;                                                                                                                 \
+     }){x})                                                                                                                        \
+         .f)
+
+    if (!(FLT_RADIX == 2 && DBL_MANT_DIG == 53 && DBL_MIN_EXP == -1021 && DBL_MAX_EXP == 1024 &&
+          sizeof(double) == sizeof(uint64_t) && DBL2BITS(1.0) == UINT64_C(0x3ff0000000000000) &&
+          DBL2BITS(-1.0) == UINT64_C(0xbff0000000000000)))
+        return cbrt(x);
+
+    uint64_t u = DBL2BITS(x);
+    uint64_t abs_u = u & UINT64_C(0x7fffffffffffffff);
+    uint64_t exp = abs_u >> 52;
+
+    if (abs_u == 0)
+        return x;
+    if (exp == 0 || exp == 0x7ff)
+        return cbrt(x);
+
+    int e = (int)exp - 1023;
+    int q = e / 3;
+    int r = e - 3 * q;
+    if (r < 0) {
+        r += 3;
+        --q;
+    }
+
+    double m = BITS2DBL((abs_u & UINT64_C(0x000fffffffffffff)) | (UINT64_C(1023) << 52));
+    double y = 0.5066598330689034 +
+               m * (0.7177663288981584 + m * (-0.2988437245358902 + m * (0.08469719299100167 + m * -0.010279630422175424)));
+
+    static const double cbrt2_to_r[3] = {1.0, 1.2599210498948731648, 1.5874010519681994748};
+    double two_to_q = BITS2DBL((uint64_t)(q + 1023) << 52);
+
+    y *= cbrt2_to_r[r] * two_to_q;
+    return (u >> 63) ? -y : y;
+
+#undef DBL2BITS
+#undef BITS2DBL
+}
 
 #define CALC_FRIENDLY_ALPHA(Breno, Bcubic) (((1 + (Breno)) * (1 - (Bcubic))) / ((1 - (Breno)) * (1 + (Bcubic))))
 /* Loss follows RFC 9438's AIMD(1, 0.5) friendliness. For ABE, match Reno's beta_ecn=0.8 with Cubic's beta_ecn=0.85. */
@@ -76,7 +142,7 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
      *   bytes_per_mtu_increase = ((1 + 0.5^(1/3) * 2) / 2) * K * MTU / ((1 - beta) * RTT_at_Wmax)
      *                          ~= 1.293700525984 * K * MTU / ((1 - beta) * RTT_at_Wmax)
      */
-    double cubic = 1.293700525984 / (1 - beta) * 1000 * cbrt((1 - beta) / 0.4 * cwnd / mtu) / rtt * mtu;
+    double cubic = 1.293700525984 / (1 - beta) * 1000 * fast_cbrt((1 - beta) / 0.4 * cwnd / mtu) / rtt * mtu;
 
     double bytes = reno < cubic ? reno : cubic;
     return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
@@ -152,7 +218,7 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
 static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, double cwnd_prior, double bandwidth, double k,
                                         uint32_t mtu, double friendly_alpha)
 {
-    double bytes_cubic = (k + cbrt((w - w_max) / (QUICLY_CUBIC_C * mtu))) * bandwidth;
+    double bytes_cubic = (k + fast_cbrt((w - w_max) / (QUICLY_CUBIC_C * mtu))) * bandwidth;
     /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
      * reduction. Bandwidth cancels when converting the Reno time to bytes sent. */
     double w_friendly = w < cwnd_prior ? w : cwnd_prior;
@@ -176,7 +242,7 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
                                                                        : state->cwnd_prior;
     /* Seconds taken by the cubic curve to climb from `cwnd_epoch` back to W_max. Derived from the gap between the two rather than
      * from W_max alone, as fast convergence and the varying reduction ratios move them apart. */
-    double k = cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
+    double k = fast_cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
 
     double bytes0 = cuback_cwnd_to_bytes_sent(cwnd, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu,
                                               cubic_friendly_alpha[state->by_ecn]);
@@ -231,7 +297,7 @@ static int cubic_start_epoch(struct st_quicly_cc_cubic_t *state, uint32_t cwnd, 
         return 0;
     assert(state->w_est != 0);
     if (isnan(state->k))
-        state->k = cbrt((cubic_w_max(state, cwnd_epoch) - cwnd) / (QUICLY_CUBIC_C * mtu));
+        state->k = fast_cbrt((cubic_w_max(state, cwnd_epoch) - cwnd) / (QUICLY_CUBIC_C * mtu));
     return 1;
 }
 

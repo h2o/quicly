@@ -21,6 +21,7 @@
  */
 #include <math.h>
 #include "quicly.h"
+#include "../lib/cc-pico.c"
 #include "test.h"
 
 static void test_pico_undo_loss(void)
@@ -146,6 +147,24 @@ static int cwnd_is(uint32_t actual, double expected)
 {
     uint32_t truncated = (uint32_t)expected;
     return actual == truncated || actual == truncated + 1 || actual + 1 == truncated;
+}
+
+static void test_fast_cbrt(void)
+{
+    static const struct {
+        double input;
+        double expected;
+    } cases[] = {
+        {0, 0}, {1, 1}, {1.5, 1.1447142425533319}, {-1, -1}, {1048576, 101.59366732596477}, {-1572864, -116.29571794125694},
+    };
+
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(cases); ++i) {
+        double actual = fast_cbrt(cases[i].input);
+        if (cases[i].expected == 0)
+            ok(actual == 0);
+        else
+            ok(fabs((actual - cases[i].expected) / cases[i].expected) < 4e-5);
+    }
 }
 
 static void test_pico_ecn(void)
@@ -612,6 +631,7 @@ static void test_rapid_start(void)
 
 void test_cc(void)
 {
+    subtest("fast-cbrt", test_fast_cbrt);
     subtest("rapid-start", test_rapid_start);
     subtest("reno", test_reno);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
