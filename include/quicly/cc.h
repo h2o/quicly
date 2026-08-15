@@ -131,15 +131,6 @@ struct st_quicly_cc_cubic_t {
      */
     double w_est;
     /**
-     * Congestion window before the reduction at the latest congestion event.
-     */
-    uint32_t cwnd_prior;
-    /**
-     * W_max retained from the latest congestion event (BDP estimate unless during fast convergence). This value is used when K is
-     * lazily evaluated post-recovery, and therefore is mutated until recovery exit (cf., Rapid Start).
-     */
-    uint32_t w_max;
-    /**
      * Timestamp at which the current epoch began. Zero while the CUBIC clock is stopped. When resuming, `epoch_start` is set to the
      * current time and `k` is recalculated.
      */
@@ -150,6 +141,15 @@ struct st_quicly_cc_cubic_t {
      * the epoch begins above W_max.
      */
     double k;
+    /**
+     * Congestion window before the reduction at the latest congestion event.
+     */
+    uint32_t cwnd_prior;
+    /**
+     * Whether fast convergence applies to the current epoch. When set, W_max is the midpoint of `cwnd_prior` and the post-reduction
+     * CWND retained in `quicly_cc_t::ssthresh`; otherwise W_max equals `cwnd_prior`.
+     */
+    unsigned fast_convergence : 1;
     /**
      * Whether the epoch adopted QUICLY_BETA_ECN (i.e., ABE).
      */

@@ -214,19 +214,24 @@ static void cuback_update_trend(struct st_quicly_cc_cuback_t *state, uint32_t pe
     state->trend = transitions[state->trend][trend_index];
 }
 
-static double cubic_calc_w(const struct st_quicly_cc_cubic_t *state, double t_sec, uint32_t mtu)
+static double cubic_w_max(const struct st_quicly_cc_cubic_t *state, uint32_t cwnd_epoch)
 {
-    double tk = t_sec - state->k;
-    return QUICLY_CUBIC_C * tk * tk * tk * mtu + state->w_max;
+    return state->fast_convergence ? cubic_fast_convergence_w_max(state->cwnd_prior, cwnd_epoch) : state->cwnd_prior;
 }
 
-static int cubic_start_epoch(struct st_quicly_cc_cubic_t *state, uint32_t cwnd_epoch, uint32_t mtu)
+static double cubic_calc_w(const struct st_quicly_cc_cubic_t *state, uint32_t cwnd_epoch, double t_sec, uint32_t mtu)
+{
+    double tk = t_sec - state->k;
+    return QUICLY_CUBIC_C * tk * tk * tk * mtu + cubic_w_max(state, cwnd_epoch);
+}
+
+static int cubic_start_epoch(struct st_quicly_cc_cubic_t *state, uint32_t cwnd, uint32_t cwnd_epoch, uint32_t mtu)
 {
     if (state->epoch_start == 0)
         return 0;
     assert(state->w_est != 0);
     if (isnan(state->k))
-        state->k = cbrt(((double)state->w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
+        state->k = cbrt((cubic_w_max(state, cwnd_epoch) - cwnd) / (QUICLY_CUBIC_C * mtu));
     return 1;
 }
 
@@ -236,7 +241,7 @@ static void cubic_set_cc_limited(struct st_quicly_cc_cubic_t *state, int cc_limi
     if (!cc_limited) {
         state->k = NAN;
         state->epoch_start = 0;
-    } else if (state->epoch_start == 0 && state->w_max != 0) {
+    } else if (state->epoch_start == 0 && state->cwnd_prior != 0) {
         state->epoch_start = now;
         state->k = NAN;
     }
@@ -249,26 +254,26 @@ static uint32_t cubic_update_w_est(struct st_quicly_cc_cubic_t *state, uint32_t 
     return state->w_est < UINT32_MAX ? state->w_est : UINT32_MAX;
 }
 
-static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, uint32_t bytes, int cc_limited, uint32_t rtt,
-                           int64_t now, uint32_t mtu)
+static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, uint32_t cwnd_epoch, uint32_t bytes, int cc_limited,
+                           uint32_t rtt, int64_t now, uint32_t mtu)
 {
     uint32_t w_est = state->w_est < UINT32_MAX ? state->w_est : UINT32_MAX;
     if (cc_limited)
         w_est = cubic_update_w_est(state, *cwnd, bytes, mtu);
 
     /* W_est is ACK-clocked even while the CUBIC clock is stopped, but CWND does not grow while currently app-limited. */
-    if (!cubic_start_epoch(state, *cwnd, mtu) || bytes == 0)
+    if (!cubic_start_epoch(state, *cwnd, cwnd_epoch, mtu) || bytes == 0)
         return;
 
     double t_sec = (now - state->epoch_start) / 1000.;
-    double w_cubic = cubic_calc_w(state, t_sec, mtu);
+    double w_cubic = cubic_calc_w(state, cwnd_epoch, t_sec, mtu);
 
     if (w_cubic < w_est) {
         /* RFC 9438, Section 4.3; Reno-Friendly Region. */
         *cwnd = w_est;
     } else {
         /* RFC 9438, Sections 4.4 and 4.5; Concave and Convex Regions. */
-        double target = cubic_calc_w(state, t_sec + rtt / 1000., mtu);
+        double target = cubic_calc_w(state, cwnd_epoch, t_sec + rtt / 1000., mtu);
         if (target < *cwnd)
             target = *cwnd;
         if (target > 1.5 * *cwnd)
@@ -277,22 +282,17 @@ static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, u
     }
 }
 
-static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwnd_prior, uint32_t cwnd_epoch, int first_episode,
-                                int by_ecn, int64_t now)
+static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwnd_prior, uint32_t previous_cwnd_epoch, int by_ecn,
+                                int64_t now)
 {
+    double previous_w_max = cubic_w_max(state, previous_cwnd_epoch);
+
     state->by_ecn = by_ecn;
     state->k = NAN;
     state->epoch_start = state->cc_limited ? now : 0;
     state->w_est = 0;
-
-    if (first_episode) {
-        state->cwnd_prior = cwnd_prior;
-        state->w_max = cwnd_prior;
-    } else {
-        double previous_w_max = state->w_max;
-        state->cwnd_prior = cwnd_prior;
-        state->w_max = cwnd_prior < previous_w_max ? cubic_fast_convergence_w_max(cwnd_prior, cwnd_epoch) : cwnd_prior;
-    }
+    state->fast_convergence = state->cwnd_prior != 0 && cwnd_prior < previous_w_max;
+    state->cwnd_prior = cwnd_prior;
 }
 
 /**
@@ -350,12 +350,12 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         if (state->w_est == 0) {
             if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
                 state->cwnd_prior = cc->cwnd / (cc->rapid_start.recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
-                state->w_max = state->cwnd_prior;
+                state->fast_convergence = 0;
             }
-            assert(state->cwnd_prior != 0 && state->w_max != 0);
+            assert(state->cwnd_prior != 0);
             state->w_est = cc->cwnd;
         }
-        cubic_on_acked(state, &cc->cwnd, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size);
+        cubic_on_acked(state, &cc->cwnd, cc->ssthresh, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size);
         goto UpdateMaximum;
     }
 
@@ -504,7 +504,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
         cc->state.pico.bytes_to_mtu_increase = 0;
     } else if (cc->type == &quicly_cc_type_cubic) {
-        cubic_on_congestion(&cc->state.pico.cubic, bdp, cc->cwnd, cc->num_loss_episodes == 1, bytes == 0, now);
+        cubic_on_congestion(&cc->state.pico.cubic, bdp, cc->ssthresh, bytes == 0, now);
         cc->state.pico.bytes_to_mtu_increase = 0;
     } else if (cc->type == &quicly_cc_type_pico) {
         /* Pico: Rapid Start might adjust CWND to a smaller value than `bdp`, but the increase is calculated using `bdp` regardless.
