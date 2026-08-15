@@ -63,8 +63,8 @@ typedef const struct st_quicly_cc_type_t quicly_cc_type_t;
  */
 struct st_quicly_cc_rapid_start_t {
     /**
-     * Until when the newest sample (i.e., `rtt_samples[0]`) is to be updated. 0 if rapid start is disabled. Once congestion is
-     * observed, this field is set to -1 and `recovery` is used.
+     * Until when the newest sample (i.e., `rtt_samples[0]`) is to be updated. Once congestion is observed, this field is set to -1
+     * and `recovery` is used; upon exiting that recovery period, it is set to 0, indicating that rapid start is disabled.
      */
     int64_t newest_rtt_sample_until;
     union {
@@ -376,6 +376,10 @@ static void quicly_cc_init_rapid_start(struct st_quicly_cc_rapid_start_t *rs, in
  */
 static int quicly_cc_rapid_start_is_enabled(struct st_quicly_cc_rapid_start_t *rs);
 /**
+ * If rapid start is in recovery
+ */
+static int quicly_cc_rapid_start_is_in_recovery(struct st_quicly_cc_rapid_start_t *rs);
+/**
  * Updates heuristics needed to determine if slow start needs to be acclerated (i.e., 3x). Must not be called once the connection
  * enters the recovery period.
  */
@@ -394,6 +398,10 @@ static void quicly_cc_rapid_start_on_first_lost(struct st_quicly_cc_rapid_start_
  */
 static void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t *rs, uint32_t *cwnd, uint32_t bytes_acked,
                                               uint32_t bytes_lost);
+/**
+ * Called upon exitting recovery, to disable rapid start.
+ */
+static void quicly_cc_rapid_start_exit_recovery(struct st_quicly_cc_rapid_start_t *rs);
 
 /* inline definitions */
 
@@ -494,6 +502,11 @@ inline int quicly_cc_rapid_start_is_enabled(struct st_quicly_cc_rapid_start_t *r
     return rs->newest_rtt_sample_until != 0;
 }
 
+inline int quicly_cc_rapid_start_is_in_recovery(struct st_quicly_cc_rapid_start_t *rs)
+{
+    return rs->newest_rtt_sample_until == -1;
+}
+
 inline void quicly_cc_rapid_start_update_rtt(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt, int64_t now)
 {
     /* bail out unless enabled */
@@ -592,6 +605,13 @@ inline void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t 
     if (*cwnd < rs->recovery.cwnd_floor)
         *cwnd = rs->recovery.cwnd_floor;
 }
+
+inline void quicly_cc_rapid_start_exit_recovery(struct st_quicly_cc_rapid_start_t *rs)
+{
+    assert(rs->newest_rtt_sample_until == -1);
+    rs->newest_rtt_sample_until = 0;
+}
+
 
 #ifdef __cplusplus
 }

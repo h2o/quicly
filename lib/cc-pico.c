@@ -315,12 +315,14 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
-    if (!cc_limited)
-        return;
-
-    /* When Rapid Start is used, setting cwnd_prior is deferred, as the BDP estimate becomes available only after recovery ends. */
-    if (cc->type == &quicly_cc_type_cuback && cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.cwnd_prior == 0)
+    /* Cuback: set cwnd_prior deferred under Rapid Start, as its BDP estimate becomes available only after recovery ends. */
+    if (cc->type == &quicly_cc_type_cuback && quicly_cc_rapid_start_is_in_recovery(&cc->rapid_start)) {
+        assert(cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.cwnd_prior == 0);
         cc->state.pico.cuback.cwnd_prior = cc->cwnd / (cc->rapid_start.recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
+    }
+
+    if (!cc_limited)
+        goto Cleanup;
 
     if (cc->cwnd < cc->ssthresh && cc->num_loss_episodes == 0)
         quicly_cc_rapid_start_update_rtt(&cc->rapid_start, &loss->rtt, now);
@@ -337,8 +339,11 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     cc->state.pico.bytes_to_mtu_increase -= bytes_available;
     assert(cc->state.pico.bytes_to_mtu_increase != 0);
 
+Cleanup:
     if (cc->cwnd_maximum < cc->cwnd)
         cc->cwnd_maximum = cc->cwnd;
+    if (quicly_cc_rapid_start_is_in_recovery(&cc->rapid_start))
+        quicly_cc_rapid_start_exit_recovery(&cc->rapid_start);
 }
 
 static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
