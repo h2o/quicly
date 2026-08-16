@@ -266,8 +266,8 @@ static void test_cubic_target_bounds(void)
     cc.state.pico.cubic.cwnd_prior = cc.cwnd;
     cc.state.pico.cubic.epoch_start = 1;
 
-    cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 1000000, mtu);
-    ok(cc.cwnd == initcwnd + mtu / 2);
+    cc.type->cc_on_acked(&cc, &loss, 2 * mtu, 1, cc.cwnd, 1, 2, 1000000, mtu);
+    ok(cc.cwnd == initcwnd + mtu);
 
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
     cc.ssthresh = cc.cwnd / 2;

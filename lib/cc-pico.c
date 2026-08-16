@@ -334,13 +334,15 @@ static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, u
         /* RFC 9438, Section 4.3; Reno-Friendly Region. */
         *cwnd = w_est;
     } else {
-        /* RFC 9438, Sections 4.4 and 4.5; Concave and Convex Regions. */
+        /* RFC 9438, Sections 4.4 and 4.5; Concave and Convex Regions, but the amount added to CWND is  `(target - cwnd) / cwnd`
+         * per MTU acked rather than per ACK. The formula smoothes CWND by using W(t + RTT) as the target to be reached 1 RTT after.
+         * But for such a design to work, the adjustment needs to be made for every MTU acked. */
         double target = cubic_calc_w(state, cwnd_epoch, t_sec + rtt / 1000., mtu);
         if (target < *cwnd)
             target = *cwnd;
         if (target > 1.5 * *cwnd)
             target = 1.5 * *cwnd;
-        *cwnd = quicly_u32_add_saturating(*cwnd, (target / *cwnd - 1) * mtu);
+        *cwnd = quicly_u32_add_saturating(*cwnd, (target / *cwnd - 1) * bytes);
     }
 }
 
