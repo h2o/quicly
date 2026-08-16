@@ -350,7 +350,8 @@ static void test_cuback_deferred_bdp_estimate(void)
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     ok(cc.state.pico.cuback.cwnd_prior == initcwnd / 2);
 
-    /* Rapid Start continues adjusting CWND throughout recovery, so W_max is derived from the final CWND afterward. */
+    /* Rapid Start continues adjusting CWND throughout recovery, so W_max is derived from the final CWND afterward, using twice
+     * the BDP estimate. */
     quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0);
     cc.type->enable_rapid_start(&cc, 900);
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
@@ -360,7 +361,7 @@ static void test_cuback_deferred_bdp_estimate(void)
 
     uint32_t cwnd_after_recovery = cc.cwnd;
     cc.type->cc_on_acked(&cc, &loss, 1, 20, 1, 0, 21, 1100, mtu);
-    ok(cc.state.pico.cuback.cwnd_prior == (uint32_t)(cwnd_after_recovery / QUICLY_BETA_LOSS));
+    ok(cc.state.pico.cuback.cwnd_prior == (uint32_t)(2. * cwnd_after_recovery / QUICLY_BETA_LOSS));
     ok(cc.state.pico.bytes_to_mtu_increase == 0);
     ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
 
