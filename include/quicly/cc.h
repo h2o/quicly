@@ -93,8 +93,6 @@ struct st_quicly_cc_rapid_start_t {
     };
 };
 
-#define QUICLY_CUBIC_TREND_FAST_CONVERGENCE 3
-
 /**
  * State used exclusively by Cuback; see `quicly_cc_type_cuback`.
  */
@@ -110,11 +108,10 @@ struct st_quicly_cc_cuback_t {
      */
     uint32_t cwnd_prior;
     /**
-     * Congestion trend. `QUICLY_CUBIC_TREND_FAST_CONVERGENCE` indicates that fast convergence is applied to the current epoch;
-     * lower values count consecutive epochs whose congestion peaks increased by more than 1%, saturated at two. A count of two
-     * suppresses fast convergence once, protecting a flow whose bandwidth share has been growing.
+     * Whether fast convergence is applied to the current epoch. When set, W_max is the midpoint between the cwnd_prior and
+     * cwnd_epoch.
      */
-    unsigned trend : 2;
+    unsigned fast_convergence : 1;
     /**
      * Whether the reduction that began the current epoch used QUICLY_BETA_ECN (i.e., ABE).
      */
