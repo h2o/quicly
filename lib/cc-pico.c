@@ -109,6 +109,25 @@ static double cubic_fast_convergence_w_max(double cwnd_prior, double cwnd_epoch)
 }
 
 /**
+ * Calculates Wmax after Rapid Start.
+ *
+ * Traditional Slow Start overshoots the path BDP by roughly 2x before detecting congestion, and Cubic retains that loss-time CWND
+ * as Wmax, its BDP estimate. When there is no competing flow, doing so overflows the bottleneck once again almost immediately and
+ * causes head-of-line blocking. However, if there are competing flows, this overshoot helps the new flow increase its share of
+ * bottleneck bandwidth rapidly.
+ *
+ * Rapid Start prevents the stated downside by obtaining a good BDP estimate and by adjusting CWND to beta * estimate, but does not
+ * provide guidance on how fast the Cubic curve should grow. We set Wmax to 2 * estimate, the same value that Cubic with traditional
+ * Slow Start adopts.
+ */
+static uint32_t cubic_post_rapid_start_wmax(uint32_t cwnd_epoch, int by_ecn)
+{
+    double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    double w_max = 2. * cwnd_epoch / beta;
+    return w_max < UINT32_MAX ? w_max : UINT32_MAX;
+}
+
+/**
  * Calculates the increase ratio to be used in congestion avoidance phase.
  */
 static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t mtu, double beta)
@@ -415,7 +434,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         struct st_quicly_cc_cubic_t *state = &cc->state.pico.cubic;
         if (state->w_est == 0) {
             if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
-                state->cwnd_prior = cc->cwnd / (cc->rapid_start.recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
+                state->cwnd_prior = cubic_post_rapid_start_wmax(cc->cwnd, cc->rapid_start.recovery.by_ecn);
                 state->fast_convergence = 0;
             }
             assert(state->cwnd_prior != 0);
@@ -428,7 +447,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     /* Cuback: set cwnd_prior deferred under Rapid Start, as its BDP estimate becomes available only after recovery ends. */
     if (cc->type == &quicly_cc_type_cuback && quicly_cc_rapid_start_is_in_recovery(&cc->rapid_start)) {
         assert(cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.cwnd_prior == 0);
-        cc->state.pico.cuback.cwnd_prior = cc->cwnd / (cc->rapid_start.recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
+        cc->state.pico.cuback.cwnd_prior = cubic_post_rapid_start_wmax(cc->cwnd, cc->rapid_start.recovery.by_ecn);
     }
 
     if (!cc_limited)
