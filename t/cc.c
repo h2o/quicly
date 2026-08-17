@@ -19,6 +19,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#include <math.h>
 #include "quicly.h"
 #include "../lib/cc-pico.c"
 #include "test.h"
@@ -235,18 +236,22 @@ static void test_cubic_fast_convergence(void)
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
 
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
-    ok(cc.state.cubic.w_max == 100 * mtu);
+    ok(!cc.state.pico.cubic.fast_convergence);
+    ok(cc.state.pico.cubic.cwnd_prior == 50 * mtu);
+    ok(cc.state.pico.cubic.w_est == 0);
 
-    cc.cwnd = 90 * mtu;
+    cc.cwnd = 45 * mtu;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1100, mtu);
-    ok(cc.state.cubic.w_max == 90 * mtu * 85 / 100);
+    ok(cc.state.pico.cubic.fast_convergence);
+    ok((cc.state.pico.cubic.cwnd_prior + cc.ssthresh) / 2 == 45 * mtu * 85 / 100);
+    ok(cc.state.pico.cubic.w_est == 0);
 
-    /* The effective W_max is 76.5 MTUs, so an 80-MTU congestion window does not trigger fast convergence again. */
-    cc.cwnd = 80 * mtu;
+    /* The effective W_max is 38.25 MTUs, so a 40-MTU congestion window does not trigger fast convergence again. */
+    cc.cwnd = 40 * mtu;
     cc.type->cc_on_lost(&cc, &loss, mtu, 30, 40, 1200, mtu);
-    ok(cc.state.cubic.w_max == 80 * mtu);
-    ok(cc.state.cubic.cwnd_prior == 80 * mtu);
-    ok(cc.state.cubic.w_est == cc.cwnd);
+    ok(!cc.state.pico.cubic.fast_convergence);
+    ok(cc.state.pico.cubic.cwnd_prior == 40 * mtu);
+    ok(cc.state.pico.cubic.w_est == 0);
 }
 
 static void test_cubic_target_bounds(void)
@@ -257,18 +262,174 @@ static void test_cubic_target_bounds(void)
 
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
     cc.ssthresh = cc.cwnd;
-    cc.state.cubic.w_max = cc.cwnd;
-    cc.state.cubic.w_est = cc.cwnd;
-    cc.state.cubic.cwnd_prior = cc.cwnd;
+    cc.state.pico.cubic.w_est = cc.cwnd;
+    cc.state.pico.cubic.cwnd_prior = cc.cwnd;
+    cc.state.pico.cubic.epoch_start = 1;
 
-    cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 1000000, mtu);
-    ok(cc.cwnd == initcwnd + mtu / 2);
+    cc.type->cc_on_acked(&cc, &loss, 2 * mtu, 1, cc.cwnd, 1, 2, 1000000, mtu);
+    ok(cc.cwnd == initcwnd + mtu);
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.ssthresh = cc.cwnd / 2;
+    cc.state.pico.cubic.cwnd_prior = cc.cwnd / 2;
+    cc.state.pico.cubic.w_est = cc.state.pico.cubic.cwnd_prior - 1;
+    cc.state.pico.cubic.epoch_start = 1;
+    cc.state.pico.cubic.k = 0;
+    cc.type->cc_on_acked(&cc, &loss, 1, 1, cc.cwnd, 0, 2, 1, mtu);
+    ok(cc.cwnd == initcwnd);
+}
+
+static void test_cubic_cc_limited(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
 
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
     cc.ssthresh = cc.cwnd;
-    cc.state.cubic.w_max = cc.cwnd / 2;
-    cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 0, mtu);
+    cc.state.pico.cubic.cwnd_prior = 50 * mtu;
+    cc.state.pico.cubic.epoch_start = 1000;
+    cc.state.pico.cubic.k = -5;
+    cc.state.pico.cubic.w_est = cc.cwnd;
+
+    /* Entering the app-limited state stops the wall clock without resetting the ACK-clocked Reno estimate. An ACK from the
+     * preceding CC-limited region advances W_est, but neither restarts the epoch nor grows CWND. */
+    ok(!isnan(cc.state.pico.cubic.k));
+    cc.type->cc_update_cc_limited(&cc, 0, 2000);
+    ok(!cc.state.pico.cubic.cc_limited);
+    ok(isnan(cc.state.pico.cubic.k));
+    ok(cc.state.pico.cubic.epoch_start == 0);
+    ok(cc.state.pico.cubic.w_est == initcwnd);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 1, mtu, 1, 2, 2100, mtu);
     ok(cc.cwnd == initcwnd);
+    ok(cc.state.pico.cubic.epoch_start == 0);
+    ok(cc.state.pico.cubic.w_est > initcwnd);
+
+    /* Resumption starts the wall clock. An ACK that is not locally CC-limited advances W_cubic but not W_est. */
+    double w_est_before = cc.state.pico.cubic.w_est;
+    cc.type->cc_update_cc_limited(&cc, 1, 3000);
+    ok(cc.state.pico.cubic.cc_limited);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 2, mtu, 0, 3, 3100, mtu);
+    ok(cc.cwnd > initcwnd);
+    ok(cc.state.pico.cubic.epoch_start == 3000);
+    ok(!isnan(cc.state.pico.cubic.k));
+    ok(cc.state.pico.cubic.w_est == w_est_before);
+    ok(cc.state.pico.cubic.k < 0);
+    double tk = -cc.state.pico.cubic.k;
+    ok(cwnd_is(0.4 * tk * tk * tk * mtu + cc.state.pico.cubic.cwnd_prior, initcwnd));
+
+    /* The next locally CC-limited ACK advances both clocks. */
+    uint32_t cwnd_before = cc.cwnd;
+    w_est_before = cc.state.pico.cubic.w_est;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 3, mtu, 1, 4, 3100, mtu);
+    ok(cc.cwnd > cwnd_before);
+    ok(cc.state.pico.cubic.w_est > w_est_before);
+}
+
+static void test_cubic_rapid_start_epoch(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.type->enable_rapid_start(&cc, 900);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.cubic.cwnd_prior != 0);
+    ok(!cc.state.pico.cubic.fast_convergence);
+    ok(cc.state.pico.cubic.w_est == 0);
+    ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(isnan(cc.state.pico.cubic.k));
+
+    cc.type->cc_on_acked(&cc, &loss, 4 * mtu, 15, 8 * mtu, 1, 20, 1100, mtu);
+    uint32_t cwnd_prior_during_recovery = cc.state.pico.cubic.cwnd_prior;
+    ok(cc.state.pico.cubic.w_est == 0);
+    ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(isnan(cc.state.pico.cubic.k));
+
+    /* Further reduction during recovery does not initialize or restart the epoch. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 16, 20, 1150, mtu);
+    ok(cc.state.pico.cubic.w_est == 0);
+    ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(isnan(cc.state.pico.cubic.k));
+    uint32_t cwnd_epoch = cc.cwnd;
+
+    /* The first ACK beyond recovery initializes the increase function from Rapid Start's progressively reduced CWND, using twice
+     * the BDP estimate as W_max. */
+    cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1200, mtu);
+    ok(cc.state.pico.cubic.cwnd_prior == (uint32_t)(2. * cwnd_epoch / QUICLY_BETA_LOSS));
+    ok(cc.state.pico.cubic.cwnd_prior != cwnd_prior_during_recovery);
+    ok(!cc.state.pico.cubic.fast_convergence);
+    ok(cc.state.pico.cubic.w_est == cwnd_epoch);
+    ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(!isnan(cc.state.pico.cubic.k));
+    ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+
+    /* Losses from the completed recovery no longer revise CWND or the initialized Cubic epoch. */
+    uint32_t cwnd_after_recovery = cc.cwnd, ssthresh_after_recovery = cc.ssthresh;
+    struct st_quicly_cc_cubic_t cubic_after_recovery = cc.state.pico.cubic;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 19, 21, 1250, mtu);
+    ok(cc.cwnd == cwnd_after_recovery);
+    ok(cc.ssthresh == ssthresh_after_recovery);
+    ok(memcmp(&cc.state.pico.cubic, &cubic_after_recovery, sizeof(cubic_after_recovery)) == 0);
+}
+
+static void test_cubic_abe(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+
+    /* Establish a 50-MTU W_max when leaving ordinary slow start. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(!cc.state.pico.cubic.fast_convergence);
+    ok(cc.state.pico.cubic.cwnd_prior == 50 * mtu);
+
+    /* An ECN event below W_max reduces by 0.85 and applies FC using (1 + 0.85) / 2, i.e. 0.925. */
+    cc.cwnd = 45 * mtu;
+    cc.type->cc_on_lost(&cc, &loss, 0, 20, 30, 1100, mtu);
+    ok(cc.state.pico.cubic.by_ecn);
+    ok(cc.cwnd == (uint32_t)(45 * mtu * QUICLY_BETA_ECN));
+    ok(cc.state.pico.cubic.fast_convergence);
+    ok((cc.state.pico.cubic.cwnd_prior + cc.ssthresh) / 2 == (uint32_t)(45 * mtu * (1 + QUICLY_BETA_ECN) / 2));
+    ok(isnan(cc.state.pico.cubic.k));
+
+    /* The ECN epoch uses alpha_ecn ~= 0.729. */
+    uint32_t cwnd_epoch = cc.cwnd;
+    double expected_w_est =
+        cwnd_epoch + (1 + 0.8) * (1 - QUICLY_BETA_ECN) / ((1 - 0.8) * (1 + QUICLY_BETA_ECN)) * mtu / cwnd_epoch * mtu;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1200, mtu);
+    ok(cc.state.pico.cubic.k > 0);
+    ok((uint32_t)cc.state.pico.cubic.w_est == (uint32_t)expected_w_est);
+}
+
+static void test_cubic_undo_loss(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.cubic.cwnd_prior != 0);
+
+    cc.type->cc_on_late_ack(&cc, 10, 1100);
+    ok(cc.cwnd == initcwnd);
+    ok(cc.ssthresh == UINT32_MAX);
+    ok(cc.recovery_end == 0);
+    ok(cc.state.pico.cubic.cwnd_prior == 0);
+    ok(cc.num_loss_episodes_undone == 1);
+}
+
+static void test_cubic_legacy_name(void)
+{
+    quicly_cc_t cc;
+
+    quicly_cc_cubic_legacy_init.cb(&quicly_cc_cubic_legacy_init, &cc, 12000, 0);
+    ok(cc.type == &quicly_cc_type_cubic_legacy);
+    ok(strcmp(cc.type->name, "cubic-legacy") == 0);
 }
 
 static void test_pico_ack_countdown(void)
@@ -304,7 +465,7 @@ static void test_pico_switch_resets_ack_credit(void)
     cc.ssthresh = cc.cwnd;
     cc.type->cc_on_acked(&cc, &loss, initcwnd - 1, 1, initcwnd - 1, 1, 2, 100, mtu);
     ok(cc.cwnd == initcwnd);
-    ok(cc.state.reno.stash == initcwnd - 1);
+    ok(cc.state.pico.bytes_to_mtu_increase == 1);
 
     ok(quicly_cc_type_pico.cc_switch(&cc));
     ok(cc.state.pico.bytes_to_mtu_increase == 0);
@@ -313,7 +474,41 @@ static void test_pico_switch_resets_ack_credit(void)
     ok(cc.state.pico.bytes_to_mtu_increase == initcwnd * QUICLY_BETA_LOSS - 1);
 
     ok(quicly_cc_type_reno.cc_switch(&cc));
-    ok(cc.state.reno.stash == 0);
+    ok(cc.state.pico.bytes_to_mtu_increase == 0);
+}
+
+static void test_reno(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    /* Reno grows by one MTU for each current-CWND bytes acknowledged. */
+    quicly_cc_reno_init.cb(&quicly_cc_reno_init, &cc, initcwnd, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.type->cc_on_acked(&cc, &loss, initcwnd - 1, 1, initcwnd - 1, 1, 2, 100, mtu);
+    ok(cc.cwnd == initcwnd);
+    ok(cc.state.pico.bytes_to_mtu_increase == 1);
+    cc.type->cc_on_acked(&cc, &loss, 1, 2, 1, 1, 3, 100, mtu);
+    ok(cc.cwnd == initcwnd + mtu);
+
+    /* Startup uses the shared 0.5 reduction; subsequent loss uses the policy beta. */
+    quicly_cc_reno_init.cb(&quicly_cc_reno_init, &cc, initcwnd, 0);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.cwnd == initcwnd / 2);
+    cc.cwnd = 40 * mtu;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1100, mtu);
+    ok(cwnd_is(cc.cwnd, 40 * mtu * QUICLY_BETA_RENO));
+    ok(cc.state.pico.bytes_to_mtu_increase == 0);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1200, mtu);
+    ok(cc.state.pico.bytes_to_mtu_increase == cc.cwnd - mtu);
+
+    /* Reno uses the same beta for ECN and packet loss. */
+    quicly_cc_reno_init.cb(&quicly_cc_reno_init, &cc, initcwnd, 0);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    cc.cwnd = 40 * mtu;
+    cc.type->cc_on_lost(&cc, &loss, 0, 20, 30, 1100, mtu);
+    ok(cwnd_is(cc.cwnd, 40 * mtu * QUICLY_BETA_RENO));
 }
 
 static void test_cuback_reno_friendly_post_bdp_estimate(void)
@@ -415,8 +610,14 @@ void test_cc(void)
 {
     subtest("fast-cbrt", test_fast_cbrt);
     subtest("rapid-start", test_rapid_start);
+    subtest("reno", test_reno);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
+    subtest("cubic-cc-limited", test_cubic_cc_limited);
+    subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);
+    subtest("cubic-abe", test_cubic_abe);
+    subtest("cubic-undo-loss", test_cubic_undo_loss);
+    subtest("cubic-legacy-name", test_cubic_legacy_name);
     subtest("pico-ack-countdown", test_pico_ack_countdown);
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
     subtest("cuback-reno-friendly-post-bdp-estimate", test_cuback_reno_friendly_post_bdp_estimate);
