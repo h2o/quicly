@@ -433,7 +433,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         goto Cleanup;
 
     /* Rapid Start: update its RTT_floor measurement used for detecting queue build-up */
-    if (cc->cwnd < cc->ssthresh && cc->num_loss_episodes == 0)
+    if (bytes != 0 && cc->cwnd < cc->ssthresh && cc->num_loss_episodes == 0)
         quicly_cc_rapid_start_update_rtt(&cc->rapid_start, &loss->rtt, now);
 
     /* Apply this ACK to the current interval. One ACK can span multiple intervals. */
@@ -473,6 +473,12 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         }
         return;
     }
+
+    /* Rapid Start: if recovery exits and the first CC event is a loss instead of an ack, call `pico_on_acked` to reflect recovery
+     * exit to Rapid Start and related states, before entering the next recovery period in the following blocks. */
+    if (quicly_cc_rapid_start_is_in_recovery(&cc->rapid_start))
+        pico_on_acked(cc, loss, 0, cc->recovery_end, (uint32_t)loss->sentmap.bytes_in_flight, 0, next_pn, now,
+                      max_udp_payload_size);
 
     double beta = cc->type == &quicly_cc_type_reno ? QUICLY_BETA_RENO : (bytes == 0 ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
 

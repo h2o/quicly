@@ -573,6 +573,34 @@ static void test_cuback_deferred_bdp_estimate(void)
     ok(cc.state.pico.bytes_to_mtu_increase != 0);
 }
 
+static void test_zero_byte_ack_exits_rapid_start_recovery(void)
+{
+    static quicly_init_cc_t *const policies[] = {&quicly_cc_cuback_init, &quicly_cc_cubic_init};
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
+        for (int second_by_ecn = 0; second_by_ecn != 2; ++second_by_ecn) {
+            quicly_cc_t cc;
+            policies[i]->cb(policies[i], &cc, initcwnd, 0);
+            cc.type->enable_rapid_start(&cc, 900);
+
+            cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+            ok(quicly_cc_rapid_start_is_in_recovery(&cc.rapid_start));
+
+            /* A subsequent packet-loss or ECN episode can be detected from an ACK carrying no congestion-controlled bytes. The
+             * loss callback finalizes Rapid Start before processing that episode. */
+            cc.type->cc_on_lost(&cc, &loss, second_by_ecn ? 0 : mtu, 20, 30, 1200, mtu);
+            ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+            ok(cc.num_loss_episodes == 2);
+            ok((policies[i] == &quicly_cc_cuback_init ? cc.state.pico.cuback.by_ecn : cc.state.pico.cubic.by_ecn) ==
+               second_by_ecn);
+            ok(policies[i] == &quicly_cc_cuback_init ? cc.state.pico.cuback.fast_convergence
+                                                     : cc.state.pico.cubic.fast_convergence);
+        }
+    }
+}
+
 static void test_rapid_start(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
@@ -622,6 +650,7 @@ void test_cc(void)
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
     subtest("cuback-reno-friendly-post-bdp-estimate", test_cuback_reno_friendly_post_bdp_estimate);
     subtest("cuback-deferred-bdp-estimate", test_cuback_deferred_bdp_estimate);
+    subtest("zero-byte-ack-exits-rapid-start-recovery", test_zero_byte_ack_exits_rapid_start_recovery);
     subtest("pico-undo-loss", test_pico_undo_loss);
     subtest("pico-undo-multiple-losses", test_pico_undo_multiple_losses);
     subtest("pico-undo-rapid-start-loss", test_pico_undo_rapid_start_loss);
