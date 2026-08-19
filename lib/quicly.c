@@ -7696,7 +7696,7 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         QUICLY_PROBE(ELICIT_PATH_MIGRATION, conn, conn->stash.now, path_index);
         QUICLY_LOG_CONN(elicit_path_migration, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
     }
-    if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
+    if (conn->super.state < QUICLY_STATE_CLOSING) {
         if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->stash.now - (receive_delay >= 0 ? receive_delay : 0),
                                   &conn->egress.send_ack_at, &conn->super.stats.num_packets.received_out_of_order)) != 0)
             goto Exit;
