@@ -137,6 +137,121 @@ static void test_pico_undo_jumpstart_loss(void)
     ok(!quicly_cc_in_jumpstart(&cc));
 }
 
+/**
+ * Compares CWND against a value calculated using floating point arithmetic, tolerating an off-by-one; the compiler is allowed to
+ * evaluate the same expression differently between translation units (e.g., by contracting a multiply-add into an FMA).
+ */
+static int cwnd_is(uint32_t actual, double expected)
+{
+    uint32_t truncated = (uint32_t)expected;
+    return actual == truncated || actual == truncated + 1 || actual + 1 == truncated;
+}
+
+static void test_pico_ecn(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_pico_init.cb(&quicly_cc_pico_init, &cc, initcwnd, 0);
+
+    /* exit slow start by observing a packet loss */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.cwnd == initcwnd / 2);
+    ok(cc.num_ecn_loss_episodes == 0);
+    uint32_t cwnd_in_ca = cc.cwnd;
+
+    /* a CE mark (i.e., zero-byte congestion report) reduces CWND by QUICLY_BETA_ECN rather than by QUICLY_BETA_LOSS */
+    cc.type->cc_on_lost(&cc, &loss, 0, 20, 30, 1100, mtu);
+    ok(cc.num_loss_episodes == 2);
+    ok(cc.num_ecn_loss_episodes == 1);
+    ok(cwnd_is(cc.cwnd, cwnd_in_ca * QUICLY_BETA_ECN));
+    ok(cc.ssthresh == cc.cwnd);
+    ok(cc.state.pico.undo.num_packets_lost == 0); /* CE marks cannot be undone by late ACKs */
+    /* the increase rate follows the factor being used; here, Reno's 1 MTU per RTT, i.e. per post-reduction CWND bytes acked */
+    ok(cc.state.pico.bytes_per_mtu_increase == cc.cwnd);
+
+    /* a packet loss reduces CWND by QUICLY_BETA_LOSS */
+    uint32_t cwnd_before_loss = cc.cwnd;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 30, 40, 1200, mtu);
+    ok(cc.num_ecn_loss_episodes == 1);
+    ok(cwnd_is(cc.cwnd, cwnd_before_loss * QUICLY_BETA_LOSS));
+}
+
+static void test_pico_ecn_rapid_start(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_pico_init.cb(&quicly_cc_pico_init, &cc, initcwnd, 0);
+    cc.type->enable_rapid_start(&cc, 900);
+
+    /* upon a CE mark, the silence factor derived from QUICLY_BETA_ECN (i.e., 0.95x) is applied */
+    cc.type->cc_on_lost(&cc, &loss, 0, 10, 20, 1000, mtu);
+    ok(cc.rapid_start.newest_rtt_sample_until == -1);
+    ok(cc.rapid_start.recovery.by_ecn);
+    ok(cwnd_is(cc.cwnd, initcwnd * QUICLY_RAPID_START_LOSS_FACTOR(QUICLY_BETA_ECN)));
+    uint32_t cwnd_entering_recovery = cc.cwnd;
+
+    /* during the recovery period, CWND is reduced by ack_factor (0.1x) per byte newly acked */
+    cc.type->cc_on_acked(&cc, &loss, 4 * mtu, 15, 8 * mtu, 1, 20, 1100, mtu);
+    ok(cwnd_is(cc.cwnd, cwnd_entering_recovery - QUICLY_RAPID_START_ACK_FACTOR(QUICLY_BETA_ECN) * (4 * mtu)));
+    uint32_t cwnd_after_ack = cc.cwnd;
+
+    /* a packet loss detected within the same recovery period is accounted using loss_factor (0.95x), the factor being retained
+     * from when the recovery period was entered, even though the episode is no longer counted as an ECN-only one */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 16, 20, 1100, mtu);
+    ok(cc.num_loss_episodes == 1);
+    ok(cc.num_ecn_loss_episodes == 0);
+    ok(cwnd_is(cc.cwnd, cwnd_after_ack - QUICLY_RAPID_START_LOSS_FACTOR(QUICLY_BETA_ECN) * mtu));
+}
+
+static void test_cubic_fast_convergence(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.cubic.w_max == 100 * mtu);
+
+    cc.cwnd = 90 * mtu;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1100, mtu);
+    ok(cc.state.cubic.w_max == 90 * mtu * 85 / 100);
+
+    /* The effective W_max is 76.5 MTUs, so an 80-MTU congestion window does not trigger fast convergence again. */
+    cc.cwnd = 80 * mtu;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 30, 40, 1200, mtu);
+    ok(cc.state.cubic.w_max == 80 * mtu);
+    ok(cc.state.cubic.cwnd_prior == 80 * mtu);
+    ok(cc.state.cubic.w_est == cc.cwnd);
+}
+
+static void test_cubic_target_bounds(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.cubic.w_max = cc.cwnd;
+    cc.state.cubic.w_est = cc.cwnd;
+    cc.state.cubic.cwnd_prior = cc.cwnd;
+
+    cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 1000000, mtu);
+    ok(cc.cwnd == initcwnd + mtu / 2);
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.cubic.w_max = cc.cwnd / 2;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 1, cc.cwnd, 1, 2, 0, mtu);
+    ok(cc.cwnd == initcwnd);
+}
+
 static void test_rapid_start(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
@@ -173,8 +288,12 @@ static void test_rapid_start(void)
 void test_cc(void)
 {
     subtest("rapid-start", test_rapid_start);
+    subtest("cubic-fast-convergence", test_cubic_fast_convergence);
+    subtest("cubic-target-bounds", test_cubic_target_bounds);
     subtest("pico-undo-loss", test_pico_undo_loss);
     subtest("pico-undo-multiple-losses", test_pico_undo_multiple_losses);
     subtest("pico-undo-rapid-start-loss", test_pico_undo_rapid_start_loss);
     subtest("pico-undo-jumpstart-loss", test_pico_undo_jumpstart_loss);
+    subtest("pico-ecn", test_pico_ecn);
+    subtest("pico-ecn-rapid-start", test_pico_ecn_rapid_start);
 }

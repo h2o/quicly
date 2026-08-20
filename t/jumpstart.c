@@ -111,7 +111,7 @@ static void do_test_jumpstart(quicly_init_cc_t *init)
                 {TEST_JUMPSTART_ACTION_LOST, 1200, 3},
                 {TEST_JUMPSTART_ACTION_END},
             },
-            15 * 1200 * QUICLY_RENO_BETA);
+            15 * 1200 * QUICLY_BETA_LOSS);
 
     /* regardless of how much we lose, we never go down below 1/2 IW */
     subtest("lower bound", test_jumpstart_pattern, init,

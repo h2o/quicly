@@ -503,6 +503,10 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t decryption_failed;                                                                                                \
         /**                                                                                                                        \
+         * Total number of packets received that were called out as duplicates.                                                    \
+         */                                                                                                                        \
+        uint64_t received_duplicate;                                                                                               \
+        /**                                                                                                                        \
          * Total number of packets sent.                                                                                           \
          */                                                                                                                        \
         uint64_t sent;                                                                                                             \
@@ -744,6 +748,7 @@ typedef struct st_quicly_path_stats_t {
 #define QUICLY_STATS_FOREACH_NUM_PACKETS(apply)                                                                                    \
     apply(num_packets.received, "num-packets.received")                                                                            \
     apply(num_packets.decryption_failed, "num-packets.decryption-failed")                                                          \
+    apply(num_packets.received_duplicate, "num-packets.received-duplicate")                                                        \
     apply(num_packets.sent, "num-packets.sent")                                                                                    \
     apply(num_packets.lost, "num-packets.lost")                                                                                    \
     apply(num_packets.lost_time_threshold, "num-packets.lost-time-threshold")                                                      \

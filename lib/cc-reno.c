@@ -87,7 +87,7 @@ void quicly_cc_reno_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t
     }
 
     /* Reduce congestion window. */
-    cc->cwnd *= cc->ssthresh == UINT32_MAX ? 0.5 : QUICLY_RENO_BETA; /* without HyStart++, we overshoot by 2x in slowstart */
+    cc->cwnd *= cc->ssthresh == UINT32_MAX ? 0.5 : QUICLY_BETA_LOSS; /* without HyStart++, we overshoot by 2x in slowstart */
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
     cc->ssthresh = cc->cwnd;

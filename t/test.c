@@ -377,7 +377,7 @@ static void test_vector(void)
         0x4d, 0x91, 0x9d, 0x48, 0x43, 0xb1, 0xca, 0x70, 0xa2, 0xd8, 0xd3, 0xf7, 0x25, 0xea, 0xd1, 0x39, 0x13, 0x77, 0xdc, 0xc0};
     quicly_decoded_packet_t packet;
     struct st_quicly_cipher_context_t ingress, egress;
-    uint64_t pn, next_expected_pn = 0;
+    uint64_t pn;
     ptls_iovec_t payload;
     int ret;
 
@@ -391,8 +391,7 @@ static void test_vector(void)
     ret = setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress, packet.cid.dest.encrypted, 0,
                                    ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL);
     ok(ret == 0);
-    ok(decrypt_packet(ingress.header_protection, aead_decrypt_fixed_key, ingress.aead, &next_expected_pn, &packet, &pn, &payload) ==
-       0);
+    ok(decrypt_packet(ingress.header_protection, aead_decrypt_fixed_key, ingress.aead, 0, &packet, &pn, &payload) == 0);
     ok(pn == 2);
     ok(sizeof(expected_payload) <= payload.len);
     ok(memcmp(expected_payload, payload.base, sizeof(expected_payload)) == 0);
@@ -972,6 +971,45 @@ static void test_record_receipt(void)
     do_test_record_receipt(QUICLY_EPOCH_INITIAL);
     do_test_record_receipt(QUICLY_EPOCH_1RTT);
     do_test_ack_frequency_ack_logic();
+}
+
+static void test_is_duplicate_pn(void)
+{
+    quicly_ranges_t ranges;
+
+    /* at the beginning of a connection, the ack queue is empty and the first packet number being expected is zero */
+    quicly_ranges_init(&ranges);
+    ok(!is_duplicate_pn(&ranges, 0, 0));
+
+    /* packets at or above the one being expected next are never duplicate */
+    ok(quicly_ranges_add(&ranges, 0, 5) == 0);
+    ok(!is_duplicate_pn(&ranges, 5, 5));
+    ok(!is_duplicate_pn(&ranges, 6, 5));
+
+    /* packet numbers covered by the ack queue are duplicate */
+    ok(is_duplicate_pn(&ranges, 4, 5));
+    ok(is_duplicate_pn(&ranges, 0, 5));
+
+    /* packet numbers within a gap have not been received yet */
+    ok(quicly_ranges_add(&ranges, 8, 11) == 0);
+    ok(!is_duplicate_pn(&ranges, 5, 11));
+    ok(!is_duplicate_pn(&ranges, 7, 11));
+    ok(is_duplicate_pn(&ranges, 8, 11));
+    ok(is_duplicate_pn(&ranges, 10, 11));
+    ok(is_duplicate_pn(&ranges, 3, 11));
+
+    /* packet numbers below the oldest range being retained are discarded, as we cannot tell if they have been processed */
+    quicly_ranges_clear(&ranges);
+    ok(quicly_ranges_add(&ranges, 8, 11) == 0);
+    ok(is_duplicate_pn(&ranges, 7, 11));
+    ok(is_duplicate_pn(&ranges, 0, 11));
+
+    /* ditto, when the ack queue has been emptied by the peer acknowledging our ACKs */
+    quicly_ranges_clear(&ranges);
+    ok(is_duplicate_pn(&ranges, 10, 11));
+    ok(!is_duplicate_pn(&ranges, 11, 11));
+
+    quicly_ranges_clear(&ranges);
 }
 
 static void test_ack_frequency(void)
@@ -1586,6 +1624,24 @@ static void test_multipath_negotiation_success(void)
     ok(ret == 0);
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
 
+    /* A valid packet can arrive after the path state associated with its CID has been discarded. Model that case by encrypting with
+     * an otherwise-unused path ID and overriding the decoded CID metadata; the packet must be ignored without dereferencing a
+     * missing packet-number space. */
+    test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
+    do_allocate_frame(client, &s, 1, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
+    *s.dst++ = QUICLY_FRAME_TYPE_PING;
+    uint32_t original_path_id = get_path(client, 0)->path_id;
+    get_path(client, 0)->path_id = 250;
+    commit_send_packet(client, &s, 0);
+    get_path(client, 0)->path_id = original_path_id;
+    unlock_now(client);
+
+    decode_packets(&decoded, &datagram, 1);
+    decoded.cid.dest.plaintext.path_id = 250;
+    ret = quicly_receive(server, NULL, &fake_address.sa, &decoded);
+    ok(ret == QUICLY_ERROR_PACKET_IGNORED);
+    ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
+
     quicly_free(client);
     quicly_free(server);
 
@@ -1764,6 +1820,13 @@ static void test_multipath_coupled_cc(void)
     /* Total cwnd should be 20000 */
     uint64_t total = quicly_calculate_total_cwnd(client);
     ok(total == 20000);
+
+    /* Fractional SRTT is significant to LIA because RTT is squared in the numerator term. */
+    client->path_spaces[0]->loss.rtt.smoothed = 1.9f;
+    client->path_spaces[1]->loss.rtt.smoothed = 2.1f;
+    ok(quicly_calculate_lia_target(client) == 36281);
+    client->path_spaces[0]->loss.rtt.smoothed = 100;
+    client->path_spaces[1]->loss.rtt.smoothed = 100;
 
     /* Acknowledge bytes on path 1 (in CA).
      * Standard Reno CA would increase cwnd after 10000 bytes.
@@ -2191,11 +2254,11 @@ static void test_multipath_path_loss(void)
     ok(!get_path(client, 0)->probe_only);
     ok(!get_path(client, 1)->probe_only);
 
-    /* make path 0 seem worse so MinRTT scheduler picks path 1 */
+    /* Make path 0 fractionally worse so the MinRTT scheduler picks path 1 without truncating SRTT. */
     client->path_spaces[0]->loss.rtt.latest = 1;
-    client->path_spaces[0]->loss.rtt.smoothed = 5;
+    client->path_spaces[0]->loss.rtt.smoothed = 1.9f;
     client->path_spaces[1]->loss.rtt.latest = 1;
-    client->path_spaces[1]->loss.rtt.smoothed = 1;
+    client->path_spaces[1]->loss.rtt.smoothed = 1.1f;
 
     /* open stream and write data */
     quicly_stream_t *stream;
@@ -2206,8 +2269,12 @@ static void test_multipath_path_loss(void)
     memset(data, 'a', sizeof(data));
     quicly_streambuf_egress_write(stream, data, sizeof(data));
 
-    /* transmit a few times, dropping path 1 packets, so they are sent and dropped */
-    for (size_t i = 0; i < 10; ++i) {
+    /* The first data packet must use path 1 and therefore be dropped. If SRTT is truncated, path 0 wins the tie and this returns
+     * 1. */
+    ok(transmit_multipath_with_loss(client, server, 20000) == 0);
+
+    /* transmit a few more times, dropping path 1 packets, so they are sent and dropped */
+    for (size_t i = 1; i < 10; ++i) {
         transmit_multipath_with_loss(client, server, 20000);
         transmit_multipath(server, client);
     }
@@ -2320,6 +2387,7 @@ int main(int argc, char **argv)
     subtest("ranges", test_ranges);
     subtest("rate", test_rate);
     subtest("record-receipt", test_record_receipt);
+    subtest("is-duplicate-pn", test_is_duplicate_pn);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
     subtest("pacer", test_pacer);

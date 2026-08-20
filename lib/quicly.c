@@ -677,7 +677,7 @@ uint64_t quicly_calculate_lia_target(quicly_conn_t *conn)
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
         if (conn->path_spaces[i] != NULL && get_path(conn, i) != NULL && !get_path(conn, i)->probe_only) {
             uint32_t cwnd = conn->path_spaces[i]->cc.cwnd;
-            uint32_t rtt = conn->path_spaces[i]->loss.rtt.smoothed;
+            double rtt = conn->path_spaces[i]->loss.rtt.smoothed;
             if (rtt == 0)
                 rtt = 1;
 
@@ -1979,6 +1979,28 @@ static int change_outside_reorder_window(quicly_ranges_t *ranges, uint64_t large
            // our max ranges to make sure all ack ranges get reported to the
            // peer.
            slots_traversed_for_next_missing > QUICLY_MAX_ACK_BLOCKS / 4;
+}
+
+/**
+ * Returns if the packet number has already been processed, or if it is too old for us to tell, as specified in RFC 9000 Section
+ * 12.3. `ack_queue` is pruned by ACK-ACKs, therefore packets arriving more than a round-trip late could be misidentified.
+ */
+static int is_duplicate_pn(quicly_ranges_t *ack_queue, uint64_t pn, uint64_t next_expected_pn)
+{
+    /* fast path that is taken when we receive a packet in-order */
+    if (pn >= next_expected_pn)
+        return 0;
+
+    /* fast rejection for PNs too small */
+    if (ack_queue->num_ranges == 0 || pn < ack_queue->ranges[0].start)
+        return 1;
+
+    /* The PN is no less than `ranges[0].start`. Scan the ranges in descending order, as the packet number in question is likely to
+     * be close to the ones received most recently. */
+    size_t i = ack_queue->num_ranges;
+    while (pn < ack_queue->ranges[--i].start)
+        ;
+    return pn < ack_queue->ranges[i].end;
 }
 
 static quicly_error_t record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_out_of_order)
@@ -3927,7 +3949,7 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
 
 static quicly_error_t do_decrypt_packet(ptls_cipher_context_t *header_protection,
                                         int (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t, size_t *),
-                                        void *aead_ctx, uint64_t *next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn,
+                                        void *aead_ctx, uint64_t next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn,
                                         ptls_iovec_t *payload)
 {
     size_t encrypted_len = packet->octets.len - packet->encrypted_off;
@@ -3950,15 +3972,13 @@ static quicly_error_t do_decrypt_packet(ptls_cipher_context_t *header_protection
     }
 
     size_t aead_off = packet->encrypted_off + pnlen;
-    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, *next_expected_pn);
+    *pn = quicly_determine_packet_number(pnbits, pnlen * 8, next_expected_pn);
 
     /* AEAD decryption */
     int ret;
     if ((ret = (*aead_cb)(aead_ctx, *pn, packet, aead_off, &ptlen)) != 0) {
         return ret;
     }
-    if (*next_expected_pn <= *pn)
-        *next_expected_pn = *pn + 1;
 
     *payload = ptls_iovec_init(packet->octets.base + aead_off, ptlen);
     return 0;
@@ -3966,7 +3986,7 @@ static quicly_error_t do_decrypt_packet(ptls_cipher_context_t *header_protection
 
 static quicly_error_t decrypt_packet(ptls_cipher_context_t *header_protection,
                                      int (*aead_cb)(void *, uint64_t, quicly_decoded_packet_t *, size_t, size_t *), void *aead_ctx,
-                                     uint64_t *next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn,
+                                     uint64_t next_expected_pn, quicly_decoded_packet_t *packet, uint64_t *pn,
                                      ptls_iovec_t *payload)
 {
     quicly_error_t ret;
@@ -3985,8 +4005,6 @@ static quicly_error_t decrypt_packet(ptls_cipher_context_t *header_protection,
                     return ret;
             }
         }
-        if (*next_expected_pn < *pn)
-            *next_expected_pn = *pn + 1;
     }
 
     /* check reserved bits after AEAD decryption */
@@ -4467,7 +4485,7 @@ static uint32_t calc_pacer_send_rate(quicly_conn_t *conn, struct st_quicly_conn_
         multiplier = 2;
     }
 
-    return quicly_pacer_calc_send_rate(multiplier, get_cc(conn, path)->cwnd, get_loss(conn, path)->rtt.smoothed);
+    return quicly_pacer_calc_send_rate(multiplier, get_cc(conn, path)->cwnd, (uint32_t)get_loss(conn, path)->rtt.smoothed);
 }
 
 static int should_send_datagram_frame(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
@@ -6680,14 +6698,14 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     }
     /* handle handshake timeouts */
     if ((conn->initial != NULL || conn->handshake != NULL) &&
-        conn->created_at + (uint64_t)conn->super.ctx->handshake_timeout_rtt_multiplier *
-                               get_loss(conn, get_send_path(conn, s))->rtt.smoothed <=
+        conn->created_at + (int64_t)(conn->super.ctx->handshake_timeout_rtt_multiplier *
+                                     get_loss(conn, get_send_path(conn, s))->rtt.smoothed) <=
             conn->stash.now) {
         QUICLY_PROBE(HANDSHAKE_TIMEOUT, conn, conn->stash.now, conn->stash.now - conn->created_at,
-                     get_loss(conn, get_send_path(conn, s))->rtt.smoothed);
+                     (uint32_t)get_loss(conn, get_send_path(conn, s))->rtt.smoothed);
         QUICLY_LOG_CONN(handshake_timeout, conn, {
             PTLS_LOG_ELEMENT_SIGNED(elapsed, conn->stash.now - conn->created_at);
-            PTLS_LOG_ELEMENT_UNSIGNED(rtt_smoothed, get_loss(conn, get_send_path(conn, s))->rtt.smoothed);
+            PTLS_LOG_ELEMENT_UNSIGNED(rtt_smoothed, (uint32_t)get_loss(conn, get_send_path(conn, s))->rtt.smoothed);
         });
         conn->super.stats.num_handshake_timeouts++;
         goto CloseNow;
@@ -6736,7 +6754,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
     /* disable ECN if zero packets where acked in the first 3 PTO of the connection during which all sent packets are ECT(0) */
     if (conn->egress.ecn.state == QUICLY_ECN_PROBING &&
-        conn->created_at + get_loss(conn, get_send_path(conn, s))->rtt.smoothed * 3 < conn->stash.now) {
+        conn->created_at + (int64_t)(get_loss(conn, get_send_path(conn, s))->rtt.smoothed * 3) < conn->stash.now) {
         update_ecn_state(conn, QUICLY_ECN_OFF);
         /* TODO reset CC? */
     }
@@ -7181,8 +7199,8 @@ static quicly_error_t default_path_scheduler_do_send(struct st_quicly_path_sched
                 struct st_quicly_path_space_t *ps_i = get_path(conn, available_paths[i])->path_space;
                 struct st_quicly_path_space_t *ps_j = get_path(conn, available_paths[j])->path_space;
 
-                uint32_t rtt_i = ps_i != NULL ? ps_i->loss.rtt.smoothed : UINT32_MAX;
-                uint32_t rtt_j = ps_j != NULL ? ps_j->loss.rtt.smoothed : UINT32_MAX;
+                float rtt_i = ps_i != NULL ? ps_i->loss.rtt.smoothed : (float)UINT32_MAX;
+                float rtt_j = ps_j != NULL ? ps_j->loss.rtt.smoothed : (float)UINT32_MAX;
 
                 if (ps_i != NULL && ps_i->loss.rtt.latest == 0)
                     rtt_i = UINT32_MAX;
@@ -9019,7 +9037,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
         int alive;
     } cipher = {};
     ptls_iovec_t payload;
-    uint64_t next_expected_pn, pn, offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
+    uint64_t pn, offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
     int is_ack_only, is_probe_only;
     quicly_error_t ret;
 
@@ -9046,9 +9064,8 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
                                         ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL)) != 0)
         goto Exit;
     cipher.alive = 1;
-    next_expected_pn = 0; /* is this correct? do we need to take care of underflow? */
-    if ((ret = decrypt_packet(cipher.ingress.header_protection, aead_decrypt_fixed_key, cipher.ingress.aead, &next_expected_pn,
-                              packet, &pn, &payload)) != 0) {
+    if ((ret = decrypt_packet(cipher.ingress.header_protection, aead_decrypt_fixed_key, cipher.ingress.aead, 0, packet, &pn,
+                              &payload)) != 0) {
         ret = QUICLY_ERROR_DECRYPTION_FAILED;
         goto Exit;
     }
@@ -9087,7 +9104,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
     }
     if ((ret = setup_handshake_space_and_flow(*conn, QUICLY_EPOCH_INITIAL)) != 0)
         goto Exit;
-    (*conn)->initial->super.next_expected_packet_number = next_expected_pn;
+    (*conn)->initial->super.next_expected_packet_number = pn + 1;
     (*conn)->initial->cipher.ingress = cipher.ingress;
     (*conn)->initial->cipher.egress = cipher.egress;
     cipher.alive = 0;
@@ -9392,27 +9409,44 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         packet->path_id = 0;
     }
 
-    uint64_t dummy_next_expected_pn = 0;
-    uint64_t *next_expected_pn_ptr = NULL;
+    uint64_t next_expected_pn_val = 0;
 
     if (epoch == QUICLY_EPOCH_1RTT && quicly_is_multipath(conn)) {
         quicly_path_space_t *dec_ps = find_path_space_by_id(conn, packet->path_id);
         if (dec_ps != NULL) {
             space = (void *)&dec_ps->pn_space;
-            next_expected_pn_ptr = &dec_ps->pn_space->next_expected_packet_number;
+            next_expected_pn_val = dec_ps->pn_space->next_expected_packet_number;
         } else {
             space = NULL;
-            next_expected_pn_ptr = &dummy_next_expected_pn;
+            next_expected_pn_val = 0;
         }
     } else {
-        next_expected_pn_ptr = &(*space)->next_expected_packet_number;
+        next_expected_pn_val = (*space)->next_expected_packet_number;
     }
 
-    if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, next_expected_pn_ptr, packet, &pn, &payload)) != 0) {
+    if ((ret = decrypt_packet(header_protection, aead.cb, aead.ctx, next_expected_pn_val, packet, &pn, &payload)) != 0) {
         ++conn->super.stats.num_packets.decryption_failed;
         QUICLY_PROBE(PACKET_DECRYPTION_FAILED, conn, conn->stash.now, pn);
         goto Exit;
     }
+    /* A short-header CID can refer to path state that has already been discarded (e.g., after the PATH_ABANDON retention period).
+     * Authentication does not make that state live again, so drop the packet before accessing its packet-number space. */
+    if (space == NULL) {
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
+    if (is_duplicate_pn(&(*space)->ack_queue, pn, (*space)->next_expected_packet_number)) {
+        ++conn->super.stats.num_packets.received_duplicate;
+        QUICLY_PROBE(PACKET_RECEIVED_DUPLICATE, conn, conn->stash.now, pn, get_epoch(packet->octets.base[0]));
+        QUICLY_LOG_CONN(packet_received_duplicate, conn, {
+            PTLS_LOG_ELEMENT_UNSIGNED(pn, pn);
+            PTLS_LOG_ELEMENT_UNSIGNED(packet_type, get_epoch(packet->octets.base[0]));
+        });
+        ret = QUICLY_ERROR_PACKET_IGNORED;
+        goto Exit;
+    }
+    if ((*space)->next_expected_packet_number <= pn)
+        (*space)->next_expected_packet_number = pn + 1;
 
     QUICLY_PROBE(PACKET_RECEIVED, conn, conn->stash.now, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, conn, {
@@ -9515,7 +9549,7 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         QUICLY_PROBE(ELICIT_PATH_MIGRATION, conn, conn->stash.now, path_index);
         QUICLY_LOG_CONN(elicit_path_migration, conn, { PTLS_LOG_ELEMENT_UNSIGNED(path_index, path_index); });
     }
-    if (*space != NULL && conn->super.state < QUICLY_STATE_CLOSING) {
+    if (conn->super.state < QUICLY_STATE_CLOSING) {
         if ((ret = record_receipt(*space, pn, packet->ecn, is_ack_only, conn->stash.now - (receive_delay >= 0 ? receive_delay : 0),
                                   &(*space)->send_ack_at, &conn->super.stats.num_packets.received_out_of_order)) != 0)
             goto Exit;
