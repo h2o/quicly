@@ -284,9 +284,9 @@ typedef struct st_quicly_transport_parameters_t {
      *
      */
     uint16_t max_datagram_frame_size;
-    /**
-     * multipath extension max path id (0 to disable)
-     */
+    /** whether to advertise the multipath transport parameter; a limit of zero still enables the extension */
+    uint8_t enable_multipath : 1;
+    /** multipath extension maximum path ID */
     uint64_t initial_max_path_id;
 } quicly_transport_parameters_t;
 

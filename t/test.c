@@ -441,6 +441,15 @@ static void test_transport_parameters(void)
     ok(decoded.max_ack_delay == 25);
     ok(!decoded.disable_active_migration);
 
+    { /* A zero initial_max_path_id still advertises multipath support. */
+        static const uint8_t zero_path_limit[] = {QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_PATH_ID, 1, 0};
+        memset(&decoded, 0x55, sizeof(decoded));
+        ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, zero_path_limit,
+                                                  zero_path_limit + sizeof(zero_path_limit)) == 0);
+        ok(decoded.enable_multipath);
+        ok(decoded.initial_max_path_id == 0);
+    }
+
     static const uint8_t dup_bytes[] = {0x05, 0x04, 0x80, 0x10, 0x00, 0x00, 0x05, 0x04, 0x80, 0x10, 0x00, 0x00};
     memset(&decoded, 0x55, sizeof(decoded));
     ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, dup_bytes, dup_bytes + sizeof(dup_bytes)) ==
@@ -1602,6 +1611,15 @@ static void test_multipath_state_isolation(void)
     ok(get_path(client, 0) != NULL);
     ok(get_path(client, 1) == NULL);
 
+    /* The initial server path remains subject to anti-amplification until handshake address validation. */
+    server->super.remote.address_validation.validated = 0;
+    get_path(server, 0)->bytes_received = 100;
+    get_path(server, 0)->bytes_sent = 250;
+    ok(calc_amplification_limit_allowance(server, get_path(server, 0)) == 50);
+    server->super.remote.address_validation.validated = 1;
+    get_path(server, 0)->bytes_received = 0;
+    get_path(server, 0)->bytes_sent = 0;
+
     /* Let's manually trigger new_path creation for path 1 on client */
     struct sockaddr_in remote_addr, local_addr;
     memset(&remote_addr, 0, sizeof(remote_addr));
@@ -1614,11 +1632,38 @@ static void test_multipath_state_isolation(void)
     local_addr.sin_port = htons(54321);
     local_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
+    /* A client blocked on peer CIDs must preserve path zero and signal the exact missing path CID. */
+    for (size_t p = 1; p < PTLS_ELEMENTSOF(client->path_spaces); ++p)
+        if (client->path_spaces[p] != NULL)
+            for (size_t c = 0; c < PTLS_ELEMENTSOF(client->path_spaces[p]->remote_cid_set.cids); ++c) {
+                client->path_spaces[p]->remote_cid_set.cids[c].state = QUICLY_REMOTE_CID_UNAVAILABLE;
+                client->path_spaces[p]->remote_cid_set.cids[c].cid.len = 0;
+            }
+    struct st_quicly_conn_path_t *path_zero = get_path(client, 0);
+    uint64_t path_zero_pn = client->path_spaces[0]->packet_number;
+    quicly_error_t ret;
+    ret = quicly_open_path(client, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    ok(ret == QUICLY_ERROR_PACKET_IGNORED);
+    ok(get_path(client, 0) == path_zero);
+    ok(client->path_spaces[0]->packet_number == path_zero_pn);
+    ok(client->egress.path_cids_blocked.sender == QUICLY_SENDER_STATE_SEND);
+    ok(client->egress.path_cids_blocked.path_id == 1);
+    ok(client->egress.path_cids_blocked.sequence == 0);
+
+    uint8_t status_bytes[16], *status_end = status_bytes;
+    status_end = quicly_encodev(status_end, 1);
+    status_end = quicly_encodev(status_end, 5);
+    struct st_quicly_handle_payload_state_t status_state = {
+        .src = status_bytes, .end = status_end, .frame_type = QUICLY_FRAME_TYPE_PATH_STATUS_BACKUP};
+    ok(handle_path_status_frame(client, &status_state) == 0);
+
     /* Open path 1 */
     size_t path_index = 1;
-    quicly_error_t ret = new_path(client, path_index, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    ret = new_path(client, path_index, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
     ok(ret == 0);
     ok(get_path(client, 1) != NULL);
+    ok(!path_has_usable_dcid(get_path(client, 1)));
+    ok(!setup_path_dcid(client, path_index));
 
     /* Verify path-specific states are allocated and separate from path 0 */
     ok(get_path(client, 1)->path_id == 1);
@@ -1626,12 +1671,48 @@ static void test_multipath_state_isolation(void)
     ok(client->path_spaces[1]->max_udp_payload_size == client->super.ctx->initial_egress_max_udp_payload_size);
     ok(client->path_spaces[1]->cc.type != NULL);
     ok(client->path_spaces[1]->loss.sentmap.num_packets == 0);
+    ok(client->path_spaces[1]->is_backup);
+
+    status_end = status_bytes;
+    status_end = quicly_encodev(status_end, 1);
+    status_end = quicly_encodev(status_end, 4); /* stale update */
+    struct st_quicly_handle_payload_state_t status_state_stale = {
+        .src = status_bytes, .end = status_end, .frame_type = QUICLY_FRAME_TYPE_PATH_STATUS_AVAILABLE};
+    ok(handle_path_status_frame(client, &status_state_stale) == 0);
+    ok(client->path_spaces[1]->is_backup);
+
+    status_end = status_bytes;
+    status_end = quicly_encodev(status_end, 1);
+    status_end = quicly_encodev(status_end, 6);
+    struct st_quicly_handle_payload_state_t status_state_new = {
+        .src = status_bytes, .end = status_end, .frame_type = QUICLY_FRAME_TYPE_PATH_STATUS_AVAILABLE};
+    ok(handle_path_status_frame(client, &status_state_new) == 0);
+    ok(!client->path_spaces[1]->is_backup);
+
+    size_t candidate_index = encode_flat_path_index(1, 1);
+    remote_addr.sin_port = htons(12346);
+    ok(new_path(client, candidate_index, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr) == 0);
+    ok(do_delete_path(client, candidate_index) == 0);
+    ok(get_path(client, candidate_index) != NULL && get_path(client, candidate_index)->abandoned);
+    ok(get_path(client, 1) != NULL && !get_path(client, 1)->abandoned);
+    ok((client->abandoned_paths_mask[0] & ((uint32_t)1 << 1)) == 0);
+    ok(do_delete_path(client, candidate_index) == 0);
+    ok(get_path(client, candidate_index) == NULL);
+    ok(get_path(client, 1) != NULL);
 
     /* Modify path 1 cwnd and verify it does not affect path 0 */
     uint32_t orig_cwnd = client->path_spaces[0]->cc.cwnd;
     client->path_spaces[1]->cc.cwnd = orig_cwnd + 5000;
     ok(client->path_spaces[0]->cc.cwnd == orig_cwnd);
     ok(client->path_spaces[1]->cc.cwnd == orig_cwnd + 5000);
+
+    quicly_cc_type_t *new_cc =
+        client->path_spaces[0]->cc.type == &quicly_cc_type_reno ? &quicly_cc_type_cubic : &quicly_cc_type_reno;
+    ok(quicly_set_cc(client, new_cc));
+    ok(client->path_spaces[0]->cc.type == new_cc);
+    ok(client->path_spaces[1]->cc.type == new_cc);
+    ok(client->path_spaces[0]->cc.conn == client);
+    ok(client->path_spaces[1]->cc.conn == client);
 
     quicly_free(client);
     quicly_free(server);

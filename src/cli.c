@@ -1582,10 +1582,12 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "exit-after-handshake") == 0) {
                 exit_after_handshake = 1;
             } else if (strcmp(longopts[opt_index].name, "initial-max-path-id") == 0) {
-                if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.initial_max_path_id) != 1) {
+                if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.initial_max_path_id) != 1 ||
+                    ctx.transport_params.initial_max_path_id > QUICLY_MAX_PATH_ID) {
                     fprintf(stderr, "failed to parse initial-max-path-id: %s\n", optarg);
                     exit(1);
                 }
+                ctx.transport_params.enable_multipath = 1;
             } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
                 return cmd_calc_initial_secret(optarg);
             } else if (strcmp(longopts[opt_index].name, "decrypt-packet") == 0) {
@@ -1909,7 +1911,8 @@ int main(int argc, char **argv)
             load_session();
         hs_properties.client.ech.configs = ech.config_list;
         hs_properties.client.ech.retry_configs = &ech.retry.configs;
-        use_cid_encryptor = cid_key != NULL || ctx.transport_params.initial_max_path_id != 0;
+        use_cid_encryptor =
+            cid_key != NULL || ctx.transport_params.enable_multipath || ctx.transport_params.initial_max_path_id != 0;
     }
     if (use_cid_encryptor) {
         if (cid_key == NULL) {
