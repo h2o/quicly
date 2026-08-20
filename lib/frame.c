@@ -91,7 +91,8 @@ uint8_t *quicly_encode_path_ack_frame(uint8_t *dst, uint8_t *dst_end, uint64_t p
     /* emit PATH_ACK_ECN frame if any of the three ECN counts are non-zero */
     uint8_t frame_type =
         (ecn_counts[0] | ecn_counts[1] | ecn_counts[2]) != 0 ? QUICLY_FRAME_TYPE_PATH_ACK_ECN : QUICLY_FRAME_TYPE_PATH_ACK;
-    if (dst_end - dst < 1)
+    size_t path_id_len = quicly_encodev_capacity(path_id);
+    if ((size_t)(dst_end - dst) < 1 + path_id_len)
         return NULL;
     *dst++ = frame_type;
     dst = quicly_encodev(dst, path_id);
