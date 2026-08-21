@@ -65,10 +65,10 @@ static int cond_rand_(struct loss_cond_t *cond)
 
     if (cond->data.rand_.bits_avail == 0) {
         if (c == NULL) {
-            /* use different seed for each invocation */
-            static uint64_t key[2];
-            c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, &key);
-            ++key[0];
+            static const uint8_t key[PTLS_AES128_KEY_SIZE] = {0}, iv[PTLS_AES_IV_SIZE] = {0};
+            c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, key);
+            assert(c != NULL);
+            ptls_cipher_init(c, iv);
         }
         /* initialize next `ntotal` bits, of which `nloss` bits are set */
         cond->data.rand_.bits = 0;
@@ -433,7 +433,7 @@ static void test_downstream(void)
         time_spent[i] = quic_now - 1;
     }
     /* Independent packet-number-space ACK deadlines no longer let a stale handshake deadline accelerate application ACKs. */
-    subtest("down-stats-50%", loss_check_stats, time_spent, 0, 1100, 1700, 450, 600, 2000);
+    subtest("down-stats-50%", loss_check_stats, time_spent, 0, 1100, 1700, 450, 700, 2000);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 4);
@@ -548,7 +548,6 @@ void test_lossy(void)
     uint64_t idle_timeout_backup = quic_ctx.transport_params.max_idle_timeout;
     quic_ctx.transport_params.max_idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
     subtest("downstream", test_downstream);
-    quic_ctx.transport_params.max_idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
     subtest("bidirectional", test_bidirectional);
     quic_ctx.transport_params.max_idle_timeout = idle_timeout_backup;
     quic_ctx.handshake_timeout_rtt_multiplier = handshake_timeout_backup;

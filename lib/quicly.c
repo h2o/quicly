@@ -4628,7 +4628,8 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
         }
         if (ps->loss.alarm_at < at && !is_point5rtt_with_no_handshake_data_to_send(conn))
             at = ps->loss.alarm_at;
-        if (ps->pn_space != NULL && ps->pn_space->send_ack_at < at)
+        if (conn->application != NULL && conn->application->one_rtt_writable && ps->pn_space != NULL &&
+            ps->pn_space->send_ack_at < at)
             at = ps->pn_space->send_ack_at;
     }
     struct st_quicly_conn_path_t *initial_path = get_path(conn, 0);

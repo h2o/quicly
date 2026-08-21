@@ -100,6 +100,22 @@ quicly_stream_callbacks_t stream_callbacks = {
     on_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_egress_stop, on_ingress_receive, on_ingress_reset};
 size_t on_destroy_callcnt;
 
+static ptls_cipher_context_t *test_random_cipher;
+
+/* Keep protocol-level random choices reproducible; cryptographic primitives are tested separately. */
+static void test_random_bytes(void *buf, size_t len)
+{
+    static const uint8_t zeroes[64] = {0};
+
+    assert(test_random_cipher != NULL);
+    while (len != 0) {
+        size_t chunk = len < sizeof(zeroes) ? len : sizeof(zeroes);
+        ptls_cipher_encrypt(test_random_cipher, buf, zeroes, chunk);
+        buf = (uint8_t *)buf + chunk;
+        len -= chunk;
+    }
+}
+
 static void test_error_codes(void)
 {
     quicly_error_t a;
@@ -2337,7 +2353,7 @@ int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
     static ptls_openssl_sign_certificate_t cert_signer;
-    static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
+    static ptls_context_t tlsctx = {.random_bytes = test_random_bytes,
                                     .get_time = &ptls_get_time,
                                     .key_exchanges = ptls_openssl_key_exchanges,
                                     .cipher_suites = ptls_openssl_cipher_suites,
@@ -2359,6 +2375,13 @@ int main(int argc, char **argv)
     (void)OSSL_PROVIDER_load(NULL, "legacy");
     (void)OSSL_PROVIDER_load(NULL, "default");
 #endif
+
+    {
+        static const uint8_t key[PTLS_AES128_KEY_SIZE] = {0}, iv[PTLS_AES_IV_SIZE] = {0};
+        test_random_cipher = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, key);
+        assert(test_random_cipher != NULL);
+        ptls_cipher_init(test_random_cipher, iv);
+    }
 
     {
         BIO *bio = BIO_new_mem_buf(RSA_CERTIFICATE, strlen(RSA_CERTIFICATE));
