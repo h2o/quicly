@@ -511,6 +511,23 @@ static void test_reno(void)
     ok(cwnd_is(cc.cwnd, 40 * mtu * QUICLY_BETA_RENO));
 }
 
+static void test_cuback_reno_bytes_per_mtu_increase(void)
+{
+    uint32_t mtu = 1200, cwnd_epoch = 7 * mtu, w_max = 10 * mtu;
+    struct st_quicly_cc_cuback_t state = {.cwnd_prior = w_max};
+
+    /* Reno curve, before Wmax: each MTU increase consumes the current CWND divided by the friendly alpha. */
+    state.bandwidth = 1e12;
+    ok(cwnd_is(cuback_bytes_per_mtu_increase(&state, cwnd_epoch, cwnd_epoch, mtu),
+               (double)cwnd_epoch / cubic_friendly_alpha[0]));
+    ok(cwnd_is(cuback_bytes_per_mtu_increase(&state, cwnd_epoch + mtu, cwnd_epoch, mtu),
+               (double)(cwnd_epoch + mtu) / cubic_friendly_alpha[0]));
+
+    /* Reno curve, at and above Wmax: alpha is one, so each increase consumes the current CWND. */
+    ok(cuback_bytes_per_mtu_increase(&state, w_max, cwnd_epoch, mtu) == w_max);
+    ok(cuback_bytes_per_mtu_increase(&state, w_max + mtu, cwnd_epoch, mtu) == w_max + mtu);
+}
+
 static void test_cuback_reno_friendly_post_bdp_estimate(void)
 {
     quicly_cc_t cc;
@@ -523,15 +540,17 @@ static void test_cuback_reno_friendly_post_bdp_estimate(void)
     cc.state.pico.cuback.bandwidth = w_max * 1000. / loss.rtt.smoothed;
     cc.state.pico.bytes_to_mtu_increase = 0;
 
-    /* Above W_max, RFC 9438 uses alpha == 1. Moving from 2 to 3 MTUs therefore requires (3^2 - 2^2) / 2 == 2.5 MTUs
-     * to be acknowledged. As the first ACK of an epoch also receives CWND bytes of credit (Cubic being at W(RTT) when it
-     * exits recovery), only the remainder has to be supplied here. */
-    cc.type->cc_on_acked(&cc, &loss, 5 * mtu / 2 - 1 - w_max, 1, 5 * mtu / 2 - 1 - w_max, 1, 2, 100, mtu);
-    ok(cc.cwnd == w_max);
-    ok(cc.state.pico.bytes_to_mtu_increase == 1);
-    cc.type->cc_on_acked(&cc, &loss, 1, 2, 1, 1, 3, 100, mtu);
+    /* Above W_max, alpha is one, so moving from 2 to 3 MTUs requires 2 MTUs to be acknowledged. The epoch credit supplies that
+     * amount, so the first positive ACK exposes the increase. */
+    cc.type->cc_on_acked(&cc, &loss, 1, 1, 1, 1, 2, 100, mtu);
     ok(cc.cwnd == w_max + mtu);
-    ok(cc.state.pico.bytes_to_mtu_increase == 7 * mtu / 2);
+    ok(cc.state.pico.bytes_to_mtu_increase == 3 * mtu - 1);
+    cc.type->cc_on_acked(&cc, &loss, 3 * mtu - 2, 2, 3 * mtu - 2, 1, 3, 100, mtu);
+    ok(cc.cwnd == w_max + mtu);
+    ok(cc.state.pico.bytes_to_mtu_increase == 1);
+    cc.type->cc_on_acked(&cc, &loss, 1, 3, 1, 1, 4, 100, mtu);
+    ok(cc.cwnd == w_max + 2 * mtu);
+    ok(cc.state.pico.bytes_to_mtu_increase == 4 * mtu);
 }
 
 static void test_cuback_deferred_bdp_estimate(void)
@@ -648,6 +667,7 @@ void test_cc(void)
     subtest("cubic-legacy-name", test_cubic_legacy_name);
     subtest("pico-ack-countdown", test_pico_ack_countdown);
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
+    subtest("cuback-reno-bytes-per-mtu-increase", test_cuback_reno_bytes_per_mtu_increase);
     subtest("cuback-reno-friendly-post-bdp-estimate", test_cuback_reno_friendly_post_bdp_estimate);
     subtest("cuback-deferred-bdp-estimate", test_cuback_deferred_bdp_estimate);
     subtest("zero-byte-ack-exits-rapid-start-recovery", test_zero_byte_ack_exits_rapid_start_recovery);

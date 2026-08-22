@@ -175,22 +175,31 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
  *
  * Let Tr be the time at which the Reno-friendly curve reaches cwnd_prior:
  *
- *   Tr = (cwnd_prior^2 - Wepoch^2) / (2 * alpha * MSS * bandwidth)
+ *   Tr = sum(w, w = Wepoch .. cwnd_prior - MSS, step MSS) / (alpha * bandwidth)
+ *      = (cwnd_prior - Wepoch) * (cwnd_prior + Wepoch - MSS) / (2 * alpha * MSS * bandwidth)
  *
- * The two time-domain curves are:
+ * The Cubic curve and the continuous interpolation through Reno's MSS-spaced points are:
  *
  *   W_cubic(t) = C * MSS * (t - K)^3 + Wmax
- *   W_reno(t)  = sqrt(Wepoch^2 + 2 * alpha * MSS * bandwidth * t),                   t <= Tr
- *                sqrt(cwnd_prior^2 + 2 * MSS * bandwidth * (t - Tr)),                t > Tr
+ *   W_reno(t)  = W_reno_pre(t),                                                      t <= Tr
+ *                W_reno_post(t),                                                     t > Tr
+ *
+ * Each Reno branch is obtained by inverting the sum of its MSS-spaced ACK thresholds:
+ *
+ *   bandwidth * t = sum(w, w = Wepoch .. W_reno_pre(t) - MSS, step MSS) / alpha
+ *   W_reno_pre(t) = (MSS + sqrt((2 * Wepoch - MSS)^2 + 8 * alpha * MSS * bandwidth * t)) / 2
+ *
+ *   bandwidth * (t - Tr) = sum(w, w = cwnd_prior .. W_reno_post(t) - MSS, step MSS)
+ *   W_reno_post(t) = (MSS + sqrt((2 * cwnd_prior - MSS)^2 + 8 * MSS * bandwidth * (t - Tr))) / 2
  *
  * As both curves are monotonically increasing, CWND - being their maximum - is monotonically increasing as well. Therefore, the
  * amount sent can be recovered from CWND, the inverse of a maximum being the minimum of the inverses. Inverting the curves gives
  * the time at which each reaches `w`. Multiplying that time by bandwidth converts the result to bytes sent since the epoch began:
  *
  *   bytes_cubic(w) = bandwidth * (K + cbrt((w - Wmax) / (C * MSS)))
- *   bytes_reno(w)  = (w^2 - Wepoch^2) / (2 * alpha * MSS),                           w <= cwnd_prior
- *                    (cwnd_prior^2 - Wepoch^2) / (2 * alpha * MSS)
- *                      + (w^2 - cwnd_prior^2) / (2 * MSS),                           w > cwnd_prior
+ *   bytes_reno(w)  = (w - Wepoch) * (w + Wepoch - MSS) / (2 * alpha * MSS),          w <= cwnd_prior
+ *                    (cwnd_prior - Wepoch) * (cwnd_prior + Wepoch - MSS) / (2 * alpha * MSS)
+ *                      + (w - cwnd_prior) * (w + cwnd_prior - MSS) / (2 * MSS),      w > cwnd_prior
  *   bytes_sent(w)  = min(bytes_cubic(w), bytes_reno(w))
  *
  * Wepoch is equal to ssthresh, therefore the only Cuback-specific states that need to be retained are:
@@ -241,9 +250,9 @@ static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, 
     /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
      * reduction. Bandwidth cancels when converting the Reno time to bytes sent. */
     double w_friendly = w < cwnd_prior ? w : cwnd_prior;
-    double bytes_reno = (w_friendly * w_friendly - w_epoch * w_epoch) / (2 * friendly_alpha * mtu);
+    double bytes_reno = (w_friendly - w_epoch) * (w_friendly + w_epoch - mtu) / (2 * friendly_alpha * mtu);
     if (w > cwnd_prior)
-        bytes_reno += (w * w - cwnd_prior * cwnd_prior) / (2 * mtu);
+        bytes_reno += (w - cwnd_prior) * (w + cwnd_prior - mtu) / (2 * mtu);
     double bytes = bytes_cubic < bytes_reno ? bytes_cubic : bytes_reno;
     return bytes > 0 ? bytes : 0;
 }
