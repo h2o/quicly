@@ -318,19 +318,28 @@ static void cubic_set_cc_limited(struct st_quicly_cc_cubic_t *state, int cc_limi
     }
 }
 
-static uint32_t cubic_update_w_est(struct st_quicly_cc_cubic_t *state, uint32_t cwnd, uint32_t bytes, uint32_t mtu)
+static uint32_t cubic_quantized_w_est(const struct st_quicly_cc_cubic_t *state, uint32_t cwnd_epoch, uint32_t mtu)
+{
+    /* Keep the estimator continuous as defined by RFC 9438 Figure 4; only the value exposed as CWND is quantized, in whole-MTU
+     * steps from the epoch's initial window. */
+    double quantized = cwnd_epoch + floor((state->w_est - cwnd_epoch) / mtu) * mtu;
+    return quantized < UINT32_MAX ? quantized : UINT32_MAX;
+}
+
+static uint32_t cubic_update_w_est(struct st_quicly_cc_cubic_t *state, uint32_t cwnd, uint32_t cwnd_epoch, uint32_t bytes,
+                                   uint32_t mtu)
 {
     double alpha = state->w_est >= state->cwnd_prior ? 1 : cubic_friendly_alpha[state->by_ecn];
     state->w_est += alpha * bytes / cwnd * mtu;
-    return state->w_est < UINT32_MAX ? state->w_est : UINT32_MAX;
+    return cubic_quantized_w_est(state, cwnd_epoch, mtu);
 }
 
 static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, uint32_t cwnd_epoch, uint32_t bytes, int cc_limited,
                            uint32_t rtt, int64_t now, uint32_t mtu)
 {
-    uint32_t w_est = state->w_est < UINT32_MAX ? state->w_est : UINT32_MAX;
+    uint32_t w_est = cubic_quantized_w_est(state, cwnd_epoch, mtu);
     if (cc_limited)
-        w_est = cubic_update_w_est(state, *cwnd, bytes, mtu);
+        w_est = cubic_update_w_est(state, *cwnd, cwnd_epoch, bytes, mtu);
 
     /* W_est is ACK-clocked even while the CUBIC clock is stopped, but CWND does not grow while currently app-limited. */
     if (!cubic_start_epoch(state, *cwnd, cwnd_epoch, mtu) || bytes == 0)

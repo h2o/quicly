@@ -279,6 +279,22 @@ static void test_cubic_target_bounds(void)
     ok(cc.cwnd == initcwnd);
 }
 
+static void test_cubic_w_est(void)
+{
+    uint32_t mtu = 1200;
+    struct st_quicly_cc_cubic_t state = {.w_est = 10 * mtu, .cwnd_prior = 10 * mtu};
+
+    /* At 10 MTUs, the exposed estimate stays unchanged until 10 MTUs have been acknowledged, then grows by exactly one MTU. */
+    ok(cubic_update_w_est(&state, 10 * mtu, 10 * mtu, 10 * mtu - 1, mtu) == 10 * mtu);
+    ok(10 * mtu < state.w_est && state.w_est < 11 * mtu);
+    ok(cubic_update_w_est(&state, 10 * mtu, 10 * mtu, 1, mtu) == 11 * mtu);
+    ok(state.w_est == 11 * mtu);
+
+    /* The next increase requires the new 11-MTU window to be acknowledged. */
+    ok(cubic_update_w_est(&state, 11 * mtu, 10 * mtu, 11 * mtu, mtu) == 12 * mtu);
+    ok(state.w_est == 12 * mtu);
+}
+
 static void test_cubic_cc_limited(void)
 {
     quicly_cc_t cc;
@@ -708,6 +724,7 @@ void test_cc(void)
     subtest("reno", test_reno);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
+    subtest("cubic-w-est", test_cubic_w_est);
     subtest("cubic-cc-limited", test_cubic_cc_limited);
     subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);
     subtest("cubic-abe", test_cubic_abe);
