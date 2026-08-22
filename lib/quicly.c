@@ -6691,33 +6691,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     size_t min_packets_to_send = 0, orig_bytes_inflight = 0;
     quicly_error_t ret = 0;
 
-    /* handle timeouts */
-    if (conn->idle_timeout.at <= conn->stash.now) {
-        QUICLY_PROBE(IDLE_TIMEOUT, conn, conn->stash.now);
-        QUICLY_LOG_CONN(idle_timeout, conn, {});
-        goto CloseNow;
-    }
-    /* handle handshake timeouts */
-    if ((conn->initial != NULL || conn->handshake != NULL) &&
-        conn->created_at + (int64_t)(conn->super.ctx->handshake_timeout_rtt_multiplier *
-                                     get_loss(conn, get_send_path(conn, s))->rtt.smoothed) <=
-            conn->stash.now) {
-        QUICLY_PROBE(HANDSHAKE_TIMEOUT, conn, conn->stash.now, conn->stash.now - conn->created_at,
-                     (uint32_t)get_loss(conn, get_send_path(conn, s))->rtt.smoothed);
-        QUICLY_LOG_CONN(handshake_timeout, conn, {
-            PTLS_LOG_ELEMENT_SIGNED(elapsed, conn->stash.now - conn->created_at);
-            PTLS_LOG_ELEMENT_UNSIGNED(rtt_smoothed, (uint32_t)get_loss(conn, get_send_path(conn, s))->rtt.smoothed);
-        });
-        conn->super.stats.num_handshake_timeouts++;
-        goto CloseNow;
-    }
-    uint64_t initial_handshake_sent = conn->super.stats.num_packets.initial_sent + conn->super.stats.num_packets.handshake_sent;
-    if (initial_handshake_sent > conn->super.ctx->max_initial_handshake_packets) {
-        QUICLY_PROBE(INITIAL_HANDSHAKE_PACKET_EXCEED, conn, conn->stash.now, initial_handshake_sent);
-        QUICLY_LOG_CONN(initial_handshake_packet_exceed, conn, { PTLS_LOG_ELEMENT_UNSIGNED(num_packets, initial_handshake_sent); });
-        conn->super.stats.num_initial_handshake_exceeded++;
-        goto CloseNow;
-    }
+
     if (get_loss(conn, get_send_path(conn, s))->alarm_at <= conn->stash.now) {
         if ((ret = quicly_loss_on_alarm(
                  get_loss(conn, get_send_path(conn, s)), conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
@@ -7007,10 +6981,6 @@ Exit:
     }
     return ret;
 
-CloseNow:
-    conn->super.state = QUICLY_STATE_DRAINING;
-    destroy_all_streams(conn, 0, 0);
-    return QUICLY_ERROR_FREE_CONNECTION;
 }
 
 void quicly_send_datagram_frames_path(quicly_conn_t *conn, size_t path_index, ptls_iovec_t *datagrams, size_t num_datagrams)
@@ -7283,6 +7253,34 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
 
     lock_now(conn, 0);
 
+    /* Connection-wide limits must be checked before consulting the send deadline. A path that has exhausted its amplification
+     * allowance is omitted from quicly_get_first_timeout, but the handshake still needs to expire. */
+    if (conn->idle_timeout.at <= conn->stash.now) {
+        QUICLY_PROBE(IDLE_TIMEOUT, conn, conn->stash.now);
+        QUICLY_LOG_CONN(idle_timeout, conn, {});
+        goto CloseNow;
+    }
+    if ((conn->initial != NULL || conn->handshake != NULL) &&
+        conn->created_at + (int64_t)(conn->super.ctx->handshake_timeout_rtt_multiplier *
+                                     get_loss(conn, get_path(conn, 0))->rtt.smoothed) <=
+            conn->stash.now) {
+        QUICLY_PROBE(HANDSHAKE_TIMEOUT, conn, conn->stash.now, conn->stash.now - conn->created_at,
+                     (uint32_t)get_loss(conn, get_path(conn, 0))->rtt.smoothed);
+        QUICLY_LOG_CONN(handshake_timeout, conn, {
+            PTLS_LOG_ELEMENT_SIGNED(elapsed, conn->stash.now - conn->created_at);
+            PTLS_LOG_ELEMENT_UNSIGNED(rtt_smoothed, (uint32_t)get_loss(conn, get_path(conn, 0))->rtt.smoothed);
+        });
+        conn->super.stats.num_handshake_timeouts++;
+        goto CloseNow;
+    }
+    uint64_t initial_handshake_sent = conn->super.stats.num_packets.initial_sent + conn->super.stats.num_packets.handshake_sent;
+    if (initial_handshake_sent > conn->super.ctx->max_initial_handshake_packets) {
+        QUICLY_PROBE(INITIAL_HANDSHAKE_PACKET_EXCEED, conn, conn->stash.now, initial_handshake_sent);
+        QUICLY_LOG_CONN(initial_handshake_packet_exceed, conn, { PTLS_LOG_ELEMENT_UNSIGNED(num_packets, initial_handshake_sent); });
+        conn->super.stats.num_initial_handshake_exceeded++;
+        goto CloseNow;
+    }
+
     /* bail out if there's nothing scheduled to be sent */
     if (conn->stash.now < quicly_get_first_timeout(conn)) {
         ret = 0;
@@ -7415,6 +7413,12 @@ Exit:
     *num_datagrams = s.num_datagrams;
     unlock_now(conn);
     return ret;
+
+CloseNow:
+    conn->super.state = QUICLY_STATE_DRAINING;
+    destroy_all_streams(conn, 0, 0);
+    ret = QUICLY_ERROR_FREE_CONNECTION;
+    goto Exit;
 }
 
 uint8_t quicly_send_get_ecn_bits(quicly_conn_t *conn)

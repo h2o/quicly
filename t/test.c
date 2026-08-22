@@ -1449,6 +1449,42 @@ static void do_test_migration_during_handshake(int second_flight_from_orig_addre
     quicly_free(server);
 }
 
+static void test_amplification_blocked_handshake_timeout(void)
+{
+    uint32_t orig_handshake_timeout_rtt_multiplier = quic_ctx.handshake_timeout_rtt_multiplier;
+    quic_ctx.handshake_timeout_rtt_multiplier = 1;
+
+    quicly_conn_t *client, *server;
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[4];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded[4];
+
+    ok(quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                      NULL, NULL) == 0);
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(client, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(num_datagrams == 1);
+    ok(decode_packets(decoded, datagrams, num_datagrams) == 1);
+    ok(quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL) == 0);
+
+    struct st_quicly_conn_path_t *server_path = get_path(server, 0);
+    server_path->bytes_sent = server_path->bytes_received * quic_ctx.pre_validation_amplification_limit;
+    ok(calc_amplification_limit_allowance(server, server_path) == 0);
+    quic_now =
+        server->created_at + (int64_t)(quic_ctx.handshake_timeout_rtt_multiplier * server->path_spaces[0]->loss.rtt.smoothed);
+    ok(quicly_get_first_timeout(server) > quic_now);
+
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(server, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == QUICLY_ERROR_FREE_CONNECTION);
+    ok(num_datagrams == 0);
+    ok(quicly_get_state(server) == QUICLY_STATE_DRAINING);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.handshake_timeout_rtt_multiplier = orig_handshake_timeout_rtt_multiplier;
+}
+
 static void test_migration_during_handshake(void)
 {
     subtest("migrate-before-2nd", do_test_migration_during_handshake, 0);
@@ -2433,6 +2469,7 @@ int main(int argc, char **argv)
     subtest("cc", test_cc);
 
     subtest("state-exhaustion", test_state_exhaustion);
+    subtest("amplification-blocked-handshake-timeout", test_amplification_blocked_handshake_timeout);
     subtest("migration-during-handshake", test_migration_during_handshake);
     subtest("multipath-negotiation-violation", test_multipath_negotiation_violation);
     subtest("multipath-status-violation", test_multipath_status_violation);
