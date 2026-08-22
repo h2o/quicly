@@ -528,6 +528,54 @@ static void test_cuback_reno_bytes_per_mtu_increase(void)
     ok(cuback_bytes_per_mtu_increase(&state, w_max + mtu, cwnd_epoch, mtu) == w_max + mtu);
 }
 
+static void test_cuback_cubic_bytes_per_mtu_increase(void)
+{
+    static const struct {
+        uint32_t cwnd_epoch_in_mtu;
+        uint32_t w_max_in_mtu;
+    } cases[] = {{7, 10}, {700, 1000}};
+    uint32_t mtu = 1200;
+
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(cases); ++i) {
+        uint32_t cwnd_epoch = cases[i].cwnd_epoch_in_mtu * mtu, w_max = cases[i].w_max_in_mtu * mtu;
+        /* A two-second RTT makes the Cubic curve cheaper than the Reno curve throughout the points being tested. */
+        struct st_quicly_cc_cuback_t state = {.cwnd_prior = w_max, .bandwidth = w_max / 2.};
+        double k = cbrt((double)(w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
+
+        /* By point symmetry, the continuous Cubic curve is one eighth of the epoch-to-Wmax gap below Wmax at K / 2, and the same
+         * distance above Wmax at 3 * K / 2. Cuback exposes only whole-MTU windows, so record the times bracketing those points. */
+        double gap = w_max - cwnd_epoch;
+        double w_half_k = w_max - gap / 8, w_three_halves_k = w_max + gap / 8;
+        uint32_t before_half_k = (uint32_t)(w_half_k / mtu) * mtu, after_half_k = before_half_k + mtu;
+        uint32_t before_three_halves_k = (uint32_t)(w_three_halves_k / mtu) * mtu;
+        uint32_t after_three_halves_k = before_three_halves_k + mtu;
+        uint64_t bytes = 0, bytes_before_half_k = 0, bytes_after_half_k = 0, bytes_at_w_max = 0,
+                 bytes_before_three_halves_k = 0, bytes_after_three_halves_k = 0;
+
+        for (uint32_t cwnd = cwnd_epoch;; cwnd += mtu) {
+            if (cwnd == before_half_k)
+                bytes_before_half_k = bytes;
+            if (cwnd == after_half_k)
+                bytes_after_half_k = bytes;
+            if (cwnd == w_max)
+                bytes_at_w_max = bytes;
+            if (cwnd == before_three_halves_k)
+                bytes_before_three_halves_k = bytes;
+            if (cwnd == after_three_halves_k) {
+                bytes_after_three_halves_k = bytes;
+                break;
+            }
+            bytes += cuback_bytes_per_mtu_increase(&state, cwnd, cwnd_epoch, mtu);
+        }
+
+        ok(bytes_before_half_k / state.bandwidth < k / 2);
+        ok(bytes_after_half_k / state.bandwidth > k / 2);
+        ok(fabs(bytes_at_w_max / state.bandwidth - k) / k < 1e-3);
+        ok(bytes_before_three_halves_k / state.bandwidth < 3 * k / 2);
+        ok(bytes_after_three_halves_k / state.bandwidth > 3 * k / 2);
+    }
+}
+
 static void test_cuback_reno_friendly_post_bdp_estimate(void)
 {
     quicly_cc_t cc;
@@ -668,6 +716,7 @@ void test_cc(void)
     subtest("pico-ack-countdown", test_pico_ack_countdown);
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
     subtest("cuback-reno-bytes-per-mtu-increase", test_cuback_reno_bytes_per_mtu_increase);
+    subtest("cuback-cubic-bytes-per-mtu-increase", test_cuback_cubic_bytes_per_mtu_increase);
     subtest("cuback-reno-friendly-post-bdp-estimate", test_cuback_reno_friendly_post_bdp_estimate);
     subtest("cuback-deferred-bdp-estimate", test_cuback_deferred_bdp_estimate);
     subtest("zero-byte-ack-exits-rapid-start-recovery", test_zero_byte_ack_exits_rapid_start_recovery);
