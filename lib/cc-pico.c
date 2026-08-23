@@ -224,17 +224,20 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
  *
  * __Note on the reno-friendly region__
  *
- * Neither Cubic nor Cuback tracks Reno exactly; they are both more aggressive than Reno.
+ * Cubic and Cuback represent the Reno-friendly estimate differently while the cubic curve controls CWND.
  *
- * Cubic accumulates W_est += alpha * segments_acked / cwnd. Those bytes are delivered along the cubic curve, which sits above the
- * reno curve early in the epoch, so W_est is credited with volume that a Reno flow would not yet have sent, and therefore reaches
- * cwnd_prior sooner than it ought to.
+ * Cubic updates `W_est += alpha * segments_acked / cwnd`, where cwnd is the combined window. Therefore, W_est increases by alpha
+ * segments per RTT, as Reno does.
  *
- * Cuback evaluates the reno curve as a pure function of the bytes sent since the epoch began and so carries no such drift.
+ * Cuback instead uses the inverse of the standalone, packet-granular Reno recurrence. Its acknowledged-byte threshold is derived
+ * from the Reno-friendly window, rather than from the larger cubic-controlled window. Therefore, if the congestion avoidance stage
+ * starts outside the Reno-friendly region, each acknowledged byte advances Cuback's estimate farther until the two curves converge,
+ * and Cuback's Reno-friendly curve takes control earlier than W_est does in Cubic, making Cuback more aggressive.
  *
- * Both also share a bias that no such adjustment removes: immediately after the reduction the cubic curve is often the cheaper of
- * the two, so the concave climb owns the first part of every epoch. As more packets would be inflight than with Reno, the ack clock
- * runs faster, and this becomes a compound effect.
+ * In a simulator 2x2 varying the Reno estimator and cubic clock independently, the clock-source effect was larger by point estimate
+ * in every tested configuration. Even in the 100 ms / four-Reno case where isolated curve analysis predicted the largest
+ * divergence, the standalone estimator increased Cuback's throughput by 2.3%, versus 3.1% for changing the cubic curve from the
+ * wall clock to the ACK clock.
  */
 static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, double cwnd_prior, double bandwidth, double k,
                                         uint32_t mtu, double friendly_alpha)
