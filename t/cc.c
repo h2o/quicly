@@ -342,6 +342,34 @@ static void test_cubic_cc_limited(void)
     ok(cc.state.pico.cubic.w_est > w_est_before);
 }
 
+static void test_cubic_recovery_epoch(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    /* RFC 9438 starts the epoch when congestion avoidance begins, not when congestion is detected. */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.cubic.w_est == 0);
+    ok(cc.state.pico.cubic.epoch_start == 0);
+    cc.type->cc_on_acked(&cc, &loss, 0, 19, 0, 1, 20, 1100, mtu);
+    ok(cc.state.pico.cubic.epoch_start == 0);
+    cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1200, mtu);
+    ok(cc.state.pico.cubic.w_est == cc.cwnd);
+    ok(cc.state.pico.cubic.epoch_start == 1200);
+
+    /* If recovery exits while app-limited, initialize W_est but defer the wall-clock epoch until sending resumes. */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    cc.type->cc_update_cc_limited(&cc, 0, 1050);
+    cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 0, 21, 1200, mtu);
+    ok(cc.state.pico.cubic.w_est == cc.cwnd);
+    ok(cc.state.pico.cubic.epoch_start == 0);
+    cc.type->cc_update_cc_limited(&cc, 1, 1300);
+    ok(cc.state.pico.cubic.epoch_start == 1300);
+}
+
 static void test_cubic_rapid_start_epoch(void)
 {
     quicly_cc_t cc;
@@ -354,30 +382,30 @@ static void test_cubic_rapid_start_epoch(void)
     ok(cc.state.pico.cubic.cwnd_prior != 0);
     ok(!cc.state.pico.cubic.fast_convergence);
     ok(cc.state.pico.cubic.w_est == 0);
-    ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(cc.state.pico.cubic.epoch_start == 0);
     ok(isnan(cc.state.pico.cubic.k));
 
     cc.type->cc_on_acked(&cc, &loss, 4 * mtu, 15, 8 * mtu, 1, 20, 1100, mtu);
     uint32_t cwnd_prior_during_recovery = cc.state.pico.cubic.cwnd_prior;
     ok(cc.state.pico.cubic.w_est == 0);
-    ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(cc.state.pico.cubic.epoch_start == 0);
     ok(isnan(cc.state.pico.cubic.k));
 
     /* Further reduction during recovery does not initialize or restart the epoch. */
     cc.type->cc_on_lost(&cc, &loss, mtu, 16, 20, 1150, mtu);
     ok(cc.state.pico.cubic.w_est == 0);
-    ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(cc.state.pico.cubic.epoch_start == 0);
     ok(isnan(cc.state.pico.cubic.k));
     uint32_t cwnd_epoch = cc.cwnd;
 
-    /* The first ACK beyond recovery initializes the increase function from Rapid Start's progressively reduced CWND, using twice
-     * the BDP estimate as W_max. */
+    /* The first ACK beyond recovery initializes the increase function and starts the epoch from Rapid Start's progressively
+     * reduced CWND, using twice the BDP estimate as W_max. */
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1200, mtu);
     ok(cc.state.pico.cubic.cwnd_prior == (uint32_t)(2. * cwnd_epoch / QUICLY_BETA_LOSS));
     ok(cc.state.pico.cubic.cwnd_prior != cwnd_prior_during_recovery);
     ok(!cc.state.pico.cubic.fast_convergence);
     ok(cc.state.pico.cubic.w_est == cwnd_epoch);
-    ok(cc.state.pico.cubic.epoch_start == 1000);
+    ok(cc.state.pico.cubic.epoch_start == 1200);
     ok(!isnan(cc.state.pico.cubic.k));
     ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
 
@@ -592,7 +620,7 @@ static void test_cuback_cubic_bytes_per_mtu_increase(void)
     }
 }
 
-static void test_cuback_reno_friendly_post_bdp_estimate(void)
+static void test_cuback_ack_countdown(void)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
@@ -604,17 +632,16 @@ static void test_cuback_reno_friendly_post_bdp_estimate(void)
     cc.state.pico.cuback.bandwidth = w_max * 1000. / loss.rtt.smoothed;
     cc.state.pico.bytes_to_mtu_increase = 0;
 
-    /* Above W_max, alpha is one, so moving from 2 to 3 MTUs requires 2 MTUs to be acknowledged. The epoch credit supplies that
-     * amount, so the first positive ACK exposes the increase. */
+    /* Above W_max, alpha is one, so moving from 2 to 3 MTUs requires 2 MTUs newly acknowledged after recovery. */
     cc.type->cc_on_acked(&cc, &loss, 1, 1, 1, 1, 2, 100, mtu);
-    ok(cc.cwnd == w_max + mtu);
-    ok(cc.state.pico.bytes_to_mtu_increase == 3 * mtu - 1);
-    cc.type->cc_on_acked(&cc, &loss, 3 * mtu - 2, 2, 3 * mtu - 2, 1, 3, 100, mtu);
-    ok(cc.cwnd == w_max + mtu);
+    ok(cc.cwnd == w_max);
+    ok(cc.state.pico.bytes_to_mtu_increase == 2 * mtu - 1);
+    cc.type->cc_on_acked(&cc, &loss, 2 * mtu - 2, 2, 2 * mtu - 2, 1, 3, 100, mtu);
+    ok(cc.cwnd == w_max);
     ok(cc.state.pico.bytes_to_mtu_increase == 1);
     cc.type->cc_on_acked(&cc, &loss, 1, 3, 1, 1, 4, 100, mtu);
-    ok(cc.cwnd == w_max + 2 * mtu);
-    ok(cc.state.pico.bytes_to_mtu_increase == 4 * mtu);
+    ok(cc.cwnd == w_max + mtu);
+    ok(cc.state.pico.bytes_to_mtu_increase == 3 * mtu);
 }
 
 static void test_cuback_deferred_bdp_estimate(void)
@@ -726,6 +753,7 @@ void test_cc(void)
     subtest("cubic-target-bounds", test_cubic_target_bounds);
     subtest("cubic-w-est", test_cubic_w_est);
     subtest("cubic-cc-limited", test_cubic_cc_limited);
+    subtest("cubic-recovery-epoch", test_cubic_recovery_epoch);
     subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);
     subtest("cubic-abe", test_cubic_abe);
     subtest("cubic-undo-loss", test_cubic_undo_loss);
@@ -734,7 +762,7 @@ void test_cc(void)
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
     subtest("cuback-reno-bytes-per-mtu-increase", test_cuback_reno_bytes_per_mtu_increase);
     subtest("cuback-cubic-bytes-per-mtu-increase", test_cuback_cubic_bytes_per_mtu_increase);
-    subtest("cuback-reno-friendly-post-bdp-estimate", test_cuback_reno_friendly_post_bdp_estimate);
+    subtest("cuback-ack-countdown", test_cuback_ack_countdown);
     subtest("cuback-deferred-bdp-estimate", test_cuback_deferred_bdp_estimate);
     subtest("zero-byte-ack-exits-rapid-start-recovery", test_zero_byte_ack_exits_rapid_start_recovery);
     subtest("pico-undo-loss", test_pico_undo_loss);

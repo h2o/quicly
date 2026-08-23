@@ -230,18 +230,11 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
  * reno curve early in the epoch, so W_est is credited with volume that a Reno flow would not yet have sent, and therefore reaches
  * cwnd_prior sooner than it ought to.
  *
- * Cuback evaluates the reno curve as a pure function of the bytes sent since the epoch began and so carries no such drift, but it
- * has the opposite bias. The one RT of credit granted when the epoch begins - which exists because Cubic aims at W_cubic(t + RTT)
- * - advances the byte counter and therefore both curves, whereas Cubic applies that lookahead to W_cubic alone. Cancelling it for
- * this branch alone would mean departing from `cwnd_epoch - alpha * MSS`.
+ * Cuback evaluates the reno curve as a pure function of the bytes sent since the epoch began and so carries no such drift.
  *
  * Both also share a bias that no such adjustment removes: immediately after the reduction the cubic curve is often the cheaper of
  * the two, so the concave climb owns the first part of every epoch. As more packets would be inflight than with Reno, the ack clock
  * runs faster, and this becomes a compound effect.
- *
- * The two biases unique to each are of comparable magnitude, and empirically Cuback and Cubic land within about a point of each
- * other when measured against a common competitor. Therefore, the biases are left uncorrected, since the design goal of Cuback is
- * to create a controller in parity with Cubic.
  */
 static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, double cwnd_prior, double bandwidth, double k,
                                         uint32_t mtu, double friendly_alpha)
@@ -312,7 +305,7 @@ static void cubic_set_cc_limited(struct st_quicly_cc_cubic_t *state, int cc_limi
     if (!cc_limited) {
         state->k = NAN;
         state->epoch_start = 0;
-    } else if (state->epoch_start == 0 && state->cwnd_prior != 0) {
+    } else if (state->epoch_start == 0 && state->w_est != 0) {
         state->epoch_start = now;
         state->k = NAN;
     }
@@ -364,14 +357,13 @@ static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, u
     }
 }
 
-static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwnd_prior, uint32_t previous_cwnd_epoch, int by_ecn,
-                                int64_t now)
+static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwnd_prior, uint32_t previous_cwnd_epoch, int by_ecn)
 {
     double previous_w_max = cubic_w_max(state, previous_cwnd_epoch);
 
     state->by_ecn = by_ecn;
     state->k = NAN;
-    state->epoch_start = state->cc_limited ? now : 0;
+    state->epoch_start = 0;
     state->w_est = 0;
     state->fast_convergence = state->cwnd_prior != 0 && cwnd_prior < previous_w_max;
     state->cwnd_prior = cwnd_prior;
@@ -380,8 +372,7 @@ static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwn
 /**
  * Calculates the size of the next ACK interval from the current congestion-control state.
  */
-static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t max_udp_payload_size,
-                                            uint32_t *bytes_available)
+static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t max_udp_payload_size)
 {
     if (cc->cwnd < cc->ssthresh) {
         return quicly_cc_rapid_start_use_3x(&cc->rapid_start, &loss->rtt) ? max_udp_payload_size / 2 : max_udp_payload_size;
@@ -391,9 +382,6 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
              * while in congestion avoidance. Use Reno until then. */
             return cc->cwnd;
         }
-        /* When exiting recovery, Cubic's CWND is W(t), so to be on par, run Cuback's clock for the same amount. */
-        if (bytes_available != NULL)
-            *bytes_available += cc->cwnd;
         return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size);
     } else if (cc->type == &quicly_cc_type_cubic) {
         assert(!"Cubic congestion avoidance bypasses the byte-counter path");
@@ -436,6 +424,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             }
             assert(state->cwnd_prior != 0);
             state->w_est = cc->cwnd;
+            state->epoch_start = state->cc_limited ? now : 0;
+            state->k = NAN;
         }
         cubic_on_acked(state, &cc->cwnd, cc->ssthresh, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size);
         goto Cleanup;
@@ -457,11 +447,11 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     /* Apply this ACK to the current interval. One ACK can span multiple intervals. */
     uint32_t bytes_available = bytes;
     if (cc->state.pico.bytes_to_mtu_increase == 0)
-        cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size, &bytes_available);
+        cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size);
     while (bytes_available >= cc->state.pico.bytes_to_mtu_increase) {
         bytes_available -= cc->state.pico.bytes_to_mtu_increase;
         cc->cwnd = quicly_u32_add_saturating(cc->cwnd, max_udp_payload_size);
-        cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size, NULL);
+        cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size);
     }
     cc->state.pico.bytes_to_mtu_increase -= bytes_available;
     assert(cc->state.pico.bytes_to_mtu_increase != 0);
@@ -608,7 +598,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
         cc->state.pico.bytes_to_mtu_increase = 0;
     } else if (cc->type == &quicly_cc_type_cubic) {
-        cubic_on_congestion(&cc->state.pico.cubic, bdp, cc->ssthresh, bytes == 0, now);
+        cubic_on_congestion(&cc->state.pico.cubic, bdp, cc->ssthresh, bytes == 0);
         cc->state.pico.bytes_to_mtu_increase = 0;
     } else if (cc->type == &quicly_cc_type_pico) {
         /* Pico: Rapid Start might adjust CWND to a smaller value than `bdp`, but the increase is calculated using `bdp` regardless.
