@@ -393,6 +393,10 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
         return cc->state.pico.bytes_per_mtu_increase;
     } else {
         assert(cc->type == &quicly_cc_type_reno);
+        if (cc->normalize_mtu) {
+            uint64_t bytes = (uint64_t)cc->cwnd * max_udp_payload_size / QUICLY_CC_REFERENCE_MTU;
+            return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
+        }
         return cc->cwnd;
     }
 }
@@ -681,10 +685,11 @@ static void pico_init_pico_state(quicly_cc_t *cc)
     }
 }
 
-static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd)
+static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd, int normalize_mtu)
 {
     *cc = (quicly_cc_t){
         .type = type,
+        .normalize_mtu = normalize_mtu,
         .cwnd = initcwnd,
         .cwnd_initial = initcwnd,
         .cwnd_maximum = initcwnd,
@@ -715,7 +720,7 @@ static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
             cc->type = type;
             pico_init_pico_state(cc);
         } else {
-            pico_reset(cc, type, cc->cwnd_initial);
+            pico_reset(cc, type, cc->cwnd_initial, cc->normalize_mtu);
         }
         return 1;
     }
@@ -753,24 +758,24 @@ static void cubic_update_cc_limited(quicly_cc_t *cc, int cc_limited, int64_t now
     cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
 }
 
-static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_pico, initcwnd);
+    pico_reset(cc, &quicly_cc_type_pico, initcwnd, normalize_mtu);
 }
 
-static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_reno, initcwnd);
+    pico_reset(cc, &quicly_cc_type_reno, initcwnd, normalize_mtu);
 }
 
-static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_cubic, initcwnd);
+    pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu);
 }
 
-static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_cuback, initcwnd);
+    pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu);
 }
 
 quicly_cc_type_t quicly_cc_type_pico = {"pico",

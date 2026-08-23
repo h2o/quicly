@@ -798,6 +798,8 @@ static void usage(const char *cmd)
            "  -E                  turns off ECN, which is otherwise used by every flow\n"
            "  -j <packets>        enables use of jumpstart using given window size\n"
            "  -l <seconds>        number of seconds to simulate (default: 100)\n"
+           "  -m <bytes>          sets the maximum UDP payload size\n"
+           "  -M                  normalizes Reno congestion-control growth to an MTU of 1462\n"
            "  -p                  turns on pacing\n"
            "  -q <seconds>        max depth of the bottleneck queue (default: 0.1)\n"
            "  -A <aqm>            queue discipline of the bottleneck: `none` (default),\n"
@@ -866,7 +868,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
 {
     reset_getopt_state();
     int ch;
-    while ((ch = getopt(argc, argv, "A:c:b:d:EFi:j:l:pq:r:Rs:th")) != -1) {
+    while ((ch = getopt(argc, argv, "A:c:b:d:EFi:j:l:m:Mpq:r:Rs:th")) != -1) {
 
         switch (ch) {
         case 'c': {
@@ -927,6 +929,19 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                 fprintf(stderr, "invalid length: %s\n", optarg);
                 return 0;
             }
+            break;
+        case 'm': {
+            uint16_t max_udp_payload_size;
+            if (sscanf(optarg, "%" SCNu16, &max_udp_payload_size) != 1 || max_udp_payload_size < QUICLY_MIN_CLIENT_INITIAL_SIZE ||
+                max_udp_payload_size > quicctx->transport_params.max_udp_payload_size) {
+                fprintf(stderr, "invalid maximum UDP payload size: %s\n", optarg);
+                return 0;
+            }
+            quicctx->initial_egress_max_udp_payload_size = max_udp_payload_size;
+            quicctx->transport_params.max_udp_payload_size = max_udp_payload_size;
+        } break;
+        case 'M':
+            quicctx->normalize_cc_mtu = 1;
             break;
         case 'p':
             quicctx->enable_ratio.pacing = 255;

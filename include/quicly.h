@@ -156,7 +156,7 @@ QUICLY_CALLBACK_TYPE(quicly_error_t, generate_resumption_token, quicly_conn_t *c
  * called to initialize a congestion controller for a new connection.
  * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
  */
-QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int64_t now);
+QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now);
 /**
  * reference counting.
  * delta must be either 1 or -1.
@@ -384,6 +384,10 @@ struct st_quicly_context_t {
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
+    /**
+     * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size
+     */
+    unsigned normalize_cc_mtu : 1;
     /**
      *
      */

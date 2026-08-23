@@ -1247,6 +1247,7 @@ static void usage(const char *cmd)
            "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
            "  -m <bytes>                max data (in bytes; default: 16MB)\n"
            "  --max-crypto-bytes <N>    maximum permitted length of a CRYPTO stream\n"
+           "  --normalize-cc-mtu        normalizes Reno congestion-control growth to an MTU of 1462\n"
            "  -N                        enforce HelloRetryRequest (client-only)\n"
            "  -n                        enforce version negotiation (client-only)\n"
            "  -O                        suppress output\n"
@@ -1538,6 +1539,7 @@ int main(int argc, char **argv)
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
                                              {"max-crypto-bytes", required_argument, NULL, 0},
+                                             {"normalize-cc-mtu", no_argument, NULL, 0},
                                              {"rapid-start", no_argument, NULL, 0},
                                              {"sockfd", required_argument, NULL, 0},
                                              {"exit-after-handshake", no_argument, NULL, 0},
@@ -1572,6 +1574,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max-crypto-bytes: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "normalize-cc-mtu") == 0) {
+                ctx.normalize_cc_mtu = 1;
             } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
                 ctx.enable_ratio.rapid_start = 255;
             } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {
