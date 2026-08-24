@@ -809,7 +809,7 @@ static void usage(const char *cmd)
            "  -j <packets>        enables use of jumpstart using given window size\n"
            "  -l <seconds>        number of seconds to simulate (default: 100)\n"
            "  -m <bytes>          sets the maximum UDP payload size\n"
-           "  -M                  normalizes Reno congestion-control growth to an MTU of 1462\n"
+           "  -M                  disables packet-size normalization of congestion-control growth\n"
            "  -p                  turns on pacing\n"
            "  -q <seconds>        max depth of the bottleneck queue (default: 0.1)\n"
            "  -A <aqm>            queue discipline of the bottleneck: `none` (default),\n"
@@ -959,7 +959,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             quicctx->transport_params.max_udp_payload_size = max_udp_payload_size;
         } break;
         case 'M':
-            quicctx->normalize_cc_mtu = 1;
+            quicctx->normalize_cc_mtu = 0;
             break;
         case 'p':
             quicctx->enable_ratio.pacing = 255;

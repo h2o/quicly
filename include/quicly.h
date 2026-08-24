@@ -385,7 +385,8 @@ struct st_quicly_context_t {
      */
     unsigned expand_client_hello : 1;
     /**
-     * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size
+     * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size; enabled in
+     * the default contexts
      */
     unsigned normalize_cc_mtu : 1;
     /**
