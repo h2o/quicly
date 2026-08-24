@@ -285,14 +285,51 @@ static void test_cubic_w_est(void)
     struct st_quicly_cc_cubic_t state = {.w_est = 10 * mtu, .cwnd_prior = 10 * mtu};
 
     /* At 10 MTUs, the exposed estimate stays unchanged until 10 MTUs have been acknowledged, then grows by exactly one MTU. */
-    ok(cubic_update_w_est(&state, 10 * mtu, 10 * mtu, 10 * mtu - 1, mtu) == 10 * mtu);
+    ok(cubic_update_w_est(&state, 10 * mtu, 10 * mtu, 10 * mtu - 1, mtu, mtu) == 10 * mtu);
     ok(10 * mtu < state.w_est && state.w_est < 11 * mtu);
-    ok(cubic_update_w_est(&state, 10 * mtu, 10 * mtu, 1, mtu) == 11 * mtu);
+    ok(cubic_update_w_est(&state, 10 * mtu, 10 * mtu, 1, mtu, mtu) == 11 * mtu);
     ok(state.w_est == 11 * mtu);
 
     /* The next increase requires the new 11-MTU window to be acknowledged. */
-    ok(cubic_update_w_est(&state, 11 * mtu, 10 * mtu, 11 * mtu, mtu) == 12 * mtu);
+    ok(cubic_update_w_est(&state, 11 * mtu, 10 * mtu, 11 * mtu, mtu, mtu) == 12 * mtu);
     ok(state.w_est == 12 * mtu);
+
+    /* With normalization, one window of ACKs advances the estimate by the reference MTU, while the exposed window remains
+     * quantized in actual-MTU steps. */
+    state = (struct st_quicly_cc_cubic_t){.w_est = 10 * mtu, .cwnd_prior = 10 * mtu};
+    ok(cubic_update_w_est(&state, 10 * mtu, 10 * mtu, 10 * mtu, mtu, QUICLY_CC_REFERENCE_MTU) == 11 * mtu);
+    ok(state.w_est == 10 * mtu + QUICLY_CC_REFERENCE_MTU);
+}
+
+static void test_cubic_mtu_normalization(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 0, .smoothed = 0, .minimum = 0, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 10 * mtu;
+
+    /* In the cubic region, normalization substitutes the reference MTU in W_cubic. */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 1, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.pico.cubic.w_est = cc.cwnd;
+    cc.state.pico.cubic.cwnd_prior = cc.cwnd;
+    cc.state.pico.cubic.epoch_start = 1000;
+    cc.state.pico.cubic.k = 0;
+    cc.type->cc_on_acked(&cc, &loss, initcwnd, 1, initcwnd, 0, 2, 2000, mtu);
+    ok(cwnd_is(cc.cwnd, initcwnd + QUICLY_CUBIC_C * QUICLY_CC_REFERENCE_MTU));
+
+    /* In the Reno-friendly region, growth uses the reference MTU but CWND is still exposed in actual-MTU steps. Five windows of
+     * ACKs therefore accumulate six 1200-byte steps (floor(5 * 1462 / 1200)). */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 1, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.pico.cubic.w_est = cc.cwnd;
+    cc.state.pico.cubic.cwnd_prior = cc.cwnd;
+    cc.state.pico.cubic.epoch_start = 1000;
+    cc.state.pico.cubic.k = 100;
+    for (size_t i = 0; i != 5; ++i) {
+        uint32_t cwnd = cc.cwnd;
+        cc.type->cc_on_acked(&cc, &loss, cwnd, i + 1, cwnd, 1, i + 2, 1000, mtu);
+    }
+    ok(cc.cwnd == initcwnd + 6 * mtu);
 }
 
 static void test_cubic_cc_limited(void)
@@ -767,6 +804,7 @@ void test_cc(void)
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
     subtest("cubic-w-est", test_cubic_w_est);
+    subtest("cubic-mtu-normalization", test_cubic_mtu_normalization);
     subtest("cubic-cc-limited", test_cubic_cc_limited);
     subtest("cubic-recovery-epoch", test_cubic_recovery_epoch);
     subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);

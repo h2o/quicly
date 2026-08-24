@@ -323,26 +323,26 @@ static uint32_t cubic_quantized_w_est(const struct st_quicly_cc_cubic_t *state, 
 }
 
 static uint32_t cubic_update_w_est(struct st_quicly_cc_cubic_t *state, uint32_t cwnd, uint32_t cwnd_epoch, uint32_t bytes,
-                                   uint32_t mtu)
+                                   uint32_t actual_mtu, uint32_t reference_mtu)
 {
     double alpha = state->w_est >= state->cwnd_prior ? 1 : cubic_friendly_alpha[state->by_ecn];
-    state->w_est += alpha * bytes / cwnd * mtu;
-    return cubic_quantized_w_est(state, cwnd_epoch, mtu);
+    state->w_est += alpha * bytes / cwnd * reference_mtu;
+    return cubic_quantized_w_est(state, cwnd_epoch, actual_mtu);
 }
 
 static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, uint32_t cwnd_epoch, uint32_t bytes, int cc_limited,
-                           uint32_t rtt, int64_t now, uint32_t mtu)
+                           uint32_t rtt, int64_t now, uint32_t actual_mtu, uint32_t reference_mtu)
 {
-    uint32_t w_est = cubic_quantized_w_est(state, cwnd_epoch, mtu);
+    uint32_t w_est = cubic_quantized_w_est(state, cwnd_epoch, actual_mtu);
     if (cc_limited)
-        w_est = cubic_update_w_est(state, *cwnd, cwnd_epoch, bytes, mtu);
+        w_est = cubic_update_w_est(state, *cwnd, cwnd_epoch, bytes, actual_mtu, reference_mtu);
 
     /* W_est is ACK-clocked even while the CUBIC clock is stopped, but CWND does not grow while currently app-limited. */
-    if (!cubic_start_epoch(state, *cwnd, cwnd_epoch, mtu) || bytes == 0)
+    if (!cubic_start_epoch(state, *cwnd, cwnd_epoch, reference_mtu) || bytes == 0)
         return;
 
     double t_sec = (now - state->epoch_start) / 1000.;
-    double w_cubic = cubic_calc_w(state, cwnd_epoch, t_sec, mtu);
+    double w_cubic = cubic_calc_w(state, cwnd_epoch, t_sec, reference_mtu);
 
     if (w_cubic < w_est) {
         /* RFC 9438, Section 4.3; Reno-Friendly Region. */
@@ -351,7 +351,7 @@ static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, u
         /* RFC 9438, Sections 4.4 and 4.5; Concave and Convex Regions, but the amount added to CWND is  `(target - cwnd) / cwnd`
          * per MTU acked rather than per ACK. The formula smoothes CWND by using W(t + RTT) as the target to be reached 1 RTT after.
          * But for such a design to work, the adjustment needs to be made for every MTU acked. */
-        double target = cubic_calc_w(state, cwnd_epoch, t_sec + rtt / 1000., mtu);
+        double target = cubic_calc_w(state, cwnd_epoch, t_sec + rtt / 1000., reference_mtu);
         if (target < *cwnd)
             target = *cwnd;
         if (target > 1.5 * *cwnd)
@@ -434,7 +434,9 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             state->epoch_start = state->cc_limited ? now : 0;
             state->k = NAN;
         }
-        cubic_on_acked(state, &cc->cwnd, cc->ssthresh, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size);
+        uint32_t reference_mtu = cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size;
+        cubic_on_acked(state, &cc->cwnd, cc->ssthresh, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size,
+                       reference_mtu);
         goto Cleanup;
     }
 
