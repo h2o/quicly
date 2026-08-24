@@ -189,6 +189,11 @@ struct net_bottleneck {
      * Total number of bytes being held, and the size of the buffer that holds them.
      */
     size_t size, capacity;
+    /**
+     * Packet size used for tail-drop admission, or zero to use the arriving packet's size. Setting this to the largest packet that
+     * can enter the queue prevents smaller packets from consuming the residual space in which a larger packet would not fit.
+     */
+    size_t admission_mtu;
     double next_emit_at;
     double bytes_per_sec;
     /**
@@ -374,8 +379,11 @@ static void net_bottleneck_forward(struct net_node *_self, struct net_packet *pa
 
     /* When the buffer is full, room is made by dropping from the head of the longest queue, so that a flow that does not slow
      * down cannot push the others out. Should the arrival belong to that queue itself there is nothing to be protected, hence it
-     * is refused; that is what always happens when the flows are not isolated. */
-    while (self->size + packet->size > self->capacity) {
+     * is refused; that is what always happens when the flows are not isolated.
+     * Section 4.2.1.2 of RFC 7141 identifies reserving the last buffer space usable by a large packet as the minimum necessary to
+     * prevent large-packet lockout. `admission_mtu` therefore holds the largest configured packet size, unless `-B` is set. */
+    size_t admission_size = self->admission_mtu != 0 ? self->admission_mtu : packet->size;
+    while (self->size + admission_size > self->capacity) {
         struct net_queue *longest = net_bottleneck_longest(self);
         if (longest == queue || longest->first == NULL) {
             net_bottleneck_drop(self, packet);
@@ -584,11 +592,12 @@ static void net_bottleneck_run(struct net_node *_self)
 }
 
 static void net_bottleneck_init(struct net_bottleneck *self, double bytes_per_sec, double capacity_in_sec, struct net_aqm aqm,
-                                int isolate_flows)
+                                int isolate_flows, size_t admission_mtu)
 {
     *self = (struct net_bottleneck){
         .num_queues = isolate_flows ? NET_BOTTLENECK_MAX_QUEUES : 1,
         .capacity = (size_t)(bytes_per_sec * capacity_in_sec),
+        .admission_mtu = admission_mtu,
         .bytes_per_sec = bytes_per_sec,
         .target = aqm.target,
         .interval = aqm.interval,
@@ -792,6 +801,7 @@ static void usage(const char *cmd)
            "Options:\n"
            "  -c <cc>             sets congestion controller\n"
            "  -b <bytes_per_sec>  bottleneck bandwidth (default: 1000000, i.e., 1MB/s)\n"
+           "  -B                  uses byte-fit rather than packet-size-neutral tail-drop admission\n"
            "  -d <delay_secs>     delay added between the sender and the botteneck\n"
            "                      (default: 0.1)\n"
            "  -i <packets>        sets initial CWND (default: %" PRIu32 ")\n"
@@ -864,11 +874,12 @@ static int parse_aqm(const char *spec, struct net_aqm *aqm)
 }
 
 static int parse_options(int argc, char **argv, quicly_context_t *quicctx, double *delay, double *start, double *bw, double *depth,
-                         double *length, double *random_loss, struct net_aqm *aqm, int *isolate_flows, FILE **trace_fp)
+                         double *length, double *random_loss, struct net_aqm *aqm, int *isolate_flows, int *byte_fit_admission,
+                         FILE **trace_fp)
 {
     reset_getopt_state();
     int ch;
-    while ((ch = getopt(argc, argv, "A:c:b:d:EFi:j:l:m:Mpq:r:Rs:th")) != -1) {
+    while ((ch = getopt(argc, argv, "A:Bc:b:d:EFi:j:l:m:Mpq:r:Rs:th")) != -1) {
 
         switch (ch) {
         case 'c': {
@@ -891,6 +902,13 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                 fprintf(stderr, "invalid AQM: %s\n", optarg);
                 return 0;
             }
+            break;
+        case 'B':
+            if (byte_fit_admission == NULL) {
+                fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
+                return 0;
+            }
+            *byte_fit_admission = 1;
             break;
         case 'b':
             if (bw == NULL) {
@@ -1117,7 +1135,8 @@ int main(int argc, char **argv)
 
     /* parse args */
     struct net_aqm aqm = {.type = NET_AQM_NONE};
-    int isolate_flows = 0;
+    int isolate_flows = 0, byte_fit_admission = 0;
+    uint16_t queue_mtu = 0;
     double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
     double length = 100;
     int first_sep = find_next_separator(argc, argv, 1);
@@ -1130,7 +1149,7 @@ int main(int argc, char **argv)
 
     argv[first_sep] = NULL;
     if (!parse_options(first_sep, argv, &quicctx, &delay, &start, &bw, &depth, &length, &random_loss, &aqm, &isolate_flows,
-                       &quicly_trace_fp))
+                       &byte_fit_admission, &quicly_trace_fp))
         exit(1);
     argv[first_sep] = "--";
 
@@ -1151,11 +1170,15 @@ int main(int argc, char **argv)
             if (seg_end < argc)
                 argv[seg_end] = NULL;
 
-            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
+            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                               NULL))
                 exit(1);
             flow_argv[0] = saved_argv0;
             if (seg_end < argc)
                 argv[seg_end] = saved;
+
+            if (queue_mtu < flow_ctx->initial_egress_max_udp_payload_size)
+                queue_mtu = flow_ctx->initial_egress_max_udp_payload_size;
 
             struct net_delay *delay_node = malloc(sizeof(*delay_node));
             net_delay_init(delay_node, flow_delay);
@@ -1186,7 +1209,7 @@ int main(int argc, char **argv)
     }
 
     /* setup bottleneck */
-    net_bottleneck_init(&bottleneck_node, bw, depth, aqm, isolate_flows);
+    net_bottleneck_init(&bottleneck_node, bw, depth, aqm, isolate_flows, byte_fit_admission ? 0 : queue_mtu);
     bottleneck_node.next_node = &server_node.node.super;
     *node_insert_at++ = &bottleneck_node.super;
 
