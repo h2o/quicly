@@ -250,8 +250,7 @@ static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, 
     /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
      * reduction. Bandwidth cancels when converting the Reno time to bytes sent. */
     double w_friendly = w < cwnd_prior ? w : cwnd_prior;
-    double bytes_reno =
-        (w_friendly - w_epoch) * (w_friendly + w_epoch - actual_mtu) / (2 * friendly_alpha * reference_mtu);
+    double bytes_reno = (w_friendly - w_epoch) * (w_friendly + w_epoch - actual_mtu) / (2 * friendly_alpha * reference_mtu);
     if (w > cwnd_prior)
         bytes_reno += (w - cwnd_prior) * (w + cwnd_prior - actual_mtu) / (2 * reference_mtu);
     double bytes = bytes_cubic < bytes_reno ? bytes_cubic : bytes_reno;

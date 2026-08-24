@@ -644,8 +644,8 @@ static void check_cuback_cubic_bytes_per_mtu_increase(uint32_t cwnd_epoch, uint3
     uint32_t before_half_k = (uint32_t)(w_half_k / actual_mtu) * actual_mtu, after_half_k = before_half_k + actual_mtu;
     uint32_t before_three_halves_k = (uint32_t)(w_three_halves_k / actual_mtu) * actual_mtu;
     uint32_t after_three_halves_k = before_three_halves_k + actual_mtu;
-    uint64_t bytes = 0, bytes_before_half_k = 0, bytes_after_half_k = 0, bytes_at_w_max = 0,
-             bytes_before_three_halves_k = 0, bytes_after_three_halves_k = 0;
+    uint64_t bytes = 0, bytes_before_half_k = 0, bytes_after_half_k = 0, bytes_at_w_max = 0, bytes_before_three_halves_k = 0,
+             bytes_after_three_halves_k = 0;
 
     for (uint32_t cwnd = cwnd_epoch;; cwnd += actual_mtu) {
         if (cwnd == before_half_k)
@@ -778,8 +778,7 @@ static void test_zero_byte_ack_exits_rapid_start_recovery(void)
             cc.type->cc_on_lost(&cc, &loss, second_by_ecn ? 0 : mtu, 20, 30, 1200, mtu);
             ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
             ok(cc.num_loss_episodes == 2);
-            ok((policies[i] == &quicly_cc_cuback_init ? cc.state.pico.cuback.by_ecn : cc.state.pico.cubic.by_ecn) ==
-               second_by_ecn);
+            ok((policies[i] == &quicly_cc_cuback_init ? cc.state.pico.cuback.by_ecn : cc.state.pico.cubic.by_ecn) == second_by_ecn);
             ok(policies[i] == &quicly_cc_cuback_init ? cc.state.pico.cuback.fast_convergence
                                                      : cc.state.pico.cubic.fast_convergence);
         }

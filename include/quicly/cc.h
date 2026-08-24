@@ -653,7 +653,6 @@ inline void quicly_cc_rapid_start_exit_recovery(struct st_quicly_cc_rapid_start_
     rs->newest_rtt_sample_until = 0;
 }
 
-
 #ifdef __cplusplus
 }
 #endif

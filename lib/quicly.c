@@ -1574,9 +1574,8 @@ static void update_rate_limit(quicly_conn_t *conn, int is_cc_limited, int is_pac
         }
     }
     if (conn->egress.cc.type->cc_update_cc_limited != NULL)
-        conn->egress.cc.type->cc_update_cc_limited(&conn->egress.cc,
-                                                   conn->super.stats.num_respected_app_limited == 0 || is_cc_limited,
-                                                   conn->stash.now);
+        conn->egress.cc.type->cc_update_cc_limited(
+            &conn->egress.cc, conn->super.stats.num_respected_app_limited == 0 || is_cc_limited, conn->stash.now);
 }
 
 /**
@@ -2851,8 +2850,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.ack_frequency.update_at = INT64_MAX;
     conn->egress.send_ack_at = INT64_MAX;
     conn->egress.send_probe_at = INT64_MAX;
-    conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd,
-                                conn->super.ctx->normalize_cc_mtu, conn->stash.now);
+    conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->super.ctx->normalize_cc_mtu,
+                                 conn->stash.now);
     if (conn->egress.cc.type->enable_rapid_start != NULL &&
         enable_with_ratio255(conn->super.ctx->enable_ratio.rapid_start, conn->super.ctx->tls->random_bytes)) {
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
