@@ -354,8 +354,13 @@ static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, u
         *cwnd = w_est;
     } else {
         /* RFC 9438, Sections 4.4 and 4.5; Concave and Convex Regions, but the amount added to CWND is  `(target - cwnd) / cwnd`
-         * per MTU acked rather than per ACK. The formula smoothes CWND by using W(t + RTT) as the target to be reached 1 RTT after.
-         * But for such a design to work, the adjustment needs to be made for every MTU acked. */
+         * per MTU acked rather than per ACK (see https://mailarchive.ietf.org/arch/msg/ccwg/ZTYECT1NQijwwxq2sDLE0scbQAg/).
+         * Unlike Cuback and W_est, increments to `cwnd` are not rounded down to an MTU multiple. This can permit a full-sized
+         * packet when `cwnd - bytes_in_flight` is positive but smaller than an MTU, however the impact is assumed negilible due to
+         * the following reasons:
+         *  - The resulting overshoot is retained as debt, preventing further transmission until it is repaid.
+         *  - W_cubic is time-based, so an earlier ACK does not directly advance the curve.
+         *  - The cubic curve generally dominates at larger windows, where a sub-packet error is relatively minor. */
         double target = cubic_calc_w(state, cwnd_epoch, t_sec + rtt / 1000., reference_mtu);
         if (target < *cwnd)
             target = *cwnd;
