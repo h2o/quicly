@@ -214,6 +214,10 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
  *
  * Using the `bytes_sent` function, the congestion controller calculates bytes needed to be acked before incrementing the CWND
  * (`bytes_sent(cwnd + mtu) - bytes_sent(cwnd)`) and drives congestion avoidance, the same way as in the case of Reno.
+ * When packet-size normalization is enabled, the reference MTU replaces MSS in the Cubic coefficient and in the denominator of
+ * the Reno sums, while `w` remains spaced by the actual MTU. In particular, the normalized pre-Wmax Reno inverse is:
+ *
+ *   bytes_reno(w) = (w - Wepoch) * (w + Wepoch - actual_MTU) / (2 * alpha * reference_MTU)
  *
  * In addition to being simple, the approach has two positive side-effects:
  *
@@ -240,15 +244,16 @@ static uint32_t pico_bytes_per_mtu_increase(uint32_t cwnd, double rtt, uint32_t 
  * wall clock to the ACK clock.
  */
 static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, double cwnd_prior, double bandwidth, double k,
-                                        uint32_t mtu, double friendly_alpha)
+                                        uint32_t actual_mtu, uint32_t reference_mtu, double friendly_alpha)
 {
-    double bytes_cubic = (k + fast_cbrt((w - w_max) / (QUICLY_CUBIC_C * mtu))) * bandwidth;
+    double bytes_cubic = (k + fast_cbrt((w - w_max) / (QUICLY_CUBIC_C * reference_mtu))) * bandwidth;
     /* RFC 9438, Section 4.3 switches alpha to one after the Reno-friendly estimate reaches the congestion window prior to
      * reduction. Bandwidth cancels when converting the Reno time to bytes sent. */
     double w_friendly = w < cwnd_prior ? w : cwnd_prior;
-    double bytes_reno = (w_friendly - w_epoch) * (w_friendly + w_epoch - mtu) / (2 * friendly_alpha * mtu);
+    double bytes_reno =
+        (w_friendly - w_epoch) * (w_friendly + w_epoch - actual_mtu) / (2 * friendly_alpha * reference_mtu);
     if (w > cwnd_prior)
-        bytes_reno += (w - cwnd_prior) * (w + cwnd_prior - mtu) / (2 * mtu);
+        bytes_reno += (w - cwnd_prior) * (w + cwnd_prior - actual_mtu) / (2 * reference_mtu);
     double bytes = bytes_cubic < bytes_reno ? bytes_cubic : bytes_reno;
     return bytes > 0 ? bytes : 0;
 }
@@ -257,7 +262,7 @@ static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, 
  * Calculates the number of bytes that have to be acked for incrementing CWND by one MTU, when Cuback is used.
  */
 static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t cwnd_epoch,
-                                              uint32_t mtu)
+                                              uint32_t actual_mtu, uint32_t reference_mtu)
 {
     /* Fast convergence: derive Wmax as the midpoint of cwnd_prior and cwnd_epoch rather than hard-coding it to 0.85 * cwnd_prior.
      * Otherwise, with ABE using QUICLY_BETA_ECN (0.85), Wmax equals cwnd_epoch and K becomes zero, causing the CC to skip the
@@ -265,18 +270,18 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
     double w_max = state->fast_convergence ? cubic_fast_convergence_w_max(state->cwnd_prior, cwnd_epoch) : state->cwnd_prior;
     /* Seconds taken by the cubic curve to climb from `cwnd_epoch` back to W_max. Derived from the gap between the two rather than
      * from W_max alone, as fast convergence and the varying reduction ratios move them apart. */
-    double k = fast_cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
+    double k = fast_cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * reference_mtu));
 
-    double bytes0 = cuback_cwnd_to_bytes_sent(cwnd, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu,
-                                              cubic_friendly_alpha[state->by_ecn]);
-    double bytes1 = cuback_cwnd_to_bytes_sent((double)cwnd + mtu, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, mtu,
-                                              cubic_friendly_alpha[state->by_ecn]);
+    double bytes0 = cuback_cwnd_to_bytes_sent(cwnd, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, actual_mtu,
+                                              reference_mtu, cubic_friendly_alpha[state->by_ecn]);
+    double bytes1 = cuback_cwnd_to_bytes_sent((double)cwnd + actual_mtu, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k,
+                                              actual_mtu, reference_mtu, cubic_friendly_alpha[state->by_ecn]);
     double bytes = bytes1 - bytes0;
 
     /* Past W_max the curve grows without bound, therefore the increase is capped at 50% of CWND per RTT as RFC 9438 does. Below
      * W_max the cap is not applied, it being the climb back to a window that the path had already sustained. */
-    if (cwnd > w_max && bytes < (double)mtu * 2)
-        bytes = (double)mtu * 2;
+    if (cwnd > w_max && bytes < (double)actual_mtu * 2)
+        bytes = (double)actual_mtu * 2;
 
     return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
 }
@@ -385,7 +390,8 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
              * while in congestion avoidance. Use Reno until then. */
             return cc->cwnd;
         }
-        return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size);
+        uint32_t reference_mtu = cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size;
+        return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size, reference_mtu);
     } else if (cc->type == &quicly_cc_type_cubic) {
         assert(!"Cubic congestion avoidance bypasses the byte-counter path");
         abort();

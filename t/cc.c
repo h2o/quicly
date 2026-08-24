@@ -614,14 +614,60 @@ static void test_cuback_reno_bytes_per_mtu_increase(void)
 
     /* Reno curve, before Wmax: each MTU increase consumes the current CWND divided by the friendly alpha. */
     state.bandwidth = 1e12;
-    ok(cwnd_is(cuback_bytes_per_mtu_increase(&state, cwnd_epoch, cwnd_epoch, mtu),
+    ok(cwnd_is(cuback_bytes_per_mtu_increase(&state, cwnd_epoch, cwnd_epoch, mtu, mtu),
                (double)cwnd_epoch / cubic_friendly_alpha[0]));
-    ok(cwnd_is(cuback_bytes_per_mtu_increase(&state, cwnd_epoch + mtu, cwnd_epoch, mtu),
+    ok(cwnd_is(cuback_bytes_per_mtu_increase(&state, cwnd_epoch + mtu, cwnd_epoch, mtu, mtu),
                (double)(cwnd_epoch + mtu) / cubic_friendly_alpha[0]));
 
     /* Reno curve, at and above Wmax: alpha is one, so each increase consumes the current CWND. */
-    ok(cuback_bytes_per_mtu_increase(&state, w_max, cwnd_epoch, mtu) == w_max);
-    ok(cuback_bytes_per_mtu_increase(&state, w_max + mtu, cwnd_epoch, mtu) == w_max + mtu);
+    ok(cuback_bytes_per_mtu_increase(&state, w_max, cwnd_epoch, mtu, mtu) == w_max);
+    ok(cuback_bytes_per_mtu_increase(&state, w_max + mtu, cwnd_epoch, mtu, mtu) == w_max + mtu);
+
+    /* Normalization scales the ACK thresholds by actual_MTU / reference_MTU without changing the actual-MTU CWND step. */
+    ok(cwnd_is(cuback_bytes_per_mtu_increase(&state, cwnd_epoch, cwnd_epoch, mtu, QUICLY_CC_REFERENCE_MTU),
+               (double)cwnd_epoch / cubic_friendly_alpha[0] * mtu / QUICLY_CC_REFERENCE_MTU));
+    ok(cwnd_is(cuback_bytes_per_mtu_increase(&state, w_max, cwnd_epoch, mtu, QUICLY_CC_REFERENCE_MTU),
+               (double)w_max * mtu / QUICLY_CC_REFERENCE_MTU));
+}
+
+static void check_cuback_cubic_bytes_per_mtu_increase(uint32_t cwnd_epoch, uint32_t w_max, uint32_t actual_mtu,
+                                                      uint32_t reference_mtu)
+{
+    /* A two-second RTT makes the Cubic curve cheaper than the Reno curve throughout the points being tested. */
+    struct st_quicly_cc_cuback_t state = {.cwnd_prior = w_max, .bandwidth = w_max / 2.};
+    double k = cbrt((double)(w_max - cwnd_epoch) / (QUICLY_CUBIC_C * reference_mtu));
+
+    /* By point symmetry, the continuous Cubic curve is one eighth of the epoch-to-Wmax gap below Wmax at K / 2, and the same
+     * distance above Wmax at 3 * K / 2. Cuback exposes only whole-MTU windows, so record the times bracketing those points. */
+    double gap = w_max - cwnd_epoch;
+    double w_half_k = w_max - gap / 8, w_three_halves_k = w_max + gap / 8;
+    uint32_t before_half_k = (uint32_t)(w_half_k / actual_mtu) * actual_mtu, after_half_k = before_half_k + actual_mtu;
+    uint32_t before_three_halves_k = (uint32_t)(w_three_halves_k / actual_mtu) * actual_mtu;
+    uint32_t after_three_halves_k = before_three_halves_k + actual_mtu;
+    uint64_t bytes = 0, bytes_before_half_k = 0, bytes_after_half_k = 0, bytes_at_w_max = 0,
+             bytes_before_three_halves_k = 0, bytes_after_three_halves_k = 0;
+
+    for (uint32_t cwnd = cwnd_epoch;; cwnd += actual_mtu) {
+        if (cwnd == before_half_k)
+            bytes_before_half_k = bytes;
+        if (cwnd == after_half_k)
+            bytes_after_half_k = bytes;
+        if (cwnd == w_max)
+            bytes_at_w_max = bytes;
+        if (cwnd == before_three_halves_k)
+            bytes_before_three_halves_k = bytes;
+        if (cwnd == after_three_halves_k) {
+            bytes_after_three_halves_k = bytes;
+            break;
+        }
+        bytes += cuback_bytes_per_mtu_increase(&state, cwnd, cwnd_epoch, actual_mtu, reference_mtu);
+    }
+
+    ok(bytes_before_half_k / state.bandwidth < k / 2);
+    ok(bytes_after_half_k / state.bandwidth > k / 2);
+    ok(fabs(bytes_at_w_max / state.bandwidth - k) / k < 1e-3);
+    ok(bytes_before_three_halves_k / state.bandwidth < 3 * k / 2);
+    ok(bytes_after_three_halves_k / state.bandwidth > 3 * k / 2);
 }
 
 static void test_cuback_cubic_bytes_per_mtu_increase(void)
@@ -634,41 +680,8 @@ static void test_cuback_cubic_bytes_per_mtu_increase(void)
 
     for (size_t i = 0; i != PTLS_ELEMENTSOF(cases); ++i) {
         uint32_t cwnd_epoch = cases[i].cwnd_epoch_in_mtu * mtu, w_max = cases[i].w_max_in_mtu * mtu;
-        /* A two-second RTT makes the Cubic curve cheaper than the Reno curve throughout the points being tested. */
-        struct st_quicly_cc_cuback_t state = {.cwnd_prior = w_max, .bandwidth = w_max / 2.};
-        double k = cbrt((double)(w_max - cwnd_epoch) / (QUICLY_CUBIC_C * mtu));
-
-        /* By point symmetry, the continuous Cubic curve is one eighth of the epoch-to-Wmax gap below Wmax at K / 2, and the same
-         * distance above Wmax at 3 * K / 2. Cuback exposes only whole-MTU windows, so record the times bracketing those points. */
-        double gap = w_max - cwnd_epoch;
-        double w_half_k = w_max - gap / 8, w_three_halves_k = w_max + gap / 8;
-        uint32_t before_half_k = (uint32_t)(w_half_k / mtu) * mtu, after_half_k = before_half_k + mtu;
-        uint32_t before_three_halves_k = (uint32_t)(w_three_halves_k / mtu) * mtu;
-        uint32_t after_three_halves_k = before_three_halves_k + mtu;
-        uint64_t bytes = 0, bytes_before_half_k = 0, bytes_after_half_k = 0, bytes_at_w_max = 0,
-                 bytes_before_three_halves_k = 0, bytes_after_three_halves_k = 0;
-
-        for (uint32_t cwnd = cwnd_epoch;; cwnd += mtu) {
-            if (cwnd == before_half_k)
-                bytes_before_half_k = bytes;
-            if (cwnd == after_half_k)
-                bytes_after_half_k = bytes;
-            if (cwnd == w_max)
-                bytes_at_w_max = bytes;
-            if (cwnd == before_three_halves_k)
-                bytes_before_three_halves_k = bytes;
-            if (cwnd == after_three_halves_k) {
-                bytes_after_three_halves_k = bytes;
-                break;
-            }
-            bytes += cuback_bytes_per_mtu_increase(&state, cwnd, cwnd_epoch, mtu);
-        }
-
-        ok(bytes_before_half_k / state.bandwidth < k / 2);
-        ok(bytes_after_half_k / state.bandwidth > k / 2);
-        ok(fabs(bytes_at_w_max / state.bandwidth - k) / k < 1e-3);
-        ok(bytes_before_three_halves_k / state.bandwidth < 3 * k / 2);
-        ok(bytes_after_three_halves_k / state.bandwidth > 3 * k / 2);
+        check_cuback_cubic_bytes_per_mtu_increase(cwnd_epoch, w_max, mtu, mtu);
+        check_cuback_cubic_bytes_per_mtu_increase(cwnd_epoch, w_max, mtu, QUICLY_CC_REFERENCE_MTU);
     }
 }
 
@@ -694,6 +707,16 @@ static void test_cuback_ack_countdown(void)
     cc.type->cc_on_acked(&cc, &loss, 1, 3, 1, 1, 4, 100, mtu);
     ok(cc.cwnd == w_max + mtu);
     ok(cc.state.pico.bytes_to_mtu_increase == 3 * mtu);
+
+    /* The policy-level option selects the normalized ACK threshold while retaining actual-MTU CWND steps. */
+    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, w_max, 1, 0);
+    cc.ssthresh = cc.cwnd;
+    cc.state.pico.cuback.cwnd_prior = w_max;
+    cc.state.pico.cuback.bandwidth = w_max * 1000. / loss.rtt.smoothed;
+    cc.type->cc_on_acked(&cc, &loss, 1, 1, 1, 1, 2, 100, mtu);
+    uint32_t normalized_deficit = (uint64_t)w_max * mtu / QUICLY_CC_REFERENCE_MTU;
+    ok(cc.cwnd == w_max);
+    ok(cc.state.pico.bytes_to_mtu_increase == normalized_deficit - 1);
 }
 
 static void test_cuback_deferred_bdp_estimate(void)
