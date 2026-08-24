@@ -39,6 +39,11 @@ extern "C" {
 
 #define QUICLY_MIN_CWND 2
 /**
+ * Reference maximum UDP payload size used for packet-size-neutral congestion control. This is the midpoint of the maximum UDP
+ * payload sizes of IPv4 and IPv6 packets carried at an IP MTU of 1500 bytes.
+ */
+#define QUICLY_CC_REFERENCE_MTU 1462
+/**
  * Default beta used when a packet is lost; 0.7 is used to achieve fairness with Cubic.
  */
 #define QUICLY_BETA_LOSS 0.7
@@ -178,6 +183,10 @@ typedef struct st_quicly_cc_t {
      * If the most recent loss episode was signalled by ECN only (i.e., no packet loss).
      */
     unsigned episode_by_ecn : 1;
+    /**
+     * Whether growth is normalized to QUICLY_CC_REFERENCE_MTU.
+     */
+    unsigned normalize_mtu : 1;
     /**
      * State information specific to the congestion controller implementation.
      */
