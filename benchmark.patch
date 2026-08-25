@@ -1,0 +1,378 @@
+diff --git a/lib/cc-pico.c b/lib/cc-pico.c
+index e8ae5b1..3813f1d 100644
+--- a/lib/cc-pico.c
++++ b/lib/cc-pico.c
+@@ -102,6 +102,15 @@ static const double cubic_friendly_alpha[2] = {CALC_FRIENDLY_ALPHA(0.5, QUICLY_B
+                                                CALC_FRIENDLY_ALPHA(0.8, QUICLY_BETA_ECN)};
+ #undef CALC_FRIENDLY_ALPHA
+ 
++/* Benchmark-only variants. They deliberately share the current CUBIC implementation and differ only in startup policy. */
++static quicly_cc_type_t bench_cubic_traditional, bench_cubic_bdp, bench_cubic_bdp_nofc;
++
++static int is_cubic_type(const quicly_cc_type_t *type)
++{
++    return type == &quicly_cc_type_cubic || type == &bench_cubic_traditional || type == &bench_cubic_bdp ||
++           type == &bench_cubic_bdp_nofc;
++}
++
+ static double cubic_fast_convergence_w_max(double cwnd_prior, double cwnd_epoch)
+ {
+     /* Equivalent to (1 + beta) / 2 * cwnd_prior when cwnd_epoch is beta * cwnd_prior, including with ABE. */
+@@ -120,10 +129,11 @@ static double cubic_fast_convergence_w_max(double cwnd_prior, double cwnd_epoch)
+  * provide guidance on how fast the Cubic curve should grow. We set Wmax to 2 * estimate, the same value that Cubic with traditional
+  * Slow Start adopts.
+  */
+-static uint32_t cubic_post_rapid_start_wmax(uint32_t cwnd_epoch, int by_ecn)
++static uint32_t cubic_post_rapid_start_wmax(const quicly_cc_t *cc, uint32_t cwnd_epoch, int by_ecn)
+ {
+     double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+-    double w_max = 2. * cwnd_epoch / beta;
++    double factor = cc->type == &bench_cubic_bdp || cc->type == &bench_cubic_bdp_nofc ? 1. : 2.;
++    double w_max = factor * cwnd_epoch / beta;
+     return w_max < UINT32_MAX ? w_max : UINT32_MAX;
+ }
+ 
+@@ -396,7 +406,7 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
+         }
+         uint32_t reference_mtu = cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size;
+         return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size, reference_mtu);
+-    } else if (cc->type == &quicly_cc_type_cubic) {
++    } else if (is_cubic_type(cc->type)) {
+         assert(!"Cubic congestion avoidance bypasses the byte-counter path");
+         abort();
+     } else if (cc->type == &quicly_cc_type_pico) {
+@@ -432,11 +442,11 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
+     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
+ 
+     /* Cubic: unlike other policies, congestion avoidance cannot be driven by bytes_to_mtu_increase. */
+-    if (cc->type == &quicly_cc_type_cubic && cc->cwnd >= cc->ssthresh) {
++    if (is_cubic_type(cc->type) && cc->cwnd >= cc->ssthresh) {
+         struct st_quicly_cc_cubic_t *state = &cc->state.pico.cubic;
+         if (state->w_est == 0) {
+             if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+-                state->cwnd_prior = cubic_post_rapid_start_wmax(cc->cwnd, cc->rapid_start.recovery.by_ecn);
++                state->cwnd_prior = cubic_post_rapid_start_wmax(cc, cc->cwnd, cc->rapid_start.recovery.by_ecn);
+                 state->fast_convergence = 0;
+             }
+             assert(state->cwnd_prior != 0);
+@@ -453,7 +463,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
+     /* Cuback: set cwnd_prior deferred under Rapid Start, as its BDP estimate becomes available only after recovery ends. */
+     if (cc->type == &quicly_cc_type_cuback && quicly_cc_rapid_start_is_in_recovery(&cc->rapid_start)) {
+         assert(cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.cwnd_prior == 0);
+-        cc->state.pico.cuback.cwnd_prior = cubic_post_rapid_start_wmax(cc->cwnd, cc->rapid_start.recovery.by_ecn);
++        cc->state.pico.cuback.cwnd_prior = cubic_post_rapid_start_wmax(cc, cc->cwnd, cc->rapid_start.recovery.by_ecn);
+     }
+ 
+     if (!cc_limited)
+@@ -524,7 +534,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
+         cc->state.pico.undo.bytes_to_mtu_increase = cc->state.pico.bytes_to_mtu_increase;
+         if (cc->type == &quicly_cc_type_cuback) {
+             cc->state.pico.undo.cuback = cc->state.pico.cuback;
+-        } else if (cc->type == &quicly_cc_type_cubic) {
++        } else if (is_cubic_type(cc->type)) {
+             cc->state.pico.undo.cubic = cc->state.pico.cubic;
+         } else if (cc->type == &quicly_cc_type_pico) {
+             cc->state.pico.undo.bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+@@ -558,6 +568,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
+              * conservative estimate of BDP. It could make the next CA epoch slightly aggressive, but nowhere near as aggressive as
+              * startup, so we're fine. */
+             bdp = cc->cwnd / 3;
++        } else if (cc->type == &bench_cubic_traditional) {
++            bdp = cc->cwnd;
+         } else {
+             bdp = cc->cwnd / 2;
+         }
+@@ -582,6 +594,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
+             if (base < cc->jumpstart.bytes_acked)
+                 base = cc->jumpstart.bytes_acked;
+             quicly_cc_rapid_start_on_first_lost(&cc->rapid_start, &cc->cwnd, bytes == 0, base * 0.5);
++        } else if (cc->type == &bench_cubic_traditional) {
++            cc->cwnd *= beta;
+         } else {
+             cc->cwnd *= 0.5;
+         }
+@@ -616,8 +630,10 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
+         cc->state.pico.cuback.by_ecn = bytes == 0;
+         cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
+         cc->state.pico.bytes_to_mtu_increase = 0;
+-    } else if (cc->type == &quicly_cc_type_cubic) {
++    } else if (is_cubic_type(cc->type)) {
+         cubic_on_congestion(&cc->state.pico.cubic, bdp, cc->ssthresh, bytes == 0);
++        if (cc->type == &bench_cubic_bdp_nofc && cc->num_loss_episodes == 2)
++            cc->state.pico.cubic.fast_convergence = 0;
+         cc->state.pico.bytes_to_mtu_increase = 0;
+     } else if (cc->type == &quicly_cc_type_pico) {
+         /* Pico: Rapid Start might adjust CWND to a smaller value than `bdp`, but the increase is calculated using `bdp` regardless.
+@@ -651,7 +667,7 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
+     cc->state.pico.bytes_to_mtu_increase = cc->state.pico.undo.bytes_to_mtu_increase;
+     if (cc->type == &quicly_cc_type_cuback) {
+         cc->state.pico.cuback = cc->state.pico.undo.cuback;
+-    } else if (cc->type == &quicly_cc_type_cubic) {
++    } else if (is_cubic_type(cc->type)) {
+         int cc_limited = cc->state.pico.cubic.cc_limited;
+         cc->state.pico.cubic = cc->state.pico.undo.cubic;
+         cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
+@@ -688,7 +704,7 @@ static void pico_init_pico_state(quicly_cc_t *cc)
+     cc->state.pico.bytes_to_mtu_increase = 0;
+     if (cc->type == &quicly_cc_type_cuback) {
+         cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
+-    } else if (cc->type == &quicly_cc_type_cubic) {
++    } else if (is_cubic_type(cc->type)) {
+         cc->state.pico.cubic = (struct st_quicly_cc_cubic_t){.k = NAN, .cc_limited = 1};
+     } else if (cc->type == &quicly_cc_type_pico) {
+         cc->state.pico.bytes_per_mtu_increase = cc->cwnd * QUICLY_BETA_LOSS;
+@@ -721,11 +737,11 @@ static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
+ {
+     if (cc->type == type) {
+         return 1; /* nothing to do */
+-    } else if (cc->type == &quicly_cc_type_reno && (type != &quicly_cc_type_cubic || cc->cwnd_exiting_slow_start == 0)) {
++    } else if (cc->type == &quicly_cc_type_reno && (!is_cubic_type(type) || cc->cwnd_exiting_slow_start == 0)) {
+         cc->type = type;
+         pico_init_pico_state(cc);
+         return 1;
+-    } else if (cc->type == &quicly_cc_type_reno || cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cubic_legacy ||
++    } else if (cc->type == &quicly_cc_type_reno || is_cubic_type(cc->type) || cc->type == &quicly_cc_type_cubic_legacy ||
+                cc->type == &quicly_cc_type_pico || cc->type == &quicly_cc_type_cuback) {
+         /* When in slow start, state can be reused as-is; otherwise, restart. */
+         if (cc->cwnd_exiting_slow_start == 0) {
+@@ -785,6 +801,21 @@ static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwn
+     pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu);
+ }
+ 
++static void bench_cubic_traditional_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
++{
++    pico_reset(cc, &bench_cubic_traditional, initcwnd, normalize_mtu);
++}
++
++static void bench_cubic_bdp_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
++{
++    pico_reset(cc, &bench_cubic_bdp, initcwnd, normalize_mtu);
++}
++
++static void bench_cubic_bdp_nofc_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
++{
++    pico_reset(cc, &bench_cubic_bdp_nofc, initcwnd, normalize_mtu);
++}
++
+ static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+ {
+     pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu);
+@@ -827,6 +858,43 @@ quicly_cc_type_t quicly_cc_type_cubic = {"cubic",
+                                          cubic_update_cc_limited};
+ quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};
+ 
++static quicly_init_cc_t bench_cubic_traditional_cc_init = {bench_cubic_traditional_init};
++static quicly_init_cc_t bench_cubic_bdp_cc_init = {bench_cubic_bdp_init};
++static quicly_init_cc_t bench_cubic_bdp_nofc_cc_init = {bench_cubic_bdp_nofc_init};
++static quicly_cc_type_t bench_cubic_traditional = {"cubic-traditional",
++                                                   &bench_cubic_traditional_cc_init,
++                                                   pico_on_acked,
++                                                   pico_on_lost,
++                                                   pico_on_persistent_congestion,
++                                                   pico_on_sent,
++                                                   cubic_on_switch,
++                                                   pico_on_late_ack,
++                                                   quicly_cc_jumpstart_enter,
++                                                   pico_enable_rapid_start,
++                                                   cubic_update_cc_limited};
++static quicly_cc_type_t bench_cubic_bdp = {"cubic-bdp",
++                                           &bench_cubic_bdp_cc_init,
++                                           pico_on_acked,
++                                           pico_on_lost,
++                                           pico_on_persistent_congestion,
++                                           pico_on_sent,
++                                           cubic_on_switch,
++                                           pico_on_late_ack,
++                                           quicly_cc_jumpstart_enter,
++                                           pico_enable_rapid_start,
++                                           cubic_update_cc_limited};
++static quicly_cc_type_t bench_cubic_bdp_nofc = {"cubic-bdp-nofc",
++                                                &bench_cubic_bdp_nofc_cc_init,
++                                                pico_on_acked,
++                                                pico_on_lost,
++                                                pico_on_persistent_congestion,
++                                                pico_on_sent,
++                                                cubic_on_switch,
++                                                pico_on_late_ack,
++                                                quicly_cc_jumpstart_enter,
++                                                pico_enable_rapid_start,
++                                                cubic_update_cc_limited};
++
+ quicly_cc_type_t quicly_cc_type_cuback = {"cuback",
+                                           &quicly_cc_cuback_init,
+                                           pico_on_acked,
+@@ -839,8 +907,15 @@ quicly_cc_type_t quicly_cc_type_cuback = {"cuback",
+                                           pico_enable_rapid_start};
+ quicly_init_cc_t quicly_cc_cuback_init = {cuback_init};
+ 
+-quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno, &quicly_cc_type_cubic,  &quicly_cc_type_cubic_legacy,
+-                                           &quicly_cc_type_pico, &quicly_cc_type_cuback, NULL};
++quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno,
++                                           &quicly_cc_type_cubic,
++                                           &bench_cubic_traditional,
++                                           &bench_cubic_bdp,
++                                           &bench_cubic_bdp_nofc,
++                                           &quicly_cc_type_cubic_legacy,
++                                           &quicly_cc_type_pico,
++                                           &quicly_cc_type_cuback,
++                                           NULL};
+ 
+ uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size)
+ {
+diff --git a/t/simulator.c b/t/simulator.c
+index da33ee9..810b00e 100644
+--- a/t/simulator.c
++++ b/t/simulator.c
+@@ -38,6 +38,37 @@
+ FILE *quicly_trace_fp;
+ 
+ static double now = 1000;
++
++static uint64_t bench_random_state;
++
++static void bench_random_bytes(void *_dst, size_t len)
++{
++    uint8_t *dst = _dst;
++    while (len != 0) {
++        uint64_t z = (bench_random_state += UINT64_C(0x9e3779b97f4a7c15));
++        z = (z ^ (z >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
++        z = (z ^ (z >> 27)) * UINT64_C(0x94d049bb133111eb);
++        z ^= z >> 31;
++        for (unsigned i = 0; i != 8 && len != 0; ++i, --len) {
++            *dst++ = z;
++            z >>= 8;
++        }
++    }
++}
++
++struct net_packet;
++
++static struct {
++    int enabled;
++    double anchor, step, duration, bandwidth;
++    uint32_t packet_src;
++    size_t window_bins, num_bins;
++    uint64_t *bins;
++} bench_share;
++
++static void bench_share_record(struct net_packet *packet);
++static void bench_share_print(void);
++
+ static struct {
+     uint64_t eligible_packets;
+     uint64_t stalls;
+@@ -327,6 +358,8 @@ static void net_random_loss_init(struct net_random_loss *self, double loss_ratio
+ 
+ static void net_bottleneck_print_stats(struct net_bottleneck *self, const char *event, struct net_packet *packet)
+ {
++    if (bench_share.enabled)
++        return;
+     printf("{\"bottleneck\": \"%s\", \"at\": %f, \"queue-size\": %zu, \"packet-src\": %" PRIu32 ", \"packet-size\": %zu}\n", event,
+            now, self->size, ntohl(packet->src->addr.sin.sin_addr.s_addr), packet->size);
+ }
+@@ -598,6 +631,7 @@ static void net_bottleneck_run(struct net_node *_self)
+     struct net_packet *packet;
+     if ((packet = net_bottleneck_dequeue(self)) == NULL)
+         return;
++    bench_share_record(packet);
+     net_bottleneck_print_stats(self, "dequeue", packet);
+ 
+     /* update next emission timer */
+@@ -826,8 +860,36 @@ static void stream_on_receive_cb(quicly_stream_t *stream, size_t off, const void
+     assert(peer->sa_family == AF_INET);
+     uint32_t packet_src = ntohl(((struct sockaddr_in *)peer)->sin_addr.s_addr);
+ 
+-    printf("{\"bytes-available\": %" PRIu64 ", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", stream->recvstate.data_off, now,
+-           packet_src);
++    if (!bench_share.enabled)
++        printf("{\"bytes-available\": %" PRIu64 ", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", stream->recvstate.data_off,
++               now, packet_src);
++}
++
++static void bench_share_record(struct net_packet *packet)
++{
++    if (!bench_share.enabled || ntohl(packet->src->addr.sin.sin_addr.s_addr) != bench_share.packet_src)
++        return;
++    double elapsed = now - 1000 - bench_share.anchor;
++    if (elapsed < 0 || elapsed >= bench_share.duration)
++        return;
++    size_t bin = elapsed / bench_share.step;
++    if (bin < bench_share.num_bins)
++        bench_share.bins[bin] += packet->size;
++}
++
++static void bench_share_print(void)
++{
++    if (!bench_share.enabled)
++        return;
++    uint64_t bytes = 0;
++    for (size_t i = 0; i != bench_share.num_bins; ++i) {
++        bytes += bench_share.bins[i];
++        if (i >= bench_share.window_bins)
++            bytes -= bench_share.bins[i - bench_share.window_bins];
++        if (i + 1 >= bench_share.window_bins)
++            printf("BENCH_SHARE %.6f %.9f\n", (i + 1) * bench_share.step,
++                   bytes / (bench_share.bandwidth * bench_share.window_bins * bench_share.step));
++    }
+ }
+ 
+ static void stream_on_receive_reset_cb(quicly_stream_t *stream, quicly_error_t err)
+@@ -1181,6 +1243,11 @@ int main(int argc, char **argv)
+                              .cipher_suites = ptls_openssl_cipher_suites,
+                              .certificates = {&cert, 1},
+                              .sign_certificate = &cert_signer.super};
++    const char *bench_seed = getenv("BENCH_SEED");
++    if (bench_seed != NULL) {
++        bench_random_state = strtoull(bench_seed, NULL, 0);
++        tlsctx.random_bytes = bench_random_bytes;
++    }
+     quicly_amend_ptls_context(&tlsctx);
+ 
+     quicly_stream_open_t stream_open = {stream_open_cb};
+@@ -1189,9 +1256,10 @@ int main(int argc, char **argv)
+     quicctx.now = &quic_now;
+     quicctx.tls = &tlsctx;
+     quicctx.stream_open = &stream_open;
++    quicctx.handshake_timeout_rtt_multiplier = 10000;
+     quicctx.transport_params.max_streams_uni = 10;
+-    quicctx.transport_params.max_stream_data.uni = 128 * 1024 * 1024;
+-    quicctx.transport_params.max_data = 128 * 1024 * 1824;
++    quicctx.transport_params.max_stream_data.uni = UINT64_C(2) * 1024 * 1024 * 1024;
++    quicctx.transport_params.max_data = UINT64_C(2) * 1024 * 1024 * 1024;
+     quicctx.transport_params.min_ack_delay_usec = UINT64_MAX; /* disable ack-delay extension */
+ 
+     struct net_bottleneck bottleneck_node;
+@@ -1228,6 +1296,23 @@ int main(int argc, char **argv)
+         exit(1);
+     argv[first_sep] = "--";
+ 
++    const char *bench_anchor = getenv("BENCH_SHARE_ANCHOR");
++    if (bench_anchor != NULL) {
++        bench_share.enabled = 1;
++        bench_share.anchor = strtod(bench_anchor, NULL);
++        bench_share.step = strtod(getenv("BENCH_SHARE_STEP"), NULL);
++        const char *window_bins = getenv("BENCH_SHARE_WINDOW_BINS");
++        bench_share.window_bins = window_bins != NULL ? strtoul(window_bins, NULL, 0) : 5;
++        bench_share.duration = strtod(getenv("BENCH_SHARE_DURATION"), NULL);
++        bench_share.packet_src = strtoul(getenv("BENCH_SHARE_SRC"), NULL, 0);
++        bench_share.bandwidth = bw;
++        assert(bench_share.step > 0 && bench_share.window_bins != 0 &&
++               bench_share.duration >= bench_share.window_bins * bench_share.step && bench_share.packet_src != 0);
++        bench_share.num_bins = bench_share.duration / bench_share.step;
++        bench_share.bins = calloc(bench_share.num_bins, sizeof(*bench_share.bins));
++        assert(bench_share.bins != NULL);
++    }
++
+     int sender_count = 0;
+     for (int seg_start = first_sep + 1; seg_start < argc;) {
+         int seg_end = find_next_separator(argc, argv, seg_start);
+@@ -1300,6 +1385,8 @@ int main(int argc, char **argv)
+     while (now < 1000 + length)
+         run_nodes(nodes);
+ 
++    bench_share_print();
++
+     if (ack_scheduler_stats.eligible_packets != 0)
+         printf("{\"ack-scheduler\": \"summary\", \"eligible-packets\": %" PRIu64 ", \"stalls\": %" PRIu64
+                ", \"queued-packets\": %" PRIu64 "}\n",
+
