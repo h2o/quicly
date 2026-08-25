@@ -1558,9 +1558,11 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int
                              can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
 }
 
-static void update_rate_limit(quicly_conn_t *conn, int is_cc_limited, int is_pacer_limited)
+static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int sendbuf_full, int pacer_limited)
 {
-    int is_ratemeter_limited = is_cc_limited || is_pacer_limited;
+    has_sendable_data = has_sendable_data && conn->super.remote.address_validation.validated;
+    int is_cwnd_limited = has_sendable_data && conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd,
+        is_ratemeter_limited = has_sendable_data && (sendbuf_full || is_cwnd_limited || pacer_limited);
 
     if (quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter) != is_ratemeter_limited) {
         if (is_ratemeter_limited) {
@@ -1573,9 +1575,16 @@ static void update_rate_limit(quicly_conn_t *conn, int is_cc_limited, int is_pac
             QUICLY_LOG_CONN(exit_cc_limited, conn, { PTLS_LOG_ELEMENT_UNSIGNED(pn, conn->egress.packet_number); });
         }
     }
-    if (conn->egress.cc.type->cc_update_cc_limited != NULL)
-        conn->egress.cc.type->cc_update_cc_limited(
-            &conn->egress.cc, conn->super.stats.num_respected_app_limited == 0 || is_cc_limited, conn->stash.now);
+    if (conn->egress.cc.type->cc_update_cc_limited != NULL) {
+        /* Pacing or exhausting the output batch retains CC-limited state after the sender has filled CWND, but does not establish
+         * that state by itself. This keeps Cubic's clock running while a bulk sender refills the window without letting small paced
+         * bursts advance the clock. */
+        if (conn->super.stats.num_respected_app_limited == 0 || is_cwnd_limited) {
+            conn->egress.cc.type->cc_update_cc_limited(&conn->egress.cc, 1, conn->stash.now);
+        } else if (!is_ratemeter_limited) {
+            conn->egress.cc.type->cc_update_cc_limited(&conn->egress.cc, 0, conn->stash.now);
+        }
+    }
 }
 
 /**
@@ -1590,7 +1599,7 @@ static void setup_next_send(quicly_conn_t *conn)
 
     /* When the flow becomes application-limited due to receiving some information, stop collecting delivery rate samples. */
     if (!can_send_stream_data)
-        update_rate_limit(conn, 0, 0);
+        update_rate_limit(conn, 0, 0, 0);
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -5816,11 +5825,8 @@ Exit:
             conn->egress.send_ack_at = INT64_MAX; /* we have sent ACKs for every epoch (or before address validation) */
         int can_send_stream_data = scheduler_can_send(conn);
         update_send_alarm(conn, can_send_stream_data, s->path_index == 0);
-        int has_sendable_data = can_send_stream_data && conn->super.remote.address_validation.validated,
-            is_cc_limited = has_sendable_data && (s->num_datagrams == s->max_datagrams ||
-                                                  conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd),
-            is_pacer_limited = has_sendable_data && pacer_can_send_at(conn) > conn->stash.now;
-        update_rate_limit(conn, is_cc_limited, is_pacer_limited);
+        update_rate_limit(conn, can_send_stream_data, s->num_datagrams == s->max_datagrams,
+                          pacer_can_send_at(conn) > conn->stash.now);
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
