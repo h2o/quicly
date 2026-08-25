@@ -38,6 +38,11 @@
 FILE *quicly_trace_fp;
 
 static double now = 1000;
+static struct {
+    uint64_t eligible_packets;
+    uint64_t stalls;
+    uint64_t queued_packets;
+} ack_scheduler_stats;
 
 static quicly_address_t new_address(void)
 {
@@ -206,6 +211,17 @@ struct net_endpoint {
     struct net_node super;
     quicly_address_t addr;
     double start_at;
+    /**
+     * Models a sender process being descheduled. An arriving packet selected by `probability` starts a blackout lasting `delay`;
+     * it and every packet arriving during the blackout are processed together when `resume_at` is reached. Endpoint timers are
+     * held as well, as they would be while the process is not running. During the data transfer, these incoming packets carry ACKs.
+     */
+    struct {
+        struct net_queue queue;
+        double probability;
+        double delay;
+        double resume_at;
+    } ack_scheduler;
     struct net_endpoint_conn {
         quicly_conn_t *quic;
         struct net_node *egress;
@@ -625,10 +641,8 @@ static void net_bottleneck_init(struct net_bottleneck *self, double bytes_per_se
 
 static quicly_cid_plaintext_t next_quic_cid;
 
-static void net_endpoint_forward(struct net_node *_self, struct net_packet *packet)
+static void net_endpoint_receive(struct net_endpoint *self, struct net_packet *packet)
 {
-    struct net_endpoint *self = (struct net_endpoint *)_self;
-
     size_t off = 0;
     while (off != packet->size) {
         /* decode packet */
@@ -661,9 +675,35 @@ static void net_endpoint_forward(struct net_node *_self, struct net_packet *pack
     net_packet_destroy(packet);
 }
 
+static void net_endpoint_forward(struct net_node *_self, struct net_packet *packet)
+{
+    struct net_endpoint *self = (struct net_endpoint *)_self;
+
+    if (self->ack_scheduler.probability != 0) {
+        if (self->ack_scheduler.resume_at != 0) {
+            ++ack_scheduler_stats.queued_packets;
+            net_queue_enqueue(&self->ack_scheduler.queue, packet);
+            return;
+        }
+        ++ack_scheduler_stats.eligible_packets;
+        if (rand() % 65536 < self->ack_scheduler.probability * 65536) {
+            ++ack_scheduler_stats.stalls;
+            ++ack_scheduler_stats.queued_packets;
+            self->ack_scheduler.resume_at = now + self->ack_scheduler.delay;
+            net_queue_enqueue(&self->ack_scheduler.queue, packet);
+            return;
+        }
+    }
+
+    net_endpoint_receive(self, packet);
+}
+
 static double net_endpoint_next_run_at(struct net_node *_self)
 {
     struct net_endpoint *self = (struct net_endpoint *)_self;
+
+    if (self->ack_scheduler.resume_at != 0)
+        return self->ack_scheduler.resume_at;
 
     if (now < self->start_at)
         return self->start_at;
@@ -687,6 +727,13 @@ static void net_endpoint_run(struct net_node *_self)
     if (now < self->start_at)
         return;
 
+    if (self->ack_scheduler.resume_at != 0) {
+        assert(self->ack_scheduler.resume_at <= now);
+        self->ack_scheduler.resume_at = 0;
+        while (self->ack_scheduler.queue.first != NULL)
+            net_endpoint_receive(self, net_queue_dequeue(&self->ack_scheduler.queue));
+    }
+
     for (struct net_endpoint_conn *conn = self->conns; conn->quic != NULL; ++conn) {
         quicly_address_t dest, src;
         struct iovec datagrams[10];
@@ -706,11 +753,14 @@ static void net_endpoint_run(struct net_node *_self)
     }
 }
 
-static void net_endpoint_init(struct net_endpoint *endpoint)
+static void net_endpoint_init(struct net_endpoint *endpoint, double ack_scheduler_probability, double ack_scheduler_delay)
 {
     *endpoint = (struct net_endpoint){
         .super = {net_endpoint_forward, net_endpoint_next_run_at, net_endpoint_run},
         .addr = new_address(),
+        .ack_scheduler = {.queue = {.append_at = &endpoint->ack_scheduler.queue.first},
+                          .probability = ack_scheduler_probability,
+                          .delay = ack_scheduler_delay},
     };
 }
 
@@ -799,6 +849,8 @@ static void usage(const char *cmd)
     printf("Usage: %s ...\n"
            "\n"
            "Options:\n"
+           "  -a <prob[:secs]>   stalls ACK processing at given probability, batching arrivals\n"
+           "                      until the stall ends (default duration: 0.001 seconds)\n"
            "  -c <cc>             sets congestion controller\n"
            "  -b <bytes_per_sec>  bottleneck bandwidth (default: 1000000, i.e., 1MB/s)\n"
            "  -B                  uses byte-fit rather than packet-size-neutral tail-drop admission\n"
@@ -875,13 +927,35 @@ static int parse_aqm(const char *spec, struct net_aqm *aqm)
 
 static int parse_options(int argc, char **argv, quicly_context_t *quicctx, double *delay, double *start, double *bw, double *depth,
                          double *length, double *random_loss, struct net_aqm *aqm, int *isolate_flows, int *byte_fit_admission,
-                         FILE **trace_fp)
+                         double *ack_scheduler_probability, double *ack_scheduler_delay, FILE **trace_fp)
 {
     reset_getopt_state();
     int ch;
-    while ((ch = getopt(argc, argv, "A:Bc:b:d:EFi:j:l:m:Mpq:r:Rs:th")) != -1) {
+    while ((ch = getopt(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:Rs:th")) != -1) {
 
         switch (ch) {
+        case 'a': {
+            if (ack_scheduler_probability == NULL) {
+                fprintf(stderr, "-%c is not available here\n", ch);
+                return 0;
+            }
+            double probability, delay = 0.001;
+            int consumed = 0;
+            if (sscanf(optarg, "%lf:%lf%n", &probability, &delay, &consumed) != 2 || optarg[consumed] != '\0') {
+                consumed = 0;
+                delay = 0.001;
+                if (sscanf(optarg, "%lf%n", &probability, &consumed) != 1 || optarg[consumed] != '\0') {
+                    fprintf(stderr, "invalid ACK scheduler specification: %s\n", optarg);
+                    return 0;
+                }
+            }
+            if (!(0 <= probability && probability <= 1) || !(delay > 0)) {
+                fprintf(stderr, "invalid ACK scheduler specification: %s\n", optarg);
+                return 0;
+            }
+            *ack_scheduler_probability = probability;
+            *ack_scheduler_delay = delay;
+        } break;
         case 'c': {
             quicly_cc_type_t **cc;
             for (cc = quicly_cc_all_types; *cc != NULL; ++cc)
@@ -1128,7 +1202,7 @@ int main(int argc, char **argv)
     } server_node;
     struct net_node *nodes[20] = {}, **node_insert_at = nodes;
 
-    net_endpoint_init(&server_node.node);
+    net_endpoint_init(&server_node.node, 0, 0);
     server_node.accept_ctx = quicctx;
     server_node.node.accept_ctx = &server_node.accept_ctx;
     *node_insert_at++ = &server_node.node.super;
@@ -1138,6 +1212,7 @@ int main(int argc, char **argv)
     int isolate_flows = 0, byte_fit_admission = 0;
     uint16_t queue_mtu = 0;
     double delay = 0.1, bw = 1e6, depth = 0.1, start = 0, random_loss = 0;
+    double ack_scheduler_probability = 0, ack_scheduler_delay = 0.001;
     double length = 100;
     int first_sep = find_next_separator(argc, argv, 1);
 
@@ -1149,7 +1224,7 @@ int main(int argc, char **argv)
 
     argv[first_sep] = NULL;
     if (!parse_options(first_sep, argv, &quicctx, &delay, &start, &bw, &depth, &length, &random_loss, &aqm, &isolate_flows,
-                       &byte_fit_admission, &quicly_trace_fp))
+                       &byte_fit_admission, &ack_scheduler_probability, &ack_scheduler_delay, &quicly_trace_fp))
         exit(1);
     argv[first_sep] = "--";
 
@@ -1161,6 +1236,7 @@ int main(int argc, char **argv)
             quicly_context_t *flow_ctx = malloc(sizeof(*flow_ctx));
             *flow_ctx = quicctx;
             double flow_delay = delay, flow_start = start;
+            double flow_ack_scheduler_probability = ack_scheduler_probability, flow_ack_scheduler_delay = ack_scheduler_delay;
 
             int flow_argc = seg_end - seg_start + 1;
             char **flow_argv = &argv[seg_start - 1];
@@ -1171,7 +1247,7 @@ int main(int argc, char **argv)
                 argv[seg_end] = NULL;
 
             if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                               NULL))
+                               &flow_ack_scheduler_probability, &flow_ack_scheduler_delay, NULL))
                 exit(1);
             flow_argv[0] = saved_argv0;
             if (seg_end < argc)
@@ -1186,7 +1262,7 @@ int main(int argc, char **argv)
             *node_insert_at++ = &delay_node->super;
 
             struct net_endpoint *client_node = malloc(sizeof(*client_node));
-            net_endpoint_init(client_node);
+            net_endpoint_init(client_node, flow_ack_scheduler_probability, flow_ack_scheduler_delay);
             client_node->start_at = now + flow_start;
             int ret = quicly_connect(&client_node->conns[0].quic, flow_ctx, "hello.example.com", &server_node.node.addr.sa,
                                      &client_node->addr.sa, &next_quic_cid, ptls_iovec_init(NULL, 0), NULL, NULL, NULL);
@@ -1223,6 +1299,11 @@ int main(int argc, char **argv)
 
     while (now < 1000 + length)
         run_nodes(nodes);
+
+    if (ack_scheduler_stats.eligible_packets != 0)
+        printf("{\"ack-scheduler\": \"summary\", \"eligible-packets\": %" PRIu64 ", \"stalls\": %" PRIu64
+               ", \"queued-packets\": %" PRIu64 "}\n",
+               ack_scheduler_stats.eligible_packets, ack_scheduler_stats.stalls, ack_scheduler_stats.queued_packets);
 
     return 0;
 }
