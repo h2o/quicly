@@ -97,9 +97,12 @@ static double fast_cbrt(double x)
 }
 
 #define CALC_FRIENDLY_ALPHA(Breno, Bcubic) (((1 + (Breno)) * (1 - (Bcubic))) / ((1 - (Breno)) * (1 + (Bcubic))))
-/* Loss follows RFC 9438's AIMD(1, 0.5) friendliness. For ABE, match Reno's beta_ecn=0.8 with Cubic's beta_ecn=0.85. */
-static const double cubic_friendly_alpha[2] = {CALC_FRIENDLY_ALPHA(0.5, QUICLY_BETA_LOSS),
-                                               CALC_FRIENDLY_ALPHA(0.8, QUICLY_BETA_ECN)};
+/* Loss follows RFC 9438's AIMD(1, 0.5) friendliness unless the alpha=1 mode is selected. For ABE, both modes match Reno's
+ * beta_ecn=0.8 with Cubic's beta_ecn=0.85. */
+static const double cubic_friendly_alpha[2][2] = {
+    {CALC_FRIENDLY_ALPHA(0.5, QUICLY_BETA_LOSS), CALC_FRIENDLY_ALPHA(0.8, QUICLY_BETA_ECN)},
+    {1, CALC_FRIENDLY_ALPHA(0.8, QUICLY_BETA_ECN)},
+};
 #undef CALC_FRIENDLY_ALPHA
 
 static double cubic_fast_convergence_w_max(double cwnd_prior, double cwnd_epoch)
@@ -261,7 +264,7 @@ static double cuback_cwnd_to_bytes_sent(double w, double w_epoch, double w_max, 
  * Calculates the number of bytes that have to be acked for incrementing CWND by one MTU, when Cuback is used.
  */
 static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t *state, uint32_t cwnd, uint32_t cwnd_epoch,
-                                              uint32_t actual_mtu, uint32_t reference_mtu)
+                                              uint32_t actual_mtu, uint32_t reference_mtu, int loss_alpha_one)
 {
     /* Fast convergence: derive Wmax as the midpoint of cwnd_prior and cwnd_epoch rather than hard-coding it to 0.85 * cwnd_prior.
      * Otherwise, with ABE using QUICLY_BETA_ECN (0.85), Wmax equals cwnd_epoch and K becomes zero, causing the CC to skip the
@@ -272,9 +275,9 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
     double k = fast_cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * reference_mtu));
 
     double bytes0 = cuback_cwnd_to_bytes_sent(cwnd, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, actual_mtu,
-                                              reference_mtu, cubic_friendly_alpha[state->by_ecn]);
+                                              reference_mtu, cubic_friendly_alpha[loss_alpha_one][state->by_ecn]);
     double bytes1 = cuback_cwnd_to_bytes_sent((double)cwnd + actual_mtu, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k,
-                                              actual_mtu, reference_mtu, cubic_friendly_alpha[state->by_ecn]);
+                                              actual_mtu, reference_mtu, cubic_friendly_alpha[loss_alpha_one][state->by_ecn]);
     double bytes = bytes1 - bytes0;
 
     /* Past W_max the curve grows without bound, therefore the increase is capped at 50% of CWND per RTT as RFC 9438 does. Below
@@ -327,19 +330,19 @@ static uint32_t cubic_quantized_w_est(const struct st_quicly_cc_cubic_t *state, 
 }
 
 static uint32_t cubic_update_w_est(struct st_quicly_cc_cubic_t *state, uint32_t cwnd, uint32_t cwnd_epoch, uint32_t bytes,
-                                   uint32_t actual_mtu, uint32_t reference_mtu)
+                                   uint32_t actual_mtu, uint32_t reference_mtu, int loss_alpha_one)
 {
-    double alpha = state->w_est >= state->cwnd_prior ? 1 : cubic_friendly_alpha[state->by_ecn];
+    double alpha = state->w_est >= state->cwnd_prior ? 1 : cubic_friendly_alpha[loss_alpha_one][state->by_ecn];
     state->w_est += alpha * bytes / cwnd * reference_mtu;
     return cubic_quantized_w_est(state, cwnd_epoch, actual_mtu);
 }
 
 static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, uint32_t cwnd_epoch, uint32_t bytes, int cc_limited,
-                           uint32_t rtt, int64_t now, uint32_t actual_mtu, uint32_t reference_mtu)
+                           uint32_t rtt, int64_t now, uint32_t actual_mtu, uint32_t reference_mtu, int loss_alpha_one)
 {
     uint32_t w_est = cubic_quantized_w_est(state, cwnd_epoch, actual_mtu);
     if (cc_limited)
-        w_est = cubic_update_w_est(state, *cwnd, cwnd_epoch, bytes, actual_mtu, reference_mtu);
+        w_est = cubic_update_w_est(state, *cwnd, cwnd_epoch, bytes, actual_mtu, reference_mtu, loss_alpha_one);
 
     /* W_est is ACK-clocked even while the CUBIC clock is stopped, but CWND does not grow while currently app-limited. */
     if (!cubic_start_epoch(state, *cwnd, cwnd_epoch, reference_mtu) || bytes == 0)
@@ -395,7 +398,8 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
             return cc->cwnd;
         }
         uint32_t reference_mtu = cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size;
-        return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size, reference_mtu);
+        return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size, reference_mtu,
+                                             cc->cubic_loss_alpha_one);
     } else if (cc->type == &quicly_cc_type_cubic) {
         assert(!"Cubic congestion avoidance bypasses the byte-counter path");
         abort();
@@ -446,7 +450,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         }
         uint32_t reference_mtu = cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size;
         cubic_on_acked(state, &cc->cwnd, cc->ssthresh, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size,
-                       reference_mtu);
+                       reference_mtu, cc->cubic_loss_alpha_one);
         goto Cleanup;
     }
 
@@ -697,11 +701,12 @@ static void pico_init_pico_state(quicly_cc_t *cc)
     }
 }
 
-static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd, int normalize_mtu)
+static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd, int normalize_mtu, int cubic_loss_alpha_one)
 {
     *cc = (quicly_cc_t){
         .type = type,
         .normalize_mtu = normalize_mtu,
+        .cubic_loss_alpha_one = cubic_loss_alpha_one,
         .cwnd = initcwnd,
         .cwnd_initial = initcwnd,
         .cwnd_maximum = initcwnd,
@@ -732,7 +737,7 @@ static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
             cc->type = type;
             pico_init_pico_state(cc);
         } else {
-            pico_reset(cc, type, cc->cwnd_initial, cc->normalize_mtu);
+            pico_reset(cc, type, cc->cwnd_initial, cc->normalize_mtu, cc->cubic_loss_alpha_one);
         }
         return 1;
     }
@@ -770,24 +775,28 @@ static void cubic_update_cc_limited(quicly_cc_t *cc, int cc_limited, int64_t now
     cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
 }
 
-static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int cubic_loss_alpha_one,
+                      int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_pico, initcwnd, normalize_mtu);
+    pico_reset(cc, &quicly_cc_type_pico, initcwnd, normalize_mtu, cubic_loss_alpha_one);
 }
 
-static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int cubic_loss_alpha_one,
+                      int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_reno, initcwnd, normalize_mtu);
+    pico_reset(cc, &quicly_cc_type_reno, initcwnd, normalize_mtu, cubic_loss_alpha_one);
 }
 
-static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int cubic_loss_alpha_one,
+                       int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu);
+    pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu, cubic_loss_alpha_one);
 }
 
-static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int cubic_loss_alpha_one,
+                        int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu);
+    pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu, cubic_loss_alpha_one);
 }
 
 quicly_cc_type_t quicly_cc_type_pico = {"pico",
