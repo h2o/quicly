@@ -156,7 +156,7 @@ QUICLY_CALLBACK_TYPE(quicly_error_t, generate_resumption_token, quicly_conn_t *c
  * called to initialize a congestion controller for a new connection.
  * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
  */
-QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now);
+QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int cubic_loss_alpha_one, int64_t now);
 /**
  * reference counting.
  * delta must be either 1 or -1.
@@ -389,6 +389,10 @@ struct st_quicly_context_t {
      * the default contexts
      */
     unsigned normalize_cc_mtu : 1;
+    /**
+     * if Cubic and Cuback should use alpha=1 for packet-loss epochs before reaching cwnd_prior, instead of the Reno-friendly alpha
+     */
+    unsigned cubic_loss_alpha_one : 1;
     /**
      *
      */
