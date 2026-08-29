@@ -1,26 +1,25 @@
-# CUBIC newcomer startup experiment
+# CuBACK vs CUBIC newcomer gain experiment
 
-This branch records the experiment comparing four ways of initializing CUBIC after startup. It is a frozen experimental record,
-not code maintained as part of Quicly's source tree.
+This branch records an experiment comparing how quickly a CuBACK or CUBIC newcomer gains bottleneck bandwidth from an established
+CUBIC flow. It is a frozen experimental record, not code maintained as part of Quicly's source tree.
 
-The experiment used Quicly commit `14194a71610049f3ee31c5acee626cd0d2f51f0b`. `benchmark.patch` adds three benchmark-only
-variants of the current CUBIC implementation and efficient, deterministic bottleneck-throughput sampling to `t/simulator.c`.
-It does not use `cubic-legacy`.
+The experiment uses Quicly commit `14194a71610049f3ee31c5acee626cd0d2f51f0b`, the same commit as
+`experiment/newcomer-startup`. `benchmark.patch` adds efficient deterministic bottleneck-throughput sampling to
+`t/simulator.c`; it does not change either congestion controller.
 
 ## Policies
 
-The incumbent is current CUBIC in every run, configured with an initial window of 30 packets and pacing enabled. Only the newcomer
-policy changes:
+The incumbent is current CUBIC in every run, starts at time zero, and uses an initial window of 30 packets with pacing enabled.
+Only the newcomer congestion controller changes:
 
-| Name in charts | Simulator options | Behavior |
-|---|---|---|
-| Traditional | `-c cubic-traditional -i 30 -p` | Ordinary 2x slow start. At the first recovery, Wmax is CWND at loss and CWND becomes 0.7 times that value. |
-| Rapid Start: Wmax = BDP | `-c cubic-bdp -i 30 -j 60 -p -R` | Rapid Start with Wmax equal to its BDP estimate. |
-| Rapid Start: Wmax = BDP; suppress first CA FC | `-c cubic-bdp-nofc -i 30 -j 60 -p -R` | The preceding policy, suppressing Fast Convergence at the first congestion event in congestion avoidance. |
-| HEAD Rapid Start: Wmax = 2 x BDP | `-c cubic -i 30 -j 60 -p -R` | Behavior of the pinned Quicly commit. |
+| Role | Simulator options |
+|---|---|
+| CUBIC incumbent | `-c cubic -i 30 -p` |
+| CUBIC newcomer | `-c cubic -i 30 -j 60 -p -R` |
+| CuBACK newcomer | `-c cuback -i 30 -j 60 -p -R` |
 
-The three benchmark policies share current CUBIC's callbacks and state machine. Their differences are limited to the startup rules
-listed above.
+Thus both newcomers use the requested `-i 30 -j 60 -p -R` configuration. This matches the HEAD CUBIC newcomer configuration in
+the previous experiment; the incumbent remains unchanged from that experiment.
 
 ## Network profiles
 
@@ -57,12 +56,12 @@ percentiles.
 
 ## Procedure
 
-Starting from a clone containing this orphan branch, create a separate worktree at the pinned source commit and apply the benchmark
-changes:
+Starting from a clone containing this orphan experiment branch, create a separate worktree at the pinned source commit and apply
+the benchmark changes:
 
 ```sh
 experiment_dir=$PWD
-source_dir=../quicly-newcomer-startup-source
+source_dir=../quicly-cuback-vs-cubic-newcomer-source
 commit=14194a71610049f3ee31c5acee626cd0d2f51f0b
 
 git worktree add --detach "$source_dir" "$commit"
@@ -77,28 +76,39 @@ cmake -S "$source_dir" -B "$source_dir/build/experiment" -DCMAKE_BUILD_TYPE=Rele
 cmake --build "$source_dir/build/experiment" --target simulator -j
 ```
 
-Run all 2,400 simulations and draw the SVG charts:
+Run all 1,200 simulations and draw the SVG charts:
 
 ```sh
 SIMULATOR="$source_dir/build/experiment/simulator" ruby run.rb
 ruby draw.rb
 ```
 
-`run.rb` accepts profile names as arguments when only part of the matrix is wanted, for example `ruby run.rb DSL LTE`. The number
-of worker processes can be changed using `WORKERS`; the default is eight. Raw samples are written below `results/raw` and are not
-committed. `draw.rb` writes the six committed charts below `results`.
+`run.rb` accepts profile names as arguments when only part of the matrix is wanted, for example `ruby run.rb DSL LTE`. The
+number of worker processes can be changed using `WORKERS`; the default is eight. Raw samples are written below `results/raw`
+and are not committed.
 
 ## Recorded results
 
 The committed SVG files are the output of the complete matrix described above:
 
-* `results/newcomer-startup-dsl.svg`
-* `results/newcomer-startup-half-dsl.svg`
-* `results/newcomer-startup-quarter-dsl.svg`
-* `results/newcomer-startup-eighth-dsl.svg`
-* `results/newcomer-startup-lte.svg`
-* `results/newcomer-startup-5g.svg`
+* `results/cuback-vs-cubic-newcomer-dsl.svg`
+* `results/cuback-vs-cubic-newcomer-half-dsl.svg`
+* `results/cuback-vs-cubic-newcomer-quarter-dsl.svg`
+* `results/cuback-vs-cubic-newcomer-eighth-dsl.svg`
+* `results/cuback-vs-cubic-newcomer-lte.svg`
+* `results/cuback-vs-cubic-newcomer-5g.svg`
 
-Traditional startup and HEAD acquire bandwidth similarly on DSL, LTE, and 5G, while Wmax equal to the BDP estimate is slower on
-the larger profiles. The distinction diminishes as DSL bandwidth is reduced and is immaterial at quarter and eighth DSL rates.
-Suppressing the first congestion-avoidance Fast Convergence does not materially change the result.
+The following summary uses the median per-run mean newcomer bandwidth share over each chart's displayed horizon. The paired delta
+is the median, across the 100 matched runs, of CuBACK share minus CUBIC share.
+
+| Profile | CUBIC | CuBACK | Paired delta |
+|---|---:|---:|---:|
+| DSL | 0.4375 | 0.4567 | +0.0140 |
+| Half DSL | 0.4316 | 0.4521 | +0.0110 |
+| Quarter DSL | 0.5018 | 0.5064 | +0.0010 |
+| Eighth DSL | 0.5130 | 0.5163 | +0.0000 |
+| LTE | 0.3972 | 0.4111 | +0.0116 |
+| 5G | 0.3617 | 0.3821 | +0.0150 |
+
+CuBACK gains bandwidth faster overall on DSL, Half DSL, LTE, and 5G. The distinction is negligible at Quarter DSL and Eighth DSL
+rates.

@@ -16,10 +16,8 @@ NETWORKS = {
 }.freeze
 
 POLICIES = {
-  'traditional' => ['-c', 'cubic-traditional', '-i', '30', '-p'],
-  'bdp' => ['-c', 'cubic-bdp', '-i', '30', '-j', '60', '-p', '-R'],
-  'bdp-nofc' => ['-c', 'cubic-bdp-nofc', '-i', '30', '-j', '60', '-p', '-R'],
-  'head' => ['-c', 'cubic', '-i', '30', '-j', '60', '-p', '-R']
+  'cubic' => ['-c', 'cubic', '-i', '30', '-j', '60', '-p', '-R'],
+  'cuback' => ['-c', 'cuback', '-i', '30', '-j', '60', '-p', '-R']
 }.freeze
 
 selected = ARGV.empty? ? NETWORKS.keys : ARGV

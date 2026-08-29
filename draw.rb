@@ -12,10 +12,8 @@ profiles = {
   '5G' => {label: '5G', bandwidth: 100.0, horizon: 50.0, rundir: rundir}
 }
 policies = {
-  'traditional' => {label: 'traditional: Wmax = CWND at loss; CWND = 0.7 x Wmax', color: '#CC79A7'},
-  'bdp' => {label: 'Rapid Start: Wmax = BDP estimate', color: '#0072B2'},
-  'bdp-nofc' => {label: 'Rapid Start: Wmax = BDP estimate; suppress first CA FC', color: '#009E73'},
-  'head' => {label: 'HEAD Rapid Start: Wmax = 2 x BDP estimate', color: '#D55E00'}
+  'cubic' => {label: 'CUBIC newcomer', color: '#0072B2'},
+  'cuback' => {label: 'CuBACK newcomer', color: '#D55E00'}
 }
 
 profiles.each do |network, profile|
@@ -51,13 +49,13 @@ profiles.each do |network, profile|
     end
   end
 
-  basename = "newcomer-startup-#{network.downcase.tr('_', '-')}"
+  basename = "cuback-vs-cubic-newcomer-#{network.downcase.tr('_', '-')}"
   output = File.join(outdir, "#{basename}.svg")
   svg = +%(<?xml version="1.0" encoding="UTF-8"?>\n)
   svg << %(<svg xmlns="http://www.w3.org/2000/svg" width="#{width}" height="#{height}" viewBox="0 0 #{width} #{height}">\n)
   svg << %(<rect width="100%" height="100%" fill="white"/>\n)
   svg << %(<style>text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #222; }</style>\n)
-  svg << %(<text x="#{margin[:left]}" y="38" font-size="25" font-weight="600">#{profile[:label]} newcomer bottleneck bandwidth across 400 runs</text>\n)
+  svg << %(<text x="#{margin[:left]}" y="38" font-size="25" font-weight="600">#{profile[:label]}: CuBACK vs CUBIC newcomer bandwidth across 200 runs</text>\n)
   svg << %(<text x="#{margin[:left]}" y="68" font-size="16" fill="#555">Horizontal span = #{fmt_seconds.call(xmax)} s; 100 paired phase/seed combinations per policy</text>\n)
 
   y_step = ymax / 3
@@ -105,7 +103,7 @@ profiles.each do |network, profile|
 
   legend_x = margin[:left] + 18
   legend_y = margin[:top] + 20
-  svg << %(<rect x="#{legend_x - 12}" y="#{legend_y - 18}" width="650" height="126" rx="5" fill="white" fill-opacity="0.9" stroke="#ccc"/>\n)
+  svg << %(<rect x="#{legend_x - 12}" y="#{legend_y - 18}" width="250" height="70" rx="5" fill="white" fill-opacity="0.9" stroke="#ccc"/>\n)
   series.each_value.with_index do |entry, index|
     y = legend_y + index * 28
     svg << %(<line x1="#{legend_x}" y1="#{y}" x2="#{legend_x + 38}" y2="#{y}" stroke="#{entry[:style][:color]}" stroke-width="4"/>\n)
