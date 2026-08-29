@@ -7,16 +7,12 @@ WORKERS = Integer(ENV.fetch('WORKERS', '8'))
 DURATION = 200
 
 NETWORKS = {
-  'DSL' => {rtt: 0.03, queue: 0.05, bandwidth: 30_000_000.0 / 8},
-  'Half_DSL' => {rtt: 0.03, queue: 0.05, bandwidth: 15_000_000.0 / 8},
-  'Quarter_DSL' => {rtt: 0.03, queue: 0.05, bandwidth: 7_500_000.0 / 8},
-  'Eighth_DSL' => {rtt: 0.03, queue: 0.05, bandwidth: 3_750_000.0 / 8},
-  'LTE' => {rtt: 0.06, queue: 0.12, bandwidth: 30_000_000.0 / 8},
-  '5G' => {rtt: 0.04, queue: 0.08, bandwidth: 100_000_000.0 / 8}
+  'LTE' => {rtt: 0.06, queue: 0.12, bandwidth: 30_000_000.0 / 8}
 }.freeze
 
 POLICIES = {
   'cubic' => ['-c', 'cubic', '-i', '30', '-j', '60', '-p', '-R'],
+  'cubic-ackclock' => ['-c', 'cubic-ackclock', '-i', '30', '-j', '60', '-p', '-R'],
   'cuback' => ['-c', 'cuback', '-i', '30', '-j', '60', '-p', '-R']
 }.freeze
 

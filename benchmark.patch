@@ -1,3 +1,216 @@
+diff --git a/include/quicly/cc.h b/include/quicly/cc.h
+index af143933..66add7f4 100644
+--- a/include/quicly/cc.h
++++ b/include/quicly/cc.h
+@@ -132,6 +132,11 @@ struct st_quicly_cc_cubic_t {
+      * post-recovery congestion window; until then, the remaining fields do not define a usable increase function.
+      */
+     double w_est;
++    /**
++     * Benchmark-only ACK-clock state. These fields are unused by production CUBIC.
++     */
++    double ack_clock_time;
++    double ack_clock_bandwidth;
+     /**
+      * Timestamp at which the current epoch began. Zero while the CUBIC clock is stopped. When resuming, `epoch_start` is set to the
+      * current time and `k` is recalculated.
+diff --git a/lib/cc-pico.c b/lib/cc-pico.c
+index e8ae5b16..1a950a8b 100644
+--- a/lib/cc-pico.c
++++ b/lib/cc-pico.c
+@@ -102,6 +102,14 @@ static const double cubic_friendly_alpha[2] = {CALC_FRIENDLY_ALPHA(0.5, QUICLY_B
+                                                CALC_FRIENDLY_ALPHA(0.8, QUICLY_BETA_ECN)};
+ #undef CALC_FRIENDLY_ALPHA
+ 
++/* Benchmark-only variant that shares CUBIC's state machine and estimator, changing only the clock source. */
++static quicly_cc_type_t bench_cubic_ackclock;
++
++static int is_cubic_type(const quicly_cc_type_t *type)
++{
++    return type == &quicly_cc_type_cubic || type == &bench_cubic_ackclock;
++}
++
+ static double cubic_fast_convergence_w_max(double cwnd_prior, double cwnd_epoch)
+ {
+     /* Equivalent to (1 + beta) / 2 * cwnd_prior when cwnd_epoch is beta * cwnd_prior, including with ABE. */
+@@ -335,17 +343,26 @@ static uint32_t cubic_update_w_est(struct st_quicly_cc_cubic_t *state, uint32_t
+ }
+ 
+ static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, uint32_t cwnd_epoch, uint32_t bytes, int cc_limited,
+-                           uint32_t rtt, int64_t now, uint32_t actual_mtu, uint32_t reference_mtu)
++                           int ack_clocked, uint32_t rtt, int64_t now, uint32_t actual_mtu, uint32_t reference_mtu)
+ {
+     uint32_t w_est = cubic_quantized_w_est(state, cwnd_epoch, actual_mtu);
+     if (cc_limited)
+         w_est = cubic_update_w_est(state, *cwnd, cwnd_epoch, bytes, actual_mtu, reference_mtu);
+ 
+     /* W_est is ACK-clocked even while the CUBIC clock is stopped, but CWND does not grow while currently app-limited. */
++    if (ack_clocked && !cc_limited)
++        return;
+     if (!cubic_start_epoch(state, *cwnd, cwnd_epoch, reference_mtu) || bytes == 0)
+         return;
+ 
+-    double t_sec = (now - state->epoch_start) / 1000.;
++    double t_sec;
++    if (ack_clocked) {
++        assert(state->ack_clock_bandwidth > 0);
++        state->ack_clock_time += bytes / state->ack_clock_bandwidth;
++        t_sec = state->ack_clock_time;
++    } else {
++        t_sec = (now - state->epoch_start) / 1000.;
++    }
+     double w_cubic = cubic_calc_w(state, cwnd_epoch, t_sec, reference_mtu);
+ 
+     if (w_cubic < w_est) {
+@@ -377,6 +394,7 @@ static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwn
+     state->k = NAN;
+     state->epoch_start = 0;
+     state->w_est = 0;
++    state->ack_clock_time = 0;
+     state->fast_convergence = state->cwnd_prior != 0 && cwnd_prior < previous_w_max;
+     state->cwnd_prior = cwnd_prior;
+ }
+@@ -396,7 +414,7 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
+         }
+         uint32_t reference_mtu = cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size;
+         return cuback_bytes_per_mtu_increase(&cc->state.pico.cuback, cc->cwnd, cc->ssthresh, max_udp_payload_size, reference_mtu);
+-    } else if (cc->type == &quicly_cc_type_cubic) {
++    } else if (is_cubic_type(cc->type)) {
+         assert(!"Cubic congestion avoidance bypasses the byte-counter path");
+         abort();
+     } else if (cc->type == &quicly_cc_type_pico) {
+@@ -432,7 +450,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
+     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
+ 
+     /* Cubic: unlike other policies, congestion avoidance cannot be driven by bytes_to_mtu_increase. */
+-    if (cc->type == &quicly_cc_type_cubic && cc->cwnd >= cc->ssthresh) {
++    if (is_cubic_type(cc->type) && cc->cwnd >= cc->ssthresh) {
+         struct st_quicly_cc_cubic_t *state = &cc->state.pico.cubic;
+         if (state->w_est == 0) {
+             if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+@@ -441,12 +459,12 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
+             }
+             assert(state->cwnd_prior != 0);
+             state->w_est = cc->cwnd;
+-            state->epoch_start = state->cc_limited ? now : 0;
++            state->epoch_start = cc->type == &bench_cubic_ackclock ? 1 : state->cc_limited ? now : 0;
+             state->k = NAN;
+         }
+         uint32_t reference_mtu = cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size;
+-        cubic_on_acked(state, &cc->cwnd, cc->ssthresh, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size,
+-                       reference_mtu);
++        cubic_on_acked(state, &cc->cwnd, cc->ssthresh, bytes, cc_limited, cc->type == &bench_cubic_ackclock, loss->rtt.smoothed,
++                       now, max_udp_payload_size, reference_mtu);
+         goto Cleanup;
+     }
+ 
+@@ -524,7 +542,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
+         cc->state.pico.undo.bytes_to_mtu_increase = cc->state.pico.bytes_to_mtu_increase;
+         if (cc->type == &quicly_cc_type_cuback) {
+             cc->state.pico.undo.cuback = cc->state.pico.cuback;
+-        } else if (cc->type == &quicly_cc_type_cubic) {
++        } else if (is_cubic_type(cc->type)) {
+             cc->state.pico.undo.cubic = cc->state.pico.cubic;
+         } else if (cc->type == &quicly_cc_type_pico) {
+             cc->state.pico.undo.bytes_per_mtu_increase = cc->state.pico.bytes_per_mtu_increase;
+@@ -616,8 +634,11 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
+         cc->state.pico.cuback.by_ecn = bytes == 0;
+         cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
+         cc->state.pico.bytes_to_mtu_increase = 0;
+-    } else if (cc->type == &quicly_cc_type_cubic) {
++    } else if (is_cubic_type(cc->type)) {
+         cubic_on_congestion(&cc->state.pico.cubic, bdp, cc->ssthresh, bytes == 0);
++        if (cc->type == &bench_cubic_ackclock)
++            cc->state.pico.cubic.ack_clock_bandwidth =
++                loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
+         cc->state.pico.bytes_to_mtu_increase = 0;
+     } else if (cc->type == &quicly_cc_type_pico) {
+         /* Pico: Rapid Start might adjust CWND to a smaller value than `bdp`, but the increase is calculated using `bdp` regardless.
+@@ -651,7 +672,7 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
+     cc->state.pico.bytes_to_mtu_increase = cc->state.pico.undo.bytes_to_mtu_increase;
+     if (cc->type == &quicly_cc_type_cuback) {
+         cc->state.pico.cuback = cc->state.pico.undo.cuback;
+-    } else if (cc->type == &quicly_cc_type_cubic) {
++    } else if (is_cubic_type(cc->type)) {
+         int cc_limited = cc->state.pico.cubic.cc_limited;
+         cc->state.pico.cubic = cc->state.pico.undo.cubic;
+         cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
+@@ -688,7 +709,7 @@ static void pico_init_pico_state(quicly_cc_t *cc)
+     cc->state.pico.bytes_to_mtu_increase = 0;
+     if (cc->type == &quicly_cc_type_cuback) {
+         cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
+-    } else if (cc->type == &quicly_cc_type_cubic) {
++    } else if (is_cubic_type(cc->type)) {
+         cc->state.pico.cubic = (struct st_quicly_cc_cubic_t){.k = NAN, .cc_limited = 1};
+     } else if (cc->type == &quicly_cc_type_pico) {
+         cc->state.pico.bytes_per_mtu_increase = cc->cwnd * QUICLY_BETA_LOSS;
+@@ -721,11 +742,11 @@ static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
+ {
+     if (cc->type == type) {
+         return 1; /* nothing to do */
+-    } else if (cc->type == &quicly_cc_type_reno && (type != &quicly_cc_type_cubic || cc->cwnd_exiting_slow_start == 0)) {
++    } else if (cc->type == &quicly_cc_type_reno && (!is_cubic_type(type) || cc->cwnd_exiting_slow_start == 0)) {
+         cc->type = type;
+         pico_init_pico_state(cc);
+         return 1;
+-    } else if (cc->type == &quicly_cc_type_reno || cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cubic_legacy ||
++    } else if (cc->type == &quicly_cc_type_reno || is_cubic_type(cc->type) || cc->type == &quicly_cc_type_cubic_legacy ||
+                cc->type == &quicly_cc_type_pico || cc->type == &quicly_cc_type_cuback) {
+         /* When in slow start, state can be reused as-is; otherwise, restart. */
+         if (cc->cwnd_exiting_slow_start == 0) {
+@@ -785,6 +806,16 @@ static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwn
+     pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu);
+ }
+ 
++static void bench_cubic_ackclock_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
++{
++    pico_reset(cc, &bench_cubic_ackclock, initcwnd, normalize_mtu);
++}
++
++static void bench_cubic_ackclock_update_cc_limited(quicly_cc_t *cc, int cc_limited, int64_t now)
++{
++    cc->state.pico.cubic.cc_limited = cc_limited;
++}
++
+ static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+ {
+     pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu);
+@@ -827,6 +858,19 @@ quicly_cc_type_t quicly_cc_type_cubic = {"cubic",
+                                          cubic_update_cc_limited};
+ quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};
+ 
++static quicly_init_cc_t bench_cubic_ackclock_cc_init = {bench_cubic_ackclock_init};
++static quicly_cc_type_t bench_cubic_ackclock = {"cubic-ackclock",
++                                                &bench_cubic_ackclock_cc_init,
++                                                pico_on_acked,
++                                                pico_on_lost,
++                                                pico_on_persistent_congestion,
++                                                pico_on_sent,
++                                                cubic_on_switch,
++                                                pico_on_late_ack,
++                                                quicly_cc_jumpstart_enter,
++                                                pico_enable_rapid_start,
++                                                bench_cubic_ackclock_update_cc_limited};
++
+ quicly_cc_type_t quicly_cc_type_cuback = {"cuback",
+                                           &quicly_cc_cuback_init,
+                                           pico_on_acked,
+@@ -839,8 +883,13 @@ quicly_cc_type_t quicly_cc_type_cuback = {"cuback",
+                                           pico_enable_rapid_start};
+ quicly_init_cc_t quicly_cc_cuback_init = {cuback_init};
+ 
+-quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno, &quicly_cc_type_cubic,  &quicly_cc_type_cubic_legacy,
+-                                           &quicly_cc_type_pico, &quicly_cc_type_cuback, NULL};
++quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno,
++                                           &quicly_cc_type_cubic,
++                                           &bench_cubic_ackclock,
++                                           &quicly_cc_type_cubic_legacy,
++                                           &quicly_cc_type_pico,
++                                           &quicly_cc_type_cuback,
++                                           NULL};
+ 
+ uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size)
+ {
 diff --git a/t/simulator.c b/t/simulator.c
 index da33ee98..810b00e1 100644
 --- a/t/simulator.c

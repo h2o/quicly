@@ -4,16 +4,12 @@ outdir = File.join(root, 'results')
 Dir.mkdir(outdir) unless Dir.exist?(outdir)
 
 profiles = {
-  'DSL' => {label: 'DSL', bandwidth: 30.0, horizon: 30.0, rundir: rundir},
-  'Half_DSL' => {label: 'Half DSL', bandwidth: 15.0, horizon: 10.0, rundir: rundir},
-  'Quarter_DSL' => {label: 'Quarter DSL', bandwidth: 7.5, horizon: 10.0, rundir: rundir},
-  'Eighth_DSL' => {label: 'Eighth DSL', bandwidth: 3.75, horizon: 10.0, rundir: rundir},
-  'LTE' => {label: 'LTE', bandwidth: 30.0, horizon: 50.0, rundir: rundir},
-  '5G' => {label: '5G', bandwidth: 100.0, horizon: 50.0, rundir: rundir}
+  'LTE' => {label: 'LTE', bandwidth: 30.0, horizon: 50.0, rundir: rundir}
 }
 policies = {
-  'cubic' => {label: 'CUBIC newcomer', color: '#0072B2'},
-  'cuback' => {label: 'CuBACK newcomer', color: '#D55E00'}
+  'cubic' => {label: 'CUBIC: wall clock + CUBIC estimator', color: '#0072B2'},
+  'cubic-ackclock' => {label: 'hybrid: ACK clock + CUBIC estimator', color: '#009E73'},
+  'cuback' => {label: 'CuBACK: ACK clock + CuBACK estimator', color: '#D55E00'}
 }
 
 profiles.each do |network, profile|
@@ -49,13 +45,13 @@ profiles.each do |network, profile|
     end
   end
 
-  basename = "cuback-vs-cubic-newcomer-#{network.downcase.tr('_', '-')}"
+  basename = "lte-newcomer-ackclock-ablation"
   output = File.join(outdir, "#{basename}.svg")
   svg = +%(<?xml version="1.0" encoding="UTF-8"?>\n)
   svg << %(<svg xmlns="http://www.w3.org/2000/svg" width="#{width}" height="#{height}" viewBox="0 0 #{width} #{height}">\n)
   svg << %(<rect width="100%" height="100%" fill="white"/>\n)
   svg << %(<style>text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #222; }</style>\n)
-  svg << %(<text x="#{margin[:left]}" y="38" font-size="25" font-weight="600">#{profile[:label]}: CuBACK vs CUBIC newcomer bandwidth across 200 runs</text>\n)
+  svg << %(<text x="#{margin[:left]}" y="38" font-size="25" font-weight="600">#{profile[:label]} newcomer ACK-clock ablation across 300 runs</text>\n)
   svg << %(<text x="#{margin[:left]}" y="68" font-size="16" fill="#555">Horizontal span = #{fmt_seconds.call(xmax)} s; 100 paired phase/seed combinations per policy</text>\n)
 
   y_step = ymax / 3
@@ -103,7 +99,7 @@ profiles.each do |network, profile|
 
   legend_x = margin[:left] + 18
   legend_y = margin[:top] + 20
-  svg << %(<rect x="#{legend_x - 12}" y="#{legend_y - 18}" width="250" height="70" rx="5" fill="white" fill-opacity="0.9" stroke="#ccc"/>\n)
+  svg << %(<rect x="#{legend_x - 12}" y="#{legend_y - 18}" width="410" height="98" rx="5" fill="white" fill-opacity="0.9" stroke="#ccc"/>\n)
   series.each_value.with_index do |entry, index|
     y = legend_y + index * 28
     svg << %(<line x1="#{legend_x}" y1="#{y}" x2="#{legend_x + 38}" y2="#{y}" stroke="#{entry[:style][:color]}" stroke-width="4"/>\n)
