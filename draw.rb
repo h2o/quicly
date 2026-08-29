@@ -13,7 +13,7 @@ profiles = {
 }
 policies = {
   'cubic' => {label: 'CUBIC newcomer', color: '#0072B2'},
-  'cuback' => {label: 'CuBACK newcomer', color: '#D55E00'}
+  'cuback' => {label: 'Cuback newcomer', color: '#D55E00'}
 }
 
 profiles.each do |network, profile|
@@ -55,7 +55,7 @@ profiles.each do |network, profile|
   svg << %(<svg xmlns="http://www.w3.org/2000/svg" width="#{width}" height="#{height}" viewBox="0 0 #{width} #{height}">\n)
   svg << %(<rect width="100%" height="100%" fill="white"/>\n)
   svg << %(<style>text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #222; }</style>\n)
-  svg << %(<text x="#{margin[:left]}" y="38" font-size="25" font-weight="600">#{profile[:label]}: CuBACK vs CUBIC newcomer bandwidth across 200 runs</text>\n)
+  svg << %(<text x="#{margin[:left]}" y="38" font-size="25" font-weight="600">#{profile[:label]}: Cuback vs CUBIC newcomer bandwidth across 200 runs</text>\n)
   svg << %(<text x="#{margin[:left]}" y="68" font-size="16" fill="#555">Horizontal span = #{fmt_seconds.call(xmax)} s; 100 paired phase/seed combinations per policy</text>\n)
 
   y_step = ymax / 3

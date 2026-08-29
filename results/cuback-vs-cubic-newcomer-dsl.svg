@@ -2,7 +2,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1800" height="950" viewBox="0 0 1800 950">
 <rect width="100%" height="100%" fill="white"/>
 <style>text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #222; }</style>
-<text x="105" y="38" font-size="25" font-weight="600">DSL: CuBACK vs CUBIC newcomer bandwidth across 200 runs</text>
+<text x="105" y="38" font-size="25" font-weight="600">DSL: Cuback vs CUBIC newcomer bandwidth across 200 runs</text>
 <text x="105" y="68" font-size="16" fill="#555">Horizontal span = 30 s; 100 paired phase/seed combinations per policy</text>
 <line x1="105" y1="865.0" x2="1765" y2="865.0" stroke="#ddd"/>
 <text x="93" y="870.0" text-anchor="end" font-size="14">0</text>
@@ -241,5 +241,5 @@
 <line x1="123" y1="115" x2="161" y2="115" stroke="#0072B2" stroke-width="4"/>
 <text x="173" y="120" font-size="15">CUBIC newcomer</text>
 <line x1="123" y1="143" x2="161" y2="143" stroke="#D55E00" stroke-width="4"/>
-<text x="173" y="148" font-size="15">CuBACK newcomer</text>
+<text x="173" y="148" font-size="15">Cuback newcomer</text>
 </svg>

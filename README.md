@@ -1,6 +1,6 @@
-# CuBACK vs CUBIC newcomer gain experiment
+# Cuback vs CUBIC newcomer gain experiment
 
-This branch records an experiment comparing how quickly a CuBACK or CUBIC newcomer gains bottleneck bandwidth from an established
+This branch records an experiment comparing how quickly a Cuback or CUBIC newcomer gains bottleneck bandwidth from an established
 CUBIC flow. It is a frozen experimental record, not code maintained as part of Quicly's source tree.
 
 The experiment uses Quicly commit `14194a71610049f3ee31c5acee626cd0d2f51f0b`, the same commit as
@@ -16,7 +16,7 @@ Only the newcomer congestion controller changes:
 |---|---|
 | CUBIC incumbent | `-c cubic -i 30 -p` |
 | CUBIC newcomer | `-c cubic -i 30 -j 60 -p -R` |
-| CuBACK newcomer | `-c cuback -i 30 -j 60 -p -R` |
+| Cuback newcomer | `-c cuback -i 30 -j 60 -p -R` |
 
 Thus both newcomers use the requested `-i 30 -j 60 -p -R` configuration. This matches the HEAD CUBIC newcomer configuration in
 the previous experiment; the incumbent remains unchanged from that experiment.
@@ -99,9 +99,9 @@ The committed SVG files are the output of the complete matrix described above:
 * `results/cuback-vs-cubic-newcomer-5g.svg`
 
 The following summary uses the median per-run mean newcomer bandwidth share over each chart's displayed horizon. The paired delta
-is the median, across the 100 matched runs, of CuBACK share minus CUBIC share.
+is the median, across the 100 matched runs, of Cuback share minus CUBIC share.
 
-| Profile | CUBIC | CuBACK | Paired delta |
+| Profile | CUBIC | Cuback | Paired delta |
 |---|---:|---:|---:|
 | DSL | 0.4375 | 0.4567 | +0.0140 |
 | Half DSL | 0.4316 | 0.4521 | +0.0110 |
@@ -110,5 +110,5 @@ is the median, across the 100 matched runs, of CuBACK share minus CUBIC share.
 | LTE | 0.3972 | 0.4111 | +0.0116 |
 | 5G | 0.3617 | 0.3821 | +0.0150 |
 
-CuBACK gains bandwidth faster overall on DSL, Half DSL, LTE, and 5G. The distinction is negligible at Quarter DSL and Eighth DSL
+Cuback gains bandwidth faster overall on DSL, Half DSL, LTE, and 5G. The distinction is negligible at Quarter DSL and Eighth DSL
 rates.
