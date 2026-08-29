@@ -346,5 +346,5 @@
 <line x1="123" y1="143" x2="161" y2="143" stroke="#009E73" stroke-width="4"/>
 <text x="173" y="148" font-size="15">hybrid: ACK clock + CUBIC estimator</text>
 <line x1="123" y1="171" x2="161" y2="171" stroke="#D55E00" stroke-width="4"/>
-<text x="173" y="176" font-size="15">CuBACK: ACK clock + CuBACK estimator</text>
+<text x="173" y="176" font-size="15">Cuback: ACK clock + Cuback estimator</text>
 </svg>

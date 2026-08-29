@@ -9,7 +9,7 @@ profiles = {
 policies = {
   'cubic' => {label: 'CUBIC: wall clock + CUBIC estimator', color: '#0072B2'},
   'cubic-ackclock' => {label: 'hybrid: ACK clock + CUBIC estimator', color: '#009E73'},
-  'cuback' => {label: 'CuBACK: ACK clock + CuBACK estimator', color: '#D55E00'}
+  'cuback' => {label: 'Cuback: ACK clock + Cuback estimator', color: '#D55E00'}
 }
 
 profiles.each do |network, profile|

@@ -22,6 +22,8 @@ abort "unknown network profile(s): #{unknown.join(', ')}" unless unknown.empty?
 
 outdir = File.join(__dir__, 'results', 'raw')
 FileUtils.mkdir_p(outdir)
+recovery_outdir = File.join(__dir__, 'results', 'recovery')
+FileUtils.mkdir_p(recovery_outdir)
 jobs = Queue.new
 selected.each do |network|
   geometry = NETWORKS.fetch(network)
@@ -65,13 +67,24 @@ workers = WORKERS.times.map do
         raise "#{network}/#{policy}/#{seed}: simulator failed: #{stderr}" unless status.success?
 
         rows = []
+        recovery_rows = []
         stdout.each_line do |line|
           match = /^BENCH_SHARE ([0-9.]+) ([0-9.]+)/.match(line)
           rows << "#{match[1]},#{match[2]}\n" if match
+          recovery_rows << line if line.start_with?('BENCH_RECOVERY')
         end
         expected = (DURATION / step).floor
         raise "#{network}/#{policy}/#{seed}: #{rows.length} samples, expected #{expected}" unless rows.length == expected
+        if policy == 'cubic-ackclock'
+          1.upto(10) do |episode|
+            count = recovery_rows.count { |line| line.match?(/^BENCH_RECOVERY ack #{episode} /) }
+            raise "#{network}/#{policy}/#{seed}: #{count} recovery records for CA period #{episode}, expected 1" unless count == 1
+          end
+        end
         File.write(File.join(outdir, "#{policy}-#{network}-#{start}-#{seed}.csv"), rows.join)
+        if policy == 'cubic-ackclock'
+          File.write(File.join(recovery_outdir, "#{policy}-#{network}-#{start}-#{seed}.txt"), recovery_rows.join)
+        end
       rescue => e
         lock.synchronize { errors << e.full_message }
       ensure
