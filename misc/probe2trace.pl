@@ -12,7 +12,7 @@ my %tracer_probes = map { uc($_) => 1 } qw(packet_sent packet_received packet_ac
 GetOptions("arch=s" => \$arch)
     or die "invalid command option\n";
 
-
+$arch =~ s/\r$//; # remove excess \r on WSL
 
 # read file and build list of probes being [[probe_name0, [[arg0_name, arg0_type], [arg1_name, arg1_type], ...], [probe_name2, ...
 my @probes = do {
