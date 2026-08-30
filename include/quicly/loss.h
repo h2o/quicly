@@ -94,9 +94,27 @@ typedef struct quicly_rtt_t {
     uint32_t latest;
 } quicly_rtt_t;
 
+/**
+ * Tracks the minimum RTT observed during the most recent RTT-sized window. The window is divided into four slots so that it can
+ * advance without discarding all recent samples at once.
+ */
+typedef struct quicly_rtt_floor_t {
+    /**
+     * End of the newest slot, or zero before the first sample is obtained.
+     */
+    int64_t newest_sample_until;
+    /**
+     * Per-slot minima, newest first. UINT32_MAX denotes a slot for which no sample was obtained.
+     */
+    uint32_t samples[4];
+} quicly_rtt_floor_t;
+
 static void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, uint32_t initial_rtt);
 static void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay);
 static uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto);
+static void quicly_rtt_floor_init(quicly_rtt_floor_t *floor);
+static void quicly_rtt_floor_update(quicly_rtt_floor_t *floor, const quicly_rtt_t *rtt, int64_t now);
+static uint32_t quicly_rtt_floor_get(const quicly_rtt_floor_t *floor);
 
 typedef struct quicly_loss_thresholds_t {
     /**
@@ -161,6 +179,10 @@ typedef struct quicly_loss_t {
      * rtt
      */
     quicly_rtt_t rtt;
+    /**
+     * Recent RTT floor, maintained for every accepted RTT sample.
+     */
+    quicly_rtt_floor_t rtt_floor;
     /**
      * sentmap
      */
@@ -256,6 +278,52 @@ inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, ui
     return (uint32_t)(rtt->smoothed + (rtt->variance * 4 >= min_pto ? rtt->variance * 4 : min_pto)) + max_ack_delay;
 }
 
+inline void quicly_rtt_floor_init(quicly_rtt_floor_t *floor)
+{
+    floor->newest_sample_until = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(floor->samples); ++i)
+        floor->samples[i] = UINT32_MAX;
+}
+
+inline void quicly_rtt_floor_update(quicly_rtt_floor_t *floor, const quicly_rtt_t *rtt, int64_t now)
+{
+    assert(rtt->latest != 0 && rtt->minimum != UINT32_MAX);
+
+    int64_t sample_duration = rtt->minimum / PTLS_ELEMENTSOF(floor->samples);
+    /* A sub-four-millisecond minimum RTT would otherwise produce a zero-length slot. Use one-millisecond slots to keep the tracker
+     * operational, though its four-slot window is then longer than one minimum RTT. */
+    if (sample_duration == 0)
+        sample_duration = 1;
+
+    if (floor->newest_sample_until == 0) {
+        floor->newest_sample_until = now + sample_duration;
+        floor->samples[0] = rtt->latest;
+        return;
+    }
+
+    if (now < floor->newest_sample_until) {
+        if (floor->samples[0] > rtt->latest)
+            floor->samples[0] = rtt->latest;
+        return;
+    }
+
+    size_t distance = (now - floor->newest_sample_until) / sample_duration + 1;
+    for (size_t dst = PTLS_ELEMENTSOF(floor->samples) - 1; dst != 0; --dst)
+        floor->samples[dst] = dst >= distance ? floor->samples[dst - distance] : UINT32_MAX;
+    floor->samples[0] = rtt->latest;
+    floor->newest_sample_until += sample_duration * distance;
+    assert(floor->newest_sample_until - sample_duration <= now && now < floor->newest_sample_until);
+}
+
+inline uint32_t quicly_rtt_floor_get(const quicly_rtt_floor_t *floor)
+{
+    uint32_t value = UINT32_MAX;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(floor->samples); ++i)
+        if (value > floor->samples[i])
+            value = floor->samples[i];
+    return value;
+}
+
 inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
                              const uint8_t *ack_delay_exponent)
 {
@@ -271,6 +339,7 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
                          .loss_time = INT64_MAX,
                          .alarm_at = INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
+    quicly_rtt_floor_init(&r->rtt_floor);
     quicly_sentmap_init(&r->sentmap);
 }
 
@@ -388,6 +457,7 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     if (ack_delay_millisecs > *r->max_ack_delay)
         ack_delay_millisecs = *r->max_ack_delay;
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
+    quicly_rtt_floor_update(&r->rtt_floor, &r->rtt, now);
 }
 
 inline quicly_error_t quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, int is_1rtt_only,

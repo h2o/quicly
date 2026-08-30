@@ -3657,7 +3657,10 @@ static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
         if (quicly_cc_in_jumpstart(&conn->egress.cc)) {
             multiplier = 1;
         } else {
-            multiplier = quicly_cc_rapid_start_use_3x(&conn->egress.cc.rapid_start, &conn->egress.loss.rtt) ? 3 : 2;
+            multiplier = quicly_cc_rapid_start_use_3x(&conn->egress.cc.rapid_start, &conn->egress.loss.rtt,
+                                                      &conn->egress.loss.rtt_floor)
+                             ? 3
+                             : 2;
         }
     } else {
         /* We use of 2x during congestion avoidance, which is different from Linux using 1.25x. The rationale behind this choice is

@@ -96,13 +96,13 @@ static void test_pico_undo_rapid_start_loss(void)
 
     quicly_cc_pico_init.cb(&quicly_cc_pico_init, &cc, initcwnd, 0, 0);
     cc.type->enable_rapid_start(&cc, 900);
-    ok(quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+    ok(quicly_cc_rapid_start_is_active(&cc.rapid_start));
 
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
-    ok(cc.rapid_start.newest_rtt_sample_until == -1);
+    ok(cc.rapid_start.state == QUICLY_CC_RAPID_START_STATE_RECOVERY);
 
     cc.type->cc_on_late_ack(&cc, 10, 1100);
-    ok(cc.rapid_start.newest_rtt_sample_until == 0);
+    ok(cc.rapid_start.state == QUICLY_CC_RAPID_START_STATE_INACTIVE);
     ok(cc.recovery_end == 0);
     ok(cc.cwnd == initcwnd);
     ok(cc.ssthresh == UINT32_MAX);
@@ -209,8 +209,8 @@ static void test_pico_ecn_rapid_start(void)
 
     /* upon a CE mark, the silence factor derived from QUICLY_BETA_ECN (i.e., 0.95x) is applied */
     cc.type->cc_on_lost(&cc, &loss, 0, 10, 20, 1000, mtu);
-    ok(cc.rapid_start.newest_rtt_sample_until == -1);
-    ok(cc.rapid_start.recovery.by_ecn);
+    ok(cc.rapid_start.state == QUICLY_CC_RAPID_START_STATE_RECOVERY);
+    ok(cc.rapid_start.by_ecn);
     ok(cwnd_is(cc.cwnd, initcwnd * QUICLY_RAPID_START_LOSS_FACTOR(QUICLY_BETA_ECN)));
     uint32_t cwnd_entering_recovery = cc.cwnd;
 
@@ -444,7 +444,7 @@ static void test_cubic_rapid_start_epoch(void)
     ok(cc.state.pico.cubic.w_est == cwnd_epoch);
     ok(cc.state.pico.cubic.epoch_start == 1200);
     ok(!isnan(cc.state.pico.cubic.k));
-    ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+    ok(!quicly_cc_rapid_start_is_active(&cc.rapid_start));
 
     /* Losses from the completed recovery no longer revise CWND or the initialized Cubic epoch. */
     uint32_t cwnd_after_recovery = cc.cwnd, ssthresh_after_recovery = cc.ssthresh;
@@ -743,7 +743,7 @@ static void test_cuback_deferred_bdp_estimate(void)
     cc.type->cc_on_acked(&cc, &loss, 1, 20, 1, 0, 21, 1100, mtu);
     ok(cc.state.pico.cuback.cwnd_prior == (uint32_t)(2. * cwnd_after_recovery / QUICLY_BETA_LOSS));
     ok(cc.state.pico.bytes_to_mtu_increase == 0);
-    ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+    ok(!quicly_cc_rapid_start_is_active(&cc.rapid_start));
 
     /* Losses from the completed recovery no longer revise CWND or the initialized Cuback epoch. */
     cwnd_after_recovery = cc.cwnd;
@@ -771,12 +771,12 @@ static void test_zero_byte_ack_exits_rapid_start_recovery(void)
             cc.type->enable_rapid_start(&cc, 900);
 
             cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
-            ok(quicly_cc_rapid_start_is_in_recovery(&cc.rapid_start));
+            ok(quicly_cc_rapid_start_is_in_first_recovery(&cc.rapid_start));
 
             /* A subsequent packet-loss or ECN episode can be detected from an ACK carrying no congestion-controlled bytes. The
              * loss callback finalizes Rapid Start before processing that episode. */
             cc.type->cc_on_lost(&cc, &loss, second_by_ecn ? 0 : mtu, 20, 30, 1200, mtu);
-            ok(!quicly_cc_rapid_start_is_enabled(&cc.rapid_start));
+            ok(!quicly_cc_rapid_start_is_active(&cc.rapid_start));
             ok(cc.num_loss_episodes == 2);
             ok((policies[i] == &quicly_cc_cuback_init ? cc.state.pico.cuback.by_ecn : cc.state.pico.cubic.by_ecn) == second_by_ecn);
             ok(policies[i] == &quicly_cc_cuback_init ? cc.state.pico.cuback.fast_convergence
@@ -789,33 +789,43 @@ static void test_rapid_start(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
     quicly_rtt_t rtt = {};
+    quicly_rtt_floor_t floor;
 
     quicly_cc_init_rapid_start(&rs, 1);
+    quicly_rtt_floor_init(&floor);
     rtt.minimum = rtt.latest = 16;
 
-    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* no sample => 2x */
-    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 1);
-    ok(quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* floor == min => 3x */
+    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt, &floor)); /* no sample => 2x */
+    quicly_rtt_floor_update(&floor, &rtt, 1);
+    ok(quicly_cc_rapid_start_use_3x(&rs, &rtt, &floor)); /* floor == min => 3x */
 
     /* 2 samples after 1/4 min_rtt */
-    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 5);
-    ok(rs.rtt_samples[0] == 16);
-    ok(rs.rtt_samples[1] == 16);
-    ok(rs.rtt_samples[2] == UINT32_MAX);
-    ok(quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* floor == min => 3x */
+    quicly_rtt_floor_update(&floor, &rtt, 5);
+    ok(floor.samples[0] == 16);
+    ok(floor.samples[1] == 16);
+    ok(floor.samples[2] == UINT32_MAX);
+    ok(quicly_cc_rapid_start_use_3x(&rs, &rtt, &floor)); /* floor == min => 3x */
 
     /* after another 1/2 min_rtt, rtt increases to min + 5 */
     rtt.latest = 21;
-    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 13);
-    ok(rs.rtt_samples[0] == 21);
-    ok(rs.rtt_samples[1] == UINT32_MAX);
-    ok(rs.rtt_samples[2] == 16);
-    ok(rs.rtt_samples[3] == 16);
-    ok(quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* floor == min => 3x */
+    quicly_rtt_floor_update(&floor, &rtt, 13);
+    ok(floor.samples[0] == 21);
+    ok(floor.samples[1] == UINT32_MAX);
+    ok(floor.samples[2] == 16);
+    ok(floor.samples[3] == 16);
+    ok(quicly_cc_rapid_start_use_3x(&rs, &rtt, &floor)); /* floor == min => 3x */
 
     /* after another 1/2 min_rtt, smaller samples are pushed out */
-    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 21);
-    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt));
+    quicly_rtt_floor_update(&floor, &rtt, 21);
+    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt, &floor));
+
+    /* Rapid Start remains disabled on paths shorter than four milliseconds even though the core floor tracker supports them. */
+    quicly_cc_init_rapid_start(&rs, 22);
+    quicly_rtt_floor_init(&floor);
+    rtt.minimum = rtt.latest = 3;
+    quicly_rtt_floor_update(&floor, &rtt, 22);
+    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt, &floor));
+    ok(!quicly_cc_rapid_start_is_active(&rs));
 }
 
 void test_cc(void)

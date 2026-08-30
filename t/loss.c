@@ -225,10 +225,54 @@ static void test_late_ack_threshold_adjustment(void)
     quicly_loss_dispose(&loss);
 }
 
+static void test_rtt_floor(void)
+{
+    quicly_rtt_t rtt = {.minimum = 16, .latest = 16};
+    quicly_rtt_floor_t floor;
+
+    quicly_rtt_floor_init(&floor);
+    ok(quicly_rtt_floor_get(&floor) == UINT32_MAX);
+
+    quicly_rtt_floor_update(&floor, &rtt, 1);
+    quicly_rtt_floor_update(&floor, &rtt, 5);
+    ok(floor.samples[0] == 16);
+    ok(floor.samples[1] == 16);
+
+    /* A lower sample in the current slot replaces its floor. */
+    rtt.minimum = rtt.latest = 15;
+    quicly_rtt_floor_update(&floor, &rtt, 6);
+    ok(quicly_rtt_floor_get(&floor) == 15);
+
+    /* Once the low samples age out, the floor rises. */
+    rtt.latest = 21;
+    quicly_rtt_floor_update(&floor, &rtt, 21);
+    quicly_rtt_floor_update(&floor, &rtt, 25);
+    quicly_rtt_floor_update(&floor, &rtt, 29);
+    quicly_rtt_floor_update(&floor, &rtt, 33);
+    ok(quicly_rtt_floor_get(&floor) == 21);
+
+    /* Sub-four-millisecond RTTs use one-millisecond slots rather than dividing by zero. */
+    quicly_rtt_floor_init(&floor);
+    rtt.minimum = rtt.latest = 3;
+    quicly_rtt_floor_update(&floor, &rtt, 1);
+    quicly_rtt_floor_update(&floor, &rtt, 2);
+    ok(quicly_rtt_floor_get(&floor) == 3);
+
+    /* Accepted RTT samples update the floor as part of loss-core ACK processing. */
+    quicly_loss_t loss;
+    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+                     &quicly_spec_context.transport_params.ack_delay_exponent);
+    quicly_loss_on_ack_received(&loss, 0, UINT64_MAX, 1, QUICLY_EPOCH_1RTT, 100, 84, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(quicly_rtt_floor_get(&loss.rtt_floor) == 16);
+    quicly_loss_dispose(&loss);
+}
+
 void test_loss(void)
 {
     subtest("time-detection", test_time_detection);
     subtest("pn-detection", test_pn_detection);
     subtest("slow-cert-verify", test_slow_cert_verify);
     subtest("late-ack-threshold-adjustment", test_late_ack_threshold_adjustment);
+    subtest("rtt-floor", test_rtt_floor);
 }
