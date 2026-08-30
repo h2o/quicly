@@ -548,7 +548,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (largest_acked < cc->recovery_end) {
         if (abba2_enabled(cc))
             abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 1);
-        if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+        if (quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
             if (cc->num_loss_episodes == 1) {
                 quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, bytes, 0);
                 cc->ssthresh = cc->cwnd;
@@ -568,8 +568,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (cc->type == &quicly_cc_type_cubic && cc->cwnd >= cc->ssthresh) {
         struct st_quicly_cc_cubic_t *state = &cc->state.pico.cubic;
         if (state->w_est == 0) {
-            if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
-                state->cwnd_prior = cubic_post_rapid_start_wmax(cc->cwnd, cc->rapid_start.recovery.by_ecn);
+            if (quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
+                state->cwnd_prior = cubic_post_rapid_start_wmax(cc->cwnd, cc->rapid_start.by_ecn);
                 state->fast_convergence = 0;
             }
             assert(state->cwnd_prior != 0);
@@ -591,17 +591,13 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     }
 
     /* Cuback: set cwnd_prior deferred under Rapid Start, as its BDP estimate becomes available only after recovery ends. */
-    if (cc->type == &quicly_cc_type_cuback && quicly_cc_rapid_start_is_in_recovery(&cc->rapid_start)) {
+    if (cc->type == &quicly_cc_type_cuback && quicly_cc_rapid_start_is_in_first_recovery(&cc->rapid_start)) {
         assert(cc->state.pico.cuback.bandwidth > 0 && cc->state.pico.cuback.cwnd_prior == 0);
-        cc->state.pico.cuback.cwnd_prior = cubic_post_rapid_start_wmax(cc->cwnd, cc->rapid_start.recovery.by_ecn);
+        cc->state.pico.cuback.cwnd_prior = cubic_post_rapid_start_wmax(cc->cwnd, cc->rapid_start.by_ecn);
     }
 
     if (!cc_limited)
         goto Cleanup;
-
-    /* Rapid Start: update its RTT_floor measurement used for detecting queue build-up */
-    if (bytes != 0 && cc->cwnd < cc->ssthresh && cc->num_loss_episodes == 0)
-        quicly_cc_rapid_start_update_rtt(&cc->rapid_start, &loss->rtt, now);
 
     /* Apply this ACK to the current interval. One ACK can span multiple intervals. */
     uint32_t pre_cwnd = cc->cwnd;
@@ -624,7 +620,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 Cleanup:
     if (cc->cwnd_maximum < cc->cwnd)
         cc->cwnd_maximum = cc->cwnd;
-    if (quicly_cc_rapid_start_is_in_recovery(&cc->rapid_start))
+    if (quicly_cc_rapid_start_is_in_first_recovery(&cc->rapid_start))
         quicly_cc_rapid_start_exit_recovery(&cc->rapid_start);
 }
 
@@ -638,7 +634,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (lost_pn < cc->recovery_end) {
         if (bytes != 0 && cc->state.pico.undo.num_packets_lost != 0)
             ++cc->state.pico.undo.num_packets_lost;
-        if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+        if (cc->num_loss_episodes == 1 && quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
             quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, 0, bytes);
             if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
                 cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
@@ -649,7 +645,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     /* Rapid Start: if recovery exits and the first CC event is a loss instead of an ack, call `pico_on_acked` to reflect recovery
      * exit to Rapid Start and related states, before entering the next recovery period in the following blocks. */
-    if (quicly_cc_rapid_start_is_in_recovery(&cc->rapid_start))
+    if (quicly_cc_rapid_start_is_in_first_recovery(&cc->rapid_start))
         pico_on_acked(cc, loss, 0, cc->recovery_end, (uint32_t)loss->sentmap.bytes_in_flight, 0, next_pn, now,
                       max_udp_payload_size);
 
@@ -692,7 +688,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (cc->cwnd_exiting_slow_start == 0) {
         assert(cc->ssthresh == UINT32_MAX);
         /* jumpstart: if detected loss during the validating phase, advance to validating phase */
-        quicly_cc_jumpstart_on_first_loss(cc, lost_pn, quicly_cc_rapid_start_is_enabled(&cc->rapid_start));
+        quicly_cc_jumpstart_on_first_loss(cc, lost_pn, quicly_cc_rapid_start_is_active(&cc->rapid_start));
         /* save values */
         cc->cwnd_exiting_slow_start = cc->cwnd;
         cc->exit_slow_start_at = now;
@@ -703,7 +699,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (cc->num_loss_episodes == 1) {
         if (quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
             bdp = cc->jumpstart.bytes_acked;
-        } else if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+        } else if (quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
             /* Rapid Start might have already switched to 2x, but it's unclear if the entire RT was in 2x. Therefore, use a
              * conservative estimate of BDP. It could make the next CA epoch slightly aggressive, but nowhere near as aggressive as
              * startup, so we're fine. */
@@ -727,7 +723,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
      * growth under tail-drop), CWND upon loss detection is 3 * (BDP + Q); therefore clamping to 1/3 * beta reproduces the CA
      * target. For loss >67% (i.e., beyond queue overflow), we keep the lower bound to avoid over-shrinking. */
     if (cc->ssthresh == UINT32_MAX) {
-        if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
+        if (quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
             uint32_t base = cc->cwnd_initial;
             if (base < cc->jumpstart.bytes_acked)
                 base = cc->jumpstart.bytes_acked;
@@ -753,7 +749,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (cc->type == &quicly_cc_type_cuback) {
         if (cc->num_loss_episodes == 1) {
             /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
-            cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
+            cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_active(&cc->rapid_start) ? 0 : bdp;
             cc->state.pico.cuback.fast_convergence = 0;
         } else {
             /* Fast convergence kicks in if the BDP estimate comes out below the previous W_max (RFC 9438, Section 4.7). */
@@ -819,7 +815,7 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
         cc->cwnd_exiting_slow_start = 0;
         cc->exit_slow_start_at = INT64_MAX;
         quicly_cc_jumpstart_reset(cc);
-        cc->rapid_start.newest_rtt_sample_until = 0;
+        cc->rapid_start.state = QUICLY_CC_RAPID_START_STATE_INACTIVE;
     }
 }
 

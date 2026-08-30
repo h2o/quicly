@@ -1229,11 +1229,18 @@ static void test_cc_accel_context(void)
         /* Path promotion uses configured policy and discards the old path's measurements. */
         conn->egress.cc.abba = 0;
         conn->egress.cc.state.pico.abba2.congested.cwnd = 100000;
+        quicly_rtt_update(&conn->egress.loss.rtt, 20, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20);
         ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
         ok(promote_path(conn, 1) == 0);
         ok(conn->egress.cc.abba);
         ok(conn->egress.cc.type->cc_init == policies[i]);
         ok(conn->egress.cc.state.pico.abba2.congested.cwnd == 0);
+        ok(conn->egress.loss.rtt.latest == 0);
+        ok(conn->egress.loss.rtt.floor.newest_sample_until == 0);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20); /* initial estimate inherited from the old path */
+        quicly_rtt_update(&conn->egress.loss.rtt, 80, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 80);
         quicly_free(conn);
     }
 }
@@ -1461,6 +1468,12 @@ static void test_stats_foreach_field(size_t off, size_t size)
 {
     ok(test_stats_foreach_next_off == off);
 
+    /* The RTT floor's sampling state is internal, not a set of exported statistics. */
+    if (off == offsetof(quicly_stats_t, rtt.latest)) {
+        test_stats_foreach_next_off = offsetof(quicly_stats_t, loss_thresholds.use_packet_based);
+        return;
+    }
+
     /* Due to alignment, padding might exist between two fields when their types are different. The `gaps` list calls out the ones
      * that "might" have such padding on some architectures. */
     static const size_t gaps[] = {
@@ -1470,6 +1483,7 @@ static void test_stats_foreach_field(size_t off, size_t size)
         GAP(loss_thresholds.use_packet_based, loss_thresholds.time_based_percentile),
         GAP(loss_thresholds.time_based_percentile, cc.cwnd),
         GAP(cc.ssthresh, cc.cwnd_initial),
+        GAP(cc.cwnd_exiting_slow_start, cc.exit_slow_start_at),
         GAP(cc.num_ecn_loss_episodes, delivery_rate.latest),
 #undef GAP
         SIZE_MAX};

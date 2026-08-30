@@ -225,10 +225,83 @@ static void test_late_ack_threshold_adjustment(void)
     quicly_loss_dispose(&loss);
 }
 
+static void test_rtt_floor(void)
+{
+    quicly_rtt_t rtt;
+
+    quicly_rtt_init(&rtt, &quicly_spec_context.loss, quicly_spec_context.loss.default_initial_rtt);
+    ok(quicly_rtt_get_floor(&rtt) == quicly_spec_context.loss.default_initial_rtt);
+    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 40);
+    ok(quicly_rtt_get_floor(&rtt) == 40);
+
+    quicly_rtt_update(&rtt, 16, 0, 1);
+    ok(quicly_rtt_get_floor(&rtt) == 16);
+    quicly_rtt_update(&rtt, 16, 0, 5);
+    ok(rtt.floor.samples[0] == 16);
+    ok(rtt.floor.samples[1] == 16);
+
+    /* A lower sample in the current slot replaces its floor. */
+    quicly_rtt_update(&rtt, 15, 0, 6);
+    ok(quicly_rtt_get_floor(&rtt) == 15);
+
+    /* Once the low samples age out, the floor rises. */
+    quicly_rtt_update(&rtt, 21, 0, 21);
+    quicly_rtt_update(&rtt, 21, 0, 25);
+    quicly_rtt_update(&rtt, 21, 0, 29);
+    quicly_rtt_update(&rtt, 21, 0, 33);
+    ok(quicly_rtt_get_floor(&rtt) == 21);
+
+    /* A three-slot jump retains only the previous slot 0, clearing the unsampled slots in between. */
+    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 40);
+    quicly_rtt_update(&rtt, 16, 0, 1);
+    quicly_rtt_update(&rtt, 20, 0, 5);
+    quicly_rtt_update(&rtt, 24, 0, 9);
+    quicly_rtt_update(&rtt, 28, 0, 13);
+    ok(quicly_rtt_get_floor(&rtt) == 16);
+    quicly_rtt_update(&rtt, 32, 0, 25);
+    ok(quicly_rtt_get_floor(&rtt) == 28);
+
+    /* That retained minimum must expire on the next shift, not survive in a skipped slot. */
+    quicly_rtt_update(&rtt, 36, 0, 29);
+    ok(quicly_rtt_get_floor(&rtt) == 32);
+
+    /* Reinitialization discards the old floor and uses the new initial estimate until the next sample. */
+    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 80);
+    ok(quicly_rtt_get_floor(&rtt) == 80);
+    quicly_rtt_update(&rtt, 100, 0, 34);
+    ok(quicly_rtt_get_floor(&rtt) == 100);
+
+    /* Floor samples use the same ACK-delay adjustment as latest RTT. */
+    quicly_rtt_update(&rtt, 120, 10, 200);
+    ok(quicly_rtt_get_floor(&rtt) == 110);
+
+    /* Sub-four-millisecond RTTs use one-millisecond slots rather than dividing by zero. */
+    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 20);
+    quicly_rtt_update(&rtt, 3, 0, 1);
+    quicly_rtt_update(&rtt, 3, 0, 2);
+    ok(quicly_rtt_get_floor(&rtt) == 3);
+
+    /* Accepted RTT samples update the floor as part of loss-core ACK processing. */
+    quicly_loss_t loss;
+    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+                     &quicly_spec_context.transport_params.ack_delay_exponent);
+    quicly_loss_on_ack_received(&loss, 0, UINT64_MAX, 1, QUICLY_EPOCH_1RTT, 100, 84, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(quicly_rtt_get_floor(&loss.rtt) == 16);
+    /* An ACK without an RTT sample must not age or resample the floor. */
+    int64_t newest_sample_until = loss.rtt.floor.newest_sample_until;
+    quicly_loss_on_ack_received(&loss, 1, UINT64_MAX, 2, QUICLY_EPOCH_1RTT, 200, 100, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_NON_ACK_ELICITING);
+    ok(loss.rtt.floor.newest_sample_until == newest_sample_until);
+    ok(quicly_rtt_get_floor(&loss.rtt) == 16);
+    quicly_loss_dispose(&loss);
+}
+
 void test_loss(void)
 {
     subtest("time-detection", test_time_detection);
     subtest("pn-detection", test_pn_detection);
     subtest("slow-cert-verify", test_slow_cert_verify);
     subtest("late-ack-threshold-adjustment", test_late_ack_threshold_adjustment);
+    subtest("rtt-floor", test_rtt_floor);
 }
