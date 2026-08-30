@@ -131,6 +131,10 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     ++cc->num_loss_episodes;
     if (cc->cwnd_exiting_slow_start == 0) {
         cc->cwnd_exiting_slow_start = cc->cwnd;
+        cc->rtt_min_exiting_slow_start = loss->rtt.minimum;
+        cc->rtt_smoothed_exiting_slow_start = (uint32_t)loss->rtt.smoothed;
+        cc->rtt_floor_exiting_slow_start = quicly_rtt_floor_get(&loss->rtt_floor);
+        cc->exiting_slow_start_by_ecn = bytes == 0;
         cc->exit_slow_start_at = now;
     }
 

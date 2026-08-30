@@ -292,6 +292,22 @@ typedef struct st_quicly_cc_t {
      */
     uint32_t cwnd_exiting_slow_start;
     /**
+     * Minimum RTT at the end of slow start. (Equals 0 if still in slow start.)
+     */
+    uint32_t rtt_min_exiting_slow_start;
+    /**
+     * Smoothed RTT at the end of slow start. (Equals 0 if still in slow start.)
+     */
+    uint32_t rtt_smoothed_exiting_slow_start;
+    /**
+     * RTT floor at the end of slow start. (Equals 0 if still in slow start.)
+     */
+    uint32_t rtt_floor_exiting_slow_start;
+    /**
+     * Whether slow start ended due to ECN rather than packet loss.
+     */
+    uint32_t exiting_slow_start_by_ecn;
+    /**
      * the time at which we exitted slow start (or INT64_MAX)
      */
     int64_t exit_slow_start_at;

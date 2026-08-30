@@ -27,7 +27,8 @@
 static void test_pico_undo_loss(void)
 {
     quicly_cc_t cc;
-    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100, .minimum = 100, .variance = 0}};
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 101.5, .minimum = 100, .variance = 0},
+                          .rtt_floor = {.samples = {98, UINT32_MAX, UINT32_MAX, UINT32_MAX}}};
     uint32_t mtu = 1200, initcwnd = 10 * mtu;
 
     quicly_cc_pico_init.cb(&quicly_cc_pico_init, &cc, initcwnd, 0, 0);
@@ -40,6 +41,10 @@ static void test_pico_undo_loss(void)
     ok(cc.cwnd < initcwnd);
     ok(cc.ssthresh == cc.cwnd);
     ok(cc.cwnd_exiting_slow_start == initcwnd);
+    ok(cc.rtt_min_exiting_slow_start == 100);
+    ok(cc.rtt_smoothed_exiting_slow_start == 101);
+    ok(cc.rtt_floor_exiting_slow_start == 98);
+    ok(!cc.exiting_slow_start_by_ecn);
     ok(cc.exit_slow_start_at == 1000);
 
     cc.type->cc_on_late_ack(&cc, 10, 1100);
@@ -52,6 +57,10 @@ static void test_pico_undo_loss(void)
     ok(cc.ssthresh == UINT32_MAX);
     ok(cc.state.pico.bytes_per_mtu_increase == bytes_per_mtu_increase);
     ok(cc.cwnd_exiting_slow_start == 0);
+    ok(cc.rtt_min_exiting_slow_start == 0);
+    ok(cc.rtt_smoothed_exiting_slow_start == 0);
+    ok(cc.rtt_floor_exiting_slow_start == 0);
+    ok(!cc.exiting_slow_start_by_ecn);
     ok(cc.exit_slow_start_at == INT64_MAX);
 }
 
@@ -211,6 +220,7 @@ static void test_pico_ecn_rapid_start(void)
     cc.type->cc_on_lost(&cc, &loss, 0, 10, 20, 1000, mtu);
     ok(cc.rapid_start.state == QUICLY_CC_RAPID_START_STATE_RECOVERY);
     ok(cc.rapid_start.by_ecn);
+    ok(cc.exiting_slow_start_by_ecn);
     ok(cwnd_is(cc.cwnd, initcwnd * QUICLY_RAPID_START_LOSS_FACTOR(QUICLY_BETA_ECN)));
     uint32_t cwnd_entering_recovery = cc.cwnd;
 

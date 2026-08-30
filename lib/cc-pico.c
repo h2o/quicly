@@ -542,6 +542,10 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         quicly_cc_jumpstart_on_first_loss(cc, lost_pn, quicly_cc_rapid_start_is_active(&cc->rapid_start));
         /* save values */
         cc->cwnd_exiting_slow_start = cc->cwnd;
+        cc->rtt_min_exiting_slow_start = loss->rtt.minimum;
+        cc->rtt_smoothed_exiting_slow_start = (uint32_t)loss->rtt.smoothed;
+        cc->rtt_floor_exiting_slow_start = quicly_rtt_floor_get(&loss->rtt_floor);
+        cc->exiting_slow_start_by_ecn = bytes == 0;
         cc->exit_slow_start_at = now;
     }
 
@@ -663,6 +667,10 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     if (was_in_startup) {
         ++cc->num_loss_episodes_undone_in_startup;
         cc->cwnd_exiting_slow_start = 0;
+        cc->rtt_min_exiting_slow_start = 0;
+        cc->rtt_smoothed_exiting_slow_start = 0;
+        cc->rtt_floor_exiting_slow_start = 0;
+        cc->exiting_slow_start_by_ecn = 0;
         cc->exit_slow_start_at = INT64_MAX;
         quicly_cc_jumpstart_reset(cc);
         cc->rapid_start.state = QUICLY_CC_RAPID_START_STATE_INACTIVE;

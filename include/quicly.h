@@ -840,6 +840,10 @@ typedef struct st_quicly_stats_t {
     apply(cc.ssthresh, "cc.ssthresh")                                                                                              \
     apply(cc.cwnd_initial, "cc.cwnd-initial")                                                                                      \
     apply(cc.cwnd_exiting_slow_start, "cc.cwnd-exiting-slow-start")                                                                \
+    apply(cc.rtt_min_exiting_slow_start, "cc.rtt-min-exiting-slow-start")                                                          \
+    apply(cc.rtt_smoothed_exiting_slow_start, "cc.rtt-smoothed-exiting-slow-start")                                                \
+    apply(cc.rtt_floor_exiting_slow_start, "cc.rtt-floor-exiting-slow-start")                                                      \
+    apply(cc.exiting_slow_start_by_ecn, "cc.exiting-slow-start-by-ecn")                                                            \
     apply(cc.exit_slow_start_at, "cc.exit-slow-start-at")                                                                          \
     apply(cc.cwnd_exiting_jumpstart, "cc.cwnd-exiting-jumpstart")                                                                  \
     apply(cc.cwnd_minimum, "cc.cwnd-minimum")                                                                                      \
