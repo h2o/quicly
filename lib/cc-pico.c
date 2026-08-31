@@ -412,10 +412,56 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
     }
 }
 
+static void pico_undo_latest_recovery(quicly_cc_t *cc, int64_t now)
+{
+    int was_in_startup = cc->state.pico.undo.ssthresh == UINT32_MAX;
+
+    assert(cc->num_loss_episodes != 0);
+
+    cc->state.pico.loss_classifier.state = QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION;
+
+    cc->cwnd = cc->state.pico.undo.cwnd;
+    cc->ssthresh = cc->state.pico.undo.ssthresh;
+    cc->state.pico.bytes_to_mtu_increase = cc->state.pico.undo.bytes_to_mtu_increase;
+    if (cc->type == &quicly_cc_type_cuback) {
+        cc->state.pico.cuback = cc->state.pico.undo.cuback;
+    } else if (cc->type == &quicly_cc_type_cubic) {
+        int cc_limited = cc->state.pico.cubic.cc_limited;
+        cc->state.pico.cubic = cc->state.pico.undo.cubic;
+        cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
+    } else if (cc->type == &quicly_cc_type_pico) {
+        cc->state.pico.bytes_per_mtu_increase = cc->state.pico.undo.bytes_per_mtu_increase;
+    } else {
+        assert(cc->type == &quicly_cc_type_reno);
+    }
+
+    cc->state.pico.undo.num_packets_lost = 0;
+    cc->recovery_end = 0;
+    --cc->num_loss_episodes;
+    ++cc->num_loss_episodes_undone;
+    if (was_in_startup) {
+        ++cc->num_loss_episodes_undone_in_startup;
+        cc->cwnd_exiting_slow_start = 0;
+        cc->rtt_min_exiting_slow_start = 0;
+        cc->rtt_smoothed_exiting_slow_start = 0;
+        cc->rtt_floor_exiting_slow_start = 0;
+        cc->exiting_slow_start_by_ecn = 0;
+        cc->exit_slow_start_at = INT64_MAX;
+        quicly_cc_jumpstart_reset(cc);
+        cc->rapid_start.state = QUICLY_CC_RAPID_START_STATE_INACTIVE;
+    }
+}
+
 static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
                           int cc_limited, uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size)
 {
     assert(inflight >= bytes);
+
+    quicly_cc_loss_classifier_t *classifier = &cc->state.pico.loss_classifier;
+    if (largest_acked < cc->recovery_end)
+        quicly_cc_loss_classifier_acked(classifier, largest_acked);
+    else if (classifier->state != QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION)
+        pico_undo_latest_recovery(cc, now);
 
     /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
@@ -482,6 +528,20 @@ Cleanup:
 static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
                          int64_t now, uint32_t max_udp_payload_size)
 {
+    quicly_cc_loss_classifier_t *classifier = &cc->state.pico.loss_classifier;
+
+    /* Continue classifying losses within the current recovery. A loss beyond its boundary means that the preceding recovery ended
+     * without being classified as congestion, so undo it before handling the new loss episode. */
+    if (classifier->state != QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION) {
+        if (lost_pn < cc->recovery_end) {
+            quicly_cc_loss_classifier_lost(classifier, &loss->rtt, quicly_rtt_floor_get(&loss->rtt_floor), lost_pn,
+                                           cc->recovery_end, bytes == 0);
+        } else {
+            assert(classifier->state == QUICLY_CC_LOSS_CLASSIFIER_STATE_TRAIN_CLOSED);
+            pico_undo_latest_recovery(cc, now);
+        }
+    }
+
     quicly_cc__update_ecn_episodes(cc, bytes, lost_pn);
 
     /* Nothing to do if loss is in recovery window (modulo when exiting rapid start, in which case CWND is further reduced relative
@@ -503,6 +563,10 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (quicly_cc_rapid_start_is_in_first_recovery(&cc->rapid_start))
         pico_on_acked(cc, loss, 0, cc->recovery_end, (uint32_t)loss->sentmap.bytes_in_flight, 0, next_pn, now,
                       max_udp_payload_size);
+
+    if (cc->random_loss_tolerance && (cc->type == &quicly_cc_type_cuback || cc->type == &quicly_cc_type_cubic))
+        quicly_cc_loss_classifier_start(classifier, &loss->rtt, quicly_rtt_floor_get(&loss->rtt_floor), lost_pn, next_pn,
+                                        bytes == 0);
 
     double beta = cc->type == &quicly_cc_type_reno ? QUICLY_BETA_RENO : (bytes == 0 ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
 
@@ -646,35 +710,7 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     if (--cc->state.pico.undo.num_packets_lost != 0)
         return;
 
-    int was_in_startup = cc->state.pico.undo.ssthresh == UINT32_MAX;
-    cc->cwnd = cc->state.pico.undo.cwnd;
-    cc->ssthresh = cc->state.pico.undo.ssthresh;
-    cc->state.pico.bytes_to_mtu_increase = cc->state.pico.undo.bytes_to_mtu_increase;
-    if (cc->type == &quicly_cc_type_cuback) {
-        cc->state.pico.cuback = cc->state.pico.undo.cuback;
-    } else if (cc->type == &quicly_cc_type_cubic) {
-        int cc_limited = cc->state.pico.cubic.cc_limited;
-        cc->state.pico.cubic = cc->state.pico.undo.cubic;
-        cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
-    } else if (cc->type == &quicly_cc_type_pico) {
-        cc->state.pico.bytes_per_mtu_increase = cc->state.pico.undo.bytes_per_mtu_increase;
-    } else {
-        assert(cc->type == &quicly_cc_type_reno);
-    }
-    cc->recovery_end = 0;
-    --cc->num_loss_episodes;
-    ++cc->num_loss_episodes_undone;
-    if (was_in_startup) {
-        ++cc->num_loss_episodes_undone_in_startup;
-        cc->cwnd_exiting_slow_start = 0;
-        cc->rtt_min_exiting_slow_start = 0;
-        cc->rtt_smoothed_exiting_slow_start = 0;
-        cc->rtt_floor_exiting_slow_start = 0;
-        cc->exiting_slow_start_by_ecn = 0;
-        cc->exit_slow_start_at = INT64_MAX;
-        quicly_cc_jumpstart_reset(cc);
-        cc->rapid_start.state = QUICLY_CC_RAPID_START_STATE_INACTIVE;
-    }
+    pico_undo_latest_recovery(cc, now);
 }
 
 static void pico_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
@@ -691,6 +727,8 @@ static void pico_init_pico_state(quicly_cc_t *cc)
 {
     /* Initialize the state overlaid by each policy implemented in this file. */
     cc->state.pico.bytes_to_mtu_increase = 0;
+    cc->state.pico.loss_classifier = (quicly_cc_loss_classifier_t){0};
+    quicly_rtt_init_with_params(&cc->state.pico.loss_classifier.qortt, 0, 0);
     if (cc->type == &quicly_cc_type_cuback) {
         cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
     } else if (cc->type == &quicly_cc_type_cubic) {
@@ -702,11 +740,12 @@ static void pico_init_pico_state(quicly_cc_t *cc)
     }
 }
 
-static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd, int normalize_mtu)
+static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance)
 {
     *cc = (quicly_cc_t){
         .type = type,
         .normalize_mtu = normalize_mtu,
+        .random_loss_tolerance = random_loss_tolerance,
         .cwnd = initcwnd,
         .cwnd_initial = initcwnd,
         .cwnd_maximum = initcwnd,
@@ -737,7 +776,7 @@ static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
             cc->type = type;
             pico_init_pico_state(cc);
         } else {
-            pico_reset(cc, type, cc->cwnd_initial, cc->normalize_mtu);
+            pico_reset(cc, type, cc->cwnd_initial, cc->normalize_mtu, cc->random_loss_tolerance);
         }
         return 1;
     }
@@ -775,24 +814,28 @@ static void cubic_update_cc_limited(quicly_cc_t *cc, int cc_limited, int64_t now
     cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
 }
 
-static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+                      int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_pico, initcwnd, normalize_mtu);
+    pico_reset(cc, &quicly_cc_type_pico, initcwnd, normalize_mtu, random_loss_tolerance);
 }
 
-static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+                      int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_reno, initcwnd, normalize_mtu);
+    pico_reset(cc, &quicly_cc_type_reno, initcwnd, normalize_mtu, random_loss_tolerance);
 }
 
-static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+                       int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu);
+    pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu, random_loss_tolerance);
 }
 
-static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+                        int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu);
+    pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu, random_loss_tolerance);
 }
 
 quicly_cc_type_t quicly_cc_type_pico = {"pico",

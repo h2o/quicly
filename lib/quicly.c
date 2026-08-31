@@ -2147,7 +2147,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     conn->egress.cc.type->cc_init->cb(
         conn->egress.cc.type->cc_init, &conn->egress.cc,
         quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size),
-        conn->egress.cc.normalize_mtu, conn->stash.now);
+        conn->egress.cc.normalize_mtu, conn->super.ctx->random_loss_tolerance, conn->stash.now);
     if (conn->super.stats.num_rapid_start != 0 && conn->egress.cc.type->enable_rapid_start != NULL)
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
 
@@ -2860,7 +2860,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.send_ack_at = INT64_MAX;
     conn->egress.send_probe_at = INT64_MAX;
     conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->super.ctx->normalize_cc_mtu,
-                                 conn->stash.now);
+                                 conn->super.ctx->random_loss_tolerance, conn->stash.now);
     if (conn->egress.cc.type->enable_rapid_start != NULL &&
         enable_with_ratio255(conn->super.ctx->enable_ratio.rapid_start, conn->super.ctx->tls->random_bytes)) {
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
@@ -3657,10 +3657,10 @@ static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
         if (quicly_cc_in_jumpstart(&conn->egress.cc)) {
             multiplier = 1;
         } else {
-            multiplier = quicly_cc_rapid_start_use_3x(&conn->egress.cc.rapid_start, &conn->egress.loss.rtt,
-                                                      &conn->egress.loss.rtt_floor)
-                             ? 3
-                             : 2;
+            multiplier =
+                quicly_cc_rapid_start_use_3x(&conn->egress.cc.rapid_start, &conn->egress.loss.rtt, &conn->egress.loss.rtt_floor)
+                    ? 3
+                    : 2;
         }
     } else {
         /* We use of 2x during congestion avoidance, which is different from Linux using 1.25x. The rationale behind this choice is

@@ -179,11 +179,12 @@ static void cubic_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     cc->state.cubic.last_sent_time = now;
 }
 
-static void cubic_reset(quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu)
+static void cubic_reset(quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
     cc->type = &quicly_cc_type_cubic_legacy;
     cc->normalize_mtu = normalize_mtu;
+    cc->random_loss_tolerance = random_loss_tolerance;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
     cc->exit_slow_start_at = INT64_MAX;
@@ -202,7 +203,7 @@ static int cubic_on_switch(quicly_cc_t *cc)
         if (cc->cwnd_exiting_slow_start == 0) {
             cc->type = &quicly_cc_type_cubic_legacy;
         } else {
-            cubic_reset(cc, cc->cwnd_initial, cc->normalize_mtu);
+            cubic_reset(cc, cc->cwnd_initial, cc->normalize_mtu, cc->random_loss_tolerance);
         }
         return 1;
     }
@@ -210,9 +211,10 @@ static int cubic_on_switch(quicly_cc_t *cc)
     return 0;
 }
 
-static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
+static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+                       int64_t now)
 {
-    cubic_reset(cc, initcwnd, normalize_mtu);
+    cubic_reset(cc, initcwnd, normalize_mtu, random_loss_tolerance);
 }
 
 quicly_cc_type_t quicly_cc_type_cubic_legacy = {"cubic-legacy",

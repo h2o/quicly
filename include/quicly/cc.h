@@ -164,6 +164,35 @@ struct st_quicly_cc_cubic_t {
     unsigned cc_limited : 1;
 };
 
+enum en_quicly_cc_loss_classifier_state_t {
+    QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION = 0,
+    QUICLY_CC_LOSS_CLASSIFIER_STATE_TRAIN_OPEN,
+    QUICLY_CC_LOSS_CLASSIFIER_STATE_TRAIN_CLOSED
+};
+
+/**
+ * Classifies a recovery as congestion based on the loss train and RTT signals.
+ */
+typedef struct st_quicly_cc_loss_classifier_t {
+    /**
+     * RTT estimator for queue-overflow losses.
+     */
+    quicly_rtt_t qortt;
+    /**
+     * First packet number of the loss train being tracked for the current recovery.
+     */
+    uint64_t train_start;
+    /**
+     * RTT observed at the start of the loss train.
+     */
+    uint32_t train_rtt;
+    /**
+     * The train is open until forward ACK progress closes it. A loss after closure classifies the recovery as congestion; other
+     * congestion signals can do the same. Late ACKs do not alter the state.
+     */
+    enum en_quicly_cc_loss_classifier_state_t state;
+} quicly_cc_loss_classifier_t;
+
 typedef struct st_quicly_cc_t {
     /**
      * Congestion controller type.
@@ -189,6 +218,10 @@ typedef struct st_quicly_cc_t {
      * Whether growth is normalized to QUICLY_CC_REFERENCE_MTU.
      */
     unsigned normalize_mtu : 1;
+    /**
+     * Whether Random Loss Tolerance is enabled for this connection.
+     */
+    unsigned random_loss_tolerance : 1;
     /**
      * State information specific to the congestion controller implementation.
      */
@@ -231,6 +264,7 @@ typedef struct st_quicly_cc_t {
                     struct st_quicly_cc_cubic_t cubic;
                 };
             } undo;
+            quicly_cc_loss_classifier_t loss_classifier;
         } pico;
         /**
          * State information for the legacy CUBIC congestion controller.
@@ -413,6 +447,12 @@ extern quicly_cc_type_t *quicly_cc_all_types[];
  */
 uint32_t quicly_cc_calc_initial_cwnd(uint32_t max_packets, uint16_t max_udp_payload_size);
 
+static void quicly_cc_loss_classifier_start(quicly_cc_loss_classifier_t *classifier, const quicly_rtt_t *rtt, uint32_t rtt_floor,
+                                            uint64_t lost_pn, uint64_t recovery_end, int by_ecn);
+static void quicly_cc_loss_classifier_acked(quicly_cc_loss_classifier_t *classifier, uint64_t largest_acked);
+static void quicly_cc_loss_classifier_lost(quicly_cc_loss_classifier_t *classifier, const quicly_rtt_t *rtt, uint32_t rtt_floor,
+                                           uint64_t lost_pn, uint64_t recovery_end, int by_ecn);
+
 /**
  * Updates ECN counter when loss is observed.
  */
@@ -442,7 +482,7 @@ static int quicly_cc_rapid_start_is_in_first_recovery(struct st_quicly_cc_rapid_
  * Reads RTT variables and returns if Slow Start should be accelerated.
  */
 static int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt,
-                                       const quicly_rtt_floor_t *floor);
+                                        const quicly_rtt_floor_t *floor);
 /**
  * Ends rapid start and enters the first recovery period.
  */
@@ -459,6 +499,57 @@ static void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t 
 static void quicly_cc_rapid_start_exit_recovery(struct st_quicly_cc_rapid_start_t *rs);
 
 /* inline definitions */
+
+inline void quicly_cc_loss_classifier_acked(quicly_cc_loss_classifier_t *classifier, uint64_t largest_acked)
+{
+    if (classifier->state == QUICLY_CC_LOSS_CLASSIFIER_STATE_TRAIN_OPEN && largest_acked > classifier->train_start)
+        classifier->state = QUICLY_CC_LOSS_CLASSIFIER_STATE_TRAIN_CLOSED;
+}
+
+inline void quicly_cc_loss_classifier_lost(quicly_cc_loss_classifier_t *classifier, const quicly_rtt_t *rtt, uint32_t rtt_floor,
+                                           uint64_t lost_pn, uint64_t recovery_end, int by_ecn)
+{
+    /* ECN-CE is an explicit congestion signal; it does not train qoRTT. */
+    if (by_ecn) {
+        classifier->state = QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION;
+        return;
+    }
+
+    /* A loss after forward ACK progress belongs to a second train. Classify the recovery as congestion and train qoRTT from the
+     * first train's RTT sample. */
+    if (classifier->state == QUICLY_CC_LOSS_CLASSIFIER_STATE_TRAIN_CLOSED) {
+        quicly_rtt_update_with_params(&classifier->qortt, classifier->train_rtt, 0, 0.25f, 5);
+        classifier->state = QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION;
+    } else if (classifier->state == QUICLY_CC_LOSS_CLASSIFIER_STATE_TRAIN_OPEN) {
+        uint64_t start = classifier->train_start;
+        assert(start <= lost_pn && start < recovery_end);
+        uint64_t train_length = lost_pn - start + 1, flight_length = recovery_end - start;
+        /* A train covering at least half of the flight is too large to tolerate regardless of RTT. */
+        if (train_length >= (flight_length + 1) / 2) {
+            classifier->state = QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION;
+        } else if (classifier->qortt.smoothed != 0) {
+            /* Once qoRTT is trained, classify the recovery when latest RTT reaches either its conservative queue-overflow estimate
+             * or five milliseconds above the recent RTT floor. */
+            const quicly_rtt_t *qortt = &classifier->qortt;
+            uint32_t qortt_threshold = qortt->smoothed > qortt->variance ? (uint32_t)(qortt->smoothed - qortt->variance) : 0;
+            uint32_t floor_threshold = quicly_u32_add_saturating(rtt_floor, 5);
+            uint32_t threshold = qortt_threshold < floor_threshold ? qortt_threshold : floor_threshold;
+            if (rtt->latest >= threshold)
+                classifier->state = QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION;
+        }
+    }
+}
+
+inline void quicly_cc_loss_classifier_start(quicly_cc_loss_classifier_t *classifier, const quicly_rtt_t *rtt, uint32_t rtt_floor,
+                                            uint64_t lost_pn, uint64_t recovery_end, int by_ecn)
+{
+    assert(classifier->state == QUICLY_CC_LOSS_CLASSIFIER_STATE_CONGESTION);
+
+    classifier->train_start = lost_pn;
+    classifier->train_rtt = rtt->latest;
+    classifier->state = QUICLY_CC_LOSS_CLASSIFIER_STATE_TRAIN_OPEN;
+    quicly_cc_loss_classifier_lost(classifier, rtt, rtt_floor, lost_pn, recovery_end, by_ecn);
+}
 
 inline void quicly_cc__update_ecn_episodes(quicly_cc_t *cc, uint32_t lost_bytes, uint64_t lost_pn)
 {
@@ -562,7 +653,7 @@ inline int quicly_cc_rapid_start_is_in_first_recovery(struct st_quicly_cc_rapid_
 }
 
 inline int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt,
-                                       const quicly_rtt_floor_t *floor)
+                                        const quicly_rtt_floor_t *floor)
 {
     if (rs->state != QUICLY_CC_RAPID_START_STATE_PROBING)
         return 0;

@@ -1152,11 +1152,16 @@ static void test_set_cc(void)
     quicly_conn_t *conn;
     quicly_error_t ret;
 
+    int random_loss_tolerance = quic_ctx.random_loss_tolerance;
+    quic_ctx.random_loss_tolerance = 1;
     ret = quicly_connect(&conn, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
                          NULL, NULL);
     ok(ret == 0);
 
     quicly_stats_t stats;
+    ret = quicly_get_stats(conn, &stats);
+    ok(ret == 0);
+    ok(stats.cc.random_loss_tolerance);
 
     // init CC with pico
     quicly_set_cc(conn, &quicly_cc_type_pico);
@@ -1197,6 +1202,7 @@ static void test_set_cc(void)
     ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "cubic") == 0);
+    ok(stats.cc.random_loss_tolerance);
 
     // reno to cubic
     quicly_set_cc(conn, &quicly_cc_type_reno);
@@ -1211,6 +1217,7 @@ static void test_set_cc(void)
     ret = quicly_get_stats(conn, &stats);
     ok(ret == 0);
     ok(strcmp(stats.cc.type->name, "reno") == 0);
+    quic_ctx.random_loss_tolerance = random_loss_tolerance;
 }
 
 void test_ecn_index_from_bits(void)
