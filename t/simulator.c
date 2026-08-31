@@ -872,6 +872,7 @@ static void usage(const char *cmd)
            "                      fq_codel\n"
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
            "  -R                  turns on rapid start\n"
+           "  -T                  turns on random loss tolerance\n"
            "  -s <seconds>        delay until the sender is added to the simulation\n"
            "                      (default: 0)\n"
            "  -t                  emits trace as well\n"
@@ -931,7 +932,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
 {
     reset_getopt_state();
     int ch;
-    while ((ch = getopt(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:Rs:th")) != -1) {
+    while ((ch = getopt(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:RTs:th")) != -1) {
 
         switch (ch) {
         case 'a': {
@@ -1070,6 +1071,9 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             break;
         case 'R':
             quicctx->enable_ratio.rapid_start = 255;
+            break;
+        case 'T':
+            quicctx->random_loss_tolerance = 1;
             break;
         case 's':
             if (sscanf(optarg, "%lf", start) != 1) {
