@@ -174,6 +174,7 @@ struct net_aqm {
 struct net_random_loss {
     struct net_node super;
     struct net_node *next_node;
+    void (*random_bytes)(void *buf, size_t len);
     double loss_ratios[NET_BOTTLENECK_MAX_QUEUES];
 };
 
@@ -305,7 +306,9 @@ static void net_random_loss_forward(struct net_node *_self, struct net_packet *p
     uint32_t index = ntohl(packet->src->addr.sin.sin_addr.s_addr);
     assert(index < PTLS_ELEMENTSOF(self->loss_ratios) && "the endpoints are given addresses sequentially, starting from one");
 
-    if (rand() % 65536 < self->loss_ratios[index] * 65536) {
+    uint32_t random_value;
+    self->random_bytes(&random_value, sizeof(random_value));
+    if ((double)random_value / ((double)UINT32_MAX + 1) < self->loss_ratios[index]) {
         printf("{\"random-loss\": \"drop\", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", now,
                ntohl(packet->src->addr.sin.sin_addr.s_addr));
         net_packet_destroy(packet);
@@ -320,10 +323,11 @@ static double net_random_loss_next_run_at(struct net_node *self)
     return INFINITY;
 }
 
-static void net_random_loss_init(struct net_random_loss *self)
+static void net_random_loss_init(struct net_random_loss *self, void (*random_bytes)(void *buf, size_t len))
 {
     *self = (struct net_random_loss){
         .super = {net_random_loss_forward, net_random_loss_next_run_at, NULL},
+        .random_bytes = random_bytes,
     };
 }
 
@@ -1209,7 +1213,7 @@ int main(int argc, char **argv)
     struct net_node *nodes[20] = {}, **node_insert_at = nodes;
 
     net_endpoint_init(&server_node.node, 0, 0);
-    net_random_loss_init(&random_loss_node);
+    net_random_loss_init(&random_loss_node, tlsctx.random_bytes);
     server_node.accept_ctx = quicctx;
     server_node.node.accept_ctx = &server_node.accept_ctx;
     *node_insert_at++ = &server_node.node.super;
