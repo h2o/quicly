@@ -512,38 +512,45 @@ static void test_cubic_random_loss_tolerance_accelerated_recovery(void)
 
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
 
-    /* The startup loss obtains the scalar qoRTT observation and uses CWND at loss as W_max. */
+    /* The startup loss obtains the scalar qoRTT observation, applies the ordinary slow-start reduction, and opens accelerated
+     * recovery toward reduced CWND / beta^2. */
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     ok(cc.state.pico.cubic.random_loss.qortt == 120);
-    ok(cc.state.pico.cubic.cwnd_prior == initcwnd);
-    ok(cc.state.pico.cubic.random_loss.recovery_target == 0);
+    ok(cc.cwnd == initcwnd / 2);
+    ok(cc.state.pico.cubic.cwnd_prior == initcwnd / 2);
+    ok(cc.state.pico.cubic.random_loss.recovery_target == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
 
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
 
-    /* An ordinary CA packet loss applies the ordinary 0.7 reduction. ACKs then use half the current relative distance to the
-     * pre-loss CWND as the growth coefficient, with a 2.5% minimum. */
+    /* An ordinary CA packet loss applies the ordinary 0.7 reduction. ACKs then use half the current relative distance to
+     * CWNDpre / beta as the growth coefficient, with a 2.5% minimum. */
     cc.cwnd = 80 * mtu;
     loss.rtt.latest = 101;
     loss.rtt.smoothed = 105;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1200, mtu);
     ok(cc.cwnd == (uint32_t)(80 * mtu * QUICLY_BETA_LOSS));
-    ok(cc.state.pico.cubic.random_loss.recovery_target == 80 * mtu);
+    ok(cc.state.pico.cubic.random_loss.recovery_target ==
+       (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
     uint32_t cwnd_before = cc.cwnd;
+    uint32_t first_increase =
+        (uint64_t)mtu * (cc.state.pico.cubic.random_loss.recovery_target - cwnd_before) / ((uint64_t)cwnd_before * 2);
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
-    ok(cc.cwnd == cwnd_before + mtu * 3 / 14);
+    ok(cc.cwnd == cwnd_before + first_increase);
 
-    /* An aggregate ACK for one post-reduction flight recovers half the remaining distance. A persistent loss then moves CWND below
-     * the preceding recovery's reduced CWND, rather than returning to the same threshold. */
+    /* An aggregate ACK for one post-reduction flight recovers half the remaining distance. A subsequent loss starts another
+     * accelerated recovery toward its own CWNDpre / beta target. */
     uint32_t bytes_acked = cc.cwnd;
     uint32_t distance = cc.state.pico.cubic.random_loss.recovery_target - cc.cwnd;
     uint32_t expected_increase = distance / 2;
     cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1500, mtu);
-    ok(cc.cwnd == cwnd_before + mtu * 3 / 14 + expected_increase);
-    uint32_t first_reduced_cwnd = (uint32_t)(80 * mtu * QUICLY_BETA_LOSS);
+    ok(cc.cwnd == cwnd_before + first_increase + expected_increase);
+    uint32_t second_cwnd_at_loss = cc.cwnd;
     cc.type->cc_on_lost(&cc, &loss, mtu, 32, 40, 1600, mtu);
-    ok(cc.cwnd < first_reduced_cwnd);
+    ok(cc.cwnd == (uint32_t)(second_cwnd_at_loss * QUICLY_BETA_LOSS));
+    ok(cc.state.pico.cubic.random_loss.recovery_target ==
+       (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
 }
 
 static void test_cubic_random_loss_tolerance_guards(void)

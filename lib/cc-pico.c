@@ -593,7 +593,6 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         pico_on_acked(cc, loss, 0, cc->recovery_end, (uint32_t)loss->sentmap.bytes_in_flight, 0, next_pn, now,
                       max_udp_payload_size);
 
-    uint32_t cwnd_at_loss = cc->cwnd;
     int qortt_observation = cc->type == &quicly_cc_type_cubic && cc->random_loss_tolerance && bytes != 0 && cc->cwnd < cc->ssthresh;
     int random_loss_recovery = cc->type == &quicly_cc_type_cubic && cc->random_loss_tolerance && bytes != 0 &&
                                cc->state.pico.cubic.random_loss.qortt != 0 && !qortt_observation;
@@ -630,14 +629,10 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     if (cc->type == &quicly_cc_type_cubic && cc->random_loss_tolerance) {
         struct st_quicly_cc_cubic_t *state = &cc->state.pico.cubic;
-        /* A CA packet loss with a qoRTT observation receives the tentative reduction below and sets the recovery cap to the
-         * pre-loss CWND. A loss reached by calibration slow start instead replaces the scalar qoRTT observation. */
+        /* A loss reached by calibration slow start replaces the scalar qoRTT observation. The accelerated recovery threshold is
+         * derived from the reduced CWND below. */
         cubic_random_loss_reset_observation(state);
-        if (random_loss_recovery) {
-            state->random_loss.recovery_target = cwnd_at_loss;
-        } else {
-            state->random_loss.recovery_target = 0;
-        }
+        state->random_loss.recovery_target = 0;
         if (qortt_observation) {
             state->random_loss.qortt = loss->rtt.latest;
         }
@@ -655,7 +650,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     /* estimate BDP (usually from CWND before reduction) */
     uint32_t bdp = cc->cwnd;
-    if (cc->num_loss_episodes == 1 && !qortt_observation) {
+    if (cc->num_loss_episodes == 1) {
         if (quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
             bdp = cc->jumpstart.bytes_acked;
         } else if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
@@ -696,6 +691,11 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+
+    if (qortt_observation || random_loss_recovery) {
+        double recovery_target = cc->cwnd / (beta * beta);
+        cc->state.pico.cubic.random_loss.recovery_target = recovery_target < UINT32_MAX ? recovery_target : UINT32_MAX;
+    }
 
     /* Update policy-specific state using the estimated BDP and reduced CWND.
      *
