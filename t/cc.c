@@ -524,8 +524,8 @@ static void test_cubic_random_loss_tolerance_accelerated_increase(void)
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
     ok(cc.state.pico.accel.full_rtt == 120);
 
-    /* An ordinary CA packet loss applies the ordinary 0.7 reduction. ACKs then use half the current relative distance to CWNDpre
-     * as the growth coefficient, with a 2.5% minimum until reaching CWNDpre / beta. */
+    /* An ordinary CA packet loss applies the ordinary 0.7 reduction. ACKs then use the smaller of half the current relative
+     * distance to CWNDpre and half the remaining RTT headroom, with a 2.5% minimum until reaching CWNDpre / beta. */
     cc.cwnd = 80 * mtu;
     loss.rtt.latest = 101;
     loss.rtt.smoothed = 105;
@@ -535,16 +535,14 @@ static void test_cubic_random_loss_tolerance_accelerated_increase(void)
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
     uint32_t cwnd_before = cc.cwnd;
-    uint32_t first_increase =
-        (uint64_t)mtu * (cc.state.pico.accel.target_cwnd - cwnd_before) / ((uint64_t)cwnd_before * 2);
+    uint32_t first_increase = mtu * accel_calc_increase_ratio(&cc, &loss.rtt);
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     ok(cc.cwnd == cwnd_before + first_increase);
 
-    /* An aggregate ACK for one post-reduction flight recovers half the remaining distance. A subsequent loss starts another
-     * accelerated increase toward its own CWNDpre target. */
+    /* An aggregate ACK for one post-reduction flight applies the RTT-limited increase. A subsequent loss starts another accelerated
+     * increase toward its own CWNDpre target. */
     uint32_t bytes_acked = cc.cwnd;
-    uint32_t distance = cc.state.pico.accel.target_cwnd - cc.cwnd;
-    uint32_t expected_increase = distance / 2;
+    uint32_t expected_increase = bytes_acked * accel_calc_increase_ratio(&cc, &loss.rtt);
     cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1500, mtu);
     ok(cc.cwnd == cwnd_before + first_increase + expected_increase);
 
@@ -633,6 +631,20 @@ static void test_cubic_random_loss_tolerance_guards(void)
     cc.type->cc_on_acked(&cc, &loss, mtu, 21, mtu, 1, 22, 1300, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 21, mtu, 1, 22, 1300, mtu);
     ok(cc.cwnd == control.cwnd);
+
+    /* Acceleration consumes no more than half of the remaining RTT headroom and stops with five percent still available. */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    cc.cwnd_exiting_slow_start = initcwnd;
+    cc.ssthresh = 50 * mtu;
+    cc.cwnd = 70 * mtu;
+    cc.state.pico.accel.target_cwnd = 100 * mtu;
+    cc.state.pico.accel.full_rtt = 120;
+    cc.state.pico.accel.min_rtt_in_previous_ca = 130;
+    loss.rtt.minimum = 80;
+    loss.rtt.latest = 100;
+    ok(fabs(accel_calc_increase_ratio(&cc, &loss.rtt) - 0.1) < 0.000001);
+    cc.state.pico.accel.full_rtt = 105;
+    ok(accel_calc_increase_ratio(&cc, &loss.rtt) == 0);
 
     /* ECN is an explicit congestion signal and never opens accelerated increase. */
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);

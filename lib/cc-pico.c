@@ -495,13 +495,20 @@ static double accel_calc_increase_ratio(const quicly_cc_t *cc, const quicly_rtt_
     }
 
     if (!accel_enabled(cc) || state->target_cwnd == 0 || state->full_rtt <= quicly_u32_add_saturating(rtt->minimum, 10) ||
-        rtt->latest >= rtt_threshold || cc->cwnd >= accel_calc_cwnd_cap(state))
+        rtt->latest >= rtt_threshold || (double)rtt->latest * 1.05 >= state->full_rtt ||
+        cc->cwnd >= accel_calc_cwnd_cap(state))
         return 0;
 
     double ratio = cc->cwnd < state->target_cwnd
                        ? (double)(state->target_cwnd - cc->cwnd) / ((double)cc->cwnd * 2)
                        : 0;
-    return ratio < 1. / 40 ? 1. / 40 : ratio;
+    if (ratio < 1. / 40)
+        ratio = 1. / 40;
+
+    /* Do not consume more than half of the remaining RTT headroom in one RTT. At the five-percent cutoff above, this limit
+     * converges on the minimum acceleration rate of 1/40. */
+    double rtt_ratio = ((double)state->full_rtt / rtt->latest - 1) / 2;
+    return ratio < rtt_ratio ? ratio : rtt_ratio;
 }
 
 static uint32_t accel_calc_cubic_cwnd(const quicly_cc_t *cc, const quicly_rtt_t *rtt, uint32_t bytes, int cc_limited)
