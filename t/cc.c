@@ -512,24 +512,25 @@ static void test_cubic_random_loss_tolerance_accelerated_increase(void)
 
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
 
-    /* The startup loss obtains the scalar qoRTT observation, applies the ordinary slow-start reduction, and opens accelerated
-     * increase toward reduced CWND / beta^2. */
+    /* The startup loss obtains the scalar qoRTT observation, applies the ordinary slow-start reduction, and sets the acceleration
+     * target using the ordinary loss beta. */
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     ok(cc.state.pico.accel.qortt == 120);
     ok(cc.cwnd == initcwnd / 2);
     ok(cc.state.pico.cubic.cwnd_prior == initcwnd / 2);
-    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / QUICLY_BETA_LOSS));
+    ok(accel_calc_cwnd_cap(&cc.state.pico.accel) == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
 
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
 
-    /* An ordinary CA packet loss applies the ordinary 0.7 reduction. ACKs then use half the current relative distance to
-     * CWNDpre / beta as the growth coefficient, with a 2.5% minimum. */
+    /* An ordinary CA packet loss applies the ordinary 0.7 reduction. ACKs then use half the current relative distance to CWNDpre
+     * as the growth coefficient, with a 2.5% minimum until reaching CWNDpre / beta. */
     cc.cwnd = 80 * mtu;
     loss.rtt.latest = 101;
     loss.rtt.smoothed = 105;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1200, mtu);
     ok(cc.cwnd == (uint32_t)(80 * mtu * QUICLY_BETA_LOSS));
-    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / QUICLY_BETA_LOSS));
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
     uint32_t cwnd_before = cc.cwnd;
@@ -539,16 +540,25 @@ static void test_cubic_random_loss_tolerance_accelerated_increase(void)
     ok(cc.cwnd == cwnd_before + first_increase);
 
     /* An aggregate ACK for one post-reduction flight recovers half the remaining distance. A subsequent loss starts another
-     * accelerated increase toward its own CWNDpre / beta target. */
+     * accelerated increase toward its own CWNDpre target. */
     uint32_t bytes_acked = cc.cwnd;
     uint32_t distance = cc.state.pico.accel.target_cwnd - cc.cwnd;
     uint32_t expected_increase = distance / 2;
     cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1500, mtu);
     ok(cc.cwnd == cwnd_before + first_increase + expected_increase);
+
+    /* Once CWND reaches the recovery target, acceleration continues at the minimum rate up to target / beta, then stops. */
+    cc.cwnd = cc.state.pico.accel.target_cwnd;
+    ok(accel_calc_increase_ratio(&cc, &loss.rtt) == 1. / 40);
+    uint32_t cwnd_cap = accel_calc_cwnd_cap(&cc.state.pico.accel);
+    ok(accel_calc_cubic_cwnd(&cc, &loss.rtt, (cwnd_cap - cc.cwnd) * 40, 1) == cwnd_cap);
+    cc.cwnd = cwnd_cap;
+    ok(accel_calc_increase_ratio(&cc, &loss.rtt) == 0);
+
     uint32_t second_cwnd_at_loss = cc.cwnd;
     cc.type->cc_on_lost(&cc, &loss, mtu, 32, 40, 1600, mtu);
     ok(cc.cwnd == (uint32_t)(second_cwnd_at_loss * QUICLY_BETA_LOSS));
-    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / QUICLY_BETA_LOSS));
 }
 
 static void test_cubic_random_loss_tolerance_guards(void)
@@ -648,7 +658,8 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
     ok(cc.state.pico.accel.qortt == 120);
     ok(cc.cwnd == initcwnd / 2);
     ok(cc.state.pico.cuback.cwnd_prior == initcwnd / 2);
-    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / QUICLY_BETA_LOSS));
+    ok(accel_calc_cwnd_cap(&cc.state.pico.accel) == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
 
     /* After an ordinary CA loss, Cuback reduces its ACK interval when accelerated increase is faster than the ordinary curve. */
@@ -657,7 +668,7 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
     loss.rtt.smoothed = 105;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1200, mtu);
     ok(cc.cwnd == (uint32_t)(80 * mtu * QUICLY_BETA_LOSS));
-    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / QUICLY_BETA_LOSS));
     cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
 
     cc.state.pico.bytes_to_mtu_increase = UINT32_MAX;
@@ -675,7 +686,8 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
     ok(cc.cwnd == cwnd_before + mtu);
     ok(cc.cwnd > control.cwnd);
 
-    /* If ordinary Cuback grows farther, it wins and retains its byte-counter state. */
+    /* If ordinary Cuback reaches its next increase first, it wins that increment. Acceleration can shorten the following
+     * interval while the derived cap has not been reached. */
     cc = control;
     cc.random_loss_tolerance = 1;
     cc.state.pico.accel.qortt = 120;
@@ -683,10 +695,10 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
     cc.state.pico.bytes_to_mtu_increase = 1;
     control = cc;
     control.random_loss_tolerance = 0;
-    cc.type->cc_on_acked(&cc, &loss, mtu, 32, mtu, 1, 33, 1500, mtu);
-    control.type->cc_on_acked(&control, &loss, mtu, 32, mtu, 1, 33, 1500, mtu);
+    cc.type->cc_on_acked(&cc, &loss, 1, 32, 1, 1, 33, 1500, mtu);
+    control.type->cc_on_acked(&control, &loss, 1, 32, 1, 1, 33, 1500, mtu);
     ok(cc.cwnd == control.cwnd);
-    ok(cc.state.pico.bytes_to_mtu_increase == control.state.pico.bytes_to_mtu_increase);
+    ok(cc.state.pico.bytes_to_mtu_increase <= control.state.pico.bytes_to_mtu_increase);
 }
 
 static void test_cuback_random_loss_tolerance_recalibration(void)

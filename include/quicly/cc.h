@@ -132,7 +132,8 @@ struct st_quicly_cc_accelerated_increase_t {
      */
     uint32_t qortt;
     /**
-     * Latest CWND cap established for accelerated increase, or zero when no cap is available.
+     * CWND that accelerated increase first recovers toward, or zero when acceleration is unavailable. Increase may continue at
+     * the minimum rate until reaching this value divided by the ordinary loss beta.
      */
     uint32_t target_cwnd;
     /**

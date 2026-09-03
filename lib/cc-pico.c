@@ -460,15 +460,23 @@ static void accel_observe_path(quicly_cc_t *cc, const quicly_rtt_t *rtt, int cc_
     }
 }
 
+static uint32_t accel_calc_cwnd_cap(const struct st_quicly_cc_accelerated_increase_t *state)
+{
+    double cap = state->target_cwnd / QUICLY_BETA_LOSS;
+    return cap < UINT32_MAX ? cap : UINT32_MAX;
+}
+
 static double accel_calc_increase_ratio(const quicly_cc_t *cc, const quicly_rtt_t *rtt)
 {
     const struct st_quicly_cc_accelerated_increase_t *state = &cc->state.pico.accel;
 
     if (!accel_enabled(cc) || state->target_cwnd == 0 || state->qortt <= quicly_u32_add_saturating(rtt->minimum, 10) ||
-        rtt->latest >= quicly_u32_add_saturating(rtt->minimum, 2) || cc->cwnd >= state->target_cwnd)
+        rtt->latest >= quicly_u32_add_saturating(rtt->minimum, 2) || cc->cwnd >= accel_calc_cwnd_cap(state))
         return 0;
 
-    double ratio = (double)(state->target_cwnd - cc->cwnd) / ((double)cc->cwnd * 2);
+    double ratio = cc->cwnd < state->target_cwnd
+                       ? (double)(state->target_cwnd - cc->cwnd) / ((double)cc->cwnd * 2)
+                       : 0;
     return ratio < 1. / 40 ? 1. / 40 : ratio;
 }
 
@@ -482,7 +490,8 @@ static uint32_t accel_calc_cubic_cwnd(const quicly_cc_t *cc, const quicly_rtt_t 
         return cc->cwnd;
 
     double cwnd = cc->cwnd + bytes * ratio;
-    return cwnd < cc->state.pico.accel.target_cwnd ? (uint32_t)cwnd : cc->state.pico.accel.target_cwnd;
+    uint32_t cap = accel_calc_cwnd_cap(&cc->state.pico.accel);
+    return cwnd < cap ? (uint32_t)cwnd : cap;
 }
 
 static uint32_t accel_bytes_per_mtu_increase(const quicly_cc_t *cc, const quicly_rtt_t *rtt, uint32_t mtu)
@@ -730,7 +739,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
 
     if (qortt_observation || use_accel) {
-        double target_cwnd = cc->cwnd / (beta * beta);
+        double target_cwnd = cc->cwnd / QUICLY_BETA_LOSS;
         cc->state.pico.accel.target_cwnd = target_cwnd < UINT32_MAX ? target_cwnd : UINT32_MAX;
     }
 
