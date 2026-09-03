@@ -469,9 +469,19 @@ static uint32_t accel_calc_cwnd_cap(const struct st_quicly_cc_accelerated_increa
 static double accel_calc_increase_ratio(const quicly_cc_t *cc, const quicly_rtt_t *rtt)
 {
     const struct st_quicly_cc_accelerated_increase_t *state = &cc->state.pico.accel;
+    uint32_t rtt_threshold = quicly_u32_add_saturating(rtt->minimum, 2);
+
+    if (state->min_rtt_in_previous_ca > rtt->minimum) {
+        /* Accommodate a persistent jitter floor without returning to the minimum RTT seen over the entire connection. Half of the
+         * preceding CA period's excess minimum is allowed, with the existing two-millisecond allowance as the lower bound. */
+        uint32_t previous_ca_threshold =
+            rtt->minimum + (state->min_rtt_in_previous_ca - rtt->minimum) / 2;
+        if (rtt_threshold < previous_ca_threshold)
+            rtt_threshold = previous_ca_threshold;
+    }
 
     if (!accel_enabled(cc) || state->target_cwnd == 0 || state->qortt <= quicly_u32_add_saturating(rtt->minimum, 10) ||
-        rtt->latest >= quicly_u32_add_saturating(rtt->minimum, 2) || cc->cwnd >= accel_calc_cwnd_cap(state))
+        rtt->latest >= rtt_threshold || cc->cwnd >= accel_calc_cwnd_cap(state))
         return 0;
 
     double ratio = cc->cwnd < state->target_cwnd
@@ -552,6 +562,10 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     }
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
+
+    if (accel_enabled(cc) && cc->cwnd >= cc->ssthresh &&
+        (cc->state.pico.accel.min_rtt_in_ca == 0 || cc->state.pico.accel.min_rtt_in_ca > loss->rtt.latest))
+        cc->state.pico.accel.min_rtt_in_ca = loss->rtt.latest;
 
     /* Cubic: unlike other policies, congestion avoidance cannot be driven by bytes_to_mtu_increase. */
     if (cc->type == &quicly_cc_type_cubic && cc->cwnd >= cc->ssthresh) {
@@ -674,6 +688,11 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     cc->recovery_end = next_pn;
     ++cc->num_loss_episodes;
+
+    if (accel_enabled(cc)) {
+        cc->state.pico.accel.min_rtt_in_previous_ca = cc->state.pico.accel.min_rtt_in_ca;
+        cc->state.pico.accel.min_rtt_in_ca = 0;
+    }
 
     if (accel_enabled(cc)) {
         /* A loss reached by calibration slow start replaces the scalar qoRTT observation. The accelerated-increase threshold is

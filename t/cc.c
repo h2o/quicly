@@ -596,6 +596,32 @@ static void test_cubic_random_loss_tolerance_guards(void)
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     ok(cc.cwnd == control.cwnd);
 
+    /* A raised minimum throughout the preceding CA period raises the gate halfway toward that observation. The existing 2ms
+     * allowance remains the lower bound. */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    cc.cwnd_exiting_slow_start = initcwnd;
+    cc.ssthresh = 50 * mtu;
+    cc.state.pico.accel.qortt = 120;
+    cc.state.pico.accel.min_rtt_in_ca = 110;
+    loss.rtt.latest = 104;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.accel.min_rtt_in_previous_ca == 110);
+    ok(cc.state.pico.accel.min_rtt_in_ca == 0);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1100, mtu);
+    control = cc;
+    control.random_loss_tolerance = 0;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
+    control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
+    ok(cc.cwnd > control.cwnd);
+
+    /* Reaching the adaptive threshold leaves CUBIC on its ordinary trajectory. */
+    loss.rtt.latest = 105;
+    control = cc;
+    control.random_loss_tolerance = 0;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 21, mtu, 1, 22, 1300, mtu);
+    control.type->cc_on_acked(&control, &loss, mtu, 21, mtu, 1, 22, 1300, mtu);
+    ok(cc.cwnd == control.cwnd);
+
     /* ECN is an explicit congestion signal and never opens accelerated increase. */
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
@@ -679,6 +705,7 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
     control.type->cc_on_acked(&control, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     ok(cc.cwnd == control.cwnd);
     ok(cc.state.pico.bytes_to_mtu_increase == accelerated_interval - mtu);
+    ok(cc.state.pico.accel.min_rtt_in_ca == 101);
 
     uint32_t bytes_acked = cc.state.pico.bytes_to_mtu_increase, cwnd_before = cc.cwnd;
     cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1450, mtu);
@@ -699,6 +726,15 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
     control.type->cc_on_acked(&control, &loss, 1, 32, 1, 1, 33, 1500, mtu);
     ok(cc.cwnd == control.cwnd);
     ok(cc.state.pico.bytes_to_mtu_increase <= control.state.pico.bytes_to_mtu_increase);
+
+    /* Cuback uses the same adaptive RTT gate as CUBIC. */
+    cc.state.pico.accel.qortt = 120;
+    cc.state.pico.accel.target_cwnd = cc.cwnd + mtu;
+    cc.state.pico.accel.min_rtt_in_previous_ca = 110;
+    loss.rtt.latest = 104;
+    ok(accel_calc_increase_ratio(&cc, &loss.rtt) > 0);
+    loss.rtt.latest = 105;
+    ok(accel_calc_increase_ratio(&cc, &loss.rtt) == 0);
 }
 
 static void test_cuback_random_loss_tolerance_recalibration(void)
