@@ -504,7 +504,7 @@ static void test_cubic_undo_loss(void)
     ok(cc.num_loss_episodes_undone == 1);
 }
 
-static void test_cubic_random_loss_tolerance_accelerated_recovery(void)
+static void test_cubic_random_loss_tolerance_accelerated_increase(void)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 120, .smoothed = 120, .minimum = 100, .variance = 0}};
@@ -513,12 +513,12 @@ static void test_cubic_random_loss_tolerance_accelerated_recovery(void)
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
 
     /* The startup loss obtains the scalar qoRTT observation, applies the ordinary slow-start reduction, and opens accelerated
-     * recovery toward reduced CWND / beta^2. */
+     * increase toward reduced CWND / beta^2. */
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
-    ok(cc.state.pico.cubic.random_loss.qortt == 120);
+    ok(cc.state.pico.accel.qortt == 120);
     ok(cc.cwnd == initcwnd / 2);
     ok(cc.state.pico.cubic.cwnd_prior == initcwnd / 2);
-    ok(cc.state.pico.cubic.random_loss.recovery_target == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
 
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
 
@@ -529,28 +529,26 @@ static void test_cubic_random_loss_tolerance_accelerated_recovery(void)
     loss.rtt.smoothed = 105;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1200, mtu);
     ok(cc.cwnd == (uint32_t)(80 * mtu * QUICLY_BETA_LOSS));
-    ok(cc.state.pico.cubic.random_loss.recovery_target ==
-       (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
     uint32_t cwnd_before = cc.cwnd;
     uint32_t first_increase =
-        (uint64_t)mtu * (cc.state.pico.cubic.random_loss.recovery_target - cwnd_before) / ((uint64_t)cwnd_before * 2);
+        (uint64_t)mtu * (cc.state.pico.accel.target_cwnd - cwnd_before) / ((uint64_t)cwnd_before * 2);
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     ok(cc.cwnd == cwnd_before + first_increase);
 
     /* An aggregate ACK for one post-reduction flight recovers half the remaining distance. A subsequent loss starts another
-     * accelerated recovery toward its own CWNDpre / beta target. */
+     * accelerated increase toward its own CWNDpre / beta target. */
     uint32_t bytes_acked = cc.cwnd;
-    uint32_t distance = cc.state.pico.cubic.random_loss.recovery_target - cc.cwnd;
+    uint32_t distance = cc.state.pico.accel.target_cwnd - cc.cwnd;
     uint32_t expected_increase = distance / 2;
     cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1500, mtu);
     ok(cc.cwnd == cwnd_before + first_increase + expected_increase);
     uint32_t second_cwnd_at_loss = cc.cwnd;
     cc.type->cc_on_lost(&cc, &loss, mtu, 32, 40, 1600, mtu);
     ok(cc.cwnd == (uint32_t)(second_cwnd_at_loss * QUICLY_BETA_LOSS));
-    ok(cc.state.pico.cubic.random_loss.recovery_target ==
-       (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
 }
 
 static void test_cubic_random_loss_tolerance_guards(void)
@@ -559,11 +557,11 @@ static void test_cubic_random_loss_tolerance_guards(void)
     quicly_loss_t loss = {.rtt = {.latest = 101, .smoothed = 105, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
 
-    /* A qoRTT observation exactly 10ms above minRTT does not enable accelerated recovery. */
+    /* A qoRTT observation exactly 10ms above minRTT does not enable accelerated increase. */
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
-    cc.state.pico.cubic.random_loss.qortt = 110;
+    cc.state.pico.accel.qortt = 110;
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1100, mtu);
     control = cc;
@@ -577,7 +575,7 @@ static void test_cubic_random_loss_tolerance_guards(void)
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
-    cc.state.pico.cubic.random_loss.qortt = 120;
+    cc.state.pico.accel.qortt = 120;
     loss.rtt.latest = 101;
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1100, mtu);
@@ -588,13 +586,13 @@ static void test_cubic_random_loss_tolerance_guards(void)
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     ok(cc.cwnd == control.cwnd);
 
-    /* ECN is an explicit congestion signal and never opens accelerated recovery. */
+    /* ECN is an explicit congestion signal and never opens accelerated increase. */
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
-    cc.state.pico.cubic.random_loss.qortt = 120;
+    cc.state.pico.accel.qortt = 120;
     cc.type->cc_on_lost(&cc, &loss, 0, 10, 20, 1000, mtu);
-    ok(cc.state.pico.cubic.random_loss.recovery_target == 0);
+    ok(cc.state.pico.accel.target_cwnd == 0);
 }
 
 static void test_cubic_random_loss_tolerance_recalibration(void)
@@ -611,10 +609,10 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
     cc.state.pico.cubic.cwnd_prior = initcwnd;
     cc.state.pico.cubic.epoch_start = 1000;
     cc.state.pico.cubic.k = 2;
-    cc.state.pico.cubic.random_loss.qortt = 120;
+    cc.state.pico.accel.qortt = 120;
 
-    cubic_random_loss_observe_path(&cc, &loss, 1001);
-    cubic_random_loss_observe_path(&cc, &loss, 6000);
+    accel_observe_path(&cc, &loss.rtt, 1, 1001, mtu);
+    accel_observe_path(&cc, &loss.rtt, 1, 6000, mtu);
     ok(cc.ssthresh == UINT32_MAX);
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.cwnd == 60 * mtu);
@@ -622,19 +620,116 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
     /* A loss in calibration replaces qoRTT; undo restores the calibration and the preceding observation. */
     loss.rtt.latest = loss.rtt.smoothed = 130;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 6100, mtu);
-    ok(cc.state.pico.cubic.random_loss.qortt == 130);
+    ok(cc.state.pico.accel.qortt == 130);
     ok(cc.cwnd >= cc.ssthresh);
     cc.type->cc_on_late_ack(&cc, 20, 6200);
-    ok(cc.state.pico.cubic.random_loss.qortt == 120);
+    ok(cc.state.pico.accel.qortt == 120);
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.cwnd_exiting_slow_start == initcwnd);
 }
 
 static void test_cubic_random_loss_tolerance(void)
 {
-    subtest("accelerated-recovery", test_cubic_random_loss_tolerance_accelerated_recovery);
+    subtest("accelerated-increase", test_cubic_random_loss_tolerance_accelerated_increase);
     subtest("guards", test_cubic_random_loss_tolerance_guards);
     subtest("recalibration", test_cubic_random_loss_tolerance_recalibration);
+}
+
+static void test_cuback_random_loss_tolerance_accelerated_increase(void)
+{
+    quicly_cc_t cc, control;
+    quicly_loss_t loss = {.rtt = {.latest = 120, .smoothed = 120, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0, 1, 0);
+
+    /* The startup loss obtains qoRTT and opens accelerated increase after the ordinary slow-start reduction. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    ok(cc.state.pico.accel.qortt == 120);
+    ok(cc.cwnd == initcwnd / 2);
+    ok(cc.state.pico.cuback.cwnd_prior == initcwnd / 2);
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
+
+    /* After an ordinary CA loss, Cuback reduces its ACK interval when accelerated increase is faster than the ordinary curve. */
+    cc.cwnd = 80 * mtu;
+    loss.rtt.latest = 101;
+    loss.rtt.smoothed = 105;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1200, mtu);
+    ok(cc.cwnd == (uint32_t)(80 * mtu * QUICLY_BETA_LOSS));
+    ok(cc.state.pico.accel.target_cwnd == (uint32_t)(cc.cwnd / (QUICLY_BETA_LOSS * QUICLY_BETA_LOSS)));
+    cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
+
+    cc.state.pico.bytes_to_mtu_increase = UINT32_MAX;
+    control = cc;
+    control.random_loss_tolerance = 0;
+    uint32_t accelerated_interval = accel_bytes_per_mtu_increase(&cc, &loss.rtt, mtu);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
+    control.type->cc_on_acked(&control, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
+    ok(cc.cwnd == control.cwnd);
+    ok(cc.state.pico.bytes_to_mtu_increase == accelerated_interval - mtu);
+
+    uint32_t bytes_acked = cc.state.pico.bytes_to_mtu_increase, cwnd_before = cc.cwnd;
+    cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1450, mtu);
+    control.type->cc_on_acked(&control, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1450, mtu);
+    ok(cc.cwnd == cwnd_before + mtu);
+    ok(cc.cwnd > control.cwnd);
+
+    /* If ordinary Cuback grows farther, it wins and retains its byte-counter state. */
+    cc = control;
+    cc.random_loss_tolerance = 1;
+    cc.state.pico.accel.qortt = 120;
+    cc.state.pico.accel.target_cwnd = cc.cwnd + 1;
+    cc.state.pico.bytes_to_mtu_increase = 1;
+    control = cc;
+    control.random_loss_tolerance = 0;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 32, mtu, 1, 33, 1500, mtu);
+    control.type->cc_on_acked(&control, &loss, mtu, 32, mtu, 1, 33, 1500, mtu);
+    ok(cc.cwnd == control.cwnd);
+    ok(cc.state.pico.bytes_to_mtu_increase == control.state.pico.bytes_to_mtu_increase);
+}
+
+static void test_cuback_random_loss_tolerance_recalibration(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 109, .smoothed = 109, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0, 1, 0);
+    cc.cwnd = 60 * mtu;
+    cc.ssthresh = 50 * mtu;
+    cc.cwnd_exiting_slow_start = initcwnd;
+    cc.state.pico.cuback.cwnd_prior = 60 * mtu;
+    cc.state.pico.cuback.bandwidth = cc.cwnd * 1000. / loss.rtt.smoothed;
+    cc.state.pico.accel.qortt = 120;
+
+    accel_observe_path(&cc, &loss.rtt, 1, 1001, mtu);
+    accel_observe_path(&cc, &loss.rtt, 1, 8000, mtu);
+    ok(cc.ssthresh == UINT32_MAX);
+    ok(cc.cwnd == 60 * mtu);
+    ok(cc.state.pico.cuback.bandwidth == 0);
+
+    /* A loss in calibration replaces qoRTT; undo restores the calibration and the preceding observation. */
+    loss.rtt.latest = loss.rtt.smoothed = 130;
+    cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 8100, mtu);
+    ok(cc.state.pico.accel.qortt == 130);
+    ok(cc.cwnd >= cc.ssthresh);
+    cc.type->cc_on_late_ack(&cc, 20, 8200);
+    ok(cc.state.pico.accel.qortt == 120);
+    ok(cc.cwnd < cc.ssthresh);
+    ok(cc.cwnd_exiting_slow_start == initcwnd);
+}
+
+static void test_cuback_random_loss_tolerance(void)
+{
+    subtest("accelerated-increase", test_cuback_random_loss_tolerance_accelerated_increase);
+    subtest("recalibration", test_cuback_random_loss_tolerance_recalibration);
+}
+
+static void test_random_loss_tolerance(void)
+{
+    subtest("cubic", test_cubic_random_loss_tolerance);
+    subtest("cuback", test_cuback_random_loss_tolerance);
 }
 
 static void test_cubic_legacy_name(void)
@@ -965,7 +1060,7 @@ void test_cc(void)
     subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);
     subtest("cubic-abe", test_cubic_abe);
     subtest("cubic-undo-loss", test_cubic_undo_loss);
-    subtest("cubic-random-loss-tolerance", test_cubic_random_loss_tolerance);
+    subtest("random-loss-tolerance", test_random_loss_tolerance);
     subtest("cubic-legacy-name", test_cubic_legacy_name);
     subtest("pico-ack-countdown", test_pico_ack_countdown);
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);

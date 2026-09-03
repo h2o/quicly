@@ -124,6 +124,28 @@ struct st_quicly_cc_cuback_t {
 };
 
 /**
+ * State used to accelerate CWND increase after Random Loss Tolerance is enabled.
+ */
+struct st_quicly_cc_accelerated_increase_t {
+    /**
+     * Queue-overflow RTT observed when calibration slow start encountered a packet loss, or zero before an observation is obtained.
+     */
+    uint32_t qortt;
+    /**
+     * Latest CWND cap established for accelerated increase, or zero when no cap is available.
+     */
+    uint32_t target_cwnd;
+    /**
+     * Beginning of the current path-change observation interval, or zero when no interval is active.
+     */
+    int64_t observation_start;
+    /**
+     * Maximum smoothed RTT observed during the current path-change observation interval.
+     */
+    float max_smoothed_rtt;
+};
+
+/**
  * State used by the Cubic policy implemented by cc-pico.c; see `quicly_cc_type_cubic`.
  */
 struct st_quicly_cc_cubic_t {
@@ -160,28 +182,6 @@ struct st_quicly_cc_cubic_t {
      * Whether the sender is currently CC-limited.
      */
     unsigned cc_limited : 1;
-    /**
-     * State used by CUBIC's random loss tolerance.
-     */
-    struct {
-        /**
-         * Queue-overflow RTT observed when calibration slow start encountered a packet loss, or zero before an observation is
-         * obtained.
-         */
-        uint32_t qortt;
-        /**
-         * CWND immediately before the latest CA loss, up to which accelerated recovery is permitted. Zero when inactive.
-         */
-        uint32_t recovery_target;
-        /**
-         * Beginning of the current path-change observation interval, or zero when no interval is active.
-         */
-        int64_t observation_start;
-        /**
-         * Maximum smoothed RTT observed during the current path-change observation interval.
-         */
-        float max_smoothed_rtt;
-    } random_loss;
 };
 
 typedef struct st_quicly_cc_t {
@@ -238,6 +238,10 @@ typedef struct st_quicly_cc_t {
                 struct st_quicly_cc_cubic_t cubic;
             };
             /**
+             * Accelerated increase state shared by Cuback and Cubic.
+             */
+            struct st_quicly_cc_accelerated_increase_t accel;
+            /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
              * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
              * declared lost and have not yet been late-ACKed. Other fields retain the values to be restored when
@@ -249,6 +253,7 @@ typedef struct st_quicly_cc_t {
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_to_mtu_increase;
+                struct st_quicly_cc_accelerated_increase_t accel;
                 union {
                     uint32_t bytes_per_mtu_increase;
                     struct st_quicly_cc_cuback_t cuback;
