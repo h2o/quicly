@@ -397,13 +397,10 @@ static void accel_reset_observation(struct st_quicly_cc_accelerated_increase_t *
     state->max_smoothed_rtt = 0;
 }
 
-static void accel_on_recovery_exit(quicly_cc_t *cc, float smoothed_rtt)
+static void accel_on_recovery_end(struct st_quicly_cc_accelerated_increase_t *state, float smoothed_rtt)
 {
-    struct st_quicly_cc_accelerated_increase_t *state = &cc->state.pico.accel;
-
-    if (!accel_enabled(cc) || cc->recovery_end == 0 || state->full_rtt != 0)
-        return;
-    state->full_rtt = smoothed_rtt;
+    if (state->full_rtt == 0)
+        state->full_rtt = smoothed_rtt;
 }
 
 static void accel_enter_calibration(quicly_cc_t *cc)
@@ -584,7 +581,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     /* A recovery entered from calibration slow start can supply multiple RTT samples. Adopt their smoothed result here rather than
      * retaining the single sample adjacent to the congestion signal. */
-    accel_on_recovery_exit(cc, calc_smoothed_rtt_before_latest(&loss->rtt));
+    if (accel_enabled(cc) && cc->recovery_end != 0)
+        accel_on_recovery_end(&cc->state.pico.accel, calc_smoothed_rtt_before_latest(&loss->rtt));
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
@@ -676,7 +674,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     /* A new congestion event beyond recovery_end also closes the preceding recovery, even when no intervening ACK invokes
      * pico_on_acked. */
-    accel_on_recovery_exit(cc, loss->rtt.smoothed);
+    if (accel_enabled(cc) && cc->recovery_end != 0)
+        accel_on_recovery_end(&cc->state.pico.accel, loss->rtt.smoothed);
 
     /* Rapid Start: if recovery exits and the first CC event is a loss instead of an ack, call `pico_on_acked` to reflect recovery
      * exit to Rapid Start and related states, before entering the next recovery period in the following blocks. */
