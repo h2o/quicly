@@ -128,9 +128,9 @@ struct st_quicly_cc_cuback_t {
  */
 struct st_quicly_cc_accelerated_increase_t {
     /**
-     * Queue-overflow RTT observed when calibration slow start encountered a packet loss, or zero before an observation is obtained.
+     * Smoothed RTT observed upon exiting a recovery entered from calibration slow start, or zero before that recovery exits.
      */
-    uint32_t qortt;
+    float full_rtt;
     /**
      * CWND that accelerated increase first recovers toward, or zero when acceleration is unavailable. Increase may continue at
      * the minimum rate until reaching this value divided by the ordinary loss beta.
