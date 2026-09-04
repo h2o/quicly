@@ -137,21 +137,21 @@ struct st_quicly_cc_accelerated_increase_t {
      */
     uint32_t target_cwnd;
     /**
-     * Minimum RTT observed during the current congestion-avoidance period, or zero before an RTT has been observed.
+     * Minimum RTT observed during the current period between congestion events, or zero before an RTT has been observed.
      */
-    uint32_t min_rtt_in_ca;
+    uint32_t min_rtt_current_period;
     /**
-     * Minimum RTT observed during the preceding congestion-avoidance period, or zero when no such observation is available.
+     * Minimum RTT observed during the preceding period between congestion events, or zero when no such observation is available.
      */
-    uint32_t min_rtt_in_previous_ca;
+    uint32_t min_rtt_previous_period;
     /**
-     * Beginning of the current path-change observation interval, or zero when no interval is active.
+     * Latest time at which the smoothed RTT was at least halfway between the minimum RTT and `full_rtt`.
      */
-    int64_t observation_start;
+    int64_t last_high_rtt_at;
     /**
-     * Maximum smoothed RTT observed during the current path-change observation interval.
+     * Expected time in milliseconds for the active congestion-avoidance trajectory to produce a high-RTT observation.
      */
-    float max_smoothed_rtt;
+    uint32_t high_rtt_interval;
 };
 
 /**
