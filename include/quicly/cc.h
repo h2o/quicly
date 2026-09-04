@@ -132,11 +132,6 @@ struct st_quicly_cc_accelerated_increase_t {
      */
     float full_rtt;
     /**
-     * CWND that accelerated increase first recovers toward, or zero when acceleration is unavailable. Increase may continue at
-     * the minimum rate until reaching this value divided by the ordinary loss beta.
-     */
-    uint32_t target_cwnd;
-    /**
      * Minimum RTT observed during the current period between congestion events, or zero before an RTT has been observed.
      */
     uint32_t min_rtt_current_period;

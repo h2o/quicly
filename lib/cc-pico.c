@@ -410,16 +410,13 @@ static void accel_on_acked(struct st_quicly_cc_accelerated_increase_t *state, co
         state->min_rtt_current_period = rtt->latest;
 }
 
-static void accel_on_lost(struct st_quicly_cc_accelerated_increase_t *state, int in_startup, uint32_t cwnd)
+static void accel_on_lost(struct st_quicly_cc_accelerated_increase_t *state, int in_startup)
 {
     state->min_rtt_previous_period = state->min_rtt_current_period;
     state->min_rtt_current_period = 0;
-    state->target_cwnd = 0;
     state->high_rtt_interval = 0;
     if (in_startup)
         state->full_rtt = 0;
-    double target_cwnd = cwnd / QUICLY_BETA_LOSS;
-    state->target_cwnd = target_cwnd < UINT32_MAX ? target_cwnd : UINT32_MAX;
 }
 
 static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt, uint32_t cwnd_epoch,
@@ -429,8 +426,8 @@ static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, 
         return 0;
 
     if (state->high_rtt_interval == 0) {
-        assert(state->target_cwnd > cwnd_epoch);
-        double k = fast_cbrt((state->target_cwnd - cwnd_epoch) / (QUICLY_CUBIC_C * reference_mtu));
+        double cwnd_before_reduction = cwnd_epoch / QUICLY_BETA_LOSS;
+        double k = fast_cbrt((cwnd_before_reduction - cwnd_epoch) / (QUICLY_CUBIC_C * reference_mtu));
 
         /* Both policies follow the greater of their cubic and Reno-friendly windows. K implies a window gap of C * K^3 * MTU,
          * hence the Reno-friendly curve covers the gap in C * K^3 / alpha round trips. Use the ordinary-loss alpha because the
@@ -451,67 +448,65 @@ static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, 
     if (now - state->last_high_rtt_at < 2 * (int64_t)state->high_rtt_interval)
         return 0;
 
-    state->target_cwnd = 0;
     state->high_rtt_interval = 0;
     return 1;
 }
 
-static uint32_t accel_calc_cwnd_cap(const struct st_quicly_cc_accelerated_increase_t *state)
+/**
+ * Calculates the accelerated increase ratio. Accelerated increase is used when the queue might have become empty and also has the
+ * capacity to grow; specifically when the latest RTT satisfies all of the following conditions:
+ * - fullRTT is more than 10ms above minRTT;
+ * - the latest RTT is at least 5% below fullRTT;
+ * - the latest RTT is below a threshold derived from the preceding and current periods:
+ *   - use (minRTT + previous-period minimum) / 2 to make sure that RTT is being driven down, but do not set the threshold below
+ *     minRTT + 2ms;
+ *   - when the current-period minimum is available, cap the threshold at that minimum plus 2ms
+ * The increase ratio is max(2ms / RTT threshold, 2.5%). RTT feedback arrives one round late, therefore, assuming an RTT below
+ * 100ms, accelerated increase pauses no later than when 4.5ms of queue is built.
+ */
+static double accel_calc_increase_ratio(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt)
 {
-    double cap = state->target_cwnd / QUICLY_BETA_LOSS;
-    return cap < UINT32_MAX ? cap : UINT32_MAX;
-}
-
-static double accel_calc_increase_ratio(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
-                                        uint32_t cwnd)
-{
-    uint32_t rtt_threshold = quicly_u32_add_saturating(rtt->minimum, 2);
-
-    if (state->min_rtt_previous_period > rtt->minimum) {
-        /* Accommodate a persistent jitter floor without returning to the minimum RTT seen over the entire connection. Half of the
-         * preceding period's excess minimum is allowed, with the existing two-millisecond allowance as the lower bound. */
-        uint32_t previous_period_threshold =
-            rtt->minimum + (state->min_rtt_previous_period - rtt->minimum) / 2;
-        if (rtt_threshold < previous_period_threshold)
-            rtt_threshold = previous_period_threshold;
-    }
-
-    if (state->target_cwnd == 0 || state->full_rtt <= quicly_u32_add_saturating(rtt->minimum, 10) ||
-        rtt->latest >= rtt_threshold || (double)rtt->latest * 1.05 >= state->full_rtt)
+    /* Skip during initial slow start. */
+    if (state->min_rtt_previous_period == 0)
         return 0;
 
-    double ratio = cwnd < state->target_cwnd ? (double)(state->target_cwnd - cwnd) / ((double)cwnd * 2) : 0;
+    /* Skip if the queue might be too shallow. */
+    if (state->full_rtt <= quicly_u32_add_saturating(rtt->minimum, 10) ||
+        (double)rtt->latest * 1.05 >= state->full_rtt)
+        return 0;
+
+    uint32_t rtt_threshold = (uint32_t)(((uint64_t)rtt->minimum + state->min_rtt_previous_period) / 2);
+    if (rtt_threshold < quicly_u32_add_saturating(rtt->minimum, 2)) {
+        rtt_threshold = quicly_u32_add_saturating(rtt->minimum, 2);
+    } else if (state->min_rtt_current_period != 0 &&
+               rtt_threshold > quicly_u32_add_saturating(state->min_rtt_current_period, 2)) {
+        rtt_threshold = quicly_u32_add_saturating(state->min_rtt_current_period, 2);
+    }
+
+    if (rtt->latest >= rtt_threshold)
+        return 0;
+
+    double ratio = 2. / rtt_threshold;
     if (ratio < 1. / 40)
         ratio = 1. / 40;
-
-    /* Do not consume more than half of the remaining RTT headroom in one RTT. At the five-percent cutoff above, this limit
-     * converges on the minimum acceleration rate of 1/40. */
-    double rtt_ratio = ((double)state->full_rtt / rtt->latest - 1) / 2;
-    return ratio < rtt_ratio ? ratio : rtt_ratio;
+    return ratio;
 }
 
 static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
                                       uint32_t cwnd, uint32_t bytes)
 {
-    uint32_t cap = accel_calc_cwnd_cap(state);
-    if (cwnd >= cap)
-        return cwnd;
-
-    double ratio = accel_calc_increase_ratio(state, rtt, cwnd);
+    double ratio = accel_calc_increase_ratio(state, rtt);
     if (ratio == 0)
         return cwnd;
 
     double increased_cwnd = cwnd + bytes * ratio;
-    return increased_cwnd < cap ? (uint32_t)increased_cwnd : cap;
+    return increased_cwnd < UINT32_MAX ? (uint32_t)increased_cwnd : UINT32_MAX;
 }
 
 static uint32_t accel_bytes_per_mtu_increase(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
-                                             uint32_t cwnd, uint32_t mtu)
+                                             uint32_t mtu)
 {
-    if (cwnd >= accel_calc_cwnd_cap(state))
-        return UINT32_MAX;
-
-    double ratio = accel_calc_increase_ratio(state, rtt, cwnd);
+    double ratio = accel_calc_increase_ratio(state, rtt);
     if (ratio == 0)
         return UINT32_MAX;
     double bytes = mtu / ratio;
@@ -616,8 +611,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         if (cc->state.pico.bytes_to_mtu_increase == 0)
             cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size);
         if (accel_enabled(cc)) {
-            uint32_t accel_bytes =
-                accel_bytes_per_mtu_increase(&cc->state.pico.accel, &loss->rtt, cc->cwnd, max_udp_payload_size);
+            uint32_t accel_bytes = accel_bytes_per_mtu_increase(&cc->state.pico.accel, &loss->rtt, max_udp_payload_size);
             if (cc->state.pico.bytes_to_mtu_increase > accel_bytes)
                 cc->state.pico.bytes_to_mtu_increase = accel_bytes;
         }
@@ -770,7 +764,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
 
     if (accel_enabled(cc))
-        accel_on_lost(&cc->state.pico.accel, in_startup, cc->cwnd);
+        accel_on_lost(&cc->state.pico.accel, in_startup);
 
     /* Update policy-specific state using the estimated BDP and reduced CWND.
      *
