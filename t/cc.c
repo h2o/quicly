@@ -663,13 +663,17 @@ static void test_cubic_random_loss_tolerance_guards(void)
     cc.state.pico.accel.full_rtt = 105;
     ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) == 0);
 
-    /* ECN applies its ordinary reduction, then permits accelerated increase when RTT has drained. */
+    /* ECN records a high-queue observation, applies its ordinary reduction, then permits accelerated increase when RTT has
+     * drained. A subsequent CE inside recovery refreshes the observation. */
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
     cc.state.pico.accel.full_rtt = 120;
     cc.state.pico.accel.min_rtt_current_period = loss.rtt.minimum;
     cc.type->cc_on_lost(&cc, &loss, 0, 10, 20, 1000, mtu);
+    ok(cc.state.pico.accel.last_high_queue_at == 1000);
+    cc.type->cc_on_lost(&cc, &loss, 0, 11, 20, 1050, mtu);
+    ok(cc.state.pico.accel.last_high_queue_at == 1050);
     control = cc;
     control.random_loss_tolerance = 0;
     loss.rtt.latest = 81;
@@ -717,10 +721,10 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
     cc.state.pico.cubic.epoch_start = 1000;
     cc.state.pico.cubic.k = 2;
     cc.state.pico.accel.full_rtt = 120;
-    cc.state.pico.accel.last_high_rtt_at = 1000;
+    cc.state.pico.accel.last_high_queue_at = 1000;
     cc.num_loss_episodes = 1;
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 2000, mtu);
-    ok(cc.state.pico.accel.last_high_rtt_at == 1000);
+    ok(cc.state.pico.accel.last_high_queue_at == 1000);
     ok(cc.state.pico.accel.high_rtt_interval == 0);
     double k = fast_cbrt((cc.ssthresh / QUICLY_BETA_LOSS - cc.ssthresh) / (QUICLY_CUBIC_C * mtu));
     ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 1000));
@@ -739,7 +743,7 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
     cc.state.pico.cubic.epoch_start = 1000;
     cc.state.pico.cubic.k = 2;
     cc.state.pico.accel.full_rtt = 120;
-    cc.state.pico.accel.last_high_rtt_at = 1000;
+    cc.state.pico.accel.last_high_queue_at = 1000;
     cc.state.pico.accel.high_rtt_interval = 2000;
     cc.num_loss_episodes = 1;
 
@@ -747,13 +751,13 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
      * observation. */
     loss.rtt.smoothed = 110;
     ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 6000));
-    ok(cc.state.pico.accel.last_high_rtt_at == 6000);
+    ok(cc.state.pico.accel.last_high_queue_at == 6000);
     loss.rtt.smoothed = 109;
     ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 9999));
     ok(accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 10000));
 
     cc.state.pico.accel.high_rtt_interval = 2000;
-    cc.state.pico.accel.last_high_rtt_at = 1000;
+    cc.state.pico.accel.last_high_queue_at = 1000;
     cc.type->cc_on_acked(&cc, &loss, 0, 30, 0, 1, 31, 4999, mtu);
     ok(cc.ssthresh != UINT32_MAX);
     cc.type->cc_on_acked(&cc, &loss, 0, 31, 0, 1, 32, 5000, mtu);
@@ -768,10 +772,10 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
     ok(cc.cwnd >= cc.ssthresh);
     cc.type->cc_on_acked(&cc, &loss, 0, 30, 0, 1, 31, 6150, mtu);
     ok(cc.state.pico.accel.full_rtt == 130);
-    ok(cc.state.pico.accel.last_high_rtt_at == 6150);
+    ok(cc.state.pico.accel.last_high_queue_at == 6150);
     cc.type->cc_on_late_ack(&cc, 20, 6200);
     ok(cc.state.pico.accel.full_rtt == 120);
-    ok(cc.state.pico.accel.last_high_rtt_at == 1000);
+    ok(cc.state.pico.accel.last_high_queue_at == 1000);
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.cwnd_exiting_slow_start == initcwnd);
 }
@@ -859,7 +863,7 @@ static void test_cuback_random_loss_tolerance_recalibration(void)
     cc.state.pico.cuback.cwnd_prior = 60 * mtu;
     cc.state.pico.cuback.bandwidth = cc.cwnd * 1000. / loss.rtt.smoothed;
     cc.state.pico.accel.full_rtt = 120;
-    cc.state.pico.accel.last_high_rtt_at = 1000;
+    cc.state.pico.accel.last_high_queue_at = 1000;
     cc.num_loss_episodes = 1;
 
     ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 1000));
@@ -886,10 +890,10 @@ static void test_cuback_random_loss_tolerance_recalibration(void)
     ok(cc.cwnd >= cc.ssthresh);
     cc.type->cc_on_acked(&cc, &loss, 0, 30, 0, 1, 31, 8150, mtu);
     ok(cc.state.pico.accel.full_rtt == 130);
-    ok(cc.state.pico.accel.last_high_rtt_at == 8150);
+    ok(cc.state.pico.accel.last_high_queue_at == 8150);
     cc.type->cc_on_late_ack(&cc, 20, 8200);
     ok(cc.state.pico.accel.full_rtt == 120);
-    ok(cc.state.pico.accel.last_high_rtt_at == 1000);
+    ok(cc.state.pico.accel.last_high_queue_at == 1000);
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.cwnd_exiting_slow_start == initcwnd);
 }

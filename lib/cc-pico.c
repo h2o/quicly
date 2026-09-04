@@ -395,7 +395,7 @@ static void accel_on_recovery_end(struct st_quicly_cc_accelerated_increase_t *st
 {
     if (state->full_rtt == 0) {
         state->full_rtt = smoothed_rtt;
-        state->last_high_rtt_at = now;
+        state->last_high_queue_at = now;
     }
 }
 
@@ -439,13 +439,13 @@ static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, 
     }
 
     if (rtt->smoothed >= ((double)rtt->minimum + state->full_rtt) / 2) {
-        state->last_high_rtt_at = now;
+        state->last_high_queue_at = now;
         return 0;
     }
 
     /* If the smoothed RTT has remained below half of the observed queue for twice the time in which a non-losing competing flow
-     * following the same CA trajectory could have produced another high-RTT observation, the path might have changed. */
-    if (now - state->last_high_rtt_at < 2 * (int64_t)state->high_rtt_interval)
+     * following the same CA trajectory could have produced another high-queue observation, the path might have changed. */
+    if (now - state->last_high_queue_at < 2 * (int64_t)state->high_rtt_interval)
         return 0;
 
     state->high_rtt_interval = 0;
@@ -650,6 +650,9 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
                          int64_t now, uint32_t max_udp_payload_size)
 {
     quicly_cc__update_ecn_episodes(cc, bytes, lost_pn);
+
+    if (accel_enabled(cc) && bytes == 0)
+        cc->state.pico.accel.last_high_queue_at = now;
 
     /* Nothing to do if loss is in recovery window (modulo when exiting rapid start, in which case CWND is further reduced relative
      * to the number of bytes lost. */

@@ -140,9 +140,10 @@ struct st_quicly_cc_accelerated_increase_t {
      */
     uint32_t min_rtt_previous_period;
     /**
-     * Latest time at which the smoothed RTT was at least halfway between the minimum RTT and `full_rtt`.
+     * Latest time at which a high queue was indicated by ECN-CE or by the smoothed RTT reaching halfway between the minimum RTT
+     * and `full_rtt`.
      */
-    int64_t last_high_rtt_at;
+    int64_t last_high_queue_at;
     /**
      * Expected time in milliseconds for the active congestion-avoidance trajectory to produce a high-RTT observation.
      */
