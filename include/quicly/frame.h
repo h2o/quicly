@@ -516,7 +516,12 @@ Error:
 
 inline size_t quicly_close_frame_capacity(uint64_t error_code, uint64_t offending_frame_type, const char *reason_phrase)
 {
-    return quicly_encode_close_frame(NULL, error_code, offending_frame_type, reason_phrase) - (uint8_t *)NULL;
+    size_t reason_phrase_len = strlen(reason_phrase);
+    return quicly_encodev_capacity(offending_frame_type == UINT64_MAX ? QUICLY_FRAME_TYPE_APPLICATION_CLOSE
+                                                                      : QUICLY_FRAME_TYPE_TRANSPORT_CLOSE) +
+           quicly_encodev_capacity(error_code) +
+           (offending_frame_type == UINT64_MAX ? 0 : quicly_encodev_capacity(offending_frame_type)) +
+           quicly_encodev_capacity(reason_phrase_len) + reason_phrase_len;
 }
 
 inline uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data)
