@@ -2147,7 +2147,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     conn->egress.cc.type->cc_init->cb(
         conn->egress.cc.type->cc_init, &conn->egress.cc,
         quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, conn->egress.max_udp_payload_size),
-        conn->egress.cc.normalize_mtu, conn->super.ctx->random_loss_tolerance, conn->stash.now);
+        conn->super.ctx->normalize_cc_mtu, conn->super.ctx->random_loss_tolerance, conn->stash.now);
     if (conn->super.stats.num_rapid_start != 0 && conn->egress.cc.type->enable_rapid_start != NULL)
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
 
