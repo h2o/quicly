@@ -62,6 +62,25 @@ static void test_handshake(void)
     for (i = 0; i != num_decoded; ++i) {
         ret = quicly_receive(client, NULL, &fake_address.sa, decoded + i);
         ok(ret == 0);
+        if ((decoded[i].octets.base[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL) {
+            quicly_decoded_packet_t mismatched = decoded[i];
+            quicly_stats_t before, after;
+            uint8_t wrong_scid[QUICLY_MAX_CID_LEN_V1];
+            size_t wrong_scid_len = mismatched.cid.src.len;
+            if (wrong_scid_len != 0) {
+                memcpy(wrong_scid, mismatched.cid.src.base, wrong_scid_len);
+                wrong_scid[0] ^= 1;
+            } else {
+                wrong_scid[0] = 1;
+                wrong_scid_len = 1;
+            }
+            mismatched.cid.src = ptls_iovec_init(wrong_scid, wrong_scid_len);
+            ok(quicly_get_stats(client, &before) == 0);
+            ok(quicly_receive(client, NULL, &fake_address.sa, &mismatched) == QUICLY_ERROR_PACKET_IGNORED);
+            ok(quicly_get_stats(client, &after) == 0);
+            ok(after.num_packets.decryption_failed == before.num_packets.decryption_failed);
+            ok(after.num_packets.received_duplicate == before.num_packets.received_duplicate);
+        }
     }
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
     ok(quicly_connection_is_ready(client));

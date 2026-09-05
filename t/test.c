@@ -1220,6 +1220,25 @@ void test_ecn_index_from_bits(void)
     ok(get_ecn_index_from_bits(3) == 2);
 }
 
+static void test_ecn_validation(void)
+{
+    uint64_t previous[3] = {10, 0, 2};
+    uint64_t valid_ect0[3] = {12, 0, 2};
+    uint64_t valid_ce[3] = {10, 0, 4};
+    uint64_t stripped[3] = {11, 0, 2};
+    uint64_t remarked_ect1[3] = {12, 1, 2};
+    uint64_t regressed[3] = {9, 0, 2};
+
+    ok(validate_ecn_counts(previous, valid_ect0, 2, 1, 1));
+    ok(validate_ecn_counts(previous, valid_ce, 2, 1, 1));
+    ok(!validate_ecn_counts(previous, stripped, 2, 1, 1));
+    ok(!validate_ecn_counts(previous, valid_ect0, 1, 0, 1));
+    ok(!validate_ecn_counts(previous, remarked_ect1, 2, 1, 1));
+    ok(!validate_ecn_counts(previous, regressed, 0, 1, 1));
+    /* Reordered ACK frames cannot fail ECN validation. */
+    ok(validate_ecn_counts(previous, regressed, 2, 1, 0));
+}
+
 static void test_jumpstart_cwnd(void)
 {
     quicly_context_t unbounded_max = {
@@ -1551,6 +1570,7 @@ int main(int argc, char **argv)
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
+    subtest("ecn-validation", test_ecn_validation);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
     subtest("ack-frequency", test_ack_frequency);

@@ -155,9 +155,12 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         cc->cwnd_minimum = cc->cwnd;
 }
 
-static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
+static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now, uint32_t max_udp_payload_size)
 {
-    /* TODO */
+    cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+    cc->recovery_end = 0;
+    if (cc->cwnd_minimum > cc->cwnd)
+        cc->cwnd_minimum = cc->cwnd;
 }
 
 static void cubic_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now)

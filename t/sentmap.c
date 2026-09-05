@@ -160,10 +160,12 @@ static void test_pto(void)
     quicly_sentmap_prepare(&map, 1, 0, QUICLY_EPOCH_INITIAL);
     quicly_sentmap_allocate(&map, on_acked);
     quicly_sentmap_commit(&map, 10, 0, 0);
-    quicly_sentmap_prepare(&map, 2, 0, QUICLY_EPOCH_INITIAL);
+    quicly_sentmap_prepare(&map, 2, 0, QUICLY_EPOCH_HANDSHAKE);
     quicly_sentmap_allocate(&map, on_acked);
     quicly_sentmap_commit(&map, 20, 0, 0);
     ok(map.bytes_in_flight == 30);
+    ok(map.bytes_in_flight_by_epoch[QUICLY_EPOCH_INITIAL] == 10);
+    ok(map.bytes_in_flight_by_epoch[QUICLY_EPOCH_HANDSHAKE] == 20);
 
     /* mark pn 1 for PTO */
     quicly_sentmap_init_iter(&map, &iter);
@@ -173,6 +175,8 @@ static void test_pto(void)
     ok(on_acked_callcnt == 1);
     ok(on_acked_ackcnt == 0);
     ok(map.bytes_in_flight == 30);
+    ok(map.bytes_in_flight_by_epoch[QUICLY_EPOCH_INITIAL] == 10);
+    ok(map.bytes_in_flight_by_epoch[QUICLY_EPOCH_HANDSHAKE] == 20);
 
     /* mark pn 1, 2 as acked */
     quicly_sentmap_init_iter(&map, &iter);
@@ -185,6 +189,8 @@ static void test_pto(void)
     ok(on_acked_callcnt == 3);
     ok(on_acked_ackcnt == 2);
     ok(map.bytes_in_flight == 0);
+    ok(map.bytes_in_flight_by_epoch[QUICLY_EPOCH_INITIAL] == 0);
+    ok(map.bytes_in_flight_by_epoch[QUICLY_EPOCH_HANDSHAKE] == 0);
 
     quicly_sentmap_dispose(&map);
 }
