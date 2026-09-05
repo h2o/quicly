@@ -180,9 +180,21 @@ static void test_mozquic(void)
     quicly_decode_stream_frame(type_flags, &p, p + 9, &frame);
 }
 
+static void test_close_encode(void)
+{
+    uint8_t buf[64], *end;
+
+    end = quicly_encode_close_frame(buf, 0x1234, 0x3fff, "hello");
+    ok(end - buf == quicly_close_frame_capacity(0x1234, 0x3fff, "hello"));
+
+    end = quicly_encode_close_frame(buf, 0x1234, UINT64_MAX, "hello");
+    ok(end - buf == quicly_close_frame_capacity(0x1234, UINT64_MAX, "hello"));
+}
+
 void test_frame(void)
 {
     subtest("ack-decode", test_ack_decode);
     subtest("ack-encode", test_ack_encode);
+    subtest("close-encode", test_close_encode);
     subtest("mozquic", test_mozquic);
 }

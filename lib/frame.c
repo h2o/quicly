@@ -151,5 +151,5 @@ uint8_t *quicly_encode_close_frame(uint8_t *const base, uint64_t error_code, uin
 
 #undef PUSHV
 
-    return base + offset;
+    return base != NULL ? base + offset : NULL;
 }
