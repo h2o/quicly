@@ -1258,8 +1258,7 @@ int main(int argc, char **argv)
                 argv[seg_end] = NULL;
 
             if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, &flow_random_loss, NULL,
-                               NULL, NULL,
-                               &flow_ack_scheduler_probability, &flow_ack_scheduler_delay, NULL))
+                               NULL, NULL, &flow_ack_scheduler_probability, &flow_ack_scheduler_delay, NULL))
                 exit(1);
             flow_argv[0] = saved_argv0;
             if (seg_end < argc)

@@ -383,8 +383,7 @@ static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwn
 
 static int accel_enabled(const quicly_cc_t *cc)
 {
-    return cc->accel_adaptation != 0 &&
-           (cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cuback);
+    return cc->accel_adaptation != 0 && (cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cuback);
 }
 
 static float calc_smoothed_rtt_before_latest(const quicly_rtt_t *rtt)
@@ -400,8 +399,7 @@ static void accel_on_recovery_end(struct st_quicly_cc_accel_adaptation_t *state,
     }
 }
 
-static void accel_on_acked(struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt, int recovery_ended,
-                           int64_t now)
+static void accel_on_acked(struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt, int recovery_ended, int64_t now)
 {
     /* A recovery entered from calibration slow start can supply multiple RTT samples. Adopt their smoothed result rather than the
      * single sample adjacent to the congestion signal. */
@@ -480,8 +478,7 @@ static double accel_calc_increase_ratio(const struct st_quicly_cc_accel_adaptati
     uint32_t rtt_threshold = (uint32_t)(((uint64_t)rtt->minimum + state->min_rtt_previous_period) / 2);
     if (rtt_threshold < quicly_u32_add_saturating(rtt->minimum, 2)) {
         rtt_threshold = quicly_u32_add_saturating(rtt->minimum, 2);
-    } else if (state->min_rtt_current_period != 0 &&
-               rtt_threshold > quicly_u32_add_saturating(state->min_rtt_current_period, 2)) {
+    } else if (state->min_rtt_current_period != 0 && rtt_threshold > quicly_u32_add_saturating(state->min_rtt_current_period, 2)) {
         rtt_threshold = quicly_u32_add_saturating(state->min_rtt_current_period, 2);
     }
 
@@ -494,8 +491,8 @@ static double accel_calc_increase_ratio(const struct st_quicly_cc_accel_adaptati
     return ratio;
 }
 
-static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt,
-                                      uint32_t cwnd, uint32_t bytes, unsigned flags)
+static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt, uint32_t cwnd,
+                                      uint32_t bytes, unsigned flags)
 {
     double ratio = accel_calc_increase_ratio(state, rtt, flags);
     if (ratio == 0)

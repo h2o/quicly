@@ -531,8 +531,7 @@ static void test_cubic_accel_adaptation_accelerated_increase(void)
     ok(cc.cwnd == (uint32_t)(80 * mtu * QUICLY_BETA_LOSS));
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
-    uint32_t accelerated_cwnd =
-        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
+    uint32_t accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
     control = cc;
     control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
@@ -541,8 +540,7 @@ static void test_cubic_accel_adaptation_accelerated_increase(void)
 
     /* An aggregate ACK for one post-reduction flight applies the accelerated increase. */
     uint32_t bytes_acked = cc.cwnd;
-    accelerated_cwnd =
-        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, bytes_acked, QUICLY_CC_ACCEL_ADAPTATION_ON);
+    accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, bytes_acked, QUICLY_CC_ACCEL_ADAPTATION_ON);
     control = cc;
     control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1500, mtu);
@@ -691,8 +689,7 @@ static void test_cubic_accel_adaptation_guards(void)
     loss.rtt.latest = 11;
     loss.rtt.smoothed = 11;
     cc.state.pico.accel.min_rtt_current_period = 11;
-    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) - 2. / 13) <
-       0.000001);
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) - 2. / 13) < 0.000001);
     /* full_rtt does not limit the increase rate while both RTT gates remain open. */
     cc.state.pico.accel.min_rtt_previous_period = 200;
     cc.state.pico.accel.min_rtt_current_period = 100;
@@ -720,8 +717,7 @@ static void test_cubic_accel_adaptation_guards(void)
     control = cc;
     control.accel_adaptation = 0;
     loss.rtt.latest = 81;
-    uint32_t accelerated_cwnd =
-        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
+    uint32_t accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
     ok(accelerated_cwnd > cc.cwnd);
     cc.type->cc_on_acked(&cc, &loss, mtu, 20, mtu, 1, 21, 1100, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1100, mtu);
@@ -770,14 +766,13 @@ static void test_cubic_accel_adaptation_recalibration(void)
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 2000, mtu);
     ok(cc.state.pico.accel.last_high_queue_at == 1000);
     ok(cc.state.pico.accel.high_rtt_interval == 0);
-    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu,
-                          QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS, INT64_MAX));
+    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS,
+                          INT64_MAX));
     ok(cc.state.pico.accel.high_rtt_interval == 0);
     double k = fast_cbrt((cc.ssthresh / QUICLY_BETA_LOSS - cc.ssthresh) / (QUICLY_CUBIC_C * mtu));
     ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 1000));
     ok(cc.state.pico.accel.high_rtt_interval != 0);
-    ok(cc.state.pico.accel.high_rtt_interval <
-       k * fast_cbrt(cc.state.pico.accel.full_rtt / loss.rtt.minimum) * 1000);
+    ok(cc.state.pico.accel.high_rtt_interval < k * fast_cbrt(cc.state.pico.accel.full_rtt / loss.rtt.minimum) * 1000);
     ok(accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON,
                          1000 + 2 * (int64_t)cc.state.pico.accel.high_rtt_interval));
 
@@ -921,8 +916,7 @@ static void test_cuback_accel_adaptation_recalibration(void)
     double cwnd_before_reduction = cc.ssthresh / QUICLY_BETA_LOSS;
     double k = fast_cbrt((cwnd_before_reduction - cc.ssthresh) / (QUICLY_CUBIC_C * mtu));
     double reno = QUICLY_CUBIC_C * k * k * k / cubic_friendly_alpha[0] * cc.state.pico.accel.full_rtt / 1000;
-    uint32_t expected_interval = (k < reno ? k : reno) *
-                                 fast_cbrt(cc.state.pico.accel.full_rtt / loss.rtt.minimum) * 1000;
+    uint32_t expected_interval = (k < reno ? k : reno) * fast_cbrt(cc.state.pico.accel.full_rtt / loss.rtt.minimum) * 1000;
     ok(calculated_interval == expected_interval);
 
     cc.state.pico.accel.high_rtt_interval = 3000;
