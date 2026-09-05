@@ -177,6 +177,10 @@ struct st_quicly_sent_t {
             uint64_t error_code;
         } path_abandon;
         struct {
+            uint32_t path_id;
+            uint64_t sequence;
+        } path_status;
+        struct {
             uint64_t max_path_id;
         } paths_blocked;
         struct {

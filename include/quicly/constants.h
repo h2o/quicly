@@ -109,6 +109,13 @@ typedef int64_t quicly_error_t;
 #define QUICLY_TRANSPORT_ERROR_NO_VIABLE_PATH QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(0x10)
 #define QUICLY_TRANSPORT_ERROR_CRYPTO(tls_alert) QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(0x100 + (tls_alert))
 
+/* error codes carried by PATH_ABANDON */
+#define QUICLY_PATH_ABANDON_ERROR_NONE 0x0
+#define QUICLY_PATH_ABANDON_ERROR_APPLICATION 0x3e
+#define QUICLY_PATH_ABANDON_ERROR_RESOURCE_LIMIT 0x3e75
+#define QUICLY_PATH_ABANDON_ERROR_UNSTABLE_OR_POOR 0x3e76
+#define QUICLY_PATH_ABANDON_ERROR_NO_CID_AVAILABLE 0x3e77
+
 /* local error codes, used for signaling status between quicly and the application */
 #define QUICLY_ERROR_PACKET_IGNORED 0xff01
 #define QUICLY_ERROR_SENDBUF_FULL 0xff02    /* internal use only; the error code is never exposed to the application */

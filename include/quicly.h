@@ -662,6 +662,10 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_initial_handshake_exceeded;                                                                                       \
     /**                                                                                                                            \
+     * Number of connections for which jumpstart is or could have been used.                                                       \
+     */                                                                                                                            \
+    uint64_t num_jumpstart_applicable;                                                                                             \
+    /**                                                                                                                            \
      * Number of connections that used rapid start.                                                                                \
      */                                                                                                                            \
     uint64_t num_rapid_start;                                                                                                      \
@@ -684,6 +688,15 @@ struct st_quicly_conn_streamgroup_state_t {
      * Time took until handshake is confirmed. UINT64_MAX if handshake is not confirmed yet.                                       \
      */                                                                                                                            \
     uint64_t handshake_confirmed_msec;                                                                                             \
+    /**                                                                                                                            \
+     * jumpstart parameters and the CWND being adopted (see also quicly_cc_t::cwnd_exiting_jumpstart)                              \
+     */                                                                                                                            \
+    struct {                                                                                                                       \
+        uint64_t prev_rate;                                                                                                        \
+        uint32_t prev_rtt;                                                                                                         \
+        uint32_t new_rtt;                                                                                                          \
+        uint32_t cwnd;                                                                                                             \
+    } jumpstart;                                                                                                                   \
     /**                                                                                                                            \
      * some contents of the last token sent                                                                                        \
      */                                                                                                                            \
@@ -830,6 +843,7 @@ typedef struct st_quicly_path_stats_t {
     apply(num_ptos, "num-ptos")                                                                                                    \
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
+    apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
     apply(num_rapid_start, "num-rapid-start")                                                                                      \
     apply(num_paced, "num-paced")                                                                                                  \
     apply(num_respected_app_limited, "num-respected-app-limited")
@@ -849,6 +863,10 @@ typedef struct st_quicly_path_stats_t {
  */
 #define QUICLY_STATS_FOREACH_NON_COUNTERS(apply)                                                                                   \
     apply(handshake_confirmed_msec, "handshake-confirmed-msec")                                                                    \
+    apply(jumpstart.prev_rate, "jumpstart.prev-rate")                                                                              \
+    apply(jumpstart.prev_rtt, "jumpstart.prev-rtt")                                                                                \
+    apply(jumpstart.new_rtt, "jumpstart.new-rtt")                                                                                  \
+    apply(jumpstart.cwnd, "jumpstart.cwnd")                                                                                        \
     apply(token_sent.at, "token-sent.at")                                                                                          \
     apply(token_sent.rate, "token-sent.rate")                                                                                      \
     apply(token_sent.rtt, "token-sent.rtt")                                                                                        \
@@ -1336,7 +1354,19 @@ typedef struct st_quicly_tuple_t {
 int quicly_get_path_tuple(quicly_conn_t *conn, size_t path_index, quicly_tuple_t *tuple);
 
 int quicly_get_path_stats(quicly_conn_t *conn, size_t path_index, quicly_path_stats_t *stats);
+/**
+ * Opens an additional path. Only clients can initiate a path.
+ */
 quicly_error_t quicly_open_path(quicly_conn_t *conn, struct sockaddr *remote_addr, struct sockaddr *local_addr);
+/**
+ * Advertises whether the peer should treat the given path as backup. Passing zero advertises PATH_STATUS_AVAILABLE.
+ */
+quicly_error_t quicly_set_path_status(quicly_conn_t *conn, uint32_t path_id, int is_backup);
+/**
+ * Explicitly abandons a path and schedules PATH_ABANDON with the supplied QUICLY_PATH_ABANDON_ERROR_* code. At least one other
+ * usable path must exist to carry the frame.
+ */
+quicly_error_t quicly_abandon_path(quicly_conn_t *conn, uint32_t path_id, uint64_t error_code);
 /**
  * closes the connection.  `err` is the application error code using the coalesced scheme (see QUICLY_ERROR_* macros), or zero (no
  * error; indicating idle close).  An application should continue calling quicly_receive and quicly_send, until they return

@@ -52,13 +52,16 @@ static void reno_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     uint32_t target = cc->cwnd;
     if (cc->conn != NULL && quicly_is_multipath(cc->conn)) {
-        uint64_t total = quicly_calculate_lia_target(cc->conn);
-        target = total > UINT32_MAX ? UINT32_MAX : (uint32_t)total;
+        uint64_t lia_target = quicly_calculate_lia_target(cc->conn);
+        /* LIA is bounded by standard Reno on every subflow. Expressed as an ACKed-byte threshold, that means using the larger of
+         * the coupled target and this path's own congestion window. */
+        if (lia_target > target)
+            target = lia_target > UINT32_MAX ? UINT32_MAX : (uint32_t)lia_target;
     }
 
     if (cc->state.reno.stash < target)
         return;
-    /* increase congestion window by 1 mss scaled by cwnd / total_cwnd */
+    /* Increase by one MSS after the LIA-scaled threshold has been acknowledged. */
     uint32_t count = cc->state.reno.stash / target;
     cc->state.reno.stash -= count * target;
     cc->cwnd = quicly_u32_add_saturating(cc->cwnd, count * max_udp_payload_size);
