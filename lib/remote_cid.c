@@ -20,6 +20,8 @@
  * IN THE SOFTWARE.
  */
 #include <assert.h>
+#include <inttypes.h>
+#include <stdio.h>
 #include <string.h>
 #include "quicly/constants.h"
 #include "quicly/remote_cid.h"
@@ -41,17 +43,17 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
     for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
         set->cids[i] = (quicly_remote_cid_t){
             .state = QUICLY_REMOTE_CID_UNAVAILABLE,
-            .sequence = i,
+            .sequence = i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT ? i : UINT64_MAX,
         };
 
-    set->_largest_sequence_expected = PTLS_ELEMENTSOF(set->cids) - 1;
+    set->_largest_sequence_expected = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1;
     memset(&set->retired, 0, sizeof(set->retired));
 }
 
 static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
                                   const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN])
 {
-    int was_stored = 0;
+    size_t slot_to_use = SIZE_MAX;
 
     if (set->_largest_sequence_expected < sequence)
         return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
@@ -78,18 +80,24 @@ static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint64_t sequenc
             /* here we know CID is not equal */
             if (set->cids[i].sequence == sequence)
                 return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-        } else if (set->cids[i].sequence == sequence) {
-            assert(!was_stored);
-            set->cids[i].sequence = sequence;
-            quicly_set_cid(&set->cids[i].cid, ptls_iovec_init(cid, cid_len));
-            memcpy(set->cids[i].stateless_reset_token, srt, QUICLY_STATELESS_RESET_TOKEN_LEN);
-            set->cids[i].state = QUICLY_REMOTE_CID_AVAILABLE;
-            was_stored = 1;
+        } else {
+            if (set->cids[i].sequence == sequence) {
+                slot_to_use = i;
+            }
         }
     }
 
-    /* execution reaches here in two cases, 1) normal path, i.e. new CID was successfully registered, and 2) new CID was already
-     * retired (was_stored == 0). */
+    if (slot_to_use == SIZE_MAX) {
+        if (sequence + QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT <= set->_largest_sequence_expected)
+            return 0;
+        return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
+    }
+
+    set->cids[slot_to_use].sequence = sequence;
+    quicly_set_cid(&set->cids[slot_to_use].cid, ptls_iovec_init(cid, cid_len));
+    memcpy(set->cids[slot_to_use].stateless_reset_token, srt, QUICLY_STATELESS_RESET_TOKEN_LEN);
+    set->cids[slot_to_use].state = QUICLY_REMOTE_CID_AVAILABLE;
+
     return 0;
 }
 
@@ -129,14 +137,12 @@ static int unregister_prior_to(quicly_remote_cid_set_t *set, uint64_t seq_unreg_
 quicly_error_t quicly_remote_cid_register(quicly_remote_cid_set_t *set, uint64_t sequence, const uint8_t *cid, size_t cid_len,
                                           const uint8_t srt[QUICLY_STATELESS_RESET_TOKEN_LEN], uint64_t retire_prior_to)
 {
-    quicly_remote_cid_set_t backup = *set; /* preserve current state so that it can be restored to notify protocol violation */
+    quicly_remote_cid_set_t backup = *set; /* preserve state to restore on error */
     quicly_error_t ret;
 
     assert(sequence >= retire_prior_to);
 
-    /* First, handle retire_prior_to. This order is important as it is possible to receive a NEW_CONNECTION_ID frame such that it
-     * retires active_connection_id_limit CIDs and then installs one new CID. Next, the new CID is registered. If either of the two
-     * fails, the state is restored to the original so that we can send an error to the peer. */
+    /* handle retire_prior_to first and restore state on error */
     if ((ret = unregister_prior_to(set, retire_prior_to)) != 0 || (ret = do_register(set, sequence, cid, cid_len, srt)) != 0)
         *set = backup;
 

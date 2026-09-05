@@ -49,6 +49,10 @@ typedef struct st_quicly_sent_packet_t {
      */
     uint8_t ack_epoch;
     /**
+     * path id on which the packet was sent
+     */
+    uint8_t path_id;
+    /**
      *
      */
     uint8_t ack_eliciting : 1;
@@ -119,6 +123,7 @@ struct st_quicly_sent_t {
          */
         struct {
             uint64_t start;
+            uint32_t path_id;
             union {
                 struct {
                     uint64_t start_length;
@@ -164,9 +169,26 @@ struct st_quicly_sent_t {
             uint64_t generation;
         } new_token;
         struct {
+            uint32_t path_id;
             uint64_t sequence;
         } new_connection_id;
         struct {
+            uint32_t path_id;
+            uint64_t error_code;
+        } path_abandon;
+        struct {
+            uint32_t path_id;
+            uint64_t sequence;
+        } path_status;
+        struct {
+            uint64_t max_path_id;
+        } paths_blocked;
+        struct {
+            uint32_t path_id;
+            uint64_t sequence;
+        } path_cids_blocked;
+        struct {
+            uint32_t path_id;
             uint64_t sequence;
         } retire_connection_id;
     } data;

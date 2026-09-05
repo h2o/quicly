@@ -132,6 +132,12 @@ static void test_ack_encode(void)
     quicly_ranges_init(&ranges);
     quicly_ranges_add(&ranges, 0x12, 0x14);
 
+    { /* PATH_ACK must reserve the entire path ID before writing anything */
+        uint8_t short_buf[3] = {0xaa, 0xbb, 0xcc};
+        ok(quicly_encode_path_ack_frame(short_buf, short_buf + 2, 64, &ranges, ecn_counts, 0) == NULL);
+        ok(short_buf[0] == 0xaa && short_buf[1] == 0xbb && short_buf[2] == 0xcc);
+    }
+
     /* encode */
     end = quicly_encode_ack_frame(buf, buf + sizeof(buf), &ranges, ecn_counts, 63);
     ok(end - buf == 5);

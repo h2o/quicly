@@ -48,6 +48,7 @@ const quicly_context_t quicly_spec_context = {
             .max_streams_bidi = 100,
             .max_streams_uni = 0,
             .max_udp_payload_size = DEFAULT_MAX_UDP_PAYLOAD_SIZE,
+            .active_connection_id_limit = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
         },
     .max_packets_per_key = DEFAULT_MAX_PACKETS_PER_KEY,
     .max_crypto_bytes = DEFAULT_MAX_CRYPTO_BYTES,
@@ -88,6 +89,7 @@ const quicly_context_t quicly_performant_context = {
             .max_streams_bidi = 100,
             .max_streams_uni = 0,
             .max_udp_payload_size = DEFAULT_MAX_UDP_PAYLOAD_SIZE,
+            .active_connection_id_limit = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
         },
     .max_packets_per_key = DEFAULT_MAX_PACKETS_PER_KEY,
     .max_crypto_bytes = DEFAULT_MAX_CRYPTO_BYTES,
@@ -159,7 +161,7 @@ static void default_encrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_t *enc
         break;
     }
     p = quicly_encode32(p, plaintext->master_id);
-    p = quicly_encode32(p, (plaintext->thread_id << 8) | plaintext->path_id);
+    p = quicly_encode32(p, (plaintext->thread_id << 16) | (plaintext->sequence << 8) | plaintext->path_id);
     assert(p - buf == self->cid_encrypt_ctx->algo->block_size);
 
     /* generate CID */
@@ -198,8 +200,10 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
         plaintext->node_id = 0;
     }
     plaintext->master_id = quicly_decode32(&p);
-    plaintext->thread_id = quicly_decode24(&p);
-    plaintext->path_id = *p++;
+    uint32_t v = quicly_decode32(&p);
+    plaintext->path_id = v & 0xff;
+    plaintext->sequence = (v >> 8) & 0xff;
+    plaintext->thread_id = v >> 16;
     assert(p - ptbuf == len);
 
     return len;
@@ -325,14 +329,23 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
     if (!conn_is_blocked)
         quicly_linklist_insert_list(&sched->active, &sched->blocked);
 
-    while (quicly_can_send_data((quicly_conn_t *)conn, s) && quicly_linklist_is_linked(&sched->active)) {
-        /* detach the first active stream */
-        quicly_stream_t *stream =
-            (void *)((char *)sched->active.next - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler));
+    quicly_linklist_t *node = sched->active.next;
+    uint32_t current_path_id = quicly_get_current_send_path_id(conn, s);
+
+    while (quicly_can_send_data((quicly_conn_t *)conn, s) && node != &sched->active) {
+        quicly_stream_t *stream = (void *)((char *)node - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler));
+        quicly_linklist_t *next_node = node->next;
+
+        if (quicly_is_multipath(conn) && stream->affinity_path_id != UINT32_MAX && stream->affinity_path_id != current_path_id) {
+            node = next_node;
+            continue;
+        }
+
         quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
         /* relink the stream to the blocked list if necessary */
         if (conn_is_blocked && !quicly_stream_can_send(stream, 0)) {
             quicly_linklist_insert(sched->blocked.prev, &stream->_send_aux.pending_link.default_scheduler);
+            node = sched->active.next;
             continue;
         }
         /* send! */
@@ -349,6 +362,8 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
         conn_is_blocked = quicly_is_blocked(conn);
         if (quicly_stream_can_send(stream, 1))
             link_stream(sched, stream, conn_is_blocked);
+
+        node = sched->active.next;
     }
 
     return ret;

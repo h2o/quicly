@@ -791,6 +791,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             ret = send_pending(fd, conn);
             if (ret != 0) {
                 ech_save_retry_configs();
+                dump_stats(stderr, conn);
                 quicly_free(conn);
                 conn = NULL;
                 if (ret == QUICLY_ERROR_FREE_CONNECTION) {
@@ -1546,6 +1547,7 @@ int main(int argc, char **argv)
                                              {"calc-initial-secret", required_argument, NULL, 0},
                                              {"decrypt-packet", required_argument, NULL, 0},
                                              {"encrypt-packet", required_argument, NULL, 0},
+                                             {"initial-max-path-id", required_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1585,6 +1587,13 @@ int main(int argc, char **argv)
                 }
             } else if (strcmp(longopts[opt_index].name, "exit-after-handshake") == 0) {
                 exit_after_handshake = 1;
+            } else if (strcmp(longopts[opt_index].name, "initial-max-path-id") == 0) {
+                if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.initial_max_path_id) != 1 ||
+                    ctx.transport_params.initial_max_path_id > QUICLY_MAX_PATH_ID) {
+                    fprintf(stderr, "failed to parse initial-max-path-id: %s\n", optarg);
+                    exit(1);
+                }
+                ctx.transport_params.enable_multipath = 1;
             } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
                 return cmd_calc_initial_secret(optarg);
             } else if (strcmp(longopts[opt_index].name, "decrypt-packet") == 0) {
@@ -1908,7 +1917,8 @@ int main(int argc, char **argv)
             load_session();
         hs_properties.client.ech.configs = ech.config_list;
         hs_properties.client.ech.retry_configs = &ech.retry.configs;
-        use_cid_encryptor = cid_key != NULL;
+        use_cid_encryptor =
+            cid_key != NULL || ctx.transport_params.enable_multipath || ctx.transport_params.initial_max_path_id != 0;
     }
     if (use_cid_encryptor) {
         if (cid_key == NULL) {
