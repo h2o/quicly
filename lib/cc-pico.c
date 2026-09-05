@@ -672,9 +672,14 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     }
 }
 
-static void pico_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
+static void pico_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now, uint32_t max_udp_payload_size)
 {
-    /* TODO */
+    cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+    cc->recovery_end = 0;
+    cc->state.pico.bytes_to_mtu_increase = 0;
+    cc->state.pico.undo.num_packets_lost = 0;
+    if (cc->cwnd_minimum > cc->cwnd)
+        cc->cwnd_minimum = cc->cwnd;
 }
 
 static void pico_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now)

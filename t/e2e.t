@@ -164,10 +164,12 @@ subtest "0-rtt" => sub {
     my $resp = `$cli -s $tempdir/session -p /12 127.0.0.1 $port 2> /dev/null`;
     is $resp, "hello world\n";
     ok -e "$tempdir/session", "session saved";
-    system "$cli -s $tempdir/session -e $tempdir/events 127.0.0.1 $port > /dev/null 2>&1";
+    # Keep the request alive long enough to receive the delayed ACK for the 0-RTT packet. A tiny response can let the client close
+    # immediately after receiving the response, before that ACK arrives.
+    system "$cli -s $tempdir/session -e $tempdir/events -p /100000 127.0.0.1 $port > /dev/null 2>&1";
     my $events = slurp_file("$tempdir/events");
     like $events, qr/"type":"stream_send".*"stream_id":0,(.|\n)*"type":"packet_sent".*"pn":1,/m, "stream 0 on pn 1";
-    like $events, qr/"type":"cc_ack_received".*"largest_acked":1,/m, "pn 1 acked";
+    like $events, qr/"type":"packet_acked".*"pn":1,/m, "pn 1 acked";
 };
 
 unlink "$tempdir/session";
@@ -441,13 +443,16 @@ subtest "slow-start" => sub {
         my ($size, $rt_min, $rt_max, @cli_args) = @_;
         subtest "${size}B" => sub {
             my $start_at = time;
-            open my $fh, "-|", "$cli -p /$size @{[ join ' ', @cli_args ]} 127.0.0.1 $udpfw_port 2>&1"
+            open my $fh, "-|", $cli, "-p", "/$size", @cli_args, "127.0.0.1", $udpfw_port
                 or die "failed to launch $cli:$!";
             for (my $total_read = 0; $total_read < $size;) {
                 IO::Select->new($fh)->can_read(); # block until the command writes something
                 my $nread = sysread $fh, my $buf, 65536;
-                die "failed to read from pipe, got $nread:$!"
-                    unless $nread > 0;
+                unless (defined $nread && $nread > 0) {
+                    fail "client returned the complete response (received $total_read of $size bytes)";
+                    close $fh;
+                    return;
+                }
                 $total_read += $nread;
             }
             my $elapsed = time - $start_at;
@@ -528,9 +533,35 @@ subtest "slow-start" => sub {
                 exec $cli, qw(-p /1000000 -i 5000 -s), "$tempdir/session", "127.0.0.1", $udpfw_port;
                 die "failed to exec $cli:$!";
             }
-            sleep 2; # wait until the connection becomes idle, at which point the token will be sent
-            kill 'KILL', $pid;
-            while (waitpid($pid, 0) != $pid) {}
+            # The session file is first written with only the TLS ticket, then rewritten after NEW_TOKEN arrives. Waiting a fixed
+            # amount of time races with completion of the training response and can leave the resume test without rate information.
+            my $deadline = time + 10;
+            my $child_reaped = 0;
+            my $initial_session;
+            my $session_ready = 0;
+            while (!$session_ready && time < $deadline) {
+                if (defined(my $session = load_session_with_token("$tempdir/session"))) {
+                    if (!defined $initial_session) {
+                        $initial_session = $session;
+                    } elsif ($session ne $initial_session) {
+                        # The first NEW_TOKEN is emitted as soon as 1-RTT keys become writable. The next one is emitted after the
+                        # training response has been handed to the transport and carries the measured delivery rate.
+                        $session_ready = 1;
+                        last;
+                    }
+                }
+                if (waitpid($pid, WNOHANG) == $pid) {
+                    $child_reaped = 1;
+                    last;
+                }
+                sleep 0.01;
+            }
+            ok $session_ready, "training produced an updated session with delivery-rate information";
+            unless ($child_reaped) {
+                kill 'KILL', $pid;
+                while (waitpid($pid, 0) != $pid) {}
+            }
+            return unless $session_ready;
             # test RT using the obtained session information
             $doit->(100000, $cc eq "reno" ? (2.8, 3.5) : (2, 2.999), "-s", "$tempdir/session");
         });
@@ -777,6 +808,9 @@ package SpawnedProcess {
     sub finalize {
         my $self = shift;
 
+        return ""
+            unless $self->{logfh};
+
         # kill the process, if it is still alive
         if ($self->{pid}) {
             kill 9, $self->{pid};
@@ -791,6 +825,7 @@ package SpawnedProcess {
             readline $self->{logfh};
         };
         close $self->{logfh};
+        undef $self->{logfh};
 
         print STDERR $log;
 
@@ -800,6 +835,36 @@ package SpawnedProcess {
 
 sub spawn_process {
     SpawnedProcess->new(@_);
+}
+
+sub load_session_with_token {
+    my $fn = shift;
+    return undef
+        unless -e $fn;
+
+    open my $fh, "<", $fn
+        or return undef;
+    binmode $fh;
+    local $/;
+    my $contents = readline $fh;
+    close $fh;
+
+    my $off = 0;
+    my $token_len;
+    for my $block_index (0..2) {
+        return undef
+            if length($contents) - $off < 2;
+        my $len = unpack "n", substr($contents, $off, 2);
+        $token_len = $len
+            if $block_index == 0;
+        $off += 2;
+        return undef
+            if length($contents) - $off < $len;
+        $off += $len;
+    }
+    return undef
+        if $token_len == 0 || $off != length($contents);
+    return $contents;
 }
 
 sub slurp_file {

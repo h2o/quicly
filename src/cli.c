@@ -166,7 +166,7 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             stats.num_packets.handshake_sent, stats.num_packets.lost, stats.num_packets.ack_received,
             stats.num_packets.acked_ecn_counts[0], stats.num_packets.acked_ecn_counts[1], stats.num_packets.acked_ecn_counts[2],
             stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent, stats.num_paths.created,
-            stats.num_paths.validated, stats.num_paths.promoted, stats.rtt.smoothed, stats.cc.num_loss_episodes,
+            stats.num_paths.validated, stats.num_paths.promoted, (uint32_t)stats.rtt.smoothed, stats.cc.num_loss_episodes,
             stats.cc.num_ecn_loss_episodes, stats.delivery_rate.smoothed, stats.cc.cwnd, stats.cc.cwnd_exiting_slow_start,
             stats.cc.exit_slow_start_at, stats.jumpstart.cwnd, stats.cc.cwnd_exiting_jumpstart, stats.jumpstart.prev_rate,
             stats.jumpstart.prev_rtt, stats.token_sent.rate, stats.token_sent.rtt, stats.num_frames_sent.ack_frequency,

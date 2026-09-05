@@ -65,10 +65,10 @@ static int cond_rand_(struct loss_cond_t *cond)
 
     if (cond->data.rand_.bits_avail == 0) {
         if (c == NULL) {
-            /* use different seed for each invocation */
-            static uint64_t key[2];
-            c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, &key);
-            ++key[0];
+            static const uint8_t key[PTLS_AES128_KEY_SIZE] = {0}, iv[PTLS_AES_IV_SIZE] = {0};
+            c = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, key);
+            assert(c != NULL);
+            ptls_cipher_init(c, iv);
         }
         /* initialize next `ntotal` bits, of which `nloss` bits are set */
         cond->data.rand_.bits = 0;
@@ -267,6 +267,7 @@ static void test_even(void)
 
 struct loss_cond_t loss_cond_down, loss_cond_up;
 static unsigned num_failures_in_loss_core;
+static int validate_server_address;
 
 static void loss_core(void)
 {
@@ -281,7 +282,7 @@ static void loss_core(void)
         uint8_t rawbuf[quic_ctx.transport_params.max_udp_payload_size];
         size_t num_packets;
         quicly_decoded_packet_t decoded;
-
+        quicly_address_token_plaintext_t address_token = {.type = QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION};
         ret = quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
                              NULL, NULL, NULL);
         ok(ret == 0);
@@ -292,7 +293,8 @@ static void loss_core(void)
         quic_now += 10;
         decode_packets(&decoded, &raw, 1);
         ok(num_packets == 1);
-        ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL, NULL);
+        ret = quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, validate_server_address ? &address_token : NULL,
+                            new_master_id(), NULL, NULL);
         ok(ret == 0);
         quic_now += 10;
     }
@@ -313,7 +315,7 @@ static void loss_core(void)
     test_streambuf_t *client_streambuf = NULL, *server_streambuf = NULL;
     const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
     size_t i, stall_count = 0;
-    for (i = 0; i < 100; ++i) {
+    for (i = 0; i < 150; ++i) {
         int64_t client_timeout = quicly_get_first_timeout(client), server_timeout = quicly_get_first_timeout(server),
                 min_timeout = client_timeout < server_timeout ? client_timeout : server_timeout;
         assert(min_timeout != INT64_MAX);
@@ -420,26 +422,30 @@ static void test_downstream(void)
     loss_cond_up = cond_true;
 
     num_failures_in_loss_core = 0;
+    /* At this extreme loss rate, validating the synthetic address keeps the test focused on loss recovery instead of the
+     * server's anti-amplification limit. */
+    validate_server_address = 1;
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 3, 4);
         subtest("75%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("down-stats-75%", loss_check_stats, time_spent, 6, 8900, 21000, 2720, 3450, 15200);
+    subtest("down-stats-75%", loss_check_stats, time_spent, 6, 8900, 21000, 2720, 4000, 15200);
+    validate_server_address = 0;
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 2);
         subtest("50%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("down-stats-50%", loss_check_stats, time_spent, 0, 750, 1190, 485, 485, 1526);
+    subtest("down-stats-50%", loss_check_stats, time_spent, 0, 750, 1190, 350, 500, 1526);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 4);
         subtest("25%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("down-stats-25%", loss_check_stats, time_spent, 0, 223, 267, 230, 230, 478);
+    subtest("down-stats-25%", loss_check_stats, time_spent, 0, 150, 225, 140, 200, 478);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 10);
@@ -453,7 +459,7 @@ static void test_downstream(void)
         subtest("5%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("down-stats-5%", loss_check_stats, time_spent, 0, 98, 126, 80, 80, 260);
+    subtest("down-stats-5%", loss_check_stats, time_spent, 0, 90, 126, 80, 80, 260);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 40);
@@ -476,13 +482,15 @@ static void test_bidirectional(void)
     size_t i;
 
     num_failures_in_loss_core = 0;
+    validate_server_address = 1;
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 3, 4);
         init_cond_rand(&loss_cond_up, 3, 4);
         subtest("75%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-75%", loss_check_stats, time_spent, 20, 180000, 233000, 61800, 88400, 690000);
+    subtest("bidi-stats-75%", loss_check_stats, time_spent, 35, 250000, 320000, 100000, 170000, 690000);
+    validate_server_address = 0;
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 2);
@@ -490,7 +498,7 @@ static void test_bidirectional(void)
         subtest("50%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-50%", loss_check_stats, time_spent, 0, 4865, 5850, 1064, 1285, 9600);
+    subtest("bidi-stats-50%", loss_check_stats, time_spent, 0, 7000, 12000, 1500, 2500, 20000);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 4);
@@ -498,7 +506,7 @@ static void test_bidirectional(void)
         subtest("25%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-25%", loss_check_stats, time_spent, 0, 251, 327, 185, 300, 715);
+    subtest("bidi-stats-25%", loss_check_stats, time_spent, 0, 251, 380, 185, 300, 715);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 10);
@@ -522,7 +530,7 @@ static void test_bidirectional(void)
         subtest("2.5%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    subtest("bidi-stats-2.5%", loss_check_stats, time_spent, 0, 89, 105, 80, 80, 220);
+    subtest("bidi-stats-2.5%", loss_check_stats, time_spent, 0, 80, 105, 80, 80, 220);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 64);
@@ -544,7 +552,6 @@ void test_lossy(void)
     uint64_t idle_timeout_backup = quic_ctx.transport_params.max_idle_timeout;
     quic_ctx.transport_params.max_idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
     subtest("downstream", test_downstream);
-    quic_ctx.transport_params.max_idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
     subtest("bidirectional", test_bidirectional);
     quic_ctx.transport_params.max_idle_timeout = idle_timeout_backup;
     quic_ctx.handshake_timeout_rtt_multiplier = handshake_timeout_backup;

@@ -143,7 +143,9 @@ quicly_error_t quicly_sentmap_update(quicly_sentmap_t *map, quicly_sentmap_iter_
     /* update CC state unless the event is PTO */
     if (packet.cc_bytes_in_flight != 0 && event != QUICLY_SENTMAP_EVENT_PTO) {
         assert(map->bytes_in_flight >= packet.cc_bytes_in_flight);
+        assert(map->bytes_in_flight_by_epoch[packet.ack_epoch] >= packet.cc_bytes_in_flight);
         map->bytes_in_flight -= packet.cc_bytes_in_flight;
+        map->bytes_in_flight_by_epoch[packet.ack_epoch] -= packet.cc_bytes_in_flight;
         iter->p->data.packet.cc_bytes_in_flight = 0;
     }
     iter->p->data.packet.frames_in_flight = 0;

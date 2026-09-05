@@ -30,6 +30,7 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 #include "quicly/constants.h"
+#include "quicly/ranges.h"
 #include "quicly/sentmap.h"
 
 typedef struct quicly_loss_conf_t {
@@ -145,6 +146,12 @@ typedef struct quicly_loss_t {
         uint64_t per_epoch[QUICLY_NUM_EPOCHS];
         uint64_t all_;
     } largest_acked_packet_plus1;
+    /** State used to recognize persistent congestion across packet number spaces. */
+    struct {
+        uint64_t first_rtt_sample_pn;
+        uint64_t last_detected_pn;
+        quicly_ranges_t acked_packets;
+    } persistent_congestion;
     /**
      * Total number of application data bytes sent when the last tail occurred, not including retransmissions.
      */
@@ -168,6 +175,7 @@ typedef struct quicly_loss_t {
 } quicly_loss_t;
 
 typedef void (*quicly_loss_on_detect_cb)(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold);
+typedef void (*quicly_loss_on_persistent_congestion_cb)(quicly_loss_t *loss);
 
 typedef enum quicly_loss_ack_received_kind_t {
     QUICLY_LOSS_ACK_RECEIVED_KIND_NON_ACK_ELICITING = 0,
@@ -178,15 +186,16 @@ typedef enum quicly_loss_ack_received_kind_t {
 static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
                              const uint8_t *ack_delay_exponent);
 static void quicly_loss_dispose(quicly_loss_t *r);
-static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
-                                     int can_send_stream_data, int handshake_is_in_progress, uint64_t total_bytes_sent,
-                                     int is_after_send);
+static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, const int64_t last_retransmittable_sent_at[QUICLY_NUM_EPOCHS],
+                                     unsigned outstanding_epochs, int can_send_stream_data, int handshake_confirmed,
+                                     uint64_t total_bytes_sent, int is_after_send);
 /**
  * called when an ACK is received
  */
-static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, uint64_t largest_late_acked, uint64_t next_pn,
-                                        size_t epoch, int64_t now, int64_t sent_at, uint64_t ack_delay_encoded,
+static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, uint64_t largest_late_acked,
+                                        uint64_t next_pn, size_t epoch, int64_t now, int64_t sent_at, uint64_t ack_delay_encoded,
                                         quicly_loss_ack_received_kind_t kind);
+static quicly_error_t quicly_loss_on_packet_acked(quicly_loss_t *r, uint64_t packet_number);
 /* This function updates the loss detection timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
  *  * send min_packets_to_send number of packets immediately. min_packets_to_send should never be 0.
@@ -195,12 +204,16 @@ static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
  */
 static quicly_error_t quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, int is_1rtt_only,
                                            size_t *min_packets_to_send, int *restrict_sending,
-                                           quicly_loss_on_detect_cb on_loss_detected);
+                                           quicly_loss_on_detect_cb on_loss_detected,
+                                           quicly_loss_on_persistent_congestion_cb on_persistent_congestion);
 /**
  *
  */
 quicly_error_t quicly_loss_detect_loss(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, int is_1rtt_only,
                                        quicly_loss_on_detect_cb on_loss_detected);
+quicly_error_t quicly_loss_detect_loss_after_ack(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, int is_1rtt_only,
+                                                 quicly_loss_on_detect_cb on_loss_detected,
+                                                 quicly_loss_on_persistent_congestion_cb on_persistent_congestion);
 /**
  * initializes the sentmap iterator, evicting the entries considered too old.
  */
@@ -267,30 +280,25 @@ inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, u
                          .pto_count = 0,
                          .time_of_last_packet_sent = 0,
                          .largest_acked_packet_plus1 = {.per_epoch = {0}, .all_ = 0},
+                         .persistent_congestion = {.first_rtt_sample_pn = UINT64_MAX, .last_detected_pn = UINT64_MAX},
                          .total_bytes_sent = 0,
                          .loss_time = INT64_MAX,
                          .alarm_at = INT64_MAX};
     quicly_rtt_init(&r->rtt, conf, initial_rtt);
+    quicly_ranges_init(&r->persistent_congestion.acked_packets);
     quicly_sentmap_init(&r->sentmap);
 }
 
 inline void quicly_loss_dispose(quicly_loss_t *r)
 {
+    quicly_ranges_clear(&r->persistent_congestion.acked_packets);
     quicly_sentmap_dispose(&r->sentmap);
 }
 
-inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last_retransmittable_sent_at, int has_outstanding,
-                                     int can_send_stream_data, int handshake_is_in_progress, uint64_t total_bytes_sent,
-                                     int is_after_send)
+inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, const int64_t last_retransmittable_sent_at[QUICLY_NUM_EPOCHS],
+                                     unsigned outstanding_epochs, int can_send_stream_data, int handshake_confirmed,
+                                     uint64_t total_bytes_sent, int is_after_send)
 {
-    if (!has_outstanding) {
-        /* Do not set alarm if there's no data outstanding */
-        r->alarm_at = INT64_MAX;
-        r->loss_time = INT64_MAX;
-        return;
-    }
-    assert(last_retransmittable_sent_at != INT64_MAX);
-
 #define SET_ALARM(t)                                                                                                               \
     do {                                                                                                                           \
         int64_t _t = (t);                                                                                                          \
@@ -308,6 +316,14 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
         return;
     }
 
+    /* Application Data PTOs are not armed until the handshake is confirmed. */
+    if (!handshake_confirmed)
+        outstanding_epochs &= ~(1u << QUICLY_EPOCH_1RTT);
+    if (outstanding_epochs == 0) {
+        r->alarm_at = INT64_MAX;
+        return;
+    }
+
     /* PTO alarm */
     int64_t alarm_duration;
     assert(r->pto_count < 63);
@@ -322,7 +338,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
      * FIXME: use of `can_send_stream_data` and `bytes_sent` is not entirely correct, it does not take things like MAX_ frames
      * and pending.flows into consideration.
      */
-    if (r->conf->num_speculative_ptos > 0 && r->pto_count <= 0 && !handshake_is_in_progress && !can_send_stream_data &&
+    if (r->conf->num_speculative_ptos > 0 && r->pto_count <= 0 && handshake_confirmed && !can_send_stream_data &&
         r->total_bytes_sent < total_bytes_sent) {
         /* New tail, defined as (i) sender is not in PTO recovery, (ii) there is no stream data to send, and
          * (iii) new application data was sent since the last tail. Move the pto_count back to kick off speculative probing. */
@@ -331,20 +347,28 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
             r->pto_count = -r->conf->num_speculative_ptos;
         r->total_bytes_sent = total_bytes_sent;
     }
-    if (r->pto_count < 0) {
-        /* Speculative probes sent under an RTT do not need to account for ack delay, since there is no expectation
-         * of an ack being received before the probe is sent. */
-        alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
-        alarm_duration >>= -r->pto_count;
-        if (alarm_duration < r->conf->min_pto)
-            alarm_duration = r->conf->min_pto;
-    } else {
-        /* Ordinary PTO. The bitshift below is fine; it would take more than a millenium to overflow either alarm_duration or
-         * pto_count, even when the timer granularity is nanosecond */
-        alarm_duration = quicly_rtt_get_pto(&r->rtt, handshake_is_in_progress ? 0 : *r->max_ack_delay, r->conf->min_pto);
-        alarm_duration <<= r->pto_count;
+    int64_t alarm_at = INT64_MAX;
+    for (size_t epoch = 0; epoch != QUICLY_NUM_EPOCHS; ++epoch) {
+        if ((outstanding_epochs & (1u << epoch)) == 0)
+            continue;
+        assert(last_retransmittable_sent_at[epoch] != INT64_MAX);
+        if (r->pto_count < 0) {
+            /* Speculative probes sent under an RTT do not need to account for ack delay, since there is no expectation
+             * of an ack being received before the probe is sent. */
+            alarm_duration = quicly_rtt_get_pto(&r->rtt, 0, r->conf->min_pto);
+            alarm_duration >>= -r->pto_count;
+            if (alarm_duration < r->conf->min_pto)
+                alarm_duration = r->conf->min_pto;
+        } else {
+            /* max_ack_delay is included only for the Application Data packet number space. */
+            alarm_duration = quicly_rtt_get_pto(&r->rtt, epoch == QUICLY_EPOCH_1RTT ? *r->max_ack_delay : 0, r->conf->min_pto);
+            alarm_duration <<= r->pto_count;
+        }
+        int64_t candidate = last_retransmittable_sent_at[epoch] + alarm_duration;
+        if (alarm_at > candidate)
+            alarm_at = candidate;
     }
-    SET_ALARM(last_retransmittable_sent_at + alarm_duration);
+    SET_ALARM(alarm_at);
 
 #undef SET_ALARM
 }
@@ -387,19 +411,27 @@ inline void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly
     /* use min(ack_delay, max_ack_delay) as the ack delay */
     if (ack_delay_millisecs > *r->max_ack_delay)
         ack_delay_millisecs = *r->max_ack_delay;
+    if (r->rtt.latest == 0)
+        r->persistent_congestion.first_rtt_sample_pn = next_pn;
     quicly_rtt_update(&r->rtt, (uint32_t)(now - sent_at), ack_delay_millisecs);
+}
+
+inline quicly_error_t quicly_loss_on_packet_acked(quicly_loss_t *r, uint64_t packet_number)
+{
+    return quicly_ranges_add(&r->persistent_congestion.acked_packets, packet_number, packet_number + 1);
 }
 
 inline quicly_error_t quicly_loss_on_alarm(quicly_loss_t *r, int64_t now, uint32_t max_ack_delay, int is_1rtt_only,
                                            size_t *min_packets_to_send, int *restrict_sending,
-                                           quicly_loss_on_detect_cb on_loss_detected)
+                                           quicly_loss_on_detect_cb on_loss_detected,
+                                           quicly_loss_on_persistent_congestion_cb on_persistent_congestion)
 {
     r->alarm_at = INT64_MAX;
     *min_packets_to_send = 1;
     if (r->loss_time != INT64_MAX) {
         /* Time threshold loss detection. Send at least 1 packet, but no restrictions on sending otherwise. */
         *restrict_sending = 0;
-        return quicly_loss_detect_loss(r, now, max_ack_delay, is_1rtt_only, on_loss_detected);
+        return quicly_loss_detect_loss_after_ack(r, now, max_ack_delay, is_1rtt_only, on_loss_detected, on_persistent_congestion);
     }
     /* PTO. Send at least and at most 1 packet during speculative probing and 2 packets otherwise. */
     ++r->pto_count;
