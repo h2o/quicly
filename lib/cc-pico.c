@@ -383,7 +383,8 @@ static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwn
 
 static int accel_enabled(const quicly_cc_t *cc)
 {
-    return cc->random_loss_tolerance && (cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cuback);
+    return cc->accel_adaptation != 0 &&
+           (cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cuback);
 }
 
 static float calc_smoothed_rtt_before_latest(const quicly_rtt_t *rtt)
@@ -420,9 +421,9 @@ static void accel_on_lost(struct st_quicly_cc_accelerated_increase_t *state, int
 }
 
 static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt, uint32_t cwnd_epoch,
-                             uint32_t reference_mtu, int64_t now)
+                             uint32_t reference_mtu, unsigned flags, int64_t now)
 {
-    if (state->full_rtt == 0)
+    if ((flags & QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE) == 0 || state->full_rtt == 0)
         return 0;
 
     if (state->high_rtt_interval == 0) {
@@ -455,7 +456,8 @@ static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, 
 /**
  * Calculates the accelerated increase ratio. Accelerated increase is used when the queue might have become empty and also has the
  * capacity to grow; specifically when the latest RTT satisfies all of the following conditions:
- * - fullRTT is more than 10ms above minRTT and more than 5% above the latest RTT;
+ * - fullRTT is more than 10ms above minRTT and more than 5% above the latest RTT, unless
+ *   `QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS` is set;
  * - the latest RTT is below a threshold derived from the preceding and current periods:
  *   - use (minRTT + previous-period minimum) / 2 to make sure that RTT is being driven down, but do not set the threshold below
  *     minRTT + 2ms;
@@ -463,15 +465,16 @@ static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, 
  * The increase ratio is max(2ms / RTT threshold, 2.5%). RTT feedback arrives one round late, therefore, assuming an RTT below
  * 100ms, accelerated increase pauses no later than when 4.5ms of queue is built.
  */
-static double accel_calc_increase_ratio(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt)
+static double accel_calc_increase_ratio(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
+                                        unsigned flags)
 {
     /* Skip during initial slow start. */
     if (state->min_rtt_previous_period == 0)
         return 0;
 
     /* Skip if the queue might be too shallow. */
-    if (state->full_rtt <= quicly_u32_add_saturating(rtt->minimum, 10) ||
-        (double)rtt->latest * 1.05 >= state->full_rtt)
+    if ((flags & QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS) == 0 &&
+        (state->full_rtt <= quicly_u32_add_saturating(rtt->minimum, 10) || (double)rtt->latest * 1.05 >= state->full_rtt))
         return 0;
 
     uint32_t rtt_threshold = (uint32_t)(((uint64_t)rtt->minimum + state->min_rtt_previous_period) / 2);
@@ -492,9 +495,9 @@ static double accel_calc_increase_ratio(const struct st_quicly_cc_accelerated_in
 }
 
 static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
-                                      uint32_t cwnd, uint32_t bytes)
+                                      uint32_t cwnd, uint32_t bytes, unsigned flags)
 {
-    double ratio = accel_calc_increase_ratio(state, rtt);
+    double ratio = accel_calc_increase_ratio(state, rtt, flags);
     if (ratio == 0)
         return cwnd;
 
@@ -503,9 +506,9 @@ static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accelerated_incr
 }
 
 static uint32_t accel_bytes_per_mtu_increase(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
-                                             uint32_t mtu)
+                                             uint32_t mtu, unsigned flags)
 {
-    double ratio = accel_calc_increase_ratio(state, rtt);
+    double ratio = accel_calc_increase_ratio(state, rtt, flags);
     if (ratio == 0)
         return UINT32_MAX;
     double bytes = mtu / ratio;
@@ -583,7 +586,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         cubic_on_acked(state, &new_cwnd, cc->ssthresh, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size,
                        reference_mtu);
         if (accel_enabled(cc) && bytes != 0 && cc_limited) {
-            uint32_t accelerated_cwnd = accel_calc_cubic_cwnd(&cc->state.pico.accel, &loss->rtt, cc->cwnd, bytes);
+            uint32_t accelerated_cwnd =
+                accel_calc_cubic_cwnd(&cc->state.pico.accel, &loss->rtt, cc->cwnd, bytes, cc->accel_adaptation);
             if (new_cwnd < accelerated_cwnd)
                 new_cwnd = accelerated_cwnd;
         }
@@ -610,7 +614,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         if (cc->state.pico.bytes_to_mtu_increase == 0)
             cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size);
         if (accel_enabled(cc)) {
-            uint32_t accel_bytes = accel_bytes_per_mtu_increase(&cc->state.pico.accel, &loss->rtt, max_udp_payload_size);
+            uint32_t accel_bytes =
+                accel_bytes_per_mtu_increase(&cc->state.pico.accel, &loss->rtt, max_udp_payload_size, cc->accel_adaptation);
             if (cc->state.pico.bytes_to_mtu_increase > accel_bytes)
                 cc->state.pico.bytes_to_mtu_increase = accel_bytes;
         }
@@ -629,7 +634,7 @@ Cleanup:
      * and return to unbounded slow start to recalibrate full_rtt. */
     if (accel_enabled(cc) && cc->cwnd >= cc->ssthresh && cc_limited &&
         accel_recalibrate(&cc->state.pico.accel, &loss->rtt, cc->ssthresh,
-                          cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size, now)) {
+                          cc->normalize_mtu ? QUICLY_CC_REFERENCE_MTU : max_udp_payload_size, cc->accel_adaptation, now)) {
         if (cc->type == &quicly_cc_type_cubic) {
             cc->state.pico.cubic = (struct st_quicly_cc_cubic_t){.k = NAN, .cc_limited = 1};
         } else {
@@ -878,12 +883,12 @@ static void pico_init_pico_state(quicly_cc_t *cc)
     }
 }
 
-static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance)
+static void pico_reset(quicly_cc_t *cc, quicly_cc_type_t *type, uint32_t initcwnd, int normalize_mtu, unsigned accel_adaptation)
 {
     *cc = (quicly_cc_t){
         .type = type,
         .normalize_mtu = normalize_mtu,
-        .random_loss_tolerance = random_loss_tolerance,
+        .accel_adaptation = accel_adaptation,
         .cwnd = initcwnd,
         .cwnd_initial = initcwnd,
         .cwnd_maximum = initcwnd,
@@ -914,7 +919,7 @@ static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
             cc->type = type;
             pico_init_pico_state(cc);
         } else {
-            pico_reset(cc, type, cc->cwnd_initial, cc->normalize_mtu, cc->random_loss_tolerance);
+            pico_reset(cc, type, cc->cwnd_initial, cc->normalize_mtu, cc->accel_adaptation);
         }
         return 1;
     }
@@ -952,28 +957,28 @@ static void cubic_update_cc_limited(quicly_cc_t *cc, int cc_limited, int64_t now
     cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
 }
 
-static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, unsigned accel_adaptation,
                       int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_pico, initcwnd, normalize_mtu, random_loss_tolerance);
+    pico_reset(cc, &quicly_cc_type_pico, initcwnd, normalize_mtu, accel_adaptation);
 }
 
-static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+static void reno_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, unsigned accel_adaptation,
                       int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_reno, initcwnd, normalize_mtu, random_loss_tolerance);
+    pico_reset(cc, &quicly_cc_type_reno, initcwnd, normalize_mtu, accel_adaptation);
 }
 
-static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, unsigned accel_adaptation,
                        int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu, random_loss_tolerance);
+    pico_reset(cc, &quicly_cc_type_cubic, initcwnd, normalize_mtu, accel_adaptation);
 }
 
-static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+static void cuback_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, unsigned accel_adaptation,
                         int64_t now)
 {
-    pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu, random_loss_tolerance);
+    pico_reset(cc, &quicly_cc_type_cuback, initcwnd, normalize_mtu, accel_adaptation);
 }
 
 quicly_cc_type_t quicly_cc_type_pico = {"pico",

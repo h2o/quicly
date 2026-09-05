@@ -878,7 +878,7 @@ static void usage(const char *cmd)
            "                      fq_codel\n"
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
            "  -R                  turns on rapid start\n"
-           "  -T                  turns on random loss tolerance\n"
+           "  -T                  turns on accelerated bottleneck bandwidth adaptation\n"
            "  -s <seconds>        delay until the sender is added to the simulation\n"
            "                      (default: 0)\n"
            "  -t                  emits trace as well\n"
@@ -1079,7 +1079,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             quicctx->enable_ratio.rapid_start = 255;
             break;
         case 'T':
-            quicctx->random_loss_tolerance = 1;
+            quicctx->accel_adaptation = QUICLY_CC_ACCEL_ADAPTATION_ON;
             break;
         case 's':
             if (sscanf(optarg, "%lf", start) != 1) {

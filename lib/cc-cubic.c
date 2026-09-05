@@ -206,7 +206,7 @@ static int cubic_on_switch(quicly_cc_t *cc)
     return 0;
 }
 
-static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
+static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, unsigned accel_adaptation,
                        int64_t now)
 {
     cubic_reset(cc, initcwnd, normalize_mtu);

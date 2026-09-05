@@ -57,6 +57,21 @@ extern "C" {
  */
 #define QUICLY_BETA_ECN 0.85
 
+/**
+ * Accelerate whenever the adaptive RTT gate permits it, bypassing the full-queue RTT guard.
+ */
+#define QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS 0x1
+/**
+ * Observe the full-queue RTT and recalibrate it when the path characteristics might have changed. Unless
+ * `QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS` is also set, the observation guards accelerated increase.
+ */
+#define QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE 0x2
+/**
+ * Default for accelerated adaptation: use fullRTT to conservatively decide when to increase faster than CUBIC, while
+ * recalibration helps regain bandwidth when random loss is frequent.
+ */
+#define QUICLY_CC_ACCEL_ADAPTATION_ON QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE
+
 /* factors defined by Rapid Start (see the I-D) */
 #define QUICLY_RAPID_START_K (2. / 3)
 #define QUICLY_RAPID_START_ACK_FACTOR(beta) (QUICLY_RAPID_START_K * (1 - (beta)))
@@ -124,7 +139,7 @@ struct st_quicly_cc_cuback_t {
 };
 
 /**
- * State used to accelerate CWND increase after Random Loss Tolerance is enabled.
+ * State used to accelerate CWND increase when bottleneck bandwidth adaptation is enabled.
  */
 struct st_quicly_cc_accelerated_increase_t {
     /**
@@ -215,9 +230,9 @@ typedef struct st_quicly_cc_t {
      */
     unsigned normalize_mtu : 1;
     /**
-     * Whether Random Loss Tolerance is enabled for this connection.
+     * Controls accelerated bottleneck bandwidth adaptation; see `QUICLY_CC_ACCEL_ADAPTATION_*`.
      */
-    unsigned random_loss_tolerance : 1;
+    unsigned accel_adaptation : 2;
     /**
      * State information specific to the congestion controller implementation.
      */

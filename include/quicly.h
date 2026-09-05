@@ -156,7 +156,7 @@ QUICLY_CALLBACK_TYPE(quicly_error_t, generate_resumption_token, quicly_conn_t *c
  * called to initialize a congestion controller for a new connection.
  * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
  */
-QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance, int64_t now);
+QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, unsigned accel_adaptation, int64_t now);
 /**
  * reference counting.
  * delta must be either 1 or -1.
@@ -390,9 +390,9 @@ struct st_quicly_context_t {
      */
     unsigned normalize_cc_mtu : 1;
     /**
-     * if congestion control should tolerate random loss
+     * controls accelerated bottleneck bandwidth adaptation; see `QUICLY_CC_ACCEL_ADAPTATION_*`
      */
-    unsigned random_loss_tolerance : 1;
+    unsigned accel_adaptation : 2;
     /**
      *
      */

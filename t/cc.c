@@ -504,13 +504,13 @@ static void test_cubic_undo_loss(void)
     ok(cc.num_loss_episodes_undone == 1);
 }
 
-static void test_cubic_random_loss_tolerance_accelerated_increase(void)
+static void test_cubic_accel_adaptation_accelerated_increase(void)
 {
     quicly_cc_t cc, control;
     quicly_loss_t loss = {.rtt = {.latest = 120, .smoothed = 120, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
 
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
 
     /* The startup loss schedules a full_rtt observation and applies the ordinary slow-start reduction. The smoothed RTT is
      * adopted when recovery exits. */
@@ -531,18 +531,20 @@ static void test_cubic_random_loss_tolerance_accelerated_increase(void)
     ok(cc.cwnd == (uint32_t)(80 * mtu * QUICLY_BETA_LOSS));
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
-    uint32_t accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu);
+    uint32_t accelerated_cwnd =
+        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
     control = cc;
-    control.random_loss_tolerance = 0;
+    control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     ok(cc.cwnd == (control.cwnd < accelerated_cwnd ? accelerated_cwnd : control.cwnd));
 
     /* An aggregate ACK for one post-reduction flight applies the accelerated increase. */
     uint32_t bytes_acked = cc.cwnd;
-    accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, bytes_acked);
+    accelerated_cwnd =
+        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, bytes_acked, QUICLY_CC_ACCEL_ADAPTATION_ON);
     control = cc;
-    control.random_loss_tolerance = 0;
+    control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1500, mtu);
     control.type->cc_on_acked(&control, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1500, mtu);
     ok(cc.cwnd == (control.cwnd < accelerated_cwnd ? accelerated_cwnd : control.cwnd));
@@ -551,6 +553,46 @@ static void test_cubic_random_loss_tolerance_accelerated_increase(void)
     uint32_t second_cwnd_at_loss = cc.cwnd;
     cc.type->cc_on_lost(&cc, &loss, mtu, 32, 40, 1600, mtu);
     ok(cc.cwnd == (uint32_t)(second_cwnd_at_loss * QUICLY_BETA_LOSS));
+}
+
+static void test_cubic_accel_adaptation_increase_always(void)
+{
+    quicly_cc_t cc, control;
+    quicly_loss_t loss = {.rtt = {.latest = 120, .smoothed = 120, .minimum = 100, .variance = 0}};
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS, 0);
+
+    /* Supply an RTT during initial slow start, then exit it through an ordinary loss. */
+    cc.type->cc_on_acked(&cc, &loss, mtu, 9, mtu, 1, 10, 900, mtu);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
+    ok(cc.state.pico.accel.full_rtt == 120);
+
+    /* The adaptive RTT gate alone permits accelerated increase, even without a usable full_rtt observation. */
+    cc.state.pico.accel.full_rtt = 0;
+    loss.rtt.latest = 101;
+    control = cc;
+    control.accel_adaptation = 0;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 21, mtu, 1, 22, 1200, mtu);
+    control.type->cc_on_acked(&control, &loss, mtu, 21, mtu, 1, 22, 1200, mtu);
+    ok(cc.cwnd > control.cwnd);
+
+    /* The flags are composable: adding RECALIBRATE observes full_rtt, while INCREASE_ALWAYS continues to bypass its guard. */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0,
+                            QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS | QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE, 0);
+    loss.rtt.latest = loss.rtt.smoothed = 120;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 9, mtu, 1, 10, 900, mtu);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
+    cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
+    ok(cc.state.pico.accel.full_rtt == 120);
+    cc.state.pico.accel.full_rtt = 110;
+    loss.rtt.latest = 101;
+    control = cc;
+    control.accel_adaptation = QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE;
+    cc.type->cc_on_acked(&cc, &loss, mtu, 21, mtu, 1, 22, 1200, mtu);
+    control.type->cc_on_acked(&control, &loss, mtu, 21, mtu, 1, 22, 1200, mtu);
+    ok(cc.cwnd > control.cwnd);
 }
 
 static void test_smoothed_rtt_before_latest(void)
@@ -564,28 +606,28 @@ static void test_smoothed_rtt_before_latest(void)
     ok(calc_smoothed_rtt_before_latest(&rtt) == preceding);
 }
 
-static void test_cubic_random_loss_tolerance_guards(void)
+static void test_cubic_accel_adaptation_guards(void)
 {
     quicly_cc_t cc, control;
     quicly_loss_t loss = {.rtt = {.latest = 101, .smoothed = 105, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
 
     /* A full_rtt observation exactly 10ms above minRTT does not enable accelerated increase. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
     cc.state.pico.accel.full_rtt = 110;
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1100, mtu);
     control = cc;
-    control.random_loss_tolerance = 0;
+    control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     ok(cc.cwnd == control.cwnd);
 
     /* A current RTT exactly 2ms above minRTT leaves CUBIC on its ordinary trajectory even if an earlier recovery ACK was below the
      * threshold. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
     cc.state.pico.accel.full_rtt = 120;
@@ -594,14 +636,14 @@ static void test_cubic_random_loss_tolerance_guards(void)
     cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1100, mtu);
     loss.rtt.latest = 102;
     control = cc;
-    control.random_loss_tolerance = 0;
+    control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     ok(cc.cwnd == control.cwnd);
 
     /* A raised minimum throughout the preceding CA period raises the gate halfway toward that observation. The existing 2ms
      * allowance remains the lower bound. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
     cc.state.pico.accel.full_rtt = 120;
@@ -612,7 +654,7 @@ static void test_cubic_random_loss_tolerance_guards(void)
     ok(cc.state.pico.accel.min_rtt_current_period == 0);
     cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1100, mtu);
     control = cc;
-    control.random_loss_tolerance = 0;
+    control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     ok(cc.cwnd > control.cwnd);
@@ -620,7 +662,7 @@ static void test_cubic_random_loss_tolerance_guards(void)
     /* Reaching the adaptive threshold leaves CUBIC on its ordinary trajectory. */
     loss.rtt.latest = 105;
     control = cc;
-    control.random_loss_tolerance = 0;
+    control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, mtu, 21, mtu, 1, 22, 1300, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 21, mtu, 1, 22, 1300, mtu);
     ok(cc.cwnd == control.cwnd);
@@ -629,13 +671,13 @@ static void test_cubic_random_loss_tolerance_guards(void)
     cc.state.pico.accel.min_rtt_previous_period = 120;
     cc.state.pico.accel.min_rtt_current_period = 104;
     loss.rtt.latest = 105;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) > 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) > 0);
     loss.rtt.latest = 106;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) == 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 0);
 
     /* Long-RTT paths retain the 2.5% floor, while shorter paths use the rate that adds approximately two milliseconds of flight
      * per RTT. Acceleration stops once full_rtt is no more than five percent above the latest RTT. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
     cc.cwnd = 70 * mtu;
@@ -644,28 +686,29 @@ static void test_cubic_random_loss_tolerance_guards(void)
     cc.state.pico.accel.min_rtt_current_period = 100;
     loss.rtt.minimum = 80;
     loss.rtt.latest = 100;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) == 1. / 40);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 1. / 40);
     loss.rtt.minimum = 10;
     loss.rtt.latest = 11;
     loss.rtt.smoothed = 11;
     cc.state.pico.accel.min_rtt_current_period = 11;
-    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) - 2. / 13) < 0.000001);
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) - 2. / 13) <
+       0.000001);
     /* full_rtt does not limit the increase rate while both RTT gates remain open. */
     cc.state.pico.accel.min_rtt_previous_period = 200;
     cc.state.pico.accel.min_rtt_current_period = 100;
     cc.state.pico.accel.full_rtt = 120;
     loss.rtt.latest = 100;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) == 1. / 40);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 1. / 40);
     loss.rtt.minimum = 80;
     loss.rtt.latest = 100;
     loss.rtt.smoothed = 100;
     cc.state.pico.accel.min_rtt_current_period = 100;
     cc.state.pico.accel.full_rtt = 105;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) == 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 0);
 
     /* ECN records a high-queue observation, applies its ordinary reduction, then permits accelerated increase when RTT has
      * drained. A subsequent CE inside recovery refreshes the observation. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
     cc.state.pico.accel.full_rtt = 120;
@@ -675,9 +718,10 @@ static void test_cubic_random_loss_tolerance_guards(void)
     cc.type->cc_on_lost(&cc, &loss, 0, 11, 20, 1050, mtu);
     ok(cc.state.pico.accel.last_high_queue_at == 1050);
     control = cc;
-    control.random_loss_tolerance = 0;
+    control.accel_adaptation = 0;
     loss.rtt.latest = 81;
-    uint32_t accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu);
+    uint32_t accelerated_cwnd =
+        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
     ok(accelerated_cwnd > cc.cwnd);
     cc.type->cc_on_acked(&cc, &loss, mtu, 20, mtu, 1, 21, 1100, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1100, mtu);
@@ -685,7 +729,7 @@ static void test_cubic_random_loss_tolerance_guards(void)
 
     /* ECN encountered during calibration schedules the same full_rtt observation as packet loss, while retaining ECN's ordinary
      * congestion response. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     loss.rtt.latest = 130;
     loss.rtt.smoothed = 125;
     cc.type->cc_on_lost(&cc, &loss, 0, 10, 20, 1000, mtu);
@@ -696,7 +740,7 @@ static void test_cubic_random_loss_tolerance_guards(void)
     ok(cc.state.pico.accel.full_rtt == 125);
 
     /* A new loss beyond recovery_end closes the preceding recovery even if no intervening ACK reached congestion control. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     loss.rtt.latest = loss.rtt.smoothed = 120;
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     loss.rtt.smoothed = 115;
@@ -704,7 +748,7 @@ static void test_cubic_random_loss_tolerance_guards(void)
     ok(cc.state.pico.accel.full_rtt == 115);
 }
 
-static void test_cubic_random_loss_tolerance_recalibration(void)
+static void test_cubic_accel_adaptation_recalibration(void)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 109, .smoothed = 109, .minimum = 100, .variance = 0}};
@@ -712,7 +756,7 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
 
     /* A loss starts a new CUBIC epoch but does not restart the time available for deciding whether the path should be
      * recalibrated. The new epoch's K is used for the decision. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd = 60 * mtu;
     cc.ssthresh = 50 * mtu;
     cc.cwnd_exiting_slow_start = initcwnd;
@@ -726,15 +770,18 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
     cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 2000, mtu);
     ok(cc.state.pico.accel.last_high_queue_at == 1000);
     ok(cc.state.pico.accel.high_rtt_interval == 0);
+    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu,
+                          QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS, INT64_MAX));
+    ok(cc.state.pico.accel.high_rtt_interval == 0);
     double k = fast_cbrt((cc.ssthresh / QUICLY_BETA_LOSS - cc.ssthresh) / (QUICLY_CUBIC_C * mtu));
-    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 1000));
+    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 1000));
     ok(cc.state.pico.accel.high_rtt_interval != 0);
     ok(cc.state.pico.accel.high_rtt_interval <
        k * fast_cbrt(cc.state.pico.accel.full_rtt / loss.rtt.minimum) * 1000);
-    ok(accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu,
+    ok(accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON,
                          1000 + 2 * (int64_t)cc.state.pico.accel.high_rtt_interval));
 
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd = 60 * mtu;
     cc.ssthresh = 50 * mtu;
     cc.cwnd_exiting_slow_start = initcwnd;
@@ -750,11 +797,11 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
     /* Reaching the threshold refreshes the timestamp. Recalibration requires the current interval to pass after the latest such
      * observation. */
     loss.rtt.smoothed = 110;
-    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 6000));
+    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 6000));
     ok(cc.state.pico.accel.last_high_queue_at == 6000);
     loss.rtt.smoothed = 109;
-    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 9999));
-    ok(accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 10000));
+    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 9999));
+    ok(accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 10000));
 
     cc.state.pico.accel.high_rtt_interval = 2000;
     cc.state.pico.accel.last_high_queue_at = 1000;
@@ -781,20 +828,21 @@ static void test_cubic_random_loss_tolerance_recalibration(void)
     ok(cc.cwnd_exiting_slow_start == initcwnd);
 }
 
-static void test_cubic_random_loss_tolerance(void)
+static void test_cubic_accel_adaptation(void)
 {
-    subtest("accelerated-increase", test_cubic_random_loss_tolerance_accelerated_increase);
-    subtest("guards", test_cubic_random_loss_tolerance_guards);
-    subtest("recalibration", test_cubic_random_loss_tolerance_recalibration);
+    subtest("accelerated-increase", test_cubic_accel_adaptation_accelerated_increase);
+    subtest("increase-always", test_cubic_accel_adaptation_increase_always);
+    subtest("guards", test_cubic_accel_adaptation_guards);
+    subtest("recalibration", test_cubic_accel_adaptation_recalibration);
 }
 
-static void test_cuback_random_loss_tolerance_accelerated_increase(void)
+static void test_cuback_accel_adaptation_accelerated_increase(void)
 {
     quicly_cc_t cc, control;
     quicly_loss_t loss = {.rtt = {.latest = 120, .smoothed = 120, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
 
-    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
 
     /* The startup loss schedules full_rtt and opens accelerated increase after the ordinary slow-start reduction. */
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
@@ -814,8 +862,9 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
 
     cc.state.pico.bytes_to_mtu_increase = UINT32_MAX;
     control = cc;
-    control.random_loss_tolerance = 0;
-    uint32_t accelerated_interval = accel_bytes_per_mtu_increase(&cc.state.pico.accel, &loss.rtt, mtu);
+    control.accel_adaptation = 0;
+    uint32_t accelerated_interval =
+        accel_bytes_per_mtu_increase(&cc.state.pico.accel, &loss.rtt, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     ok(cc.cwnd == control.cwnd);
@@ -831,11 +880,11 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
     /* If ordinary Cuback reaches its next increase first, it wins that increment. Acceleration can shorten the following
      * interval. */
     cc = control;
-    cc.random_loss_tolerance = 1;
+    cc.accel_adaptation = QUICLY_CC_ACCEL_ADAPTATION_ON;
     cc.state.pico.accel.full_rtt = 120;
     cc.state.pico.bytes_to_mtu_increase = 1;
     control = cc;
-    control.random_loss_tolerance = 0;
+    control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, 1, 32, 1, 1, 33, 1500, mtu);
     control.type->cc_on_acked(&control, &loss, 1, 32, 1, 1, 33, 1500, mtu);
     ok(cc.cwnd == control.cwnd);
@@ -846,18 +895,18 @@ static void test_cuback_random_loss_tolerance_accelerated_increase(void)
     cc.state.pico.accel.min_rtt_previous_period = 110;
     loss.rtt.latest = 104;
     cc.state.pico.accel.min_rtt_current_period = 104;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) > 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) > 0);
     loss.rtt.latest = 105;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt) == 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 0);
 }
 
-static void test_cuback_random_loss_tolerance_recalibration(void)
+static void test_cuback_accel_adaptation_recalibration(void)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 109, .smoothed = 109, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
 
-    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0, 1, 0);
+    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd = 60 * mtu;
     cc.ssthresh = 50 * mtu;
     cc.cwnd_exiting_slow_start = initcwnd;
@@ -867,7 +916,7 @@ static void test_cuback_random_loss_tolerance_recalibration(void)
     cc.state.pico.accel.last_high_queue_at = 1000;
     cc.num_loss_episodes = 1;
 
-    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, 1000));
+    ok(!accel_recalibrate(&cc.state.pico.accel, &loss.rtt, cc.ssthresh, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 1000));
     uint32_t calculated_interval = cc.state.pico.accel.high_rtt_interval;
     double cwnd_before_reduction = cc.ssthresh / QUICLY_BETA_LOSS;
     double k = fast_cbrt((cwnd_before_reduction - cc.ssthresh) / (QUICLY_CUBIC_C * mtu));
@@ -900,17 +949,17 @@ static void test_cuback_random_loss_tolerance_recalibration(void)
     ok(cc.cwnd_exiting_slow_start == initcwnd);
 }
 
-static void test_cuback_random_loss_tolerance(void)
+static void test_cuback_accel_adaptation(void)
 {
-    subtest("accelerated-increase", test_cuback_random_loss_tolerance_accelerated_increase);
-    subtest("recalibration", test_cuback_random_loss_tolerance_recalibration);
+    subtest("accelerated-increase", test_cuback_accel_adaptation_accelerated_increase);
+    subtest("recalibration", test_cuback_accel_adaptation_recalibration);
 }
 
-static void test_random_loss_tolerance(void)
+static void test_accel_adaptation(void)
 {
     subtest("smoothed-rtt-before-latest", test_smoothed_rtt_before_latest);
-    subtest("cubic", test_cubic_random_loss_tolerance);
-    subtest("cuback", test_cuback_random_loss_tolerance);
+    subtest("cubic", test_cubic_accel_adaptation);
+    subtest("cuback", test_cuback_accel_adaptation);
 }
 
 static void test_cubic_legacy_name(void)
@@ -1241,7 +1290,7 @@ void test_cc(void)
     subtest("cubic-rapid-start-epoch", test_cubic_rapid_start_epoch);
     subtest("cubic-abe", test_cubic_abe);
     subtest("cubic-undo-loss", test_cubic_undo_loss);
-    subtest("random-loss-tolerance", test_random_loss_tolerance);
+    subtest("accel-adaptation", test_accel_adaptation);
     subtest("cubic-legacy-name", test_cubic_legacy_name);
     subtest("pico-ack-countdown", test_pico_ack_countdown);
     subtest("pico-switch-resets-ack-credit", test_pico_switch_resets_ack_credit);
