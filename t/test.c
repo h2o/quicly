@@ -1983,29 +1983,31 @@ static void test_multipath_coupled_cc(void)
      * Under correct LIA with equal RTTs, alpha = 0.5, so it should require 40000 bytes to increase! */
     quicly_cc_t *cc = &client->path_spaces[1]->cc;
     cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 15000, 100, 15000, 1, 101, client->stash.now, 1200);
-    /* Should accumulate stash, but no increase yet because stash (15000) < target (40000) */
+    /* 25,000 bytes remain before the 40,000-byte LIA target is reached. */
     ok(cc->cwnd == 10000);
-    ok(cc->state.reno.stash == 15000);
+    ok(cc->state.pico.bytes_to_mtu_increase == 25000);
 
     cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 20000, 101, 20000, 1, 102, client->stash.now, 1200);
-    /* stash is now 35000, still < 40000 */
+    /* Another 20,000 bytes leaves 5,000 bytes in the current interval. */
     ok(cc->cwnd == 10000);
-    ok(cc->state.reno.stash == 35000);
+    ok(cc->state.pico.bytes_to_mtu_increase == 5000);
 
     cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 5000, 102, 5000, 1, 103, client->stash.now, 1200);
-    /* stash reaches 40000, should increase cwnd by 1 MSS (1200) and reset stash to 0 */
+    /* Reaching 40,000 increases CWND by one MSS and starts the next LIA interval. */
     ok(cc->cwnd == 11200);
-    ok(cc->state.reno.stash == 0);
+    ok(cc->state.pico.bytes_to_mtu_increase == 40128);
 
     /* The coupled term can be smaller than a slow path's own CWND. LIA must remain bounded by standard Reno in that case. */
     client->path_spaces[0]->cc.cwnd = 1000;
     client->path_spaces[0]->loss.rtt.smoothed = 1;
     cc->cwnd = 100000;
     client->path_spaces[1]->loss.rtt.smoothed = 1000;
-    ok(quicly_calculate_lia_target(client) < cc->cwnd);
+    uint64_t reno_target = cc->normalize_mtu ? (uint64_t)cc->cwnd * 1200 / QUICLY_CC_REFERENCE_MTU : cc->cwnd;
+    ok(quicly_calculate_lia_target(client) < reno_target);
+    cc->state.pico.bytes_to_mtu_increase = 0;
     cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 2000, 103, 2000, 1, 104, client->stash.now, 1200);
     ok(cc->cwnd == 100000);
-    ok(cc->state.reno.stash == 2000);
+    ok(cc->state.pico.bytes_to_mtu_increase == reno_target - 2000);
 
     quicly_free(client);
     quicly_free(server);

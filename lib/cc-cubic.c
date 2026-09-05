@@ -175,10 +175,11 @@ static void cubic_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     cc->state.cubic.last_sent_time = now;
 }
 
-static void cubic_reset(quicly_cc_t *cc, uint32_t initcwnd)
+static void cubic_reset(quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu)
 {
     memset(cc, 0, sizeof(quicly_cc_t));
-    cc->type = &quicly_cc_type_cubic;
+    cc->type = &quicly_cc_type_cubic_legacy;
+    cc->normalize_mtu = normalize_mtu;
     cc->cwnd = cc->cwnd_initial = cc->cwnd_maximum = initcwnd;
     cc->ssthresh = cc->cwnd_minimum = UINT32_MAX;
     cc->exit_slow_start_at = INT64_MAX;
@@ -188,15 +189,16 @@ static void cubic_reset(quicly_cc_t *cc, uint32_t initcwnd)
 
 static int cubic_on_switch(quicly_cc_t *cc)
 {
-    if (cc->type == &quicly_cc_type_cubic)
+    if (cc->type == &quicly_cc_type_cubic_legacy)
         return 1;
 
-    if (cc->type == &quicly_cc_type_reno || cc->type == &quicly_cc_type_pico) {
+    if (cc->type == &quicly_cc_type_reno || cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_pico ||
+        cc->type == &quicly_cc_type_cuback) {
         /* When in slow start, state can be reused as-is; otherwise, restart. */
         if (cc->cwnd_exiting_slow_start == 0) {
-            cc->type = &quicly_cc_type_cubic;
+            cc->type = &quicly_cc_type_cubic_legacy;
         } else {
-            cubic_reset(cc, cc->cwnd_initial);
+            cubic_reset(cc, cc->cwnd_initial, cc->normalize_mtu);
         }
         return 1;
     }
@@ -204,18 +206,18 @@ static int cubic_on_switch(quicly_cc_t *cc)
     return 0;
 }
 
-static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int64_t now)
+static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now)
 {
-    cubic_reset(cc, initcwnd);
+    cubic_reset(cc, initcwnd, normalize_mtu);
 }
 
-quicly_cc_type_t quicly_cc_type_cubic = {"cubic",
-                                         &quicly_cc_cubic_init,
-                                         cubic_on_acked,
-                                         cubic_on_lost,
-                                         cubic_on_persistent_congestion,
-                                         cubic_on_sent,
-                                         cubic_on_switch,
-                                         NULL,
-                                         quicly_cc_jumpstart_enter};
-quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};
+quicly_cc_type_t quicly_cc_type_cubic_legacy = {"cubic-legacy",
+                                                &quicly_cc_cubic_legacy_init,
+                                                cubic_on_acked,
+                                                cubic_on_lost,
+                                                cubic_on_persistent_congestion,
+                                                cubic_on_sent,
+                                                cubic_on_switch,
+                                                NULL,
+                                                quicly_cc_jumpstart_enter};
+quicly_init_cc_t quicly_cc_cubic_legacy_init = {cubic_init};

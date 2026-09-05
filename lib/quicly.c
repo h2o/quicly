@@ -1833,10 +1833,15 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, qui
     }
 }
 
-static void update_ratemeter(quicly_conn_t *conn, quicly_path_space_t *ps, int is_cc_limited)
+static void update_ratemeter(quicly_conn_t *conn, quicly_path_space_t *ps, int has_sendable_data, int sendbuf_full,
+                             int pacer_limited)
 {
-    if (quicly_ratemeter_is_cc_limited(&ps->ratemeter) != is_cc_limited) {
-        if (is_cc_limited) {
+    has_sendable_data = has_sendable_data && conn->super.remote.address_validation.validated;
+    int is_cwnd_limited = has_sendable_data && ps->loss.sentmap.bytes_in_flight >= ps->cc.cwnd,
+        is_ratemeter_limited = has_sendable_data && (sendbuf_full || is_cwnd_limited || pacer_limited);
+
+    if (quicly_ratemeter_is_cc_limited(&ps->ratemeter) != is_ratemeter_limited) {
+        if (is_ratemeter_limited) {
             quicly_ratemeter_enter_cc_limited(&ps->ratemeter, ps->packet_number);
             QUICLY_PROBE(ENTER_CC_LIMITED, conn, conn->stash.now, ps->packet_number);
             QUICLY_LOG_CONN(enter_cc_limited, conn, { PTLS_LOG_ELEMENT_UNSIGNED(pn, ps->packet_number); });
@@ -1844,6 +1849,16 @@ static void update_ratemeter(quicly_conn_t *conn, quicly_path_space_t *ps, int i
             quicly_ratemeter_exit_cc_limited(&ps->ratemeter, ps->packet_number);
             QUICLY_PROBE(EXIT_CC_LIMITED, conn, conn->stash.now, ps->packet_number);
             QUICLY_LOG_CONN(exit_cc_limited, conn, { PTLS_LOG_ELEMENT_UNSIGNED(pn, ps->packet_number); });
+        }
+    }
+    if (ps->cc.type->cc_update_cc_limited != NULL) {
+        /* Pacing or exhausting the output batch retains CC-limited state after the sender has filled CWND, but does not establish
+         * that state by itself. This keeps Cubic's clock running while a bulk sender refills the window without letting small paced
+         * bursts advance the clock. */
+        if (conn->super.stats.num_respected_app_limited == 0 || is_cwnd_limited) {
+            ps->cc.type->cc_update_cc_limited(&ps->cc, 1, conn->stash.now);
+        } else if (!is_ratemeter_limited) {
+            ps->cc.type->cc_update_cc_limited(&ps->cc, 0, conn->stash.now);
         }
     }
 }
@@ -1862,7 +1877,7 @@ static void setup_next_send(quicly_conn_t *conn)
     if (!can_send_stream_data) {
         for (int i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; ++i)
             if (conn->path_spaces[i] != NULL)
-                update_ratemeter(conn, conn->path_spaces[i], 0);
+                update_ratemeter(conn, conn->path_spaces[i], 0, 0, 0);
     }
 }
 
@@ -2406,7 +2421,8 @@ static quicly_error_t alloc_path_space(quicly_conn_t *conn, size_t path_index, u
 
         ps->max_udp_payload_size = conn->super.ctx->initial_egress_max_udp_payload_size;
         uint32_t initcwnd = quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets, ps->max_udp_payload_size);
-        conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &ps->cc, initcwnd, conn->stash.now);
+        conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &ps->cc, initcwnd, conn->super.ctx->normalize_cc_mtu,
+                                     conn->stash.now);
         if (conn->path_spaces[0] != NULL && ps->cc.type != conn->path_spaces[0]->cc.type &&
             !conn->path_spaces[0]->cc.type->cc_switch(&ps->cc)) {
             do_free_pn_space(ps->pn_space);
@@ -2743,7 +2759,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
         ->type->cc_init->cb(get_cc(conn, get_path(conn, active_idx))->type->cc_init, get_cc(conn, get_path(conn, active_idx)),
                             quicly_cc_calc_initial_cwnd(conn->super.ctx->initcwnd_packets,
                                                         *get_max_udp_payload_size(conn, get_path(conn, active_idx))),
-                            conn->stash.now);
+                            conn->super.ctx->normalize_cc_mtu, conn->stash.now);
     get_cc(conn, get_path(conn, active_idx))->conn = conn;
     if (conn->super.stats.num_rapid_start != 0 && get_cc(conn, get_path(conn, active_idx))->type->enable_rapid_start != NULL)
         get_cc(conn, get_path(conn, active_idx))
@@ -3596,7 +3612,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.ack_frequency.update_at = INT64_MAX;
     conn->egress.send_ack_at = INT64_MAX;
     conn->egress.send_probe_at = INT64_MAX;
-    conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, get_cc(conn, NULL), initcwnd, conn->stash.now);
+    conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, get_cc(conn, NULL), initcwnd, conn->super.ctx->normalize_cc_mtu,
+                                 conn->stash.now);
     get_cc(conn, NULL)->conn = conn;
     if (get_cc(conn, NULL)->type->enable_rapid_start != NULL &&
         enable_with_ratio255(conn->super.ctx->enable_ratio.rapid_start, conn->super.ctx->tls->random_bytes)) {
@@ -7046,12 +7063,9 @@ Exit:
         recalc_send_ack_at(conn);
         int can_send_stream_data = scheduler_can_send(conn);
         update_send_alarm(conn, can_send_stream_data, get_path_space_by_path(conn, get_send_path(conn, s)));
-        update_ratemeter(
-            conn, get_path_space_by_path(conn, get_send_path(conn, s)),
-            can_send_stream_data && conn->super.remote.address_validation.validated &&
-                (s->num_datagrams == s->max_datagrams ||
-                 get_loss(conn, get_send_path(conn, s))->sentmap.bytes_in_flight >= get_cc(conn, get_send_path(conn, s))->cwnd ||
-                 pacer_can_send_at(conn, get_send_path(conn, s)) > conn->stash.now));
+        update_ratemeter(conn, get_path_space_by_path(conn, get_send_path(conn, s)), can_send_stream_data,
+                         s->num_datagrams == s->max_datagrams,
+                         pacer_can_send_at(conn, get_send_path(conn, s)) > conn->stash.now);
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
