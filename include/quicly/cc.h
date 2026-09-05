@@ -141,7 +141,7 @@ struct st_quicly_cc_cuback_t {
 /**
  * State used to accelerate CWND increase when bottleneck bandwidth adaptation is enabled.
  */
-struct st_quicly_cc_accelerated_increase_t {
+struct st_quicly_cc_accel_adaptation_t {
     /**
      * Smoothed RTT observed upon exiting a recovery entered from calibration slow start, or zero before that recovery exits.
      */
@@ -260,7 +260,7 @@ typedef struct st_quicly_cc_t {
             /**
              * Accelerated increase state shared by Cuback and Cubic.
              */
-            struct st_quicly_cc_accelerated_increase_t accel;
+            struct st_quicly_cc_accel_adaptation_t accel;
             /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
              * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
@@ -273,7 +273,7 @@ typedef struct st_quicly_cc_t {
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_to_mtu_increase;
-                struct st_quicly_cc_accelerated_increase_t accel;
+                struct st_quicly_cc_accel_adaptation_t accel;
                 union {
                     uint32_t bytes_per_mtu_increase;
                     struct st_quicly_cc_cuback_t cuback;

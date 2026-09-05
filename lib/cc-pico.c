@@ -392,7 +392,7 @@ static float calc_smoothed_rtt_before_latest(const quicly_rtt_t *rtt)
     return rtt->latest != 0 ? (rtt->smoothed * 8 - rtt->latest) / 7 : rtt->smoothed;
 }
 
-static void accel_on_recovery_end(struct st_quicly_cc_accelerated_increase_t *state, float smoothed_rtt, int64_t now)
+static void accel_on_recovery_end(struct st_quicly_cc_accel_adaptation_t *state, float smoothed_rtt, int64_t now)
 {
     if (state->full_rtt == 0) {
         state->full_rtt = smoothed_rtt;
@@ -400,7 +400,7 @@ static void accel_on_recovery_end(struct st_quicly_cc_accelerated_increase_t *st
     }
 }
 
-static void accel_on_acked(struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt, int recovery_ended,
+static void accel_on_acked(struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt, int recovery_ended,
                            int64_t now)
 {
     /* A recovery entered from calibration slow start can supply multiple RTT samples. Adopt their smoothed result rather than the
@@ -411,7 +411,7 @@ static void accel_on_acked(struct st_quicly_cc_accelerated_increase_t *state, co
         state->min_rtt_current_period = rtt->latest;
 }
 
-static void accel_on_lost(struct st_quicly_cc_accelerated_increase_t *state, int in_startup)
+static void accel_on_lost(struct st_quicly_cc_accel_adaptation_t *state, int in_startup)
 {
     state->min_rtt_previous_period = state->min_rtt_current_period;
     state->min_rtt_current_period = 0;
@@ -420,7 +420,7 @@ static void accel_on_lost(struct st_quicly_cc_accelerated_increase_t *state, int
         state->full_rtt = 0;
 }
 
-static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt, uint32_t cwnd_epoch,
+static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt, uint32_t cwnd_epoch,
                              uint32_t reference_mtu, unsigned flags, int64_t now)
 {
     if ((flags & QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE) == 0 || state->full_rtt == 0)
@@ -465,7 +465,7 @@ static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, 
  * The increase ratio is max(2ms / RTT threshold, 2.5%). RTT feedback arrives one round late, therefore, assuming an RTT below
  * 100ms, accelerated increase pauses no later than when 4.5ms of queue is built.
  */
-static double accel_calc_increase_ratio(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
+static double accel_calc_increase_ratio(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt,
                                         unsigned flags)
 {
     /* Skip during initial slow start. */
@@ -494,7 +494,7 @@ static double accel_calc_increase_ratio(const struct st_quicly_cc_accelerated_in
     return ratio;
 }
 
-static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
+static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt,
                                       uint32_t cwnd, uint32_t bytes, unsigned flags)
 {
     double ratio = accel_calc_increase_ratio(state, rtt, flags);
@@ -505,7 +505,7 @@ static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accelerated_incr
     return increased_cwnd < UINT32_MAX ? (uint32_t)increased_cwnd : UINT32_MAX;
 }
 
-static uint32_t accel_bytes_per_mtu_increase(const struct st_quicly_cc_accelerated_increase_t *state, const quicly_rtt_t *rtt,
+static uint32_t accel_bytes_per_mtu_increase(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt,
                                              uint32_t mtu, unsigned flags)
 {
     double ratio = accel_calc_increase_ratio(state, rtt, flags);
@@ -871,7 +871,7 @@ static void pico_init_pico_state(quicly_cc_t *cc)
 {
     /* Initialize the state overlaid by each policy implemented in this file. */
     cc->state.pico.bytes_to_mtu_increase = 0;
-    cc->state.pico.accel = (struct st_quicly_cc_accelerated_increase_t){0};
+    cc->state.pico.accel = (struct st_quicly_cc_accel_adaptation_t){0};
     if (cc->type == &quicly_cc_type_cuback) {
         cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
     } else if (cc->type == &quicly_cc_type_cubic) {
