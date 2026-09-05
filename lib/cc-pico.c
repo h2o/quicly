@@ -455,8 +455,7 @@ static int accel_recalibrate(struct st_quicly_cc_accelerated_increase_t *state, 
 /**
  * Calculates the accelerated increase ratio. Accelerated increase is used when the queue might have become empty and also has the
  * capacity to grow; specifically when the latest RTT satisfies all of the following conditions:
- * - fullRTT is more than 10ms above minRTT;
- * - the latest RTT is at least 5% below fullRTT;
+ * - fullRTT is more than 10ms above minRTT and more than 5% above the latest RTT;
  * - the latest RTT is below a threshold derived from the preceding and current periods:
  *   - use (minRTT + previous-period minimum) / 2 to make sure that RTT is being driven down, but do not set the threshold below
  *     minRTT + 2ms;
@@ -724,7 +723,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     /* estimate BDP (usually from CWND before reduction) */
     uint32_t bdp = cc->cwnd;
-    if (cc->num_loss_episodes == 1) {
+    if (cc->ssthresh == UINT32_MAX) {
         if (quicly_cc_is_jumpstart_ack(cc, lost_pn)) {
             bdp = cc->jumpstart.bytes_acked;
         } else if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
@@ -826,7 +825,10 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     cc->cwnd = cc->state.pico.undo.cwnd;
     cc->ssthresh = cc->state.pico.undo.ssthresh;
     cc->state.pico.bytes_to_mtu_increase = cc->state.pico.undo.bytes_to_mtu_increase;
+    /* `last_high_queue_at` is a pure observation rather than a reaction being retracted, therefore it is never undone */
+    int64_t last_high_queue_at = cc->state.pico.accel.last_high_queue_at;
     cc->state.pico.accel = cc->state.pico.undo.accel;
+    cc->state.pico.accel.last_high_queue_at = last_high_queue_at;
     if (cc->type == &quicly_cc_type_cuback) {
         cc->state.pico.cuback = cc->state.pico.undo.cuback;
     } else if (cc->type == &quicly_cc_type_cubic) {
@@ -945,13 +947,9 @@ static void pico_enable_rapid_start(quicly_cc_t *cc, int64_t now)
     quicly_cc_init_rapid_start(&cc->rapid_start, now);
 }
 
-static void pico_update_cc_limited(quicly_cc_t *cc, int cc_limited, int64_t now)
+static void cubic_update_cc_limited(quicly_cc_t *cc, int cc_limited, int64_t now)
 {
-    if (cc->type == &quicly_cc_type_cubic) {
-        cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
-    } else {
-        assert(cc->type == &quicly_cc_type_cuback);
-    }
+    cubic_set_cc_limited(&cc->state.pico.cubic, cc_limited, now);
 }
 
 static void pico_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int random_loss_tolerance,
@@ -1012,7 +1010,7 @@ quicly_cc_type_t quicly_cc_type_cubic = {"cubic",
                                          pico_on_late_ack,
                                          quicly_cc_jumpstart_enter,
                                          pico_enable_rapid_start,
-                                         pico_update_cc_limited};
+                                         cubic_update_cc_limited};
 quicly_init_cc_t quicly_cc_cubic_init = {cubic_init};
 
 quicly_cc_type_t quicly_cc_type_cuback = {"cuback",
@@ -1024,8 +1022,7 @@ quicly_cc_type_t quicly_cc_type_cuback = {"cuback",
                                           cuback_on_switch,
                                           pico_on_late_ack,
                                           quicly_cc_jumpstart_enter,
-                                          pico_enable_rapid_start,
-                                          pico_update_cc_limited};
+                                          pico_enable_rapid_start};
 quicly_init_cc_t quicly_cc_cuback_init = {cuback_init};
 
 quicly_cc_type_t *quicly_cc_all_types[] = {&quicly_cc_type_reno, &quicly_cc_type_cubic,  &quicly_cc_type_cubic_legacy,
