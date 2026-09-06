@@ -57,6 +57,21 @@ extern "C" {
  */
 #define QUICLY_BETA_ECN 0.85
 
+/**
+ * Accelerate whenever the adaptive RTT gate permits it, bypassing the full-queue RTT guard.
+ */
+#define QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS 0x1
+/**
+ * Observe the full-queue RTT and recalibrate it when the path characteristics might have changed. Unless
+ * `QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS` is also set, the observation guards accelerated increase.
+ */
+#define QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE 0x2
+/**
+ * Default for accelerated adaptation: use fullRTT to conservatively decide when to increase faster than CUBIC, while
+ * recalibration helps regain bandwidth when random loss is frequent.
+ */
+#define QUICLY_CC_ACCEL_ADAPTATION_ON QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE
+
 /* factors defined by Rapid Start (see the I-D) */
 #define QUICLY_RAPID_START_K (2. / 3)
 #define QUICLY_RAPID_START_ACK_FACTOR(beta) (QUICLY_RAPID_START_K * (1 - (beta)))
@@ -124,6 +139,33 @@ struct st_quicly_cc_cuback_t {
 };
 
 /**
+ * State used to accelerate CWND increase when bottleneck bandwidth adaptation is enabled.
+ */
+struct st_quicly_cc_accel_adaptation_t {
+    /**
+     * Smoothed RTT observed upon exiting a recovery entered from calibration slow start, or zero before that recovery exits.
+     */
+    float full_rtt;
+    /**
+     * Minimum RTT observed during the current period between congestion events, or zero before an RTT has been observed.
+     */
+    uint32_t min_rtt_current_period;
+    /**
+     * Minimum RTT observed during the preceding period between congestion events, or zero when no such observation is available.
+     */
+    uint32_t min_rtt_previous_period;
+    /**
+     * Latest time at which a high queue was indicated by ECN-CE or by the smoothed RTT reaching halfway between the minimum RTT
+     * and `full_rtt`.
+     */
+    int64_t last_high_queue_at;
+    /**
+     * Expected time in milliseconds for the active congestion-avoidance trajectory to produce a high-RTT observation.
+     */
+    uint32_t high_rtt_interval;
+};
+
+/**
  * State used by the Cubic policy implemented by cc-pico.c; see `quicly_cc_type_cubic`.
  */
 struct st_quicly_cc_cubic_t {
@@ -188,6 +230,10 @@ typedef struct st_quicly_cc_t {
      */
     unsigned normalize_mtu : 1;
     /**
+     * Controls accelerated bottleneck bandwidth adaptation; see `QUICLY_CC_ACCEL_ADAPTATION_*`.
+     */
+    unsigned accel_adaptation : 2;
+    /**
      * State information specific to the congestion controller implementation.
      */
     union {
@@ -212,6 +258,10 @@ typedef struct st_quicly_cc_t {
                 struct st_quicly_cc_cubic_t cubic;
             };
             /**
+             * Accelerated increase state shared by Cuback and Cubic.
+             */
+            struct st_quicly_cc_accel_adaptation_t accel;
+            /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
              * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
              * declared lost and have not yet been late-ACKed. Other fields retain the values to be restored when
@@ -223,6 +273,7 @@ typedef struct st_quicly_cc_t {
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_to_mtu_increase;
+                struct st_quicly_cc_accel_adaptation_t accel;
                 union {
                     uint32_t bytes_per_mtu_increase;
                     struct st_quicly_cc_cuback_t cuback;
