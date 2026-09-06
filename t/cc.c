@@ -531,7 +531,8 @@ static void test_cubic_accel_adaptation_accelerated_increase(void)
     ok(cc.cwnd == (uint32_t)(80 * mtu * QUICLY_BETA_LOSS));
 
     cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1300, mtu);
-    uint32_t accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
+    uint32_t accelerated_cwnd =
+        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     control = cc;
     control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
@@ -540,7 +541,8 @@ static void test_cubic_accel_adaptation_accelerated_increase(void)
 
     /* An aggregate ACK for one post-reduction flight applies the accelerated increase. */
     uint32_t bytes_acked = cc.cwnd;
-    accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, bytes_acked, QUICLY_CC_ACCEL_ADAPTATION_ON);
+    accelerated_cwnd =
+        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, bytes_acked, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     control = cc;
     control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, bytes_acked, 31, bytes_acked, 1, 32, 1500, mtu);
@@ -669,9 +671,9 @@ static void test_cubic_accel_adaptation_guards(void)
     cc.state.pico.accel.min_rtt_previous_period = 120;
     cc.state.pico.accel.min_rtt_current_period = 104;
     loss.rtt.latest = 105;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) > 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) > 0);
     loss.rtt.latest = 106;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 0);
 
     /* Long-RTT paths retain the 2.5% floor, while shorter paths use the rate that adds approximately two milliseconds of flight
      * per RTT. Acceleration stops once full_rtt is no more than five percent above the latest RTT. */
@@ -684,24 +686,41 @@ static void test_cubic_accel_adaptation_guards(void)
     cc.state.pico.accel.min_rtt_current_period = 100;
     loss.rtt.minimum = 80;
     loss.rtt.latest = 100;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 1. / 40);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 1. / 40);
     loss.rtt.minimum = 10;
     loss.rtt.latest = 11;
     loss.rtt.smoothed = 11;
     cc.state.pico.accel.min_rtt_current_period = 11;
-    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) - 2. / 13) < 0.000001);
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) - 2. / 13) <
+       0.000001);
+
+    /* Cap accelerated increase at half the growth needed to reverse the reduction that opened the current recovery. The ECN cap
+     * is lower because ABE applies a smaller reduction. */
+    loss.rtt.minimum = loss.rtt.latest = 1;
+    cc.state.pico.accel.full_rtt = 20;
+    cc.state.pico.accel.min_rtt_previous_period = 1;
+    cc.state.pico.accel.min_rtt_current_period = 1;
+    double loss_ratio_limit = (1. / QUICLY_BETA_LOSS - 1) / 2;
+    double ecn_ratio_limit = (1. / QUICLY_BETA_ECN - 1) / 2;
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) -
+            loss_ratio_limit) < 0.000001);
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 1) -
+            ecn_ratio_limit) < 0.000001);
+    ok(fabs(QUICLY_BETA_LOSS * (1 + loss_ratio_limit) - (1 + QUICLY_BETA_LOSS) / 2) < 0.000001);
+    ok(fabs(QUICLY_BETA_ECN * (1 + ecn_ratio_limit) - (1 + QUICLY_BETA_ECN) / 2) < 0.000001);
     /* full_rtt does not limit the increase rate while both RTT gates remain open. */
+    loss.rtt.minimum = 10;
     cc.state.pico.accel.min_rtt_previous_period = 200;
     cc.state.pico.accel.min_rtt_current_period = 100;
     cc.state.pico.accel.full_rtt = 120;
     loss.rtt.latest = 100;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 1. / 40);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 1. / 40);
     loss.rtt.minimum = 80;
     loss.rtt.latest = 100;
     loss.rtt.smoothed = 100;
     cc.state.pico.accel.min_rtt_current_period = 100;
     cc.state.pico.accel.full_rtt = 105;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 0);
 
     /* ECN records a high-queue observation, applies its ordinary reduction, then permits accelerated increase when RTT has
      * drained. A subsequent CE inside recovery refreshes the observation. */
@@ -717,7 +736,8 @@ static void test_cubic_accel_adaptation_guards(void)
     control = cc;
     control.accel_adaptation = 0;
     loss.rtt.latest = 81;
-    uint32_t accelerated_cwnd = accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
+    uint32_t accelerated_cwnd =
+        accel_calc_cubic_cwnd(&cc.state.pico.accel, &loss.rtt, cc.cwnd, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 1);
     ok(accelerated_cwnd > cc.cwnd);
     cc.type->cc_on_acked(&cc, &loss, mtu, 20, mtu, 1, 21, 1100, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1100, mtu);
@@ -859,7 +879,7 @@ static void test_cuback_accel_adaptation_accelerated_increase(void)
     control = cc;
     control.accel_adaptation = 0;
     uint32_t accelerated_interval =
-        accel_bytes_per_mtu_increase(&cc.state.pico.accel, &loss.rtt, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON);
+        accel_bytes_per_mtu_increase(&cc.state.pico.accel, &loss.rtt, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.type->cc_on_acked(&cc, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 30, mtu, 1, 31, 1400, mtu);
     ok(cc.cwnd == control.cwnd);
@@ -890,9 +910,9 @@ static void test_cuback_accel_adaptation_accelerated_increase(void)
     cc.state.pico.accel.min_rtt_previous_period = 110;
     loss.rtt.latest = 104;
     cc.state.pico.accel.min_rtt_current_period = 104;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) > 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) > 0);
     loss.rtt.latest = 105;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 0);
 }
 
 static void test_cuback_accel_adaptation_recalibration(void)

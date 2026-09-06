@@ -460,11 +460,12 @@ static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, cons
  *   - use (minRTT + previous-period minimum) / 2 to make sure that RTT is being driven down, but do not set the threshold below
  *     minRTT + 2ms;
  *   - when the current-period minimum is available, cap the threshold at that minimum plus 2ms
- * The increase ratio is max(2ms / RTT threshold, 2.5%). RTT feedback arrives one round late, therefore, assuming an RTT below
- * 100ms, accelerated increase pauses no later than when 4.5ms of queue is built.
+ * The increase ratio is max(2ms / RTT threshold, 2.5%), capped at half the increase that would reverse the latest congestion
+ * reduction over one RTT. RTT feedback arrives one round late, therefore, assuming an RTT below 100ms, accelerated increase
+ * pauses no later than when 4.5ms of queue is built.
  */
 static double accel_calc_increase_ratio(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt,
-                                        unsigned flags)
+                                        unsigned flags, int by_ecn)
 {
     /* Skip during initial slow start. */
     if (state->min_rtt_previous_period == 0)
@@ -488,13 +489,17 @@ static double accel_calc_increase_ratio(const struct st_quicly_cc_accel_adaptati
     double ratio = 2. / rtt_threshold;
     if (ratio < 1. / 40)
         ratio = 1. / 40;
+    double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    double ratio_limit = (1. / beta - 1) / 2;
+    if (ratio > ratio_limit)
+        ratio = ratio_limit;
     return ratio;
 }
 
 static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt, uint32_t cwnd,
-                                      uint32_t bytes, unsigned flags)
+                                      uint32_t bytes, unsigned flags, int by_ecn)
 {
-    double ratio = accel_calc_increase_ratio(state, rtt, flags);
+    double ratio = accel_calc_increase_ratio(state, rtt, flags, by_ecn);
     if (ratio == 0)
         return cwnd;
 
@@ -503,9 +508,9 @@ static uint32_t accel_calc_cubic_cwnd(const struct st_quicly_cc_accel_adaptation
 }
 
 static uint32_t accel_bytes_per_mtu_increase(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt,
-                                             uint32_t mtu, unsigned flags)
+                                             uint32_t mtu, unsigned flags, int by_ecn)
 {
-    double ratio = accel_calc_increase_ratio(state, rtt, flags);
+    double ratio = accel_calc_increase_ratio(state, rtt, flags, by_ecn);
     if (ratio == 0)
         return UINT32_MAX;
     double bytes = mtu / ratio;
@@ -584,7 +589,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
                        reference_mtu);
         if (accel_enabled(cc) && bytes != 0 && cc_limited) {
             uint32_t accelerated_cwnd =
-                accel_calc_cubic_cwnd(&cc->state.pico.accel, &loss->rtt, cc->cwnd, bytes, cc->accel_adaptation);
+                accel_calc_cubic_cwnd(&cc->state.pico.accel, &loss->rtt, cc->cwnd, bytes, cc->accel_adaptation, state->by_ecn);
             if (new_cwnd < accelerated_cwnd)
                 new_cwnd = accelerated_cwnd;
         }
@@ -612,7 +617,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size);
         if (accel_enabled(cc)) {
             uint32_t accel_bytes =
-                accel_bytes_per_mtu_increase(&cc->state.pico.accel, &loss->rtt, max_udp_payload_size, cc->accel_adaptation);
+                accel_bytes_per_mtu_increase(&cc->state.pico.accel, &loss->rtt, max_udp_payload_size, cc->accel_adaptation,
+                                             cc->state.pico.cuback.by_ecn);
             if (cc->state.pico.bytes_to_mtu_increase > accel_bytes)
                 cc->state.pico.bytes_to_mtu_increase = accel_bytes;
         }
