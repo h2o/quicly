@@ -423,11 +423,27 @@ static void accel_on_lost(struct st_quicly_cc_accel_adaptation_t *state, int in_
         state->full_rtt = 0;
 }
 
+static float accel_calc_bottom_rtt(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt, unsigned flags)
+{
+    if ((flags & QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE) == 0 || state->past_min_rtt.estimator.latest == 0)
+        return rtt->minimum;
+
+    float bottom_rtt = state->past_min_rtt.estimator.smoothed - state->past_min_rtt.estimator.variance;
+    if (bottom_rtt < rtt->minimum) {
+        bottom_rtt = rtt->minimum;
+    } else if (state->min_rtt_current_period != 0 && bottom_rtt > state->min_rtt_current_period) {
+        bottom_rtt = state->min_rtt_current_period;
+    }
+    return bottom_rtt;
+}
+
 static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt, uint32_t cwnd_epoch,
                              uint32_t reference_mtu, unsigned flags, int64_t now)
 {
     if ((flags & QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE) == 0 || state->full_rtt == 0)
         return 0;
+
+    float bottom_rtt = accel_calc_bottom_rtt(state, rtt, flags);
 
     if (state->high_rtt_interval == 0) {
         double cwnd_before_reduction = cwnd_epoch / QUICLY_BETA_LOSS;
@@ -438,16 +454,16 @@ static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, cons
          * competing flow's congestion signal is unknown, start with the shorter return time of the two curves, then retain the
          * existing cube-root adjustment for the observed queue depth. */
         double reno = QUICLY_CUBIC_C * k * k * k / cubic_friendly_alpha[0] * state->full_rtt / 1000;
-        double interval = (k < reno ? k : reno) * fast_cbrt((double)state->full_rtt / rtt->minimum) * 1000;
+        double interval = (k < reno ? k : reno) * fast_cbrt(state->full_rtt / bottom_rtt) * 1000;
         state->high_rtt_interval = interval < 1 ? 1 : interval < UINT32_MAX ? interval : UINT32_MAX;
     }
 
-    if (rtt->smoothed >= ((double)rtt->minimum + state->full_rtt) / 2) {
+    if (rtt->smoothed >= bottom_rtt + 10) {
         state->last_high_queue_at = now;
         return 0;
     }
 
-    /* If the smoothed RTT has remained below half of the observed queue for twice the time in which a non-losing competing flow
+    /* If the smoothed RTT has remained below the high-queue threshold for twice the time in which a non-losing competing flow
      * following the same CA trajectory could have produced another high-queue observation, the path might have changed. */
     if (now - state->last_high_queue_at < 2 * (int64_t)state->high_rtt_interval)
         return 0;
@@ -459,7 +475,7 @@ static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, cons
 /**
  * Calculates the accelerated increase ratio. Accelerated increase is used when the queue might have become empty and also has the
  * capacity to grow; specifically when the latest RTT satisfies all of the following conditions:
- * - fullRTT is more than 10ms above minRTT and more than 5% above the latest RTT, unless
+ * - fullRTT is more than 10ms above the estimated bottom RTT and more than 5% above the latest RTT, unless
  *   `QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS` is set;
  * - the latest RTT is below a threshold derived from the preceding and current periods:
  *   - by default, use (minRTT + previous-period minimum) / 2, but no lower than minRTT + 2ms;
@@ -482,8 +498,9 @@ static double accel_calc_increase_ratio(const struct st_quicly_cc_accel_adaptati
                                         unsigned flags, int by_ecn)
 {
     /* Skip if the queue might be too shallow. */
+    float bottom_rtt = accel_calc_bottom_rtt(state, rtt, flags);
     if ((flags & QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS) == 0 &&
-        (state->full_rtt <= quicly_u32_add_saturating(rtt->minimum, 10) || (double)rtt->latest * 1.05 >= state->full_rtt))
+        (state->full_rtt <= bottom_rtt + 10 || (double)rtt->latest * 1.05 >= state->full_rtt))
         return 0;
 
     double rtt_threshold;

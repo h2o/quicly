@@ -67,8 +67,8 @@ extern "C" {
  */
 #define QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE 0x2
 /**
- * Smooth the minimum RTTs of completed congestion-avoidance periods when constructing the adaptive RTT gate. Otherwise, only
- * the preceding period's minimum is used.
+ * Smooth the minimum RTTs of completed congestion-avoidance periods when estimating the bottom RTT and constructing the adaptive
+ * gates. Otherwise, the bottom is minRTT and the drain gate uses only the preceding period's minimum.
  */
 #define QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE 0x4
 /**
@@ -170,8 +170,8 @@ struct st_quicly_cc_accel_adaptation_t {
         quicly_rtt_t estimator;
     } past_min_rtt;
     /**
-     * Latest time at which a high queue was indicated by ECN-CE or by the smoothed RTT reaching halfway between the minimum RTT
-     * and `full_rtt`.
+     * Latest time at which a high queue was indicated by ECN-CE or by the smoothed RTT reaching 10ms above the estimated bottom
+     * RTT.
      */
     int64_t last_high_queue_at;
     /**

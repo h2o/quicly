@@ -643,6 +643,18 @@ static void test_cubic_accel_adaptation_guards(void)
     ok(accel_calc_increase_ratio(&preceding, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 0);
     loss.rtt.latest = 101;
 
+    /* The default bottom RTT is minRTT. The smoothed gate raises it to one variance below the smoothed period minima and bounds it
+     * by the minimum of the period in progress. */
+    struct st_quicly_cc_accel_adaptation_t smoothed = {.full_rtt = 112};
+    set_accel_past_minimum_estimate(&smoothed, 110, 5);
+    ok(accel_calc_bottom_rtt(&smoothed, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON) == 100);
+    ok(accel_calc_bottom_rtt(&smoothed, &loss.rtt, smoothed_flags) == 105);
+    smoothed.min_rtt_current_period = 104;
+    ok(accel_calc_bottom_rtt(&smoothed, &loss.rtt, smoothed_flags) == 104);
+    smoothed.min_rtt_current_period = 0;
+    ok(accel_calc_increase_ratio(&preceding, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) > 0);
+    ok(accel_calc_increase_ratio(&smoothed, &loss.rtt, smoothed_flags, 0) == 0);
+
     /* A full_rtt observation exactly 10ms above minRTT does not enable accelerated increase. */
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
@@ -800,6 +812,25 @@ static void test_cubic_accel_adaptation_recalibration(void)
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 109, .smoothed = 109, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
+    unsigned smoothed_flags = QUICLY_CC_ACCEL_ADAPTATION_ON | QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE;
+
+    /* A high queue is ten milliseconds above the selected bottom RTT: minRTT by default, or the recent-floor estimate when the
+     * smoothed gate is enabled. */
+    struct st_quicly_cc_accel_adaptation_t high_queue = {.full_rtt = 140,
+                                                         .last_high_queue_at = 1000,
+                                                         .high_rtt_interval = 1000};
+    loss.rtt.smoothed = 110;
+    ok(!accel_recalibrate(&high_queue, &loss.rtt, 50 * mtu, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 1500));
+    ok(high_queue.last_high_queue_at == 1500);
+    set_accel_past_minimum_estimate(&high_queue, 110, 5);
+    high_queue.last_high_queue_at = 1000;
+    loss.rtt.smoothed = 114;
+    ok(!accel_recalibrate(&high_queue, &loss.rtt, 50 * mtu, mtu, smoothed_flags, 1500));
+    ok(high_queue.last_high_queue_at == 1000);
+    loss.rtt.smoothed = 115;
+    ok(!accel_recalibrate(&high_queue, &loss.rtt, 50 * mtu, mtu, smoothed_flags, 1500));
+    ok(high_queue.last_high_queue_at == 1500);
+    loss.rtt.smoothed = 109;
 
     /* A loss starts a new CUBIC epoch but does not restart the time available for deciding whether the path should be
      * recalibrated. The new epoch's K is used for the decision. */
