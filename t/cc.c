@@ -725,8 +725,7 @@ static void test_cubic_accel_adaptation_guards(void)
     loss.rtt.latest = 11;
     loss.rtt.smoothed = 11;
     cc.state.pico.accel.min_rtt_current_period = 11;
-    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) - 2. / 13) <
-       0.000001);
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) - 2. / 13) < 0.000001);
 
     /* Cap accelerated increase at half the growth needed to reverse the reduction that opened the current recovery. The ECN cap
      * is lower because ABE applies a smaller reduction. */

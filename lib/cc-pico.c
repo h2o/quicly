@@ -637,9 +637,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         if (cc->state.pico.bytes_to_mtu_increase == 0)
             cc->state.pico.bytes_to_mtu_increase = calc_bytes_per_mtu_increase(cc, loss, max_udp_payload_size);
         if (accel_enabled(cc)) {
-            uint32_t accel_bytes =
-                accel_bytes_per_mtu_increase(&cc->state.pico.accel, &loss->rtt, max_udp_payload_size, cc->accel_adaptation,
-                                             cc->state.pico.cuback.by_ecn);
+            uint32_t accel_bytes = accel_bytes_per_mtu_increase(&cc->state.pico.accel, &loss->rtt, max_udp_payload_size,
+                                                                cc->accel_adaptation, cc->state.pico.cuback.by_ecn);
             if (cc->state.pico.bytes_to_mtu_increase > accel_bytes)
                 cc->state.pico.bytes_to_mtu_increase = accel_bytes;
         }
