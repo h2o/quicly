@@ -409,9 +409,14 @@ static void accel_on_acked(struct st_quicly_cc_accel_adaptation_t *state, const 
         state->min_rtt_current_period = rtt->latest;
 }
 
-static void accel_on_lost(struct st_quicly_cc_accel_adaptation_t *state, int in_startup)
+static void accel_on_lost(struct st_quicly_cc_accel_adaptation_t *state, int in_startup, unsigned flags)
 {
-    state->min_rtt_previous_period = state->min_rtt_current_period;
+    if ((flags & QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE) != 0) {
+        if (state->min_rtt_current_period != 0)
+            quicly_rtt_update_with_initial_variance(&state->past_min_rtt.estimator, state->min_rtt_current_period, 0, 5);
+    } else {
+        state->past_min_rtt.previous_period = state->min_rtt_current_period;
+    }
     state->min_rtt_current_period = 0;
     state->high_rtt_interval = 0;
     if (in_startup)
@@ -457,9 +462,18 @@ static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, cons
  * - fullRTT is more than 10ms above minRTT and more than 5% above the latest RTT, unless
  *   `QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS` is set;
  * - the latest RTT is below a threshold derived from the preceding and current periods:
- *   - use (minRTT + previous-period minimum) / 2 to make sure that RTT is being driven down, but do not set the threshold below
- *     minRTT + 2ms;
- *   - when the current-period minimum is available, cap the threshold at that minimum plus 2ms
+ *   - by default, use (minRTT + previous-period minimum) / 2, but no lower than minRTT + 2ms;
+ *   - when `QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE` is set, instead use the smoothed minimum of completed periods minus
+ *     half its variance, but no lower than minRTT + 2ms;
+ *   - cap either threshold at the current-period minimum plus 2ms
+ * The smoothed-period construction prevents accelerated increase from ratcheting its own floor estimate upward across CA periods:
+ * - the current period is excluded from the estimator, so acceleration cannot raise the historical gate that enables it;
+ * - once the estimated floor is above minRTT + 2ms, acceleration requires the current-period minimum to be below that estimate;
+ * - with smoothed-value and variance weights of 1/8 and 1/4, respectively, feeding such a minimum strictly lowers the estimated
+ *   floor;
+ * - when the period ends, only its minimum RTT is added to the estimator, excluding any higher RTTs produced by acceleration
+ * Below minRTT + 2ms, eligible samples can move the estimate upward only toward that fixed lower bound. These weights are therefore
+ * part of the no-ratcheting guarantee, rather than arbitrary estimator parameters.
  * The increase ratio is max(2ms / RTT threshold, 2.5%), capped at half the increase that would reverse the latest congestion
  * reduction over one RTT. RTT feedback arrives one round late, therefore, assuming an RTT below 100ms, accelerated increase
  * pauses no later than when 4.5ms of queue is built.
@@ -467,21 +481,28 @@ static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, cons
 static double accel_calc_increase_ratio(const struct st_quicly_cc_accel_adaptation_t *state, const quicly_rtt_t *rtt,
                                         unsigned flags, int by_ecn)
 {
-    /* Skip during initial slow start. */
-    if (state->min_rtt_previous_period == 0)
-        return 0;
-
     /* Skip if the queue might be too shallow. */
     if ((flags & QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS) == 0 &&
         (state->full_rtt <= quicly_u32_add_saturating(rtt->minimum, 10) || (double)rtt->latest * 1.05 >= state->full_rtt))
         return 0;
 
-    uint32_t rtt_threshold = (uint32_t)(((uint64_t)rtt->minimum + state->min_rtt_previous_period) / 2);
-    if (rtt_threshold < quicly_u32_add_saturating(rtt->minimum, 2)) {
-        rtt_threshold = quicly_u32_add_saturating(rtt->minimum, 2);
-    } else if (state->min_rtt_current_period != 0 && rtt_threshold > quicly_u32_add_saturating(state->min_rtt_current_period, 2)) {
-        rtt_threshold = quicly_u32_add_saturating(state->min_rtt_current_period, 2);
+    double rtt_threshold;
+    if ((flags & QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE) != 0) {
+        const quicly_rtt_t *estimator = &state->past_min_rtt.estimator;
+        /* Skip during initial slow start. */
+        if (estimator->latest == 0)
+            return 0;
+        rtt_threshold = estimator->smoothed - estimator->variance / 2;
+    } else {
+        /* Skip during initial slow start. */
+        if (state->past_min_rtt.previous_period == 0)
+            return 0;
+        rtt_threshold = ((uint64_t)rtt->minimum + state->past_min_rtt.previous_period) / 2;
     }
+    if (rtt_threshold < quicly_u32_add_saturating(rtt->minimum, 2))
+        rtt_threshold = quicly_u32_add_saturating(rtt->minimum, 2);
+    if (state->min_rtt_current_period != 0 && rtt_threshold > quicly_u32_add_saturating(state->min_rtt_current_period, 2))
+        rtt_threshold = quicly_u32_add_saturating(state->min_rtt_current_period, 2);
 
     if (rtt->latest >= rtt_threshold)
         return 0;
@@ -774,7 +795,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
 
     if (accel_enabled(cc))
-        accel_on_lost(&cc->state.pico.accel, in_startup);
+        accel_on_lost(&cc->state.pico.accel, in_startup, cc->accel_adaptation);
 
     /* Update policy-specific state using the estimated BDP and reduced CWND.
      *
@@ -875,6 +896,8 @@ static void pico_init_pico_state(quicly_cc_t *cc)
     /* Initialize the state overlaid by each policy implemented in this file. */
     cc->state.pico.bytes_to_mtu_increase = 0;
     cc->state.pico.accel = (struct st_quicly_cc_accel_adaptation_t){0};
+    if ((cc->accel_adaptation & QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE) != 0)
+        quicly_rtt_init(&cc->state.pico.accel.past_min_rtt.estimator, NULL, 0);
     if (cc->type == &quicly_cc_type_cuback) {
         cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
     } else if (cc->type == &quicly_cc_type_cubic) {

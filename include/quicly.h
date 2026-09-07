@@ -392,7 +392,7 @@ struct st_quicly_context_t {
     /**
      * controls accelerated bottleneck bandwidth adaptation; see `QUICLY_CC_ACCEL_ADAPTATION_*`
      */
-    unsigned accel_adaptation : 2;
+    unsigned accel_adaptation : 3;
     /**
      *
      */

@@ -95,6 +95,8 @@ typedef struct quicly_rtt_t {
 } quicly_rtt_t;
 
 static void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, uint32_t initial_rtt);
+static void quicly_rtt_update_with_initial_variance(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay,
+                                                    float initial_variance);
 static void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay);
 static uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto);
 
@@ -223,11 +225,13 @@ inline void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, u
     rtt->variance = initial_rtt / 2.f;
 }
 
-inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay)
+inline void quicly_rtt_update_with_initial_variance(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay,
+                                                    float initial_variance)
 {
     int is_first_sample = rtt->latest == 0;
 
     assert(latest_rtt != UINT32_MAX);
+    assert(0 <= initial_variance);
     rtt->latest = latest_rtt != 0 ? latest_rtt : 1; /* Force minimum RTT sample to 1ms */
 
     /* update min_rtt */
@@ -241,7 +245,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
     /* update smoothed_rtt and rttvar */
     if (is_first_sample) {
         rtt->smoothed = rtt->latest;
-        rtt->variance = rtt->latest / 2.f;
+        rtt->variance = initial_variance;
     } else {
         float latest = (float)rtt->latest;
         float absdiff = rtt->smoothed >= latest ? rtt->smoothed - latest : latest - rtt->smoothed;
@@ -249,6 +253,11 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t a
         rtt->smoothed = rtt->smoothed * 0.875f + latest * 0.125f;
     }
     assert(rtt->smoothed != 0);
+}
+
+inline void quicly_rtt_update(quicly_rtt_t *rtt, uint32_t latest_rtt, uint32_t ack_delay)
+{
+    quicly_rtt_update_with_initial_variance(rtt, latest_rtt, ack_delay, (latest_rtt != 0 ? latest_rtt : 1) / 2.f);
 }
 
 inline uint32_t quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint32_t min_pto)

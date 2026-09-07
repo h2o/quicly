@@ -225,10 +225,38 @@ static void test_late_ack_threshold_adjustment(void)
     quicly_loss_dispose(&loss);
 }
 
+static void test_rtt_update_with_initial_variance(void)
+{
+    quicly_rtt_t rtt;
+
+    quicly_rtt_init(&rtt, NULL, 0);
+
+    quicly_rtt_update_with_initial_variance(&rtt, 30, 0, 5);
+    ok(rtt.minimum == 30);
+    ok(rtt.latest == 30);
+    ok(rtt.smoothed == 30);
+    ok(rtt.variance == 5);
+
+    quicly_rtt_update_with_initial_variance(&rtt, 50, 0, 5);
+    ok(rtt.minimum == 30);
+    ok(rtt.latest == 50);
+    ok(rtt.smoothed == 32.5);
+    ok(rtt.variance == 8.75);
+
+    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 30);
+    quicly_rtt_update(&rtt, 30, 0);
+    ok(rtt.smoothed == 30);
+    ok(rtt.variance == 15);
+    quicly_rtt_update(&rtt, 50, 0);
+    ok(rtt.smoothed == 32.5);
+    ok(rtt.variance == 16.25);
+}
+
 void test_loss(void)
 {
     subtest("time-detection", test_time_detection);
     subtest("pn-detection", test_pn_detection);
     subtest("slow-cert-verify", test_slow_cert_verify);
     subtest("late-ack-threshold-adjustment", test_late_ack_threshold_adjustment);
+    subtest("rtt-update-with-initial-variance", test_rtt_update_with_initial_variance);
 }

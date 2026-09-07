@@ -486,6 +486,12 @@ static void test_cubic_abe(void)
     ok((uint32_t)cc.state.pico.cubic.w_est == (uint32_t)expected_w_est);
 }
 
+static void set_accel_past_minimum_estimate(struct st_quicly_cc_accel_adaptation_t *state, uint32_t smoothed, float variance)
+{
+    state->past_min_rtt.estimator =
+        (quicly_rtt_t){.minimum = smoothed, .smoothed = smoothed, .variance = variance, .latest = smoothed};
+}
+
 static void test_cubic_undo_loss(void)
 {
     quicly_cc_t cc;
@@ -611,6 +617,31 @@ static void test_cubic_accel_adaptation_guards(void)
     quicly_cc_t cc, control;
     quicly_loss_t loss = {.rtt = {.latest = 101, .smoothed = 105, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
+    unsigned smoothed_flags = QUICLY_CC_ACCEL_ADAPTATION_ON | QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE;
+
+    /* With smoothed and variance weights of 1/8 and 1/4, one upward sample does not raise smoothed - variance / 2. A subsequent
+     * downward sample lowers it. */
+    struct st_quicly_cc_accel_adaptation_t estimator = {0};
+    quicly_rtt_init(&estimator.past_min_rtt.estimator, NULL, 0);
+    set_accel_past_minimum_estimate(&estimator, 100, 0);
+    estimator.min_rtt_current_period = 120;
+    accel_on_lost(&estimator, 0, smoothed_flags);
+    ok(estimator.past_min_rtt.estimator.smoothed == 102.5);
+    ok(estimator.past_min_rtt.estimator.variance == 5);
+    ok(estimator.past_min_rtt.estimator.smoothed - estimator.past_min_rtt.estimator.variance / 2 == 100);
+    estimator.min_rtt_current_period = 90;
+    accel_on_lost(&estimator, 0, smoothed_flags);
+    ok(estimator.past_min_rtt.estimator.smoothed == 100.9375);
+    ok(estimator.past_min_rtt.estimator.variance == 6.875);
+    ok(estimator.past_min_rtt.estimator.smoothed - estimator.past_min_rtt.estimator.variance / 2 == 97.5);
+
+    /* The default gate is derived from the immediately preceding period. */
+    struct st_quicly_cc_accel_adaptation_t preceding = {.full_rtt = 120, .past_min_rtt.previous_period = 110};
+    loss.rtt.latest = 104;
+    ok(accel_calc_increase_ratio(&preceding, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) > 0);
+    loss.rtt.latest = 105;
+    ok(accel_calc_increase_ratio(&preceding, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 0);
+    loss.rtt.latest = 101;
 
     /* A full_rtt observation exactly 10ms above minRTT does not enable accelerated increase. */
     quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
@@ -641,16 +672,17 @@ static void test_cubic_accel_adaptation_guards(void)
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     ok(cc.cwnd == control.cwnd);
 
-    /* A raised minimum throughout the preceding CA period raises the gate halfway toward that observation. The existing 2ms
-     * allowance remains the lower bound. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
+    /* The first completed period initializes the estimator with 5ms variance. The current period is tracked separately. */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, smoothed_flags, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
     cc.state.pico.accel.full_rtt = 120;
     cc.state.pico.accel.min_rtt_current_period = 110;
     loss.rtt.latest = 104;
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
-    ok(cc.state.pico.accel.min_rtt_previous_period == 110);
+    ok(cc.state.pico.accel.past_min_rtt.estimator.latest == 110);
+    ok(cc.state.pico.accel.past_min_rtt.estimator.smoothed == 110);
+    ok(cc.state.pico.accel.past_min_rtt.estimator.variance == 5);
     ok(cc.state.pico.accel.min_rtt_current_period == 0);
     cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1100, mtu);
     control = cc;
@@ -658,69 +690,69 @@ static void test_cubic_accel_adaptation_guards(void)
     cc.type->cc_on_acked(&cc, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 20, mtu, 1, 21, 1200, mtu);
     ok(cc.cwnd > control.cwnd);
+    ok(cc.state.pico.accel.past_min_rtt.estimator.latest == 110);
+    ok(cc.state.pico.accel.min_rtt_current_period == 104);
 
     /* Reaching the adaptive threshold leaves CUBIC on its ordinary trajectory. */
-    loss.rtt.latest = 105;
+    loss.rtt.latest = 106;
     control = cc;
     control.accel_adaptation = 0;
     cc.type->cc_on_acked(&cc, &loss, mtu, 21, mtu, 1, 22, 1300, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 21, mtu, 1, 22, 1300, mtu);
     ok(cc.cwnd == control.cwnd);
 
-    /* The current period's floor plus two milliseconds caps the allowance derived from the preceding period. */
-    cc.state.pico.accel.min_rtt_previous_period = 120;
+    /* The current period's floor plus two milliseconds caps the allowance derived from the completed-period estimator. */
+    set_accel_past_minimum_estimate(&cc.state.pico.accel, 120, 0);
     cc.state.pico.accel.min_rtt_current_period = 104;
     loss.rtt.latest = 105;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) > 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) > 0);
     loss.rtt.latest = 106;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) == 0);
 
     /* Long-RTT paths retain the 2.5% floor, while shorter paths use the rate that adds approximately two milliseconds of flight
      * per RTT. Acceleration stops once full_rtt is no more than five percent above the latest RTT. */
-    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, smoothed_flags, 0);
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.ssthresh = 50 * mtu;
     cc.cwnd = 70 * mtu;
     cc.state.pico.accel.full_rtt = 120;
-    cc.state.pico.accel.min_rtt_previous_period = 130;
+    set_accel_past_minimum_estimate(&cc.state.pico.accel, 130, 0);
     cc.state.pico.accel.min_rtt_current_period = 100;
     loss.rtt.minimum = 80;
     loss.rtt.latest = 100;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 1. / 40);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) == 1. / 40);
     loss.rtt.minimum = 10;
     loss.rtt.latest = 11;
     loss.rtt.smoothed = 11;
     cc.state.pico.accel.min_rtt_current_period = 11;
-    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) - 2. / 13) <
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) - 2. / 13) <
        0.000001);
 
     /* Cap accelerated increase at half the growth needed to reverse the reduction that opened the current recovery. The ECN cap
      * is lower because ABE applies a smaller reduction. */
     loss.rtt.minimum = loss.rtt.latest = 1;
     cc.state.pico.accel.full_rtt = 20;
-    cc.state.pico.accel.min_rtt_previous_period = 1;
+    set_accel_past_minimum_estimate(&cc.state.pico.accel, 1, 0);
     cc.state.pico.accel.min_rtt_current_period = 1;
     double loss_ratio_limit = (1. / QUICLY_BETA_LOSS - 1) / 2;
     double ecn_ratio_limit = (1. / QUICLY_BETA_ECN - 1) / 2;
-    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) -
-            loss_ratio_limit) < 0.000001);
-    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 1) -
-            ecn_ratio_limit) < 0.000001);
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) - loss_ratio_limit) < 0.000001);
+    ok(fabs(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 1) - ecn_ratio_limit) < 0.000001);
     ok(fabs(QUICLY_BETA_LOSS * (1 + loss_ratio_limit) - (1 + QUICLY_BETA_LOSS) / 2) < 0.000001);
     ok(fabs(QUICLY_BETA_ECN * (1 + ecn_ratio_limit) - (1 + QUICLY_BETA_ECN) / 2) < 0.000001);
     /* full_rtt does not limit the increase rate while both RTT gates remain open. */
     loss.rtt.minimum = 10;
-    cc.state.pico.accel.min_rtt_previous_period = 200;
+    set_accel_past_minimum_estimate(&cc.state.pico.accel, 200, 0);
     cc.state.pico.accel.min_rtt_current_period = 100;
     cc.state.pico.accel.full_rtt = 120;
     loss.rtt.latest = 100;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 1. / 40);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) == 1. / 40);
     loss.rtt.minimum = 80;
     loss.rtt.latest = 100;
     loss.rtt.smoothed = 100;
     cc.state.pico.accel.min_rtt_current_period = 100;
     cc.state.pico.accel.full_rtt = 105;
-    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 0);
+    ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, smoothed_flags, 0) == 0);
 
     /* ECN records a high-queue observation, applies its ordinary reduction, then permits accelerated increase when RTT has
      * drained. A subsequent CE inside recovery refreshes the observation. */
@@ -907,11 +939,11 @@ static void test_cuback_accel_adaptation_accelerated_increase(void)
 
     /* Cuback uses the same adaptive RTT gate as CUBIC. */
     cc.state.pico.accel.full_rtt = 120;
-    cc.state.pico.accel.min_rtt_previous_period = 110;
+    cc.state.pico.accel.past_min_rtt.previous_period = 110;
     loss.rtt.latest = 104;
     cc.state.pico.accel.min_rtt_current_period = 104;
     ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) > 0);
-    loss.rtt.latest = 105;
+    loss.rtt.latest = 106;
     ok(accel_calc_increase_ratio(&cc.state.pico.accel, &loss.rtt, QUICLY_CC_ACCEL_ADAPTATION_ON, 0) == 0);
 }
 

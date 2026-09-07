@@ -67,8 +67,13 @@ extern "C" {
  */
 #define QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE 0x2
 /**
- * Default for accelerated adaptation: use fullRTT to conservatively decide when to increase faster than CUBIC, while
- * recalibration helps regain bandwidth when random loss is frequent.
+ * Smooth the minimum RTTs of completed congestion-avoidance periods when constructing the adaptive RTT gate. Otherwise, only
+ * the preceding period's minimum is used.
+ */
+#define QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE 0x4
+/**
+ * Default for accelerated adaptation: use fullRTT and the preceding period's minimum RTT to conservatively decide when to increase
+ * faster than CUBIC, while recalibration helps regain bandwidth when random loss is frequent.
  */
 #define QUICLY_CC_ACCEL_ADAPTATION_ON QUICLY_CC_ACCEL_ADAPTATION_RECALIBRATE
 
@@ -151,9 +156,19 @@ struct st_quicly_cc_accel_adaptation_t {
      */
     uint32_t min_rtt_current_period;
     /**
-     * Minimum RTT observed during the preceding period between congestion events, or zero when no such observation is available.
+     * Prior minimum RTT state selected by `QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE`.
      */
-    uint32_t min_rtt_previous_period;
+    union {
+        /**
+         * Minimum RTT observed during the preceding period between congestion events, or zero when unavailable.
+         */
+        uint32_t previous_period;
+        /**
+         * RTT estimator fed with the minimum RTT of each completed period between congestion events. The current period is
+         * excluded; `latest` is zero until the first period has been completed.
+         */
+        quicly_rtt_t estimator;
+    } past_min_rtt;
     /**
      * Latest time at which a high queue was indicated by ECN-CE or by the smoothed RTT reaching halfway between the minimum RTT
      * and `full_rtt`.
@@ -232,7 +247,7 @@ typedef struct st_quicly_cc_t {
     /**
      * Controls accelerated bottleneck bandwidth adaptation; see `QUICLY_CC_ACCEL_ADAPTATION_*`.
      */
-    unsigned accel_adaptation : 2;
+    unsigned accel_adaptation : 3;
     /**
      * State information specific to the congestion controller implementation.
      */
