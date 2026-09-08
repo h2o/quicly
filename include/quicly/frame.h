@@ -139,7 +139,7 @@ typedef struct st_quicly_application_close_frame_t {
 static quicly_error_t quicly_decode_application_close_frame(const uint8_t **src, const uint8_t *end,
                                                             quicly_application_close_frame_t *frame);
 
-static size_t quicly_close_frame_capacity(uint64_t error_code, uint64_t offending_frame_type, const char *reason_phrase);
+size_t quicly_close_frame_capacity(uint64_t error_code, uint64_t offending_frame_type, const char *reason_phrase);
 /**
  * @param offending_frame_type the offending frame type if sending a transport close, or UINT64_MAX if sending an application close
  */
@@ -512,16 +512,6 @@ inline quicly_error_t quicly_decode_transport_close_frame(const uint8_t **src, c
     return 0;
 Error:
     return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
-}
-
-inline size_t quicly_close_frame_capacity(uint64_t error_code, uint64_t offending_frame_type, const char *reason_phrase)
-{
-    size_t reason_phrase_len = strlen(reason_phrase);
-    return quicly_encodev_capacity(offending_frame_type == UINT64_MAX ? QUICLY_FRAME_TYPE_APPLICATION_CLOSE
-                                                                      : QUICLY_FRAME_TYPE_TRANSPORT_CLOSE) +
-           quicly_encodev_capacity(error_code) +
-           (offending_frame_type == UINT64_MAX ? 0 : quicly_encodev_capacity(offending_frame_type)) +
-           quicly_encodev_capacity(reason_phrase_len) + reason_phrase_len;
 }
 
 inline uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data)
