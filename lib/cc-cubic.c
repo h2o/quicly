@@ -155,11 +155,6 @@ static void cubic_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         cc->cwnd_minimum = cc->cwnd;
 }
 
-static void cubic_on_persistent_congestion(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now)
-{
-    /* TODO */
-}
-
 static void cubic_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now)
 {
     /* Prevent extreme cwnd growth following an idle period caused by application limit.
@@ -211,13 +206,7 @@ static void cubic_init(quicly_init_cc_t *self, quicly_cc_t *cc, uint32_t initcwn
     cubic_reset(cc, initcwnd, normalize_mtu);
 }
 
-quicly_cc_type_t quicly_cc_type_cubic_legacy = {"cubic-legacy",
-                                                &quicly_cc_cubic_legacy_init,
-                                                cubic_on_acked,
-                                                cubic_on_lost,
-                                                cubic_on_persistent_congestion,
-                                                cubic_on_sent,
-                                                cubic_on_switch,
-                                                NULL,
-                                                quicly_cc_jumpstart_enter};
+quicly_cc_type_t quicly_cc_type_cubic_legacy = {
+    "cubic-legacy", &quicly_cc_cubic_legacy_init, cubic_on_acked, cubic_on_lost, cubic_on_sent, cubic_on_switch,
+    NULL,           quicly_cc_jumpstart_enter};
 quicly_init_cc_t quicly_cc_cubic_legacy_init = {cubic_init};
