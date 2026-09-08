@@ -852,6 +852,15 @@ typedef struct st_quicly_stats_t {
     apply(cc.num_loss_episodes_undone, "cc.num-loss-episodes-undone")                                                              \
     apply(cc.num_loss_episodes_undone_in_startup, "cc.num-loss-episodes-undone-in-startup")                                        \
     apply(cc.num_ecn_loss_episodes, "cc.num-ecn-loss-episodes")                                                                    \
+    apply(cc.bytes_increased_in_ca, "cc.bytes-increased-in-ca")                                                                    \
+    apply(cc.bytes_accelerated, "cc.bytes-accelerated")                                                                            \
+    apply(cc.num_accel_periods, "cc.num-accel-periods")                                                                            \
+    apply(cc.num_accel_periods_ended_by_ecn, "cc.num-accel-periods-ended-by-ecn")                                                  \
+    apply(cc.num_accel_recalibrations, "cc.num-accel-recalibrations")                                                              \
+    apply(cc.state.pico.accel.full_rtt, "cc.accel-full-rtt")                                                                       \
+    apply(cc.state.pico.accel.min_rtt_current_period, "cc.accel-min-rtt-current-period")                                           \
+    apply(cc.state.pico.accel.min_rtt_past, "cc.accel-min-rtt-past")                                                               \
+    apply(cc.state.pico.accel.min_rtt_past_variance, "cc.accel-min-rtt-past-variance")                                             \
     apply(delivery_rate.latest, "delivery-rate.latest")                                                                            \
     apply(delivery_rate.smoothed, "delivery-rate.smoothed")                                                                        \
     apply(delivery_rate.stdev, "delivery-rate.stdev")                                                                              \

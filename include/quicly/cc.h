@@ -156,19 +156,15 @@ struct st_quicly_cc_accel_adaptation_t {
      */
     uint32_t min_rtt_current_period;
     /**
-     * Prior minimum RTT state selected by `QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE`.
+     * Minimum RTT observed during the preceding period, or the smoothed minimum of completed periods when
+     * `QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE` is set. Zero when unavailable.
      */
-    union {
-        /**
-         * Minimum RTT observed during the preceding period between congestion events, or zero when unavailable.
-         */
-        uint32_t previous_period;
-        /**
-         * RTT estimator fed with the minimum RTT of each completed period between congestion events. The current period is
-         * excluded; `latest` is zero until the first period has been completed.
-         */
-        quicly_rtt_t estimator;
-    } past_min_rtt;
+    float min_rtt_past;
+    /**
+     * Variance of `min_rtt_past`, zero before the smoothed estimator is initialized, or 1U << 31 when the smoothed gate is
+     * disabled.
+     */
+    float min_rtt_past_variance;
     /**
      * Latest time at which a high queue was indicated by ECN-CE or by the smoothed RTT reaching 10ms above the estimated bottom
      * RTT.
@@ -249,6 +245,10 @@ typedef struct st_quicly_cc_t {
      */
     unsigned accel_adaptation : 3;
     /**
+     * Whether accelerated increase has controlled growth during the current congestion-avoidance period.
+     */
+    unsigned accel_in_current_period : 1;
+    /**
      * State information specific to the congestion controller implementation.
      */
     union {
@@ -261,6 +261,10 @@ typedef struct st_quicly_cc_t {
              * value needs to be initialized.
              */
             uint32_t bytes_to_mtu_increase;
+            /**
+             * Whether the current `bytes_to_mtu_increase` interval was selected by accelerated increase.
+             */
+            unsigned bytes_to_mtu_increase_by_accel : 1;
             /**
              * State used exclusively by each congestion controller.
              */
@@ -288,6 +292,8 @@ typedef struct st_quicly_cc_t {
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_to_mtu_increase;
+                unsigned bytes_to_mtu_increase_by_accel : 1;
+                unsigned accel_in_current_period : 1;
                 struct st_quicly_cc_accel_adaptation_t accel;
                 union {
                     uint32_t bytes_per_mtu_increase;
@@ -387,6 +393,26 @@ typedef struct st_quicly_cc_t {
      * Total number of loss episodes that was reported only by ECN (hence no packet loss).
      */
     uint32_t num_ecn_loss_episodes;
+    /**
+     * Cumulative increase of CWND during congestion avoidance.
+     */
+    uint64_t bytes_increased_in_ca;
+    /**
+     * Cumulative increase of CWND during congestion avoidance that was controlled by accelerated increase.
+     */
+    uint64_t bytes_accelerated;
+    /**
+     * Number of congestion-avoidance periods during which accelerated increase controlled growth.
+     */
+    uint64_t num_accel_periods;
+    /**
+     * Number of accelerated periods whose following congestion event was reported by ECN.
+     */
+    uint64_t num_accel_periods_ended_by_ecn;
+    /**
+     * Number of times accelerated adaptation entered recalibration slow start, or UINT64_MAX when recalibration is disabled.
+     */
+    uint64_t num_accel_recalibrations;
 } quicly_cc_t;
 
 struct st_quicly_cc_type_t {

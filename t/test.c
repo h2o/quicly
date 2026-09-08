@@ -1445,7 +1445,9 @@ static void test_stats_foreach_field(size_t off, size_t size)
         GAP(loss_thresholds.use_packet_based, loss_thresholds.time_based_percentile),
         GAP(loss_thresholds.time_based_percentile, cc.cwnd),
         GAP(cc.ssthresh, cc.cwnd_initial),
-        GAP(cc.num_ecn_loss_episodes, delivery_rate.latest),
+        GAP(cc.num_ecn_loss_episodes, cc.bytes_increased_in_ca),
+        GAP(cc.num_accel_recalibrations, cc.state.pico.accel.full_rtt),
+        GAP(cc.state.pico.accel.min_rtt_past_variance, delivery_rate.latest),
 #undef GAP
         SIZE_MAX};
     for (size_t i = 0; gaps[i] != SIZE_MAX; i += 2) {
