@@ -188,6 +188,10 @@ typedef struct st_quicly_cc_t {
      */
     unsigned normalize_mtu : 1;
     /**
+     * Whether Cubic and Cuback use alpha=1 for packet-loss epochs before reaching cwnd_prior.
+     */
+    unsigned cubic_loss_alpha_one : 1;
+    /**
      * State information specific to the congestion controller implementation.
      */
     union {
