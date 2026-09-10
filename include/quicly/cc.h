@@ -174,6 +174,10 @@ struct st_quicly_cc_accel_adaptation_t {
      * Expected time in milliseconds for the active congestion-avoidance trajectory to produce a high-RTT observation.
      */
     uint32_t high_rtt_interval;
+    /**
+     * Cumulative CWND increase controlled by accelerated increase during the current congestion-avoidance period.
+     */
+    uint32_t bytes_accelerated_current_period;
 };
 
 /**
@@ -245,10 +249,6 @@ typedef struct st_quicly_cc_t {
      */
     unsigned accel_adaptation : 3;
     /**
-     * Whether accelerated increase has controlled growth during the current congestion-avoidance period.
-     */
-    unsigned accel_in_current_period : 1;
-    /**
      * State information specific to the congestion controller implementation.
      */
     union {
@@ -293,7 +293,6 @@ typedef struct st_quicly_cc_t {
                 uint32_t ssthresh;
                 uint32_t bytes_to_mtu_increase;
                 unsigned bytes_to_mtu_increase_by_accel : 1;
-                unsigned accel_in_current_period : 1;
                 struct st_quicly_cc_accel_adaptation_t accel;
                 union {
                     uint32_t bytes_per_mtu_increase;
