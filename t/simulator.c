@@ -37,6 +37,37 @@
 
 FILE *quicly_trace_fp;
 
+static void sim_random_bytes(void *dst, size_t len)
+{
+    static struct {
+        ptls_cipher_context_t *cipher;
+        size_t offset;
+        uint8_t bytes[1024];
+    } prng;
+
+    if (prng.cipher == NULL) {
+        struct {
+            uint8_t key[PTLS_AES128_KEY_SIZE];
+            uint8_t iv[PTLS_AES_IV_SIZE];
+        } seed;
+
+        ptls_openssl_random_bytes(&seed, sizeof(seed));
+        prng.cipher = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, seed.key);
+        assert(prng.cipher != NULL);
+        ptls_cipher_init(prng.cipher, seed.iv);
+        prng.offset = sizeof(prng.bytes);
+        ptls_clear_memory(&seed, sizeof(seed));
+    }
+    assert(len <= sizeof(prng.bytes));
+
+    if (sizeof(prng.bytes) - prng.offset < len) {
+        ptls_cipher_encrypt(prng.cipher, prng.bytes, prng.bytes, sizeof(prng.bytes));
+        prng.offset = 0;
+    }
+    memcpy(dst, prng.bytes + prng.offset, len);
+    prng.offset += len;
+}
+
 static double now = 1000;
 static struct {
     uint64_t eligible_packets;
@@ -692,7 +723,9 @@ static void net_endpoint_forward(struct net_node *_self, struct net_packet *pack
             return;
         }
         ++ack_scheduler_stats.eligible_packets;
-        if (rand() % 65536 < self->ack_scheduler.probability * 65536) {
+        uint32_t random_value;
+        sim_random_bytes(&random_value, sizeof(random_value));
+        if ((double)random_value / ((double)UINT32_MAX + 1) < self->ack_scheduler.probability) {
             ++ack_scheduler_stats.stalls;
             ++ack_scheduler_stats.queued_packets;
             self->ack_scheduler.resume_at = now + self->ack_scheduler.delay;
@@ -1213,7 +1246,7 @@ int main(int argc, char **argv)
     struct net_node *nodes[20] = {}, **node_insert_at = nodes;
 
     net_endpoint_init(&server_node.node, 0, 0);
-    net_random_loss_init(&random_loss_node, tlsctx.random_bytes);
+    net_random_loss_init(&random_loss_node, sim_random_bytes);
     server_node.accept_ctx = quicctx;
     server_node.node.accept_ctx = &server_node.accept_ctx;
     *node_insert_at++ = &server_node.node.super;
