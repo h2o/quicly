@@ -461,16 +461,6 @@ static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, cons
     float bottom_rtt = accel_calc_bottom_rtt(state, rtt, flags);
     float high_rtt = bottom_rtt + 10;
 
-    if (rtt->smoothed >= high_rtt) {
-        state->last_high_queue_at = now;
-        return 0;
-    }
-
-    /* Recalibration is useful only when accelerated increase indicates that the bottleneck might be underutilized. */
-    double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
-    if (state->bytes_accelerated_current_period < cwnd * (1 - beta) * 0.25)
-        return 0;
-
     if (state->high_rtt_interval == 0) {
         double cwnd_before_reduction = cwnd_epoch / QUICLY_BETA_LOSS;
         double k = fast_cbrt((cwnd_before_reduction - cwnd_epoch) / (QUICLY_CUBIC_C * reference_mtu));
@@ -484,9 +474,24 @@ static int accel_recalibrate(struct st_quicly_cc_accel_adaptation_t *state, cons
         state->high_rtt_interval = interval < 1 ? 1 : interval < UINT32_MAX ? interval : UINT32_MAX;
     }
 
+    if (rtt->smoothed >= high_rtt) {
+        state->last_high_queue_at = now;
+        return 0;
+    }
+
+    /* When full_rtt provides enough headroom for accelerated increase, recalibration is useful only after that increase indicates
+     * that the bottleneck might be underutilized. Without the increase-always option, a lower full_rtt cannot enable accelerated
+     * increase in the first place, so let the absence of a high-queue observation trigger recalibration by itself. */
+    double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    if (state->full_rtt > high_rtt && state->bytes_accelerated_current_period < cwnd * (1 - beta) * 0.25)
+        return 0;
+
     /* If the smoothed RTT has remained below the high-queue threshold for twice the time in which a non-losing competing flow
-     * following the same CA trajectory could have produced another high-queue observation, the path might have changed. */
-    if (now - state->last_high_queue_at < 2 * (int64_t)state->high_rtt_interval)
+     * following the same CA trajectory could have produced another high-queue observation, the path might have changed. When
+     * full_rtt does not clear the high-queue threshold, wait four times longer because the absence of high RTT is weaker evidence
+     * that the bottleneck is underutilized. */
+    int interval_multiplier = state->full_rtt > high_rtt ? 2 : 8;
+    if (now - state->last_high_queue_at < interval_multiplier * (int64_t)state->high_rtt_interval)
         return 0;
 
     state->high_rtt_interval = 0;
@@ -725,6 +730,7 @@ Cleanup:
             assert(cc->type == &quicly_cc_type_cuback);
             cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
         }
+        cc->state.pico.accel.cwnd_before_recalibration = cc->cwnd;
         cc->state.pico.bytes_to_mtu_increase = 0;
         cc->state.pico.bytes_to_mtu_increase_by_accel = 0;
         cc->ssthresh = UINT32_MAX;
@@ -852,6 +858,12 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             if (base < cc->jumpstart.bytes_acked)
                 base = cc->jumpstart.bytes_acked;
             quicly_cc_rapid_start_on_first_lost(&cc->rapid_start, &cc->cwnd, bytes == 0, base * 0.5);
+        } else if (cc->state.pico.accel.cwnd_before_recalibration != 0) {
+            /* Recalibration slow start deliberately overfills the queue and is expected to produce a synchronous congestion
+             * signal. Treat its entry CWND as this flow's pre-signal CWND, so it takes the same multiplicative reduction as
+             * competing flows. */
+            bdp = cc->state.pico.accel.cwnd_before_recalibration;
+            cc->cwnd = bdp * beta;
         } else {
             cc->cwnd *= 0.5;
         }

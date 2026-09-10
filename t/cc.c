@@ -837,9 +837,10 @@ static void test_cubic_accel_adaptation_recalibration(void)
 
     /* A high queue is ten milliseconds above the selected bottom RTT: minRTT by default, or the recent-floor estimate when the
      * smoothed gate is enabled. */
-    struct st_quicly_cc_accel_adaptation_t high_queue = {.full_rtt = 140, .last_high_queue_at = 1000, .high_rtt_interval = 1000};
+    struct st_quicly_cc_accel_adaptation_t high_queue = {.full_rtt = 140, .last_high_queue_at = 1000};
     loss.rtt.smoothed = 110;
     ok(!accel_recalibrate(&high_queue, &loss.rtt, 50 * mtu, 50 * mtu, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 0, 1500));
+    ok(high_queue.high_rtt_interval != 0);
     ok(high_queue.last_high_queue_at == 1500);
     set_accel_past_minimum_estimate(&high_queue, 110, 5);
     high_queue.last_high_queue_at = 1000;
@@ -850,6 +851,11 @@ static void test_cubic_accel_adaptation_recalibration(void)
     ok(!accel_recalibrate(&high_queue, &loss.rtt, 50 * mtu, 50 * mtu, mtu, smoothed_flags, 0, 1500));
     ok(high_queue.last_high_queue_at == 1500);
     loss.rtt.smoothed = 109;
+
+    /* The high-RTT interval is established independently of whether accelerated increase has met the recalibration gain guard. */
+    struct st_quicly_cc_accel_adaptation_t waiting_for_gain = {.full_rtt = 120, .last_high_queue_at = 1000};
+    ok(!accel_recalibrate(&waiting_for_gain, &loss.rtt, 50 * mtu, 50 * mtu, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 0, 1000));
+    ok(waiting_for_gain.high_rtt_interval != 0);
 
     /* Recalibration requires accelerated increase to meet the minimum gain derived from the current CWND and latest reduction
      * factor. */
@@ -863,6 +869,13 @@ static void test_cubic_accel_adaptation_recalibration(void)
     ok(!accel_recalibrate(&guarded, &loss.rtt, 50 * mtu, 50 * mtu, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 1, 3000));
     guarded.bytes_accelerated_current_period = 3000;
     ok(accel_recalibrate(&guarded, &loss.rtt, 50 * mtu, 50 * mtu, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 1, 3000));
+
+    /* Without the increase-always option, a full_rtt too close to the bottom RTT cannot enable accelerated increase. The absence
+     * of a high-queue observation is therefore sufficient once the longer recalibration interval elapses. */
+    struct st_quicly_cc_accel_adaptation_t low_full_rtt = {
+        .full_rtt = 110, .last_high_queue_at = 1000, .high_rtt_interval = 1000};
+    ok(!accel_recalibrate(&low_full_rtt, &loss.rtt, 50 * mtu, 50 * mtu, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 0, 8999));
+    ok(accel_recalibrate(&low_full_rtt, &loss.rtt, 50 * mtu, 50 * mtu, mtu, QUICLY_CC_ACCEL_ADAPTATION_ON, 0, 9000));
 
     /* A loss starts a new CUBIC epoch but does not restart the time available for deciding whether the path should be
      * recalibrated. The new epoch's K is used for the decision. */
@@ -897,6 +910,7 @@ static void test_cubic_accel_adaptation_recalibration(void)
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.state.pico.cubic.w_est = cc.cwnd;
     cc.state.pico.cubic.cwnd_prior = initcwnd;
+    cc.state.pico.cubic.fast_convergence = 1;
     cc.state.pico.cubic.epoch_start = 1000;
     cc.state.pico.cubic.k = 2;
     cc.state.pico.accel.full_rtt = 120;
@@ -924,20 +938,36 @@ static void test_cubic_accel_adaptation_recalibration(void)
     ok(cc.num_accel_recalibrations == 1);
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.cwnd == 60 * mtu);
+    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
+    ok(cc.state.pico.cubic.cwnd_prior == 0);
+    ok(!cc.state.pico.cubic.fast_convergence);
+    ok(cc.state.pico.cubic.w_est == 0);
 
-    /* A loss in calibration replaces full_rtt upon recovery exit; undo restores the calibration while retaining the
-       high-queue observation. */
+    /* Recalibration slow start can grow far beyond its entry CWND. The synchronous loss establishes the next epoch as if it had
+     * occurred at the entry CWND, without Fast Convergence; the probe peak is not retained as this flow's share. */
+    cc.cwnd = 100 * mtu;
     loss.rtt.latest = loss.rtt.smoothed = 130;
-    cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 6100, mtu);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 6100, mtu);
     ok(cc.state.pico.accel.full_rtt == 0);
-    ok(cc.cwnd >= cc.ssthresh);
-    cc.type->cc_on_acked(&cc, &loss, 0, 30, 0, 1, 31, 6150, mtu);
+    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
+    ok(cc.cwnd == (uint32_t)(60 * mtu * QUICLY_BETA_LOSS));
+    ok(cc.cwnd == cc.ssthresh);
+    ok(cc.state.pico.cubic.cwnd_prior == 60 * mtu);
+    ok(!cc.state.pico.cubic.fast_convergence);
+    cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 6150, mtu);
     ok(cc.state.pico.accel.full_rtt == 130);
     ok(cc.state.pico.accel.last_high_queue_at == 6150);
-    cc.type->cc_on_late_ack(&cc, 20, 6200);
+
+    /* Undo restores the calibration probe while retaining the high-queue observation. */
+    cc.type->cc_on_late_ack(&cc, 40, 6200);
     ok(cc.state.pico.accel.full_rtt == 120);
     ok(cc.state.pico.accel.last_high_queue_at == 6150);
+    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
+    ok(cc.cwnd == 100 * mtu);
     ok(cc.cwnd < cc.ssthresh);
+    ok(cc.state.pico.cubic.cwnd_prior == 0);
+    ok(!cc.state.pico.cubic.fast_convergence);
+    ok(cc.state.pico.cubic.w_est == 0);
     ok(cc.cwnd_exiting_slow_start == initcwnd);
 }
 
@@ -1028,6 +1058,7 @@ static void test_cuback_accel_adaptation_recalibration(void)
     cc.ssthresh = 50 * mtu;
     cc.cwnd_exiting_slow_start = initcwnd;
     cc.state.pico.cuback.cwnd_prior = 60 * mtu;
+    cc.state.pico.cuback.fast_convergence = 1;
     cc.state.pico.cuback.bandwidth = cc.cwnd * 1000. / loss.rtt.smoothed;
     cc.state.pico.accel.full_rtt = 120;
     cc.state.pico.accel.last_high_queue_at = 1000;
@@ -1050,21 +1081,33 @@ static void test_cuback_accel_adaptation_recalibration(void)
     ok(cc.ssthresh == UINT32_MAX);
     ok(cc.num_accel_recalibrations == 1);
     ok(cc.cwnd == 60 * mtu);
+    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
     ok(cc.state.pico.cuback.bandwidth == 0);
+    ok(!cc.state.pico.cuback.fast_convergence);
 
-    /* A loss in calibration replaces full_rtt upon recovery exit; undo restores the calibration while retaining the
-       high-queue observation. */
+    /* Cuback treats recalibration completion as a congestion event at the retained CWND. */
+    cc.cwnd = 100 * mtu;
     loss.rtt.latest = loss.rtt.smoothed = 130;
-    cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 8100, mtu);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 8100, mtu);
     ok(cc.state.pico.accel.full_rtt == 0);
-    ok(cc.cwnd >= cc.ssthresh);
-    cc.type->cc_on_acked(&cc, &loss, 0, 30, 0, 1, 31, 8150, mtu);
+    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
+    ok(cc.cwnd == (uint32_t)(60 * mtu * QUICLY_BETA_LOSS));
+    ok(cc.cwnd == cc.ssthresh);
+    ok(cc.state.pico.cuback.cwnd_prior == 60 * mtu);
+    ok(!cc.state.pico.cuback.fast_convergence);
+    ok(cc.state.pico.cuback.bandwidth == 60 * mtu * 1000. / loss.rtt.smoothed);
+    cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 8150, mtu);
     ok(cc.state.pico.accel.full_rtt == 130);
     ok(cc.state.pico.accel.last_high_queue_at == 8150);
-    cc.type->cc_on_late_ack(&cc, 20, 8200);
+    cc.type->cc_on_late_ack(&cc, 40, 8200);
     ok(cc.state.pico.accel.full_rtt == 120);
     ok(cc.state.pico.accel.last_high_queue_at == 8150);
+    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
+    ok(cc.cwnd == 100 * mtu);
     ok(cc.cwnd < cc.ssthresh);
+    ok(cc.state.pico.cuback.cwnd_prior == 0);
+    ok(!cc.state.pico.cuback.fast_convergence);
+    ok(cc.state.pico.cuback.bandwidth == 0);
     ok(cc.cwnd_exiting_slow_start == initcwnd);
 }
 
