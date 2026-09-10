@@ -1,0 +1,184 @@
+diff --git a/t/simulator.c b/t/simulator.c
+index 22f459c..9ac7aee 100644
+--- a/t/simulator.c
++++ b/t/simulator.c
+@@ -36,6 +36,38 @@
+ #include "quicly/defaults.h"
+ 
+ FILE *quicly_trace_fp;
++static int measurement_output_only;
++
++static void sim_random_bytes(void *dst, size_t len)
++{
++    static struct {
++        ptls_cipher_context_t *cipher;
++        size_t offset;
++        uint8_t bytes[1024];
++    } prng;
++
++    if (prng.cipher == NULL) {
++        struct {
++            uint8_t key[PTLS_AES128_KEY_SIZE];
++            uint8_t iv[PTLS_AES_IV_SIZE];
++        } seed;
++
++        ptls_openssl_random_bytes(&seed, sizeof(seed));
++        prng.cipher = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, seed.key);
++        assert(prng.cipher != NULL);
++        ptls_cipher_init(prng.cipher, seed.iv);
++        prng.offset = sizeof(prng.bytes);
++        ptls_clear_memory(&seed, sizeof(seed));
++    }
++    assert(len <= sizeof(prng.bytes));
++
++    if (sizeof(prng.bytes) - prng.offset < len) {
++        ptls_cipher_encrypt(prng.cipher, prng.bytes, prng.bytes, sizeof(prng.bytes));
++        prng.offset = 0;
++    }
++    memcpy(dst, prng.bytes + prng.offset, len);
++    prng.offset += len;
++}
+ 
+ static double now = 1000;
+ static struct {
+@@ -309,8 +341,9 @@ static void net_random_loss_forward(struct net_node *_self, struct net_packet *p
+     uint32_t random_value;
+     self->random_bytes(&random_value, sizeof(random_value));
+     if ((double)random_value / ((double)UINT32_MAX + 1) < self->loss_ratios[index]) {
+-        printf("{\"random-loss\": \"drop\", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", now,
+-               ntohl(packet->src->addr.sin.sin_addr.s_addr));
++        if (!measurement_output_only)
++            printf("{\"random-loss\": \"drop\", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", now,
++                   ntohl(packet->src->addr.sin.sin_addr.s_addr));
+         net_packet_destroy(packet);
+         return;
+     }
+@@ -333,6 +366,8 @@ static void net_random_loss_init(struct net_random_loss *self, void (*random_byt
+ 
+ static void net_bottleneck_print_stats(struct net_bottleneck *self, const char *event, struct net_packet *packet)
+ {
++    if (measurement_output_only)
++        return;
+     printf("{\"bottleneck\": \"%s\", \"at\": %f, \"queue-size\": %zu, \"packet-src\": %" PRIu32 ", \"packet-size\": %zu}\n", event,
+            now, self->size, ntohl(packet->src->addr.sin.sin_addr.s_addr), packet->size);
+ }
+@@ -832,8 +867,9 @@ static void stream_on_receive_cb(quicly_stream_t *stream, size_t off, const void
+     assert(peer->sa_family == AF_INET);
+     uint32_t packet_src = ntohl(((struct sockaddr_in *)peer)->sin_addr.s_addr);
+ 
+-    printf("{\"bytes-available\": %" PRIu64 ", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", stream->recvstate.data_off, now,
+-           packet_src);
++    if (!measurement_output_only)
++        printf("{\"bytes-available\": %" PRIu64 ", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", stream->recvstate.data_off,
++               now, packet_src);
+ }
+ 
+ static void stream_on_receive_reset_cb(quicly_stream_t *stream, quicly_error_t err)
+@@ -860,6 +896,7 @@ static void usage(const char *cmd)
+            "  -c <cc>             sets congestion controller\n"
+            "  -b <bytes_per_sec>  bottleneck bandwidth (default: 1000000, i.e., 1MB/s)\n"
+            "  -B                  uses byte-fit rather than packet-size-neutral tail-drop admission\n"
++           "  -C                  emits measurement summaries only\n"
+            "  -d <delay_secs>     delay added between the sender and the botteneck\n"
+            "                      (default: 0.1)\n"
+            "  -i <packets>        sets initial CWND (default: %" PRIu32 ")\n"
+@@ -879,6 +916,7 @@ static void usage(const char *cmd)
+            "  -r <probability>    adds random loss at given probability (default: 0)\n"
+            "  -R                  turns on rapid start\n"
+            "  -T                  turns on accelerated bottleneck bandwidth adaptation\n"
++           "  -X <flags>          sets accelerated bottleneck bandwidth adaptation flags\n"
+            "  -s <seconds>        delay until the sender is added to the simulation\n"
+            "                      (default: 0)\n"
+            "  -t                  emits trace as well\n"
+@@ -938,7 +976,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
+ {
+     reset_getopt_state();
+     int ch;
+-    while ((ch = getopt(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:RTs:th")) != -1) {
++    while ((ch = getopt(argc, argv, "A:BCa:b:c:d:EFi:j:l:m:Mpq:r:RTs:tX:h")) != -1) {
+ 
+         switch (ch) {
+         case 'a': {
+@@ -991,6 +1029,13 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
+             }
+             *byte_fit_admission = 1;
+             break;
++        case 'C':
++            if (length == NULL) {
++                fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
++                return 0;
++            }
++            measurement_output_only = 1;
++            break;
+         case 'b':
+             if (bw == NULL) {
+                 fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
+@@ -1081,6 +1126,15 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
+         case 'T':
+             quicctx->accel_adaptation = QUICLY_CC_ACCEL_ADAPTATION_ON;
+             break;
++        case 'X': {
++            int flags;
++            char extra;
++            if (sscanf(optarg, "%i%c", &flags, &extra) != 1 || flags < 0 || flags >= 1 << 3) {
++                fprintf(stderr, "invalid accelerated adaptation flags: %s\n", optarg);
++                return 0;
++            }
++            quicctx->accel_adaptation = flags;
++        } break;
+         case 's':
+             if (sscanf(optarg, "%lf", start) != 1) {
+                 fprintf(stderr, "invaild start: %s\n", optarg);
+@@ -1211,9 +1265,10 @@ int main(int argc, char **argv)
+         quicly_context_t accept_ctx;
+     } server_node;
+     struct net_node *nodes[20] = {}, **node_insert_at = nodes;
++    struct net_endpoint *client_nodes[PTLS_ELEMENTSOF(nodes)] = {};
+ 
+     net_endpoint_init(&server_node.node, 0, 0);
+-    net_random_loss_init(&random_loss_node, tlsctx.random_bytes);
++    net_random_loss_init(&random_loss_node, sim_random_bytes);
+     server_node.accept_ctx = quicctx;
+     server_node.node.accept_ctx = &server_node.accept_ctx;
+     *node_insert_at++ = &server_node.node.super;
+@@ -1274,6 +1329,7 @@ int main(int argc, char **argv)
+ 
+             struct net_endpoint *client_node = malloc(sizeof(*client_node));
+             net_endpoint_init(client_node, flow_ack_scheduler_probability, flow_ack_scheduler_delay);
++            client_nodes[sender_count] = client_node;
+             uint32_t client_index = ntohl(client_node->addr.sin.sin_addr.s_addr);
+             assert(client_index < PTLS_ELEMENTSOF(random_loss_node.loss_ratios));
+             random_loss_node.loss_ratios[client_index] = flow_random_loss;
+@@ -1313,10 +1369,30 @@ int main(int argc, char **argv)
+         *node_insert_at++ = &random_loss_node.super;
+     }
+ 
+-    while (now < 1000 + length)
++    int measurement_started = 0;
++    while (now < 1000 + length) {
+         run_nodes(nodes);
++        if (!measurement_started && now >= 1000 + length / 2) {
++            for (int i = 0; i < sender_count; ++i) {
++                quicly_stats_t stats;
++                quicly_get_stats(client_nodes[i]->conns[0].quic, &stats);
++                printf("{\"cc-stats\":\"measurement-start\",\"packet-src\":%d,\"data-off\":%" PRIu64
++                       ",\"num-loss-episodes\":%" PRIu32 "}\n",
++                       i + 2, stats.num_bytes.stream_data_sent, stats.cc.num_loss_episodes);
++            }
++            measurement_started = 1;
++        }
++    }
++
++    for (int i = 0; i < sender_count; ++i) {
++        quicly_stats_t stats;
++        quicly_get_stats(client_nodes[i]->conns[0].quic, &stats);
++        printf("{\"cc-stats\":\"measurement-end\",\"packet-src\":%d,\"data-off\":%" PRIu64
++               ",\"num-loss-episodes\":%" PRIu32 "}\n",
++               i + 2, stats.num_bytes.stream_data_sent, stats.cc.num_loss_episodes);
++    }
+ 
+-    if (ack_scheduler_stats.eligible_packets != 0)
++    if (!measurement_output_only && ack_scheduler_stats.eligible_packets != 0)
+         printf("{\"ack-scheduler\": \"summary\", \"eligible-packets\": %" PRIu64 ", \"stalls\": %" PRIu64
+                ", \"queued-packets\": %" PRIu64 "}\n",
+                ack_scheduler_stats.eligible_packets, ack_scheduler_stats.stalls, ack_scheduler_stats.queued_packets);

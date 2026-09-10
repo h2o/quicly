@@ -1,0 +1,105 @@
+# ABBA recalibration-suppression experiment
+
+This orphan branch is a self-contained record of the experiment that exposed over-aggressive ABBA recalibration and measured two
+guards intended to suppress it. It pins Quicly commit `31f8be8` as the baseline. `3f01697.patch` contains the complete source and
+unit-test change through commit `3f01697`; it applies directly to the pinned baseline. `benchmark.patch` contains only the
+simulator options, measurement output, and faster simulator-local random-number generation needed by the sweep.
+
+The two guards prevent recalibration when:
+
+1. `full_rtt` is below the high-queue watermark, because low RTT cannot then distinguish an empty queue from a full but shallow
+   queue; or
+2. accelerated increase in the current congestion-avoidance period has not recovered one quarter of the latest congestion
+   reduction, because there is not yet evidence of material underutilization.
+
+## Matrix
+
+The contender is either stock or ABBA. All incumbents are stock. Every stock/ABBA result is compared with the matching stock/stock
+result, so ABBA taking otherwise unused capacity is not mistaken for unfairness.
+
+| Axis | Values |
+|---|---|
+| Controller | CUBIC, Cuback |
+| ABBA flags | `0x2`, `0x6` |
+| Idle RTT | 5, 10, 20, 40, 80 ms |
+| BDP | 4, 25, 100, 400 packets |
+| Queue | 2, 5, 10, 20 ms and 0.3, 1, 2 RTT, after removing depths below 2 ms, fixed depths above 0.3 RTT, and duplicates |
+| Random loss per full flight | 0, 0.1%, 1%, 10% |
+| Random-loss scope | contender only and all flows; the zero-loss case is recorded once as `clean` |
+| Incumbents | 1, 4 |
+| Contender order | first, last |
+| Repetitions | 10 |
+
+The per-packet probability is derived from the configured loss probability per full flight (BDP plus queue). The measured half of
+each simulation spans at least 200 RTTs and is lengthened to target 50 expected congestion periods using the larger of CUBIC's
+Reno-friendly and cubic window approximations. The first half is warm-up.
+
+## Reproduction
+
+Create two worktrees from the pinned source commit. Apply only the benchmark harness to the baseline, and apply both patches to the
+guarded tree:
+
+```sh
+experiment_dir=$PWD
+baseline_dir=../quicly-abba-baseline
+guarded_dir=../quicly-abba-guarded
+commit=31f8be8
+
+git worktree add --detach "$baseline_dir" "$commit"
+git worktree add --detach "$guarded_dir" "$commit"
+git -C "$baseline_dir" submodule update --init --recursive
+git -C "$guarded_dir" submodule update --init --recursive
+git -C "$baseline_dir" apply "$experiment_dir/benchmark.patch"
+git -C "$guarded_dir" apply "$experiment_dir/3f01697.patch"
+git -C "$guarded_dir" apply "$experiment_dir/benchmark.patch"
+```
+
+Build both simulators:
+
+```sh
+cmake -S "$baseline_dir" -B "$baseline_dir/build/experiment" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$baseline_dir/build/experiment" --target simulator -j
+cmake -S "$guarded_dir" -B "$guarded_dir/build/experiment" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$guarded_dir/build/experiment" --target simulator -j
+```
+
+Run one complete matrix for each source revision and ABBA mode. `run.rb` writes resumable TSV output. A single-process invocation
+uses one logical shard; `THREADS` controls concurrency within it:
+
+```sh
+threads=$(getconf _NPROCESSORS_ONLN)
+
+for flags in 2 6; do
+  SIMULATOR="$baseline_dir/build/experiment/simulator" \
+    OUTPUT="baseline-0x$(printf %x "$flags").tsv" THREADS="$threads" \
+    TOTAL_SLOTS=1 SLOT_BEGIN=0 SLOT_END=1 ABBA_FLAGS="$flags" ruby run.rb
+  SIMULATOR="$guarded_dir/build/experiment/simulator" \
+    OUTPUT="guarded-0x$(printf %x "$flags").tsv" THREADS="$threads" \
+    TOTAL_SLOTS=1 SLOT_BEGIN=0 SLOT_END=1 ABBA_FLAGS="$flags" ruby run.rb
+done
+```
+
+For independent parallel shards, give every invocation the same `TOTAL_SLOTS` and a disjoint half-open `SLOT_BEGIN` / `SLOT_END`
+range. Concatenate their TSV files before compaction; repeated headers are accepted. `COUNT_ONLY=1` prints the matrix size without
+running simulations.
+
+`compact.rb` retains every successful repetition and discards execution metadata. Its output is the compressed LDJSON format
+committed under `results/raw`:
+
+```sh
+ruby compact.rb baseline-0x2.tsv | gzip > results/raw/baseline-0x2.ldjson.gz
+ruby compact.rb baseline-0x6.tsv | gzip > results/raw/baseline-0x6.ldjson.gz
+ruby compact.rb guarded-0x2.tsv | gzip > results/raw/guarded-0x2.ldjson.gz
+ruby compact.rb guarded-0x6.tsv | gzip > results/raw/guarded-0x6.ldjson.gz
+ruby summarize.rb
+```
+
+## Recorded data
+
+Each compact LDJSON record identifies one matrix cell and contains all ten repetition samples. Samples contain repetition number,
+aggregate incumbent throughput, contender throughput, total utilization, and contender share; throughput values are percentages
+of bottleneck capacity. The baseline `0x2` result is stored as three numeric shards that together contain its ten repetitions.
+
+`results/summary.md` is regenerated by `summarize.rb`. Its principal safety check calls an incumbent clearly harmed only when the
+ABBA run's per-incumbent throughput P90 is below the matching stock/stock P10. The committed summary also reproduces the motivating
+Cuback case at 80 ms RTT, BDP 400 packets, a 10 ms queue, and no random loss.
