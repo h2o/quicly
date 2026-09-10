@@ -178,10 +178,6 @@ struct st_quicly_cc_accel_adaptation_t {
      * Cumulative CWND increase controlled by accelerated increase during the current congestion-avoidance period.
      */
     uint32_t bytes_accelerated_current_period;
-    /**
-     * CWND at which recalibration most recently began, or zero before the first recalibration.
-     */
-    uint32_t cwnd_before_recalibration;
 };
 
 /**

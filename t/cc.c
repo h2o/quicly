@@ -936,23 +936,24 @@ static void test_cubic_accel_adaptation_recalibration(void)
     cc.type->cc_on_acked(&cc, &loss, 0, 31, 0, 1, 32, 5000, mtu);
     ok(cc.ssthresh == UINT32_MAX);
     ok(cc.num_accel_recalibrations == 1);
+    ok(cc.num_loss_episodes == 1);
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.cwnd == 60 * mtu);
-    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
     ok(cc.state.pico.cubic.cwnd_prior == 0);
     ok(!cc.state.pico.cubic.fast_convergence);
     ok(cc.state.pico.cubic.w_est == 0);
 
-    /* Recalibration slow start can grow far beyond its entry CWND. The synchronous loss establishes the next epoch as if it had
-     * occurred at the entry CWND, without Fast Convergence; the probe peak is not retained as this flow's share. */
+    /* Recalibration slow start can grow far beyond its entry CWND. Infer a bounded share from the probe peak and suppress Fast
+     * Convergence. */
     cc.cwnd = 100 * mtu;
+    uint32_t recalibrated_cwnd = cc.cwnd / (2 * (2 - QUICLY_BETA_LOSS));
     loss.rtt.latest = loss.rtt.smoothed = 130;
     cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 6100, mtu);
+    ok(cc.num_loss_episodes == 2);
     ok(cc.state.pico.accel.full_rtt == 0);
-    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
-    ok(cc.cwnd == (uint32_t)(60 * mtu * QUICLY_BETA_LOSS));
+    ok(cc.cwnd == recalibrated_cwnd);
     ok(cc.cwnd == cc.ssthresh);
-    ok(cc.state.pico.cubic.cwnd_prior == 60 * mtu);
+    ok(cc.state.pico.cubic.cwnd_prior == recalibrated_cwnd);
     ok(!cc.state.pico.cubic.fast_convergence);
     cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 6150, mtu);
     ok(cc.state.pico.accel.full_rtt == 130);
@@ -960,9 +961,9 @@ static void test_cubic_accel_adaptation_recalibration(void)
 
     /* Undo restores the calibration probe while retaining the high-queue observation. */
     cc.type->cc_on_late_ack(&cc, 40, 6200);
+    ok(cc.num_loss_episodes == 1);
     ok(cc.state.pico.accel.full_rtt == 120);
     ok(cc.state.pico.accel.last_high_queue_at == 6150);
-    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
     ok(cc.cwnd == 100 * mtu);
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.state.pico.cubic.cwnd_prior == 0);
@@ -1080,29 +1081,31 @@ static void test_cuback_accel_adaptation_recalibration(void)
     cc.type->cc_on_acked(&cc, &loss, 0, 31, 0, 1, 32, 7000, mtu);
     ok(cc.ssthresh == UINT32_MAX);
     ok(cc.num_accel_recalibrations == 1);
+    ok(cc.num_loss_episodes == 1);
     ok(cc.cwnd == 60 * mtu);
-    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
     ok(cc.state.pico.cuback.bandwidth == 0);
     ok(!cc.state.pico.cuback.fast_convergence);
 
-    /* Cuback treats recalibration completion as a congestion event at the retained CWND. */
+    /* Cuback treats recalibration completion as a congestion event at the bounded share inferred from the probe peak. */
     cc.cwnd = 100 * mtu;
+    uint32_t recalibrated_bdp = cc.cwnd / 2;
+    uint32_t recalibrated_cwnd = cc.cwnd / (2 * (2 - QUICLY_BETA_LOSS));
     loss.rtt.latest = loss.rtt.smoothed = 130;
     cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 8100, mtu);
+    ok(cc.num_loss_episodes == 2);
     ok(cc.state.pico.accel.full_rtt == 0);
-    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
-    ok(cc.cwnd == (uint32_t)(60 * mtu * QUICLY_BETA_LOSS));
+    ok(cc.cwnd == recalibrated_cwnd);
     ok(cc.cwnd == cc.ssthresh);
-    ok(cc.state.pico.cuback.cwnd_prior == 60 * mtu);
+    ok(cc.state.pico.cuback.cwnd_prior == recalibrated_cwnd);
     ok(!cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.cuback.bandwidth == 60 * mtu * 1000. / loss.rtt.smoothed);
+    ok(cc.state.pico.cuback.bandwidth == recalibrated_bdp * 1000. / loss.rtt.smoothed);
     cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 8150, mtu);
     ok(cc.state.pico.accel.full_rtt == 130);
     ok(cc.state.pico.accel.last_high_queue_at == 8150);
     cc.type->cc_on_late_ack(&cc, 40, 8200);
+    ok(cc.num_loss_episodes == 1);
     ok(cc.state.pico.accel.full_rtt == 120);
     ok(cc.state.pico.accel.last_high_queue_at == 8150);
-    ok(cc.state.pico.accel.cwnd_before_recalibration == 60 * mtu);
     ok(cc.cwnd == 100 * mtu);
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.state.pico.cuback.cwnd_prior == 0);
