@@ -730,7 +730,9 @@ Cleanup:
             cc->state.pico.cubic = (struct st_quicly_cc_cubic_t){.k = NAN, .cc_limited = 1};
         } else {
             assert(cc->type == &quicly_cc_type_cuback);
-            cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};
+            /* Reset the Cuback trajectory while preserving its ACK-rate estimate. */
+            cc->state.pico.cuback =
+                (struct st_quicly_cc_cuback_t){.bandwidth = cc->state.pico.cuback.bandwidth};
         }
         cc->state.pico.bytes_to_mtu_increase = 0;
         cc->state.pico.bytes_to_mtu_increase_by_accel = 0;
@@ -841,8 +843,6 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         if (bdp < QUICLY_MIN_CWND * max_udp_payload_size)
             bdp = QUICLY_MIN_CWND * max_udp_payload_size;
     }
-    uint32_t w_max = bdp;
-
     /* Reduce congestion window. At the end of Slow Start, 0.5x is used, because the 1 RTT delay in ACK causes the sender to
      * overshoot by 2x (note: after 0.5x reduction, CWND is still as large as BDP+QUEUE, so further reduction is preferable). That
      * 2x overshoot builds up regardless of if congestion is signalled by a CE mark or by a packet loss, therefore `beta` is not
@@ -865,13 +865,14 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             cc->cwnd *= 0.5;
         } else {
             assert(accel_enabled(cc));
-            /* Bound this flow's congestion window from the recalibration peak. Assume asynchronous loss, under which the
-             * available bottleneck headroom is at most (1 - beta) times the full capacity of the path, and that the RTT feedback
-             * delay lets slow start overshoot the resulting full-window CWND by at most 2x. Under those assumptions, dividing the
-             * observed peak by 2 * (2 - beta) cannot exceed this flow's fair share. Use the loss beta conservatively
-             * even when recalibration ends in ECN. */
-            w_max = cc->cwnd / (2 * (2 - QUICLY_BETA_LOSS));
-            cc->cwnd = w_max;
+            /* Recalibration uses two loss assumptions for different events. The asynchronous loss preceding the probe leaves at
+             * most (1 - beta) times the full capacity of the path as available headroom; combined with at most 2x slow-start
+             * overshoot after reaching the full-window CWND, dividing the observed peak by 2 * (2 - beta) cannot exceed this
+             * flow's fair share. The queue-overflow loss ending the probe is expected to be synchronous across competing flows,
+             * so it does not constitute a new observation of this flow's share of the ACK rate; Cuback therefore preserves its
+             * pre-probe bandwidth below. Use the loss beta conservatively even when recalibration ends in ECN. The generic
+             * slow-start BDP estimate is not used for recalibration. */
+            cc->cwnd /= 2 * (2 - QUICLY_BETA_LOSS);
         }
     } else {
         cc->cwnd *= beta;
@@ -879,14 +880,11 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 
     if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
         cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
-    if (w_max < QUICLY_MIN_CWND * max_udp_payload_size)
-        w_max = QUICLY_MIN_CWND * max_udp_payload_size;
 
     if (accel_enabled(cc))
         accel_on_lost(&cc->state.pico.accel, in_startup, cc->accel_adaptation);
 
-    /* Update policy-specific state using Wmax and the reduced CWND. Cuback separately uses the estimated BDP to calculate its
-     * bandwidth.
+    /* Update policy-specific state using the estimated BDP and reduced CWND.
      *
      * Note on Cubic/Cuback: When ordinary slow start is used, both Wmax and post-recovery CWND are set to the estimated BDP and K
      * becomes 0, therefore the cubic curve will only have the convex region. CWND is not reduced beyond x0.5, because doing so
@@ -897,22 +895,28 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     if (cc->type == &quicly_cc_type_cuback) {
         if (cc->num_loss_episodes == 1) {
             /* Exiting startup: adopt the calculated BDP as the prior CWND or defer until the exiting recovery. */
-            cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : w_max;
+            cc->state.pico.cuback.cwnd_prior = quicly_cc_rapid_start_is_enabled(&cc->rapid_start) ? 0 : bdp;
+            cc->state.pico.cuback.fast_convergence = 0;
+        } else if (cc->ssthresh == UINT32_MAX) {
+            /* Recalibration uses the bounded congestion window rather than the generic slow-start BDP estimate. */
+            cc->state.pico.cuback.cwnd_prior = cc->cwnd;
             cc->state.pico.cuback.fast_convergence = 0;
         } else {
-            /* Fast convergence kicks in if Wmax comes out below the previous Wmax (RFC 9438, Section 4.7). */
+            /* Fast convergence kicks in if the BDP estimate comes out below the previous Wmax (RFC 9438, Section 4.7). */
             double previous_w_max = cc->state.pico.cuback.fast_convergence
                                         ? cubic_fast_convergence_w_max(cc->state.pico.cuback.cwnd_prior, cc->ssthresh)
                                         : cc->state.pico.cuback.cwnd_prior;
-            cc->state.pico.cuback.cwnd_prior = w_max;
-            cc->state.pico.cuback.fast_convergence = w_max < previous_w_max;
+            cc->state.pico.cuback.cwnd_prior = bdp;
+            cc->state.pico.cuback.fast_convergence = bdp < previous_w_max;
         }
         cc->state.pico.cuback.by_ecn = bytes == 0;
-        cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
+        /* Recalibration is the exception described above; other congestion events refresh the ACK-rate estimate. */
+        if (cc->ssthresh != UINT32_MAX || cc->num_loss_episodes == 1)
+            cc->state.pico.cuback.bandwidth = loss->rtt.smoothed != 0 ? bdp * 1000. / loss->rtt.smoothed : 0;
         cc->state.pico.bytes_to_mtu_increase = 0;
         cc->state.pico.bytes_to_mtu_increase_by_accel = 0;
     } else if (cc->type == &quicly_cc_type_cubic) {
-        cubic_on_congestion(&cc->state.pico.cubic, w_max, cc->ssthresh, bytes == 0);
+        cubic_on_congestion(&cc->state.pico.cubic, cc->ssthresh == UINT32_MAX ? cc->cwnd : bdp, cc->ssthresh, bytes == 0);
         cc->state.pico.bytes_to_mtu_increase = 0;
         cc->state.pico.bytes_to_mtu_increase_by_accel = 0;
     } else if (cc->type == &quicly_cc_type_pico) {

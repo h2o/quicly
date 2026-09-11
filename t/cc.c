@@ -1061,6 +1061,7 @@ static void test_cuback_accel_adaptation_recalibration(void)
     cc.state.pico.cuback.cwnd_prior = 60 * mtu;
     cc.state.pico.cuback.fast_convergence = 1;
     cc.state.pico.cuback.bandwidth = cc.cwnd * 1000. / loss.rtt.smoothed;
+    double bandwidth_before_recalibration = cc.state.pico.cuback.bandwidth;
     cc.state.pico.accel.full_rtt = 120;
     cc.state.pico.accel.last_high_queue_at = 1000;
     cc.state.pico.accel.bytes_accelerated_current_period = cc.cwnd;
@@ -1083,12 +1084,11 @@ static void test_cuback_accel_adaptation_recalibration(void)
     ok(cc.num_accel_recalibrations == 1);
     ok(cc.num_loss_episodes == 1);
     ok(cc.cwnd == 60 * mtu);
-    ok(cc.state.pico.cuback.bandwidth == 0);
+    ok(cc.state.pico.cuback.bandwidth == bandwidth_before_recalibration);
     ok(!cc.state.pico.cuback.fast_convergence);
 
     /* Cuback treats recalibration completion as a congestion event at the bounded share inferred from the probe peak. */
     cc.cwnd = 100 * mtu;
-    uint32_t recalibrated_bdp = cc.cwnd / 2;
     uint32_t recalibrated_cwnd = cc.cwnd / (2 * (2 - QUICLY_BETA_LOSS));
     loss.rtt.latest = loss.rtt.smoothed = 130;
     cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 8100, mtu);
@@ -1098,7 +1098,7 @@ static void test_cuback_accel_adaptation_recalibration(void)
     ok(cc.cwnd == cc.ssthresh);
     ok(cc.state.pico.cuback.cwnd_prior == recalibrated_cwnd);
     ok(!cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.cuback.bandwidth == recalibrated_bdp * 1000. / loss.rtt.smoothed);
+    ok(cc.state.pico.cuback.bandwidth == bandwidth_before_recalibration);
     cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 8150, mtu);
     ok(cc.state.pico.accel.full_rtt == 130);
     ok(cc.state.pico.accel.last_high_queue_at == 8150);
@@ -1110,7 +1110,7 @@ static void test_cuback_accel_adaptation_recalibration(void)
     ok(cc.cwnd < cc.ssthresh);
     ok(cc.state.pico.cuback.cwnd_prior == 0);
     ok(!cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.cuback.bandwidth == 0);
+    ok(cc.state.pico.cuback.bandwidth == bandwidth_before_recalibration);
     ok(cc.cwnd_exiting_slow_start == initcwnd);
 }
 
