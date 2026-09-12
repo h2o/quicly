@@ -112,7 +112,7 @@ inline uint64_t quicly_pacer_get_window(quicly_pacer_t *pacer, int64_t now, uint
      * milliseconds. */
     uint64_t elapsed = (uint64_t)now - (uint64_t)pacer->at;
     uint64_t window, delta = elapsed > UINT64_MAX / bytes_per_msec ? UINT64_MAX : elapsed * bytes_per_msec;
-    if (pacer->bytes_sent > delta) {
+    if (pacer->at != INT64_MIN && pacer->bytes_sent > delta) {
         pacer->bytes_sent -= delta;
         if (burst_window > pacer->bytes_sent) {
             window = (burst_window - pacer->bytes_sent + mtu - 1) / mtu;

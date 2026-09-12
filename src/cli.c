@@ -69,7 +69,8 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
     }
 }
 
-static int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src);
+static int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src,
+                                  const ptls_save_ticket_properties_t *properties);
 static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_on_client_hello_parameters_t *params);
 
 static const char *session_file = NULL;
@@ -1132,8 +1133,12 @@ Exit:
     return 0;
 }
 
-int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src)
+int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src,
+                           const ptls_save_ticket_properties_t *properties)
 {
+    if (properties->early_data && properties->max_early_data_size != UINT32_MAX)
+        return -(int)QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+
     free(session_info.tls_ticket.base);
     session_info.tls_ticket = ptls_iovec_init(malloc(src.len), src.len);
     memcpy(session_info.tls_ticket.base, src.base, src.len);
