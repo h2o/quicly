@@ -2594,6 +2594,7 @@ static void test_multipath_path_loss(void)
 }
 
 #include "datagram-queue.h"
+#include "datagram-congestion.h"
 
 int main(int argc, char **argv)
 {
@@ -2670,6 +2671,7 @@ int main(int argc, char **argv)
     subtest("cid", test_cid);
     subtest("simple", test_simple);
     subtest("datagram-queue", test_datagram_queue);
+    subtest("datagram-congestion", test_datagram_congestion_accounting);
     subtest("sparse-datagram-queues", test_sparse_datagram_queues);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("lossy", test_lossy);

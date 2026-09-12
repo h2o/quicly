@@ -4673,17 +4673,27 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         return conn->egress.send_ack_at;
 
-    for (size_t i = 0; i < (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); ++i) {
-        if (get_path(conn, i) != NULL) {
-            if (get_path(conn, i)->abandoned) {
-                /* abandoned paths don't send datagrams, but we might need to wake up to destroy them completely */
-            } else if (should_send_datagram_frame(conn, get_path(conn, i))) {
-                return 0;
+    int64_t at = conn->idle_timeout.at;
+    /* Queued data wakes the sender only when its path has congestion, pacing,
+     * and amplification credit. Otherwise ACKs or the loss timer drive progress. */
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+        quicly_path_space_t *ps = conn->path_spaces[i];
+        if (ps == NULL)
+            continue;
+        for (size_t j = 0; j < PTLS_ELEMENTSOF(ps->addrs); ++j) {
+            struct st_quicly_conn_path_t *path = ps->addrs[j];
+            if (path == NULL || path->abandoned || path->probe_only || !path_has_usable_dcid(path) ||
+                !should_send_datagram_frame(conn, path))
+                continue;
+            uint64_t amp_window = calc_amplification_limit_allowance(conn, path);
+            if (amp_window != 0 && calc_send_window(conn, path, 0, amp_window, UINT64_MAX, 0) > 0) {
+                int64_t datagram_at = pacer_can_send_at(conn, path);
+                if (datagram_at < at)
+                    at = datagram_at;
             }
         }
     }
 
-    int64_t at = conn->idle_timeout.at;
     int scheduler_ready = -1;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
         quicly_path_space_t *ps = conn->path_spaces[i];
@@ -5114,7 +5124,6 @@ static inline uint8_t *emit_cid(uint8_t *dst, const quicly_cid_t *cid)
 enum allocate_frame_type {
     ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING,
     ALLOCATE_FRAME_TYPE_ACK_ELICITING,
-    ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC,
 };
 
 static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context_t *s, size_t min_space,
@@ -6919,7 +6928,6 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 }
             }
             /* DATAGRAM frame. Notes regarding current implementation:
-             * * Not limited by CC, nor the bytes counted by CC.
              * * When given payload is too large and does not fit into a QUIC packet, a packet containing only PADDING frames is
              *   sent. This is because we do not have a way to retract the generation of a QUIC packet.
              * * Does not notify the application that the frame was dropped internally. */
@@ -6928,7 +6936,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 for (size_t i = s->datagram_payloads_consumed; i != path->datagram_frame_payloads.count; ++i) {
                     ptls_iovec_t *payload = path->datagram_frame_payloads.payloads + i;
                     size_t required_space = quicly_datagram_frame_capacity(*payload);
-                    if ((ret = do_allocate_frame(conn, s, required_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC)) != 0)
+                    if ((ret = do_allocate_frame(conn, s, required_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
                         goto Exit;
                     if (s->dst_end - s->dst >= required_space) {
                         s->dst = quicly_encode_datagram_frame(s->dst, *payload);
