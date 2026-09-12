@@ -1632,12 +1632,16 @@ static int quicly_stream_has_receive_side(int is_client, quicly_stream_id_t stre
  */
 static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
 /**
- * Sends QUIC DATAGRAM frames. Some of the frames being provided may get dropped.
+ * Queues QUIC DATAGRAM frames. Queue overflow, allocation failure, or an oversized payload can drop frames.
+ * Frames not processed by a partial send remain queued for a later quicly_send call.
+ * No retransmission or peer-delivery guarantee is provided.
  * Notes:
  * * At the moment, emission of QUIC packets carrying DATAGRAM frames is not congestion controlled.
  * * While the API is designed to look like synchronous, application still has to call `quicly_send` for the time being.
  */
 void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, size_t num_datagrams);
+/** Returns the number of locally queued DATAGRAM frames, not delivery or ACK status. */
+size_t quicly_get_num_datagram_frames_path(quicly_conn_t *conn, size_t path_index);
 void quicly_send_datagram_frames_path(quicly_conn_t *conn, size_t path_index, ptls_iovec_t *datagrams, size_t num_datagrams);
 int quicly_has_datagram_frames(quicly_conn_t *conn);
 /**

@@ -908,6 +908,17 @@ static void clear_path_datagram_frame_payloads(struct st_quicly_conn_path_t *pat
     path->datagram_frame_payloads.count = 0;
 }
 
+static void consume_path_datagram_frame_payloads(struct st_quicly_conn_path_t *path, size_t consumed)
+{
+    assert(consumed <= path->datagram_frame_payloads.count);
+    for (size_t i = 0; i != consumed; ++i)
+        free(path->datagram_frame_payloads.payloads[i].base);
+    size_t remaining = path->datagram_frame_payloads.count - consumed;
+    memmove(path->datagram_frame_payloads.payloads, path->datagram_frame_payloads.payloads + consumed,
+            remaining * sizeof(path->datagram_frame_payloads.payloads[0]));
+    path->datagram_frame_payloads.count = remaining;
+}
+
 static void clear_datagram_frame_payloads(quicly_conn_t *conn)
 {
     for (size_t i = 0; i != conn->egress.datagram_frame_payloads.count; ++i) {
@@ -4885,6 +4896,8 @@ struct st_quicly_send_context_t {
      * number of datagrams currently stored in |packets|
      */
     size_t num_datagrams;
+    /** DATAGRAM payloads consumed in this send; the remaining suffix stays queued. */
+    size_t datagram_payloads_consumed;
     /**
      * buffer in which packets are built
      */
@@ -6912,13 +6925,14 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
              * * Does not notify the application that the frame was dropped internally. */
             if (should_send_datagram_frame(conn, get_send_path(conn, s))) {
                 struct st_quicly_conn_path_t *path = get_send_path(conn, s);
-                for (size_t i = 0; i != path->datagram_frame_payloads.count; ++i) {
+                for (size_t i = s->datagram_payloads_consumed; i != path->datagram_frame_payloads.count; ++i) {
                     ptls_iovec_t *payload = path->datagram_frame_payloads.payloads + i;
                     size_t required_space = quicly_datagram_frame_capacity(*payload);
                     if ((ret = do_allocate_frame(conn, s, required_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC)) != 0)
                         goto Exit;
                     if (s->dst_end - s->dst >= required_space) {
                         s->dst = quicly_encode_datagram_frame(s->dst, *payload);
+                        ++conn->super.stats.num_frames_sent.datagram;
                         QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, payload->base, payload->len);
                         QUICLY_LOG_CONN(datagram_send, conn,
                                         { PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(payload, payload->base, payload->len); });
@@ -6927,6 +6941,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                          * because it is forbidden to send an empty QUIC packet. */
                         *s->dst++ = QUICLY_FRAME_TYPE_PADDING;
                     }
+                    ++s->datagram_payloads_consumed;
                 }
             }
             if (!ack_only) {
@@ -7095,13 +7110,25 @@ void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, s
     quicly_send_datagram_frames_path(conn, 0, datagrams, num_datagrams);
 }
 
+size_t quicly_get_num_datagram_frames_path(quicly_conn_t *conn, size_t path_index)
+{
+    if (path_index >= (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT) ||
+        get_path(conn, path_index) == NULL)
+        return 0;
+    return get_path(conn, path_index)->datagram_frame_payloads.count;
+}
+
 int quicly_has_datagram_frames(quicly_conn_t *conn)
 {
     if (conn->egress.datagram_frame_payloads.count > 0)
         return 1;
-    for (size_t i = 0; i < (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); ++i) {
-        if (get_path(conn, i) != NULL && get_path(conn, i)->datagram_frame_payloads.count > 0)
-            return 1;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+        quicly_path_space_t *ps = conn->path_spaces[i];
+        if (ps == NULL)
+            continue;
+        for (size_t j = 0; j < PTLS_ELEMENTSOF(ps->addrs); ++j)
+            if (ps->addrs[j] != NULL && ps->addrs[j]->datagram_frame_payloads.count > 0)
+                return 1;
     }
     return 0;
 }
@@ -7492,9 +7519,8 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     assert_consistency(conn, s.path_index == 0 || quicly_is_multipath(conn));
 
 Exit:
-    if (s.num_datagrams != 0) {
-        clear_path_datagram_frame_payloads(get_path(conn, s.path_index));
-    }
+    if (s.num_datagrams != 0 && s.datagram_payloads_consumed != 0)
+        consume_path_datagram_frame_payloads(get_path(conn, s.path_index), s.datagram_payloads_consumed);
     if (s.path_index == 0)
         clear_datagram_frame_payloads(conn);
     if (s.recalc_send_probe_at)

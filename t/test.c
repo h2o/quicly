@@ -2593,6 +2593,8 @@ static void test_multipath_path_loss(void)
     quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
 }
 
+#include "datagram-queue.h"
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
@@ -2667,6 +2669,8 @@ int main(int argc, char **argv)
     subtest("multipath-nonce", test_multipath_nonce);
     subtest("cid", test_cid);
     subtest("simple", test_simple);
+    subtest("datagram-queue", test_datagram_queue);
+    subtest("sparse-datagram-queues", test_sparse_datagram_queues);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("lossy", test_lossy);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
