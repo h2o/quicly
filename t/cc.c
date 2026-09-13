@@ -643,12 +643,12 @@ static void test_cubic_accel_adaptation_guards(void)
     struct st_quicly_cc_accel_adaptation_t estimator = {0};
     set_accel_past_minimum_estimate(&estimator, 100, 0);
     estimator.min_rtt_current_period = 120;
-    accel_on_lost(&estimator, 0, smoothed_flags);
+    accel_enter_recovery(&estimator, smoothed_flags, 0);
     ok(estimator.min_rtt_past == 102.5);
     ok(estimator.min_rtt_past_variance == 5);
     ok(estimator.min_rtt_past - estimator.min_rtt_past_variance / 2 == 100);
     estimator.min_rtt_current_period = 90;
-    accel_on_lost(&estimator, 0, smoothed_flags);
+    accel_enter_recovery(&estimator, smoothed_flags, 0);
     ok(estimator.min_rtt_past == 100.9375);
     ok(estimator.min_rtt_past_variance == 6.875);
     ok(estimator.min_rtt_past - estimator.min_rtt_past_variance / 2 == 97.5);
@@ -835,6 +835,14 @@ static void test_cubic_accel_adaptation_recalibration(void)
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
     unsigned smoothed_flags = QUICLY_CC_ACCEL_ADAPTATION_ON | QUICLY_CC_ACCEL_ADAPTATION_SMOOTHED_GATE;
 
+    /* A zero full_rtt in increase-always mode does not denote recalibration recovery. */
+    quicly_cc_cubic_init.cb(&quicly_cc_cubic_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_INCREASE_ALWAYS, 0);
+    cc.ssthresh = 50 * mtu;
+    cc.cwnd = 51 * mtu;
+    cc.state.pico.cubic.cwnd_prior = 50 * mtu;
+    accel_recovery_update(&cc.state.pico.accel, cc.accel_adaptation, mtu, &cc.cwnd, cc.state.pico.cubic.cwnd_prior);
+    ok(cc.cwnd == 51 * mtu);
+
     /* A high queue is ten milliseconds above the selected bottom RTT: minRTT by default, or the recent-floor estimate when the
      * smoothed gate is enabled. */
     struct st_quicly_cc_accel_adaptation_t high_queue = {.full_rtt = 140, .last_high_queue_at = 1000};
@@ -946,16 +954,28 @@ static void test_cubic_accel_adaptation_recalibration(void)
     /* Recalibration slow start can grow far beyond its entry CWND. Infer a bounded share from the probe peak and suppress Fast
      * Convergence. */
     cc.cwnd = 100 * mtu;
-    uint32_t recalibrated_cwnd = cc.cwnd / (2 * (2 - QUICLY_BETA_LOSS));
+    uint32_t recalibrated_cwnd = cc.cwnd * ACCEL_RECALIBRATION_BETA;
+    uint32_t recalibrated_wmax = recalibrated_cwnd / QUICLY_BETA_LOSS;
+    uint32_t cwnd_during_recovery = cc.cwnd * ACCEL_RECALIBRATION_INITIAL_FACTOR;
     loss.rtt.latest = loss.rtt.smoothed = 130;
     cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 6100, mtu);
     ok(cc.num_loss_episodes == 2);
     ok(cc.state.pico.accel.full_rtt == 0);
-    ok(cc.cwnd == recalibrated_cwnd);
-    ok(cc.cwnd == cc.ssthresh);
-    ok(cc.state.pico.cubic.cwnd_prior == recalibrated_cwnd);
+    ok(cwnd_is(cc.cwnd, cwnd_during_recovery));
+    ok(cc.cwnd > cc.ssthresh);
+    ok(cc.ssthresh == recalibrated_cwnd);
+    ok(cc.state.pico.cubic.cwnd_prior == recalibrated_wmax);
     ok(!cc.state.pico.cubic.fast_convergence);
-    cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 6150, mtu);
+
+    /* ACKs below the recovery boundary spread the remaining reduction while retaining an ACK clock. */
+    cc.type->cc_on_acked(&cc, &loss, 10 * mtu, 49, 10 * mtu, 1, 50, 6125, mtu);
+    cwnd_during_recovery -= (uint32_t)((ACCEL_RECALIBRATION_INITIAL_FACTOR - ACCEL_RECALIBRATION_BETA) * (10 * mtu));
+    ok(cwnd_is(cc.cwnd, cwnd_during_recovery));
+    ok(cc.cwnd > recalibrated_cwnd);
+
+    cc.type->cc_on_acked(&cc, &loss, 2 * mtu, 50, 2 * mtu, 1, 51, 6150, mtu);
+    /* The recovery-ending ACK clamps CWND to the recalibration target before applying ordinary CUBIC growth. */
+    ok(recalibrated_cwnd <= cc.cwnd && cc.cwnd <= recalibrated_cwnd + mtu);
     ok(cc.state.pico.accel.full_rtt == 130);
     ok(cc.state.pico.accel.last_high_queue_at == 6150);
 
@@ -1054,6 +1074,16 @@ static void test_cuback_accel_adaptation_recalibration(void)
     quicly_loss_t loss = {.rtt = {.latest = 109, .smoothed = 109, .minimum = 100, .variance = 0}};
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
 
+    /* Initial Rapid Start recovery is not recalibration. In particular, Cuback defers cwnd_prior until recovery exits. */
+    quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
+    cc.type->enable_rapid_start(&cc, 900);
+    cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 900, mtu);
+    ok(cc.state.pico.cuback.cwnd_prior == 0);
+    uint32_t cwnd_exiting_initial_recovery = cc.cwnd;
+    cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 950, mtu);
+    ok(cc.cwnd == cwnd_exiting_initial_recovery);
+    ok(cc.state.pico.cuback.cwnd_prior != 0);
+
     quicly_cc_cuback_init.cb(&quicly_cc_cuback_init, &cc, initcwnd, 0, QUICLY_CC_ACCEL_ADAPTATION_ON, 0);
     cc.cwnd = 60 * mtu;
     cc.ssthresh = 50 * mtu;
@@ -1089,20 +1119,33 @@ static void test_cuback_accel_adaptation_recalibration(void)
 
     /* Cuback treats recalibration completion as a congestion event at the bounded share inferred from the probe peak. */
     cc.cwnd = 100 * mtu;
-    uint32_t recalibrated_cwnd = cc.cwnd / (2 * (2 - QUICLY_BETA_LOSS));
+    uint32_t recalibrated_cwnd = cc.cwnd * ACCEL_RECALIBRATION_BETA;
+    uint32_t recalibrated_wmax = recalibrated_cwnd / QUICLY_BETA_LOSS;
+    uint32_t cwnd_during_recovery = cc.cwnd * ACCEL_RECALIBRATION_INITIAL_FACTOR;
     loss.rtt.latest = loss.rtt.smoothed = 130;
     cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 8100, mtu);
     ok(cc.num_loss_episodes == 2);
     ok(cc.state.pico.accel.full_rtt == 0);
-    ok(cc.cwnd == recalibrated_cwnd);
-    ok(cc.cwnd == cc.ssthresh);
-    ok(cc.state.pico.cuback.cwnd_prior == recalibrated_cwnd);
+    ok(cwnd_is(cc.cwnd, cwnd_during_recovery));
+    ok(cc.cwnd > cc.ssthresh);
+    ok(cc.ssthresh == recalibrated_cwnd);
+    ok(cc.state.pico.cuback.cwnd_prior == recalibrated_wmax);
     ok(!cc.state.pico.cuback.fast_convergence);
     ok(cc.state.pico.cuback.bandwidth == bandwidth_before_recalibration);
-    cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 8150, mtu);
+
+    /* Additional losses inside recovery contribute to the paced reduction. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 41, 50, 8125, mtu);
+    cwnd_during_recovery -= (uint32_t)((ACCEL_RECALIBRATION_INITIAL_FACTOR - ACCEL_RECALIBRATION_BETA) * mtu);
+    ok(cwnd_is(cc.cwnd, cwnd_during_recovery));
+    ok(cc.state.pico.undo.num_packets_lost == 2);
+
+    cc.type->cc_on_acked(&cc, &loss, 2 * mtu, 50, 2 * mtu, 1, 51, 8150, mtu);
+    ok(cc.cwnd == recalibrated_cwnd);
     ok(cc.state.pico.accel.full_rtt == 130);
     ok(cc.state.pico.accel.last_high_queue_at == 8150);
     cc.type->cc_on_late_ack(&cc, 40, 8200);
+    ok(cc.num_loss_episodes == 2);
+    cc.type->cc_on_late_ack(&cc, 41, 8201);
     ok(cc.num_loss_episodes == 1);
     ok(cc.state.pico.accel.full_rtt == 120);
     ok(cc.state.pico.accel.last_high_queue_at == 8150);
