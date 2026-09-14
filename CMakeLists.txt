@@ -125,6 +125,8 @@ TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_D
 
 ADD_EXECUTABLE(udpfw t/udpfw.c)
 
+ADD_EXECUTABLE(tunulator EXCLUDE_FROM_ALL t/tunulator.c)
+
 ADD_CUSTOM_TARGET(check
     sh -c
         "PERL5LIB='${CMAKE_CURRENT_SOURCE_DIR}'\${PERL5LIB:+:\$PERL5LIB} \
