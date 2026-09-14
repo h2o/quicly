@@ -3,7 +3,7 @@
  *
  * Packet handling:
  *   Attach to the configured Linux TUN using TUNSETIFF with IFF_TUN | IFF_NO_PI.
- *   Discard packets whose source and destination ports both equal server-port, because their direction is ambiguous.
+ *   Discard packets whose source and destination ports are both server ports, because their direction is ambiguous.
  *   Discard IPv4 fragments (MF set or nonzero fragment offset); noninitial fragments lack transport ports.
  *   To emulate one router hop, discard TTL <= 1; otherwise decrement TTL and update the IPv4 header checksum. The kernel's
  *   local-delivery path does not decrement TTL. The address swap preserves the IP and TCP/UDP pseudo-header sums, so
@@ -25,6 +25,7 @@
  * Statistics:
  *   Use the current monotonic time when reading or writing each packet.
  *   In the select() loop, emit an object for each completed millisecond, including empty milliseconds after a late wakeup.
+ *   Wake once per second to flush statistics when there is no I/O.
  *   Port reuse shares a series; tunulator does not track TCP connection lifetimes or QUIC connections multiplexed on one socket.
  */
 /*
@@ -48,13 +49,350 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <limits.h>
+#include <linux/if_tun.h>
+#include <net/if.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <time.h>
+#include <unistd.h>
+
+#define NS_PER_MS UINT64_C(1000000)
+#define NS_PER_SEC UINT64_C(1000000000)
+#define NUM_FLOWS (2 * 65536)
+#define READ_BATCH 32
+#define EVENT_BATCH 64
+
+struct packet {
+    struct packet *next;
+    uint64_t at;
+    unsigned flow;
+    size_t len;
+    uint8_t bytes[];
+};
+
+struct queue {
+    struct packet *head, **tail;
+    size_t bytes;
+};
+
+struct direction {
+    struct queue delay, bottleneck;
+    uint64_t delay_ns, rate, next_send;
+    size_t capacity;
+};
+
+struct statistics {
+    uint64_t bytes[NUM_FLOWS][4];
+    unsigned active[NUM_FLOWS], num_active;
+    uint64_t next_at;
+    FILE *out;
+};
+
+struct tunulator {
+    int fd;
+    size_t mtu;
+    struct in_addr peer;
+    uint8_t server_ports[65536];
+    struct direction dirs[2];
+    struct statistics stats;
+};
+
+static void fail(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    fputc('\n', stderr);
+    exit(EXIT_FAILURE);
+}
+
+static uint64_t get_now(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        fail("clock_gettime: %s", strerror(errno));
+    return (uint64_t)ts.tv_sec * NS_PER_SEC + ts.tv_nsec;
+}
+
+static uint16_t read16(const uint8_t *p)
+{
+    return (uint16_t)p[0] << 8 | p[1];
+}
+
+static void write16(uint8_t *p, uint16_t value)
+{
+    p[0] = value >> 8;
+    p[1] = value;
+}
+
+static void init_queue(struct queue *q)
+{
+    q->head = NULL;
+    q->tail = &q->head;
+    q->bytes = 0;
+}
+
+static void enqueue(struct queue *q, struct packet *p)
+{
+    p->next = NULL;
+    *q->tail = p;
+    q->tail = &p->next;
+    q->bytes += p->len;
+}
+
+static struct packet *dequeue(struct queue *q)
+{
+    struct packet *p = q->head;
+    if ((q->head = p->next) == NULL)
+        q->tail = &q->head;
+    q->bytes -= p->len;
+    return p;
+}
+
+static void emit_statistics(struct statistics *s)
+{
+    fputc('{', s->out);
+    for (unsigned i = 0; i < s->num_active; ++i) {
+        unsigned flow = s->active[i];
+        uint64_t *b = s->bytes[flow];
+        fprintf(s->out, "%s\"%c%u\":[%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "]", i == 0 ? "" : ",", flow >> 16 ? 't' : 'u',
+                flow & 65535, b[0], b[1], b[2], b[3]);
+        memset(b, 0, sizeof(s->bytes[flow]));
+    }
+    fputs("}\n", s->out);
+    s->num_active = 0;
+}
+
+static void advance_statistics(struct statistics *s, uint64_t now)
+{
+    if (now < s->next_at)
+        return;
+    while (now >= s->next_at) {
+        emit_statistics(s);
+        s->next_at += NS_PER_MS;
+    }
+    if (fflush(s->out) != 0 || ferror(s->out))
+        fail("writing statistics: %s", strerror(errno));
+}
+
+static void count_bytes(struct statistics *s, uint64_t now, unsigned flow, unsigned counter, size_t len)
+{
+    advance_statistics(s, now);
+    uint64_t *b = s->bytes[flow];
+    if ((b[0] | b[1] | b[2] | b[3]) == 0)
+        s->active[s->num_active++] = flow;
+    b[counter] += len;
+}
+
+static void receive_packet(struct tunulator *t, uint8_t *bytes, size_t len, uint64_t now)
+{
+    if (len < 20 || bytes[0] >> 4 != 4 || len > t->mtu || read16(bytes + 2) != len)
+        return;
+    size_t iplen = (bytes[0] & 15) * 4;
+    if (iplen < 20 || iplen > len || (read16(bytes + 6) & 0x3fff) != 0)
+        return;
+    static const uint8_t loopback[] = {127, 0, 0, 1};
+    if (memcmp(bytes + 12, loopback, 4) != 0 || memcmp(bytes + 16, &t->peer.s_addr, 4) != 0)
+        return;
+    unsigned proto = bytes[9];
+    if (proto == IPPROTO_UDP) {
+        if (len - iplen < 8 || read16(bytes + iplen + 4) != len - iplen)
+            return;
+    } else if (proto == IPPROTO_TCP) {
+        if (len - iplen < 20)
+            return;
+        size_t tcplen = (bytes[iplen + 12] >> 4) * 4;
+        if (tcplen < 20 || tcplen > len - iplen)
+            return;
+    } else {
+        return;
+    }
+
+    uint16_t src = read16(bytes + iplen), dst = read16(bytes + iplen + 2);
+    unsigned dir, port;
+    if (t->server_ports[dst] && !t->server_ports[src]) {
+        dir = 0;
+        port = src;
+    } else if (t->server_ports[src] && !t->server_ports[dst]) {
+        dir = 1;
+        port = dst;
+    } else {
+        return;
+    }
+    unsigned flow = (proto == IPPROTO_TCP ? 65536 : 0) | port;
+    count_bytes(&t->stats, now, flow, dir * 2, len);
+    if (bytes[8] <= 1)
+        return;
+
+    /* RFC 1624 incremental checksum update for the TTL/protocol word. */
+    uint32_t sum = (uint16_t)~read16(bytes + 10) + (uint16_t)~read16(bytes + 8);
+    --bytes[8];
+    sum += read16(bytes + 8);
+    sum = (sum & 65535) + (sum >> 16);
+    sum = (sum & 65535) + (sum >> 16);
+    write16(bytes + 10, ~sum);
+    uint8_t addr[4];
+    memcpy(addr, bytes + 12, 4);
+    memcpy(bytes + 12, bytes + 16, 4);
+    memcpy(bytes + 16, addr, 4);
+
+    struct direction *d = &t->dirs[dir];
+    if (d->delay_ns > UINT64_MAX - now)
+        fail("propagation delay exceeds clock range");
+    struct packet *p = malloc(sizeof(*p) + len);
+    if (p == NULL)
+        fail("allocating packet: %s", strerror(errno));
+    p->at = now + d->delay_ns;
+    p->flow = flow;
+    p->len = len;
+    memcpy(p->bytes, bytes, len);
+    enqueue(&d->delay, p);
+}
+
+static uint64_t send_at(const struct direction *d)
+{
+    if (d->bottleneck.head == NULL)
+        return UINT64_MAX;
+    return d->next_send > d->bottleneck.head->at ? d->next_send : d->bottleneck.head->at;
+}
+
+static uint64_t next_event(const struct direction *d)
+{
+    uint64_t at = send_at(d);
+    if (d->delay.head != NULL && d->delay.head->at < at)
+        at = d->delay.head->at;
+    return at;
+}
+
+static void run_event(struct tunulator *t, unsigned dir, uint64_t at)
+{
+    struct direction *d = &t->dirs[dir];
+    if (d->delay.head != NULL && d->delay.head->at <= at) {
+        struct packet *p = dequeue(&d->delay);
+        if (d->capacity - d->bottleneck.bytes < t->mtu)
+            free(p);
+        else
+            enqueue(&d->bottleneck, p);
+        return;
+    }
+
+    struct packet *p = dequeue(&d->bottleneck);
+    uint64_t duration = p->len * NS_PER_SEC;
+    d->next_send = at + duration / d->rate + (duration % d->rate != 0);
+    ssize_t ret;
+    do {
+        ret = write(t->fd, p->bytes, p->len);
+    } while (ret < 0 && errno == EINTR);
+    if (ret == (ssize_t)p->len) {
+        count_bytes(&t->stats, get_now(), p->flow, dir * 2 + 1, p->len);
+    } else if (ret >= 0) {
+        fail("short TUN write: %zd of %zu bytes", ret, p->len);
+    } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+        fail("writing TUN: %s", strerror(errno));
+    }
+    free(p);
+}
+
+static void run_events(struct tunulator *t, uint64_t now)
+{
+    for (unsigned i = 0; i < EVENT_BATCH; ++i) {
+        uint64_t up = next_event(&t->dirs[0]), down = next_event(&t->dirs[1]);
+        unsigned dir = down < up;
+        uint64_t at = dir ? down : up;
+        if (at > now)
+            break;
+        run_event(t, dir, at);
+    }
+}
+
+static void run_loop(struct tunulator *t)
+{
+    uint8_t bytes[65536];
+    while (1) {
+        run_events(t, get_now());
+        for (unsigned i = 0; i < READ_BATCH; ++i) {
+            ssize_t len = read(t->fd, bytes, sizeof(bytes));
+            if (len > 0) {
+                receive_packet(t, bytes, len, get_now());
+            } else if (len == 0) {
+                fail("TUN device closed");
+            } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break;
+            } else if (errno != EINTR) {
+                fail("reading TUN: %s", strerror(errno));
+            }
+        }
+        uint64_t now = get_now();
+        advance_statistics(&t->stats, now);
+        uint64_t at = t->stats.next_at + NS_PER_SEC - NS_PER_MS;
+        for (unsigned i = 0; i < 2; ++i) {
+            uint64_t event = next_event(&t->dirs[i]);
+            if (event < at)
+                at = event;
+        }
+        now = get_now();
+        uint64_t wait_ns = at > now ? at - now : 0;
+        uint64_t wait_us = wait_ns / 1000 + (wait_ns % 1000 != 0);
+        struct timeval timeout = {.tv_sec = wait_us / 1000000, .tv_usec = wait_us % 1000000};
+        fd_set reads;
+        FD_ZERO(&reads);
+        FD_SET(t->fd, &reads);
+        if (select(t->fd + 1, &reads, NULL, NULL, &timeout) < 0 && errno != EINTR)
+            fail("select: %s", strerror(errno));
+    }
+}
+
+static uint64_t parse_number(const char *value, uint64_t min, uint64_t max, const char *what)
+{
+    uint64_t n;
+    if (sscanf(value, "%" SCNu64, &n) != 1 || n < min || n > max)
+        fail("invalid %s: %s", what, value);
+    return n;
+}
+
+static int open_tun(const char *path, const char *name, size_t *mtu)
+{
+    if (strlen(name) >= IFNAMSIZ)
+        fail("TUN interface name is too long: %s", name);
+    int control = socket(AF_INET, SOCK_DGRAM, 0);
+    if (control < 0)
+        fail("opening interface control socket: %s", strerror(errno));
+    struct ifreq ifr = {0};
+    strcpy(ifr.ifr_name, name);
+    if (ioctl(control, SIOCGIFMTU, &ifr) != 0)
+        fail("getting MTU of %s (configure the interface first): %s", name, strerror(errno));
+    if (ifr.ifr_mtu < 68 || ifr.ifr_mtu > 65535)
+        fail("invalid IPv4 MTU on %s: %d", name, ifr.ifr_mtu);
+    *mtu = ifr.ifr_mtu;
+    close(control);
+
+    int fd = open(path, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0)
+        fail("opening %s: %s", path, strerror(errno));
+    if (fd >= FD_SETSIZE)
+        fail("TUN descriptor exceeds select limit");
+    ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
+    if (ioctl(fd, TUNSETIFF, &ifr) != 0)
+        fail("attaching to %s: %s", name, strerror(errno));
+    if (ioctl(fd, TUNSETOFFLOAD, 0) != 0)
+        fail("disabling TUN offload: %s", strerror(errno));
+    return fd;
+}
 
 static void usage(const char *cmd)
 {
-    printf("Usage: %s -t tun-file [options] peer-ip server-port\n"
+    printf("Usage: %s -t tun-file [options] peer-ip server-port [server-port ...]\n"
            "       %s -h\n"
            "\n"
            "Emulate a network between local TCP/UDP endpoints through a single TUN.\n"
@@ -71,9 +409,10 @@ static void usage(const char *cmd)
            "  -P <microseconds>   downstream propagation delay (default: 0)\n"
            "  -h                  print this help and exit\n"
            "\n"
-           "peer-ip is the virtual IPv4 peer; server-port is the local TCP/UDP port.\n"
+           "peer-ip is the virtual IPv4 peer, followed by one or more local TCP/UDP server ports.\n"
            "Upstream means client-to-server; downstream means server-to-client.\n"
            "Directions have independent queues/rates; added base RTT is -p plus -P.\n"
+           "All server ports share the same queue and rate in each direction.\n"
            "\n"
            "Statistics: emit a JSON object containing only active flows each millisecond\n"
            "on stdout, followed by a newline:\n"
@@ -85,21 +424,71 @@ static void usage(const char *cmd)
            "\n"
            "Setup: route peer-ip through TUN with source 127.0.0.1, enable Linux\n"
            "route_localnet, and configure a fixed MTU. Do not assign peer-ip locally.\n"
-           "Disable TUN checksum/segmentation offload. Initially only unfragmented\n"
-           "IPv4 TCP/UDP is planned; routing and interface setup are external.\n"
+           "Disable TUN checksum/segmentation offload. Only unfragmented IPv4 TCP/UDP\n"
+           "is supported; routing and interface setup are external.\n"
            "\n"
            "Example (DSL profile, with IP-byte accounting):\n"
-           "  %s -t /dev/net/tun -n tun0 -p 30000 -w 3750000 -b 187500 1.2.3.4 4433\n",
+           "  %s -t /dev/net/tun -n tun0 -p 30000 -w 3750000 -b 187500 192.0.2.1 4433\n",
            cmd, cmd, cmd);
 }
 
 int main(int argc, char **argv)
 {
-    if (argc == 2 && strcmp(argv[1], "-h") == 0) {
-        usage(argv[0]);
-        return EXIT_SUCCESS;
+    struct tunulator *t = calloc(1, sizeof(*t));
+    if (t == NULL)
+        fail("allocating state: %s", strerror(errno));
+    for (unsigned i = 0; i < 2; ++i) {
+        init_queue(&t->dirs[i].delay);
+        init_queue(&t->dirs[i].bottleneck);
+        t->dirs[i].rate = UINT32_MAX;
+        t->dirs[i].capacity = 100000;
     }
+    const char *path = NULL, *name = "tun0";
+    int ch;
+    while ((ch = getopt(argc, argv, "t:n:b:B:w:W:p:P:h")) != -1) {
+        switch (ch) {
+        case 't':
+            path = optarg;
+            break;
+        case 'n':
+            name = optarg;
+            break;
+        case 'b':
+        case 'B':
+            t->dirs[ch == 'B'].capacity = parse_number(optarg, 1, SIZE_MAX, "buffer capacity");
+            break;
+        case 'w':
+        case 'W':
+            t->dirs[ch == 'W'].rate = parse_number(optarg, 1, UINT64_MAX, "throughput");
+            break;
+        case 'p':
+        case 'P':
+            t->dirs[ch == 'P'].delay_ns = parse_number(optarg, 0, UINT64_MAX / 1000, "propagation delay") * 1000;
+            break;
+        case 'h':
+            usage(argv[0]);
+            free(t);
+            return EXIT_SUCCESS;
+        default:
+            free(t);
+            return EXIT_FAILURE;
+        }
+    }
+    if (path == NULL)
+        fail("missing -t tun-file; use -h for help");
+    if (argc - optind < 2)
+        fail("expected peer-ip and at least one server-port; use -h for help");
+    if (inet_pton(AF_INET, argv[optind], &t->peer) != 1)
+        fail("invalid IPv4 peer: %s", argv[optind]);
+    for (int i = optind + 1; i < argc; ++i)
+        t->server_ports[parse_number(argv[i], 1, 65535, "server port")] = 1;
+    t->fd = open_tun(path, name, &t->mtu);
+    for (unsigned i = 0; i < 2; ++i)
+        if (t->dirs[i].capacity < t->mtu)
+            fail("%s buffer must hold at least one MTU (%zu bytes)", i == 0 ? "upstream" : "downstream", t->mtu);
 
-    fprintf(stderr, "%s: forwarding is not implemented; use -h to view the proposed interface.\n", argv[0]);
-    return EXIT_FAILURE;
+    t->stats.out = stdout;
+    t->stats.next_at = get_now() + NS_PER_MS;
+    run_loop(t);
+    return EXIT_SUCCESS;
 }
