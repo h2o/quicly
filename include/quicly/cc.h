@@ -436,10 +436,6 @@ struct st_quicly_cc_type_t {
     void (*cc_on_lost)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn, int64_t now,
                        uint32_t max_udp_payload_size);
     /**
-     * Called when persistent congestion is observed.
-     */
-    void (*cc_on_persistent_congestion)(quicly_cc_t *cc, const quicly_loss_t *loss, int64_t now);
-    /**
      * Called after a packet is sent.
      */
     void (*cc_on_sent)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, int64_t now);
