@@ -50,6 +50,7 @@
  * IN THE SOFTWARE.
  */
 #include <arpa/inet.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -65,6 +66,8 @@
 #include <sys/select.h>
 #include <time.h>
 #include <unistd.h>
+#include "picotls.h"
+#include "picotls/openssl.h"
 
 #define NS_PER_MS UINT64_C(1000000)
 #define NS_PER_SEC UINT64_C(1000000000)
@@ -89,6 +92,7 @@ struct direction {
     struct queue delay, bottleneck;
     uint64_t delay_ns, rate, next_send;
     size_t capacity;
+    double loss_probability;
 };
 
 struct statistics {
@@ -123,6 +127,37 @@ static uint64_t get_now(void)
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
         fail("clock_gettime: %s", strerror(errno));
     return (uint64_t)ts.tv_sec * NS_PER_SEC + ts.tv_nsec;
+}
+
+static void random_bytes(void *dst, size_t len)
+{
+    static struct {
+        ptls_cipher_context_t *cipher;
+        size_t offset;
+        uint8_t bytes[1024];
+    } prng;
+
+    if (prng.cipher == NULL) {
+        struct {
+            uint8_t key[PTLS_AES128_KEY_SIZE];
+            uint8_t iv[PTLS_AES_IV_SIZE];
+        } seed;
+
+        ptls_openssl_random_bytes(&seed, sizeof(seed));
+        prng.cipher = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, seed.key);
+        assert(prng.cipher != NULL);
+        ptls_cipher_init(prng.cipher, seed.iv);
+        prng.offset = sizeof(prng.bytes);
+        ptls_clear_memory(&seed, sizeof(seed));
+    }
+    assert(len <= sizeof(prng.bytes));
+
+    if (sizeof(prng.bytes) - prng.offset < len) {
+        ptls_cipher_encrypt(prng.cipher, prng.bytes, prng.bytes, sizeof(prng.bytes));
+        prng.offset = 0;
+    }
+    memcpy(dst, prng.bytes + prng.offset, len);
+    prng.offset += len;
 }
 
 static uint16_t read16(const uint8_t *p)
@@ -290,6 +325,14 @@ static void run_event(struct tunulator *t, unsigned dir, uint64_t at)
     struct packet *p = dequeue(&d->bottleneck);
     uint64_t duration = p->len * NS_PER_SEC;
     d->next_send = at + duration / d->rate + (duration % d->rate != 0);
+    if (d->loss_probability != 0) {
+        uint32_t value;
+        random_bytes(&value, sizeof(value));
+        if ((double)value / ((double)UINT32_MAX + 1) < d->loss_probability) {
+            free(p);
+            return;
+        }
+    }
     ssize_t ret;
     do {
         ret = write(t->fd, p->bytes, p->len);
@@ -407,12 +450,15 @@ static void usage(const char *cmd)
            "  -W <bytes_per_sec>  downstream throughput (default: 4294967295, UINT32_MAX)\n"
            "  -p <microseconds>   upstream propagation delay (default: 0)\n"
            "  -P <microseconds>   downstream propagation delay (default: 0)\n"
+           "  -r <probability>    upstream random packet loss (0..1; default: 0)\n"
+           "  -R <probability>    downstream random packet loss (0..1; default: 0)\n"
            "  -h                  print this help and exit\n"
            "\n"
            "peer-ip is the virtual IPv4 peer, followed by one or more local TCP/UDP server ports.\n"
            "Upstream means client-to-server; downstream means server-to-client.\n"
            "Directions have independent queues/rates; added base RTT is -p plus -P.\n"
            "All server ports share the same queue and rate in each direction.\n"
+           "Random losses occur after the bottleneck, consuming bandwidth.\n"
            "\n"
            "Statistics: emit a JSON object containing only active flows each millisecond\n"
            "on stdout, followed by a newline:\n"
@@ -445,7 +491,7 @@ int main(int argc, char **argv)
     }
     const char *path = NULL, *name = "tun0";
     int ch;
-    while ((ch = getopt(argc, argv, "t:n:b:B:w:W:p:P:h")) != -1) {
+    while ((ch = getopt(argc, argv, "t:n:b:B:w:W:p:P:r:R:h")) != -1) {
         switch (ch) {
         case 't':
             path = optarg;
@@ -465,6 +511,13 @@ int main(int argc, char **argv)
         case 'P':
             t->dirs[ch == 'P'].delay_ns = parse_number(optarg, 0, UINT64_MAX / 1000, "propagation delay") * 1000;
             break;
+        case 'r':
+        case 'R': {
+            double probability;
+            if (sscanf(optarg, "%lf", &probability) != 1 || !(probability >= 0 && probability <= 1))
+                fail("invalid random loss probability: %s", optarg);
+            t->dirs[ch == 'R'].loss_probability = probability;
+        } break;
         case 'h':
             usage(argv[0]);
             free(t);
