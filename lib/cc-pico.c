@@ -399,7 +399,6 @@ static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
     double slope = (rc - re) / (wc - we);
     if (slope >= re / we) {
         state->a = re / we;
-        /* Assign exactly zero: the proportional-switch guard must not see a positive rounding residue. */
         state->b = 0;
     } else {
         state->a = slope;
@@ -418,7 +417,7 @@ static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwn
     };
 }
 
-static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int in_recovery, int by_ecn)
+static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int in_recovery)
 {
     if (state->congested.cwnd == 0 || rtt->latest == 0)
         return;
@@ -443,19 +442,9 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
         fit = 1;
     }
 
-    /* Fit only when the empty point is initialized or updated, before considering the proportional-model switch. */
+    /* Fit only when the empty point is initialized or updated. */
     if (fit)
         abba2_fit_model(state);
-
-    /* Beyond Wc * (2 - beta), stop extrapolating the two-point fit and adopt RTT proportional to CWND, anchored at the current
-     * SRTT and pre-growth window. Use the actual congestion window, not a Wmax modified by fast convergence or startup handling.
-     * Test b after fitting: an unfitted (b is NaN) or affine model can switch, while a proportional model is left unchanged. */
-    double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
-    /* This form avoids rounding 1.15 * Wc just below an integral threshold for the ECN beta. */
-    if (state->b != 0 && cwnd > state->congested.cwnd + state->congested.cwnd * (1 - beta)) {
-        state->a = (double)rtt->smoothed / cwnd;
-        state->b = 0;
-    }
 }
 
 static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, uint32_t cubic_cwnd, uint32_t acked,
@@ -558,7 +547,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
         if (abba2_enabled(cc))
-            abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 1, 0);
+            abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 1);
         if (quicly_cc_rapid_start_is_enabled(&cc->rapid_start)) {
             if (cc->num_loss_episodes == 1) {
                 quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, bytes, 0);
@@ -573,8 +562,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
     if (abba2_enabled(cc) && cc->cwnd >= cc->ssthresh)
-        abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 0,
-                       cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
+        abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 0);
 
     /* Cubic: unlike other policies, congestion avoidance cannot be driven by bytes_to_mtu_increase. */
     if (cc->type == &quicly_cc_type_cubic && cc->cwnd >= cc->ssthresh) {
