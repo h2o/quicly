@@ -12,7 +12,7 @@
  * Scheduling:
  *   Each direction has a propagation-delay stage followed by a shared FIFO bottleneck. Delay storage is separate from
  *   bottleneck capacity. Tail-drop arrivals when free buffer space is below one TUN MTU, regardless of packet size.
- *   An idle bottleneck emits immediately; emitting L IP bytes at
+ *   At a fixed rate, an idle bottleneck emits immediately; emitting L IP bytes at
  *   rate w prevents another emission for L/w seconds. Do not accumulate transmission credit while idle. Use complete IP
  *   lengths for bandwidth and buffer accounting. Require nonnegative delay, positive rate, and buffers at least the TUN MTU.
  *
@@ -74,6 +74,7 @@
 #define NUM_FLOWS (2 * 65536)
 #define READ_BATCH 32
 #define EVENT_BATCH 64
+#define TRACE_BYTES 1500
 
 struct packet {
     struct packet *next;
@@ -93,6 +94,10 @@ struct direction {
     uint64_t delay_ns, rate, next_send;
     size_t capacity;
     double loss_probability;
+    struct {
+        uint64_t *at, period, epoch;
+        size_t count, index, remaining;
+    } trace;
 };
 
 struct statistics {
@@ -295,14 +300,28 @@ static void receive_packet(struct tunulator *t, uint8_t *bytes, size_t len, uint
     enqueue(&d->delay, p);
 }
 
-static uint64_t send_at(const struct direction *d)
+static uint64_t send_at(struct direction *d)
 {
     if (d->bottleneck.head == NULL)
         return UINT64_MAX;
+    if (d->trace.at != NULL) {
+        uint64_t earliest = d->bottleneck.head->at;
+        if (earliest >= d->trace.epoch + d->trace.period) {
+            d->trace.epoch += (earliest - d->trace.epoch) / d->trace.period * d->trace.period;
+            d->trace.index = 0;
+        }
+        while (d->trace.epoch + d->trace.at[d->trace.index] < earliest) {
+            if (++d->trace.index == d->trace.count) {
+                d->trace.index = 0;
+                d->trace.epoch += d->trace.period;
+            }
+        }
+        return d->trace.epoch + d->trace.at[d->trace.index];
+    }
     return d->next_send > d->bottleneck.head->at ? d->next_send : d->bottleneck.head->at;
 }
 
-static uint64_t next_event(const struct direction *d)
+static uint64_t next_event(struct direction *d)
 {
     uint64_t at = send_at(d);
     if (d->delay.head != NULL && d->delay.head->at < at)
@@ -310,21 +329,9 @@ static uint64_t next_event(const struct direction *d)
     return at;
 }
 
-static void run_event(struct tunulator *t, unsigned dir, uint64_t at)
+static void send_packet(struct tunulator *t, unsigned dir, struct packet *p)
 {
     struct direction *d = &t->dirs[dir];
-    if (d->delay.head != NULL && d->delay.head->at <= at) {
-        struct packet *p = dequeue(&d->delay);
-        if (d->capacity - d->bottleneck.bytes < t->mtu)
-            free(p);
-        else
-            enqueue(&d->bottleneck, p);
-        return;
-    }
-
-    struct packet *p = dequeue(&d->bottleneck);
-    uint64_t duration = p->len * NS_PER_SEC;
-    d->next_send = at + duration / d->rate + (duration % d->rate != 0);
     if (d->loss_probability != 0) {
         uint32_t value;
         random_bytes(&value, sizeof(value));
@@ -345,6 +352,41 @@ static void run_event(struct tunulator *t, unsigned dir, uint64_t at)
         fail("writing TUN: %s", strerror(errno));
     }
     free(p);
+}
+
+static void run_event(struct tunulator *t, unsigned dir, uint64_t at)
+{
+    struct direction *d = &t->dirs[dir];
+    if (d->delay.head != NULL && d->delay.head->at <= at) {
+        struct packet *p = dequeue(&d->delay);
+        if (d->capacity - d->bottleneck.bytes < t->mtu)
+            free(p);
+        else
+            enqueue(&d->bottleneck, p);
+        return;
+    }
+
+    if (d->trace.at != NULL) {
+        size_t budget = TRACE_BYTES;
+        while (budget != 0 && d->bottleneck.head != NULL) {
+            if (d->trace.remaining == 0)
+                d->trace.remaining = d->bottleneck.head->len;
+            size_t bytes = d->trace.remaining < budget ? d->trace.remaining : budget;
+            d->trace.remaining -= bytes;
+            budget -= bytes;
+            if (d->trace.remaining == 0)
+                send_packet(t, dir, dequeue(&d->bottleneck));
+        }
+        if (++d->trace.index == d->trace.count) {
+            d->trace.index = 0;
+            d->trace.epoch += d->trace.period;
+        }
+    } else {
+        struct packet *p = dequeue(&d->bottleneck);
+        uint64_t duration = p->len * NS_PER_SEC;
+        d->next_send = at + duration / d->rate + (duration % d->rate != 0);
+        send_packet(t, dir, p);
+    }
 }
 
 static void run_events(struct tunulator *t, uint64_t now)
@@ -404,6 +446,47 @@ static uint64_t parse_number(const char *value, uint64_t min, uint64_t max, cons
     return n;
 }
 
+static void load_trace(struct direction *d, const char *path, uint64_t start_ms)
+{
+    FILE *fp = fopen(path, "r");
+    if (fp == NULL)
+        fail("opening trace %s: %s", path, strerror(errno));
+    uint64_t *entries = NULL, ms;
+    size_t count = 0, capacity = 0;
+    int ret;
+    while ((ret = fscanf(fp, "%" SCNu64, &ms)) == 1) {
+        if (ms >= UINT64_MAX / NS_PER_MS || (count != 0 && ms < entries[count - 1]))
+            fail("invalid timestamp in trace %s", path);
+        if (count == capacity) {
+            capacity = capacity == 0 ? 1024 : capacity * 2;
+            if ((entries = realloc(entries, capacity * sizeof(*entries))) == NULL)
+                fail("allocating trace: %s", strerror(errno));
+        }
+        entries[count++] = ms;
+    }
+    if (ret != EOF || ferror(fp) || count == 0)
+        fail("invalid or empty trace: %s", path);
+    fclose(fp);
+    uint64_t period_ms = entries[count - 1] + 1;
+    if (start_ms >= period_ms)
+        fail("trace start offset must be below %" PRIu64 " ms", period_ms);
+
+    free(d->trace.at);
+    if ((d->trace.at = malloc(count * sizeof(*d->trace.at))) == NULL)
+        fail("allocating trace: %s", strerror(errno));
+    size_t first = 0;
+    while (entries[first] < start_ms)
+        ++first;
+    for (size_t i = 0; i < count; ++i) {
+        size_t source = (first + i) % count;
+        uint64_t relative_ms = source >= first ? entries[source] - start_ms : period_ms - start_ms + entries[source];
+        d->trace.at[i] = relative_ms * NS_PER_MS;
+    }
+    d->trace.count = count;
+    d->trace.period = period_ms * NS_PER_MS;
+    free(entries);
+}
+
 static int open_tun(const char *path, const char *name, size_t *mtu)
 {
     if (strlen(name) >= IFNAMSIZ)
@@ -448,6 +531,7 @@ static void usage(const char *cmd)
            "  -B <bytes>          downstream FIFO capacity (default: 100000)\n"
            "  -w <bytes_per_sec>  upstream throughput (default: 4294967295, UINT32_MAX)\n"
            "  -W <bytes_per_sec>  downstream throughput (default: 4294967295, UINT32_MAX)\n"
+           "  -F <file> <ms>      downstream bandwidth trace, starting at offset ms; replaces -W\n"
            "  -p <microseconds>   upstream propagation delay (default: 0)\n"
            "  -P <microseconds>   downstream propagation delay (default: 0)\n"
            "  -r <probability>    upstream random packet loss (0..1; default: 0)\n"
@@ -459,6 +543,10 @@ static void usage(const char *cmd)
            "Directions have independent queues/rates; added base RTT is -p plus -P.\n"
            "All server ports share the same queue and rate in each direction.\n"
            "Random losses occur after the bottleneck, consuming bandwidth.\n"
+           "Trace files list millisecond timestamps, one per line, each allowing 1500 IP bytes.\n"
+           "Repeated timestamps add capacity; unused capacity expires at that timestamp.\n"
+           "Packets spanning entries are sent when their full length has been accounted for.\n"
+           "Playback starts with forwarding and repeats after the last timestamp plus 1 ms.\n"
            "\n"
            "Statistics: emit a JSON object containing only active flows each millisecond\n"
            "on stdout, followed by a newline:\n"
@@ -491,7 +579,7 @@ int main(int argc, char **argv)
     }
     const char *path = NULL, *name = "tun0";
     int ch;
-    while ((ch = getopt(argc, argv, "t:n:b:B:w:W:p:P:r:R:h")) != -1) {
+    while ((ch = getopt(argc, argv, "t:n:b:B:w:W:F:p:P:r:R:h")) != -1) {
         switch (ch) {
         case 't':
             path = optarg;
@@ -506,6 +594,11 @@ int main(int argc, char **argv)
         case 'w':
         case 'W':
             t->dirs[ch == 'W'].rate = parse_number(optarg, 1, UINT64_MAX, "throughput");
+            break;
+        case 'F':
+            if (optind == argc)
+                fail("missing trace start offset");
+            load_trace(&t->dirs[1], optarg, parse_number(argv[optind++], 0, UINT64_MAX, "trace start offset"));
             break;
         case 'p':
         case 'P':
@@ -541,7 +634,9 @@ int main(int argc, char **argv)
             fail("%s buffer must hold at least one MTU (%zu bytes)", i == 0 ? "upstream" : "downstream", t->mtu);
 
     t->stats.out = stdout;
-    t->stats.next_at = get_now() + NS_PER_MS;
+    uint64_t now = get_now();
+    t->stats.next_at = now + NS_PER_MS;
+    t->dirs[1].trace.epoch = now;
     run_loop(t);
     return EXIT_SUCCESS;
 }
