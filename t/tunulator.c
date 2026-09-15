@@ -15,6 +15,8 @@
  *   At a fixed rate, an idle bottleneck emits immediately; emitting L IP bytes at
  *   rate w prevents another emission for L/w seconds. Do not accumulate transmission credit while idle. Use complete IP
  *   lengths for bandwidth and buffer accounting. Require nonnegative delay, positive rate, and buffers at least the TUN MTU.
+ *   Optional CoDel marks ECN-capable packets or drops at the bottleneck before consuming bandwidth. Measure sojourn time excluding
+ *   propagation delay and host scheduling jitter. With traces, inspect each packet only before its first transmission slot.
  *
  * Event loop:
  *   Use one thread, nonblocking TUN I/O, CLOCK_MONOTONIC, and select() with a timeout to the earliest absolute deadline.
@@ -56,6 +58,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <linux/if_tun.h>
+#include <math.h>
 #include <net/if.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -89,11 +92,23 @@ struct queue {
     size_t bytes;
 };
 
+struct codel {
+    uint64_t target, interval;
+    int ecn;
+    uint64_t first_above_time, drop_next;
+    uint32_t count, lastcount;
+    int dropping;
+};
+
+static const struct codel codel_defaults = {.target = 5 * NS_PER_MS, .interval = 100 * NS_PER_MS, .ecn = 1};
+
 struct direction {
     struct queue delay, bottleneck;
     uint64_t delay_ns, rate, next_send;
     size_t capacity;
     double loss_probability;
+    int use_codel;
+    struct codel codel;
     struct {
         uint64_t *at, period, epoch;
         size_t count, index, remaining;
@@ -198,6 +213,79 @@ static struct packet *dequeue(struct queue *q)
         q->tail = &q->head;
     q->bytes -= p->len;
     return p;
+}
+
+static int codel_should_drop(struct codel *c, struct queue *q, size_t mtu, uint64_t now)
+{
+    /* Exclude the candidate packet from the backlog, as in RFC 8289, Section 5.6. p->at is its bottleneck arrival time. */
+    struct packet *p = q->head;
+    if (p == NULL || now - p->at < c->target || q->bytes - p->len <= mtu) {
+        c->first_above_time = 0;
+        return 0;
+    }
+    if (c->first_above_time == 0) {
+        c->first_above_time = now + c->interval;
+        return 0;
+    }
+    return now >= c->first_above_time;
+}
+
+static uint64_t codel_control_law(struct codel *c, uint64_t at)
+{
+    return at + (uint64_t)(c->interval / sqrt(c->count));
+}
+
+static int mark_ce(struct packet *p)
+{
+    if ((p->bytes[1] & 3) == 0)
+        return 0;
+    if ((p->bytes[1] & 3) != 3) {
+        /* RFC 1624 incremental checksum update; preserve DSCP and the rest of the IPv4 header. */
+        uint32_t sum = (uint16_t)~read16(p->bytes + 10) + (uint16_t)~read16(p->bytes);
+        p->bytes[1] |= 3;
+        sum += read16(p->bytes);
+        sum = (sum & 65535) + (sum >> 16);
+        sum = (sum & 65535) + (sum >> 16);
+        write16(p->bytes + 10, ~sum);
+    }
+    return 1;
+}
+
+/* Apply RFC 8289 CoDel, leaving the selected packet at the head. Keeping it queued preserves buffer accounting while a trace
+ * transmits it across multiple slots. Drops consume no bandwidth; the MTU guard ensures that a nonempty queue stays nonempty. */
+static void codel_prepare(struct codel *c, struct queue *q, size_t mtu, uint64_t now)
+{
+    int should_drop = codel_should_drop(c, q, mtu, now);
+    if (c->dropping) {
+        if (!should_drop) {
+            c->dropping = 0;
+            return;
+        }
+        while (c->dropping && now >= c->drop_next) {
+            if (c->count != UINT32_MAX)
+                ++c->count;
+            if (c->ecn && mark_ce(q->head)) {
+                c->drop_next = codel_control_law(c, c->drop_next);
+                return;
+            }
+            free(dequeue(q));
+            if (!codel_should_drop(c, q, mtu, now))
+                c->dropping = 0;
+            else
+                c->drop_next = codel_control_law(c, c->drop_next);
+        }
+    } else if (should_drop) {
+        if (!c->ecn || !mark_ce(q->head)) {
+            free(dequeue(q));
+            codel_should_drop(c, q, mtu, now);
+        }
+        c->dropping = 1;
+        uint32_t delta = c->count - c->lastcount;
+        /* drop_next may still be in the future when reentering; avoid unsigned subtraction in that case. */
+        c->count = delta > 1 && (now < c->drop_next || now - c->drop_next < 16 * c->interval) ? delta : 1;
+        c->lastcount = c->count;
+        c->drop_next = codel_control_law(c, now);
+    }
 }
 
 static void emit_statistics(struct statistics *s)
@@ -369,8 +457,11 @@ static void run_event(struct tunulator *t, unsigned dir, uint64_t at)
     if (d->trace.at != NULL) {
         size_t budget = TRACE_BYTES;
         while (budget != 0 && d->bottleneck.head != NULL) {
-            if (d->trace.remaining == 0)
+            if (d->trace.remaining == 0) {
+                if (d->use_codel)
+                    codel_prepare(&d->codel, &d->bottleneck, t->mtu, at);
                 d->trace.remaining = d->bottleneck.head->len;
+            }
             size_t bytes = d->trace.remaining < budget ? d->trace.remaining : budget;
             d->trace.remaining -= bytes;
             budget -= bytes;
@@ -382,6 +473,8 @@ static void run_event(struct tunulator *t, unsigned dir, uint64_t at)
             d->trace.epoch += d->trace.period;
         }
     } else {
+        if (d->use_codel)
+            codel_prepare(&d->codel, &d->bottleneck, t->mtu, at);
         struct packet *p = dequeue(&d->bottleneck);
         uint64_t duration = p->len * NS_PER_SEC;
         d->next_send = at + duration / d->rate + (duration % d->rate != 0);
@@ -444,6 +537,42 @@ static uint64_t parse_number(const char *value, uint64_t min, uint64_t max, cons
     if (sscanf(value, "%" SCNu64, &n) != 1 || n < min || n > max)
         fail("invalid %s: %s", what, value);
     return n;
+}
+
+static int parse_queue_discipline(struct direction *d, const char *value)
+{
+    struct codel c = codel_defaults;
+    int use_codel = strcmp(value, "fifo") != 0;
+    if (use_codel) {
+        if (strncmp(value, "codel", 5) != 0)
+            return 0;
+        const char *p = value + 5;
+        if (strncmp(p, "/noecn", 6) == 0) {
+            c.ecn = 0;
+            p += 6;
+        }
+        if (*p == ':') {
+            uint64_t *fields[] = {&c.target, &c.interval};
+            for (unsigned i = 0; i < 2; ++i) {
+                if (*p != ':' || p[1] < '0' || p[1] > '9')
+                    return 0;
+                char *end;
+                errno = 0;
+                unsigned long long ms = strtoull(p + 1, &end, 10);
+                if (errno != 0 || ms == 0 || ms > UINT32_MAX)
+                    return 0;
+                *fields[i] = ms * NS_PER_MS;
+                p = end;
+            }
+            if (c.target >= c.interval)
+                return 0;
+        }
+        if (*p != '\0')
+            return 0;
+    }
+    d->use_codel = use_codel;
+    d->codel = c;
+    return 1;
 }
 
 static void load_trace(struct direction *d, const char *path, uint64_t start_ms)
@@ -529,6 +658,8 @@ static void usage(const char *cmd)
            "  -n <interface>      preconfigured Linux TUN interface (default: tun0)\n"
            "  -b <bytes>          upstream FIFO capacity (default: 100000)\n"
            "  -B <bytes>          downstream FIFO capacity (default: 100000)\n"
+           "  -q <discipline>     upstream queue discipline (default: fifo)\n"
+           "  -Q <discipline>     downstream queue discipline (default: fifo)\n"
            "  -w <bytes_per_sec>  upstream throughput (default: 4294967295, UINT32_MAX)\n"
            "  -W <bytes_per_sec>  downstream throughput (default: 4294967295, UINT32_MAX)\n"
            "  -F <file> <ms>      downstream bandwidth trace, starting at offset ms; replaces -W\n"
@@ -542,6 +673,12 @@ static void usage(const char *cmd)
            "Upstream means client-to-server; downstream means server-to-client.\n"
            "Directions have independent queues/rates; added base RTT is -p plus -P.\n"
            "All server ports share the same queue and rate in each direction.\n"
+           "Disciplines: fifo, codel[:target_ms:interval_ms], or codel/noecn[:target_ms:interval_ms].\n"
+           "CoDel defaults to a 5 ms target and 100 ms interval; times are positive integer milliseconds\n"
+           "(up to 4294967295), with target below interval. Example: -Q codel:10:200.\n"
+           "CoDel marks ECN-capable packets CE, otherwise drops; codel/noecn always drops.\n"
+           "Marked packets consume bandwidth; dropped packets do not. Full buffers tail-drop.\n"
+           "Its queue delay excludes propagation delay; buffer capacity still limits arrivals.\n"
            "Random losses occur after the bottleneck, consuming bandwidth.\n"
            "Trace files list millisecond timestamps, one per line, each allowing 1500 IP bytes.\n"
            "Repeated timestamps add capacity; unused capacity expires at that timestamp.\n"
@@ -579,7 +716,7 @@ int main(int argc, char **argv)
     }
     const char *path = NULL, *name = "tun0";
     int ch;
-    while ((ch = getopt(argc, argv, "t:n:b:B:w:W:F:p:P:r:R:h")) != -1) {
+    while ((ch = getopt(argc, argv, "t:n:b:B:q:Q:w:W:F:p:P:r:R:h")) != -1) {
         switch (ch) {
         case 't':
             path = optarg;
@@ -594,6 +731,13 @@ int main(int argc, char **argv)
         case 'w':
         case 'W':
             t->dirs[ch == 'W'].rate = parse_number(optarg, 1, UINT64_MAX, "throughput");
+            break;
+        case 'q':
+        case 'Q':
+            if (!parse_queue_discipline(&t->dirs[ch == 'Q'], optarg))
+                fail("invalid queue discipline: %s (expected fifo or codel[/noecn][:target_ms:interval_ms]; "
+                     "0 < target < interval <= 4294967295)",
+                     optarg);
             break;
         case 'F':
             if (optind == argc)
