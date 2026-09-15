@@ -37,6 +37,37 @@
 
 FILE *quicly_trace_fp;
 
+static void sim_random_bytes(void *dst, size_t len)
+{
+    static struct {
+        ptls_cipher_context_t *cipher;
+        size_t offset;
+        uint8_t bytes[1024];
+    } prng;
+
+    if (prng.cipher == NULL) {
+        struct {
+            uint8_t key[PTLS_AES128_KEY_SIZE];
+            uint8_t iv[PTLS_AES_IV_SIZE];
+        } seed;
+
+        ptls_openssl_random_bytes(&seed, sizeof(seed));
+        prng.cipher = ptls_cipher_new(&ptls_openssl_aes128ctr, 1, seed.key);
+        assert(prng.cipher != NULL);
+        ptls_cipher_init(prng.cipher, seed.iv);
+        prng.offset = sizeof(prng.bytes);
+        ptls_clear_memory(&seed, sizeof(seed));
+    }
+    assert(len <= sizeof(prng.bytes));
+
+    if (sizeof(prng.bytes) - prng.offset < len) {
+        ptls_cipher_encrypt(prng.cipher, prng.bytes, prng.bytes, sizeof(prng.bytes));
+        prng.offset = 0;
+    }
+    memcpy(dst, prng.bytes + prng.offset, len);
+    prng.offset += len;
+}
+
 static double now = 1000;
 static struct {
     uint64_t eligible_packets;
@@ -151,12 +182,6 @@ struct net_delay {
     struct net_queue queue;
 };
 
-struct net_random_loss {
-    struct net_node super;
-    struct net_node *next_node;
-    double loss_ratio;
-};
-
 /**
  * The discipline the queues of the bottleneck run. It is orthogonal to whether the flows are isolated; fq_codel (RFC 8290) is
  * `NET_AQM_CODEL` combined with isolation.
@@ -176,6 +201,14 @@ struct net_aqm {
  * given addresses sequentially, the address is used as the index.
  */
 #define NET_BOTTLENECK_MAX_QUEUES 20
+
+struct net_random_loss {
+    struct net_node super;
+    struct net_node *next_node;
+    void (*random_bytes)(void *buf, size_t len);
+    double loss_ratios[NET_BOTTLENECK_MAX_QUEUES];
+};
+
 /**
  * Number of bytes a queue is allowed to send in one round of deficit round robin.
  */
@@ -301,8 +334,12 @@ static void net_delay_init(struct net_delay *self, double delay)
 static void net_random_loss_forward(struct net_node *_self, struct net_packet *packet)
 {
     struct net_random_loss *self = (struct net_random_loss *)_self;
+    uint32_t index = ntohl(packet->src->addr.sin.sin_addr.s_addr);
+    assert(index < PTLS_ELEMENTSOF(self->loss_ratios) && "the endpoints are given addresses sequentially, starting from one");
 
-    if (rand() % 65536 < self->loss_ratio * 65536) {
+    uint32_t random_value;
+    self->random_bytes(&random_value, sizeof(random_value));
+    if ((double)random_value / ((double)UINT32_MAX + 1) < self->loss_ratios[index]) {
         printf("{\"random-loss\": \"drop\", \"at\": %f, \"packet-src\": %" PRIu32 "}\n", now,
                ntohl(packet->src->addr.sin.sin_addr.s_addr));
         net_packet_destroy(packet);
@@ -317,11 +354,11 @@ static double net_random_loss_next_run_at(struct net_node *self)
     return INFINITY;
 }
 
-static void net_random_loss_init(struct net_random_loss *self, double loss_ratio)
+static void net_random_loss_init(struct net_random_loss *self, void (*random_bytes)(void *buf, size_t len))
 {
     *self = (struct net_random_loss){
         .super = {net_random_loss_forward, net_random_loss_next_run_at, NULL},
-        .loss_ratio = loss_ratio,
+        .random_bytes = random_bytes,
     };
 }
 
@@ -686,7 +723,9 @@ static void net_endpoint_forward(struct net_node *_self, struct net_packet *pack
             return;
         }
         ++ack_scheduler_stats.eligible_packets;
-        if (rand() % 65536 < self->ack_scheduler.probability * 65536) {
+        uint32_t random_value;
+        sim_random_bytes(&random_value, sizeof(random_value));
+        if ((double)random_value / ((double)UINT32_MAX + 1) < self->ack_scheduler.probability) {
             ++ack_scheduler_stats.stalls;
             ++ack_scheduler_stats.queued_packets;
             self->ack_scheduler.resume_at = now + self->ack_scheduler.delay;
@@ -1203,6 +1242,7 @@ int main(int argc, char **argv)
     struct net_node *nodes[20] = {}, **node_insert_at = nodes;
 
     net_endpoint_init(&server_node.node, 0, 0);
+    net_random_loss_init(&random_loss_node, sim_random_bytes);
     server_node.accept_ctx = quicctx;
     server_node.node.accept_ctx = &server_node.accept_ctx;
     *node_insert_at++ = &server_node.node.super;
@@ -1235,7 +1275,7 @@ int main(int argc, char **argv)
             /* the context is retained by the connection being created below, therefore it has to be allocated on heap */
             quicly_context_t *flow_ctx = malloc(sizeof(*flow_ctx));
             *flow_ctx = quicctx;
-            double flow_delay = delay, flow_start = start;
+            double flow_delay = delay, flow_start = start, flow_random_loss = random_loss;
             double flow_ack_scheduler_probability = ack_scheduler_probability, flow_ack_scheduler_delay = ack_scheduler_delay;
 
             int flow_argc = seg_end - seg_start + 1;
@@ -1246,8 +1286,8 @@ int main(int argc, char **argv)
             if (seg_end < argc)
                 argv[seg_end] = NULL;
 
-            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                               &flow_ack_scheduler_probability, &flow_ack_scheduler_delay, NULL))
+            if (!parse_options(flow_argc, flow_argv, flow_ctx, &flow_delay, &flow_start, NULL, NULL, NULL, &flow_random_loss, NULL,
+                               NULL, NULL, &flow_ack_scheduler_probability, &flow_ack_scheduler_delay, NULL))
                 exit(1);
             flow_argv[0] = saved_argv0;
             if (seg_end < argc)
@@ -1263,6 +1303,9 @@ int main(int argc, char **argv)
 
             struct net_endpoint *client_node = malloc(sizeof(*client_node));
             net_endpoint_init(client_node, flow_ack_scheduler_probability, flow_ack_scheduler_delay);
+            uint32_t client_index = ntohl(client_node->addr.sin.sin_addr.s_addr);
+            assert(client_index < PTLS_ELEMENTSOF(random_loss_node.loss_ratios));
+            random_loss_node.loss_ratios[client_index] = flow_random_loss;
             client_node->start_at = now + flow_start;
             int ret = quicly_connect(&client_node->conns[0].quic, flow_ctx, "hello.example.com", &server_node.node.addr.sa,
                                      &client_node->addr.sa, &next_quic_cid, ptls_iovec_init(NULL, 0), NULL, NULL, NULL);
@@ -1290,8 +1333,10 @@ int main(int argc, char **argv)
     *node_insert_at++ = &bottleneck_node.super;
 
     /* setup random loss */
-    if (random_loss != 0) {
-        net_random_loss_init(&random_loss_node, random_loss);
+    int has_random_loss = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(random_loss_node.loss_ratios); ++i)
+        has_random_loss |= random_loss_node.loss_ratios[i] != 0;
+    if (has_random_loss) {
         random_loss_node.next_node = &server_node.node.super;
         bottleneck_node.next_node = &random_loss_node.super;
         *node_insert_at++ = &random_loss_node.super;
