@@ -409,14 +409,10 @@ static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
 
 static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt)
 {
-    /* Undo the transport's 7/8 SRTT update to exclude the RTT of the ACK triggering congestion. Before the first sample,
-     * use the initialized SRTT estimate as-is. */
-    double srtt = rtt->latest != 0 ? ((double)rtt->smoothed * 8 - rtt->latest) / 7 : rtt->smoothed;
+    /* Pair the pre-reduction window with the minimum RTT observed from congestion through recovery. If no sample is available
+     * at congestion, use SRTT as the initial estimate. The empty point is initialized separately at recovery exit. */
     *state = (struct st_quicly_cc_abba2_t){
-        .congested = {cwnd, srtt},
-        /* SRTT is a ceiling for the minimum tracker, not a new measurement. Defer the window coordinate until recovery exits,
-         * as Jump Start and Rapid Start may still adjust it. This does not reset the transport's minimum-RTT estimate. */
-        .empty = {0, rtt->latest != 0 && rtt->latest < srtt ? rtt->latest : srtt},
+        .congested = {cwnd, rtt->latest != 0 ? rtt->latest : rtt->smoothed},
         .a = 0,
         .b = NAN,
     };
@@ -428,14 +424,17 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
         return;
 
     if (in_recovery) {
-        if (rtt->latest < state->empty.rtt)
-            state->empty.rtt = rtt->latest;
+        if (rtt->latest < state->congested.rtt)
+            state->congested.rtt = rtt->latest;
         return;
     }
 
     int fit = 0;
     if (state->empty.cwnd == 0) {
+        /* Freeze the recovery minimum as the high watermark and use it as the ceiling for the CA minimum tracker. Defer the
+         * window coordinate until here because Jump Start and Rapid Start may adjust CWND during recovery. */
         state->empty.cwnd = cwnd;
+        state->empty.rtt = state->congested.rtt;
         fit = 1;
     }
     if (rtt->latest < state->empty.rtt) {

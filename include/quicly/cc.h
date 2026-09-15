@@ -135,8 +135,9 @@ struct st_quicly_cc_cuback_t {
  */
 struct st_quicly_cc_abba2_t {
     /**
-     * Retains the watermarks of one congestion-avoidance period. `congested` is the high watermark taken at the congestion event
-     * starting the period. `empty` tracks the low watermark through the ensuing recovery and congestion avoidance.
+     * Retains the watermarks of one congestion-avoidance period. `congested` pairs the pre-reduction window with the minimum RTT
+     * observed from congestion through recovery. `empty` starts at recovery exit and tracks the low watermark during congestion
+     * avoidance, using the recovery minimum as its initial RTT ceiling.
      */
     struct {
         uint32_t cwnd;
