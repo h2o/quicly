@@ -128,8 +128,10 @@ struct st_quicly_cc_cuback_t {
  * growth and congestion response.
  *
  * It models the relationship between CWND and RTT using the congestion watermark and the lowest RTT observed afterward. An RTT
- * below the model's prediction signals room for faster window growth. It also accelerates when RTT is near the connection's
- * minimum, independently of the model. On each ACK, it selects the larger of ordinary growth and these accelerated candidates.
+ * below the model's prediction signals room for faster window growth. Fitting requires enough RTT variation to estimate a useful
+ * slope; far beyond the congestion window, the model instead assumes RTT is proportional to CWND. Independently, it accelerates
+ * near minRTT if the congestion RTT was sufficiently above that minimum. On each ACK, it selects the largest of ordinary growth
+ * and the accelerated candidates.
  */
 struct st_quicly_cc_abba2_t {
     /**

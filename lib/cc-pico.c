@@ -32,6 +32,11 @@
 #define QUICLY_CUBIC_C 0.4
 
 /**
+ * Minimum RTT span in milliseconds required for the two-point fit or independent low-RTT acceleration.
+ */
+#define QUICLY_ABBA2_MIN_RTT_SPAN 5
+
+/**
  * Fast approximation of cbrt(). The input is reduced to a mantissa in [1, 2), to which a fourth-degree polynomial is applied.
  * The polynomial's value and slope join smoothly at powers of two; continuity of the slope is important to Cuback, which
  * subtracts the inverse curve at adjacent CWNDs to calculate each per-MTU increase. The maximum relative error of the result is
@@ -383,8 +388,8 @@ static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
      * lower RTT increases acceleration; refitting through the new empty point would erase that growth signal. */
     if (wc <= we)
         return;
-    /* With an ordered window span but equal RTTs, retain the horizontal fit. */
-    if (rc == re) {
+    /* A small RTT span is not enough to estimate a useful slope; retain a horizontal model until the queue has drained enough. */
+    if (rc - re < QUICLY_ABBA2_MIN_RTT_SPAN) {
         state->a = 0;
         state->b = re;
         return;
@@ -472,8 +477,9 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
         if (model_gain > gain)
             gain = model_gain;
     }
-    /* This independent gain is positive only below minRTT + 2ms. A closed low-RTT gate does not disable model acceleration. */
-    if (rtt->minimum != 0 && rtt->minimum != UINT32_MAX && rtt->latest < (double)rtt->minimum + 2) {
+    /* Independently accelerate toward minRTT + 2ms only if congestion was observed sufficiently above minRTT. Unlike the
+     * two-point fit, this uses the connection's minimum RTT, not the current period's empty point. */
+    if ((double)state->congested.rtt - rtt->minimum >= QUICLY_ABBA2_MIN_RTT_SPAN && rtt->latest < (double)rtt->minimum + 2) {
         double low_rtt_gain = ((double)rtt->minimum + 2) / rtt->latest - 1;
         if (low_rtt_gain > gain)
             gain = low_rtt_gain;
