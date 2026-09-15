@@ -1213,6 +1213,31 @@ static void test_set_cc(void)
     ok(strcmp(stats.cc.type->name, "reno") == 0);
 }
 
+static void test_cc_accel_context(void)
+{
+    quicly_init_cc_t *const policies[] = {&quicly_cc_cubic_init, &quicly_cc_cuback_init};
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
+        quicly_context_t ctx = quic_ctx;
+        ctx.init_cc = policies[i];
+        ctx.abba = 1;
+        quicly_conn_t *conn;
+        ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                          NULL) == 0);
+        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.state.pico.abba2.congested.cwnd == 0);
+
+        /* Path promotion uses configured policy and discards the old path's measurements. */
+        conn->egress.cc.abba = 0;
+        conn->egress.cc.state.pico.abba2.congested.cwnd = 100000;
+        ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
+        ok(promote_path(conn, 1) == 0);
+        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.type->cc_init == policies[i]);
+        ok(conn->egress.cc.state.pico.abba2.congested.cwnd == 0);
+        quicly_free(conn);
+    }
+}
+
 void test_ecn_index_from_bits(void)
 {
     ok(get_ecn_index_from_bits(1) == 1);
@@ -1550,6 +1575,7 @@ int main(int argc, char **argv)
     subtest("lossy", test_lossy);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
+    subtest("cc-accel-context", test_cc_accel_context);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);

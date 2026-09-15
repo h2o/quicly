@@ -124,6 +124,35 @@ struct st_quicly_cc_cuback_t {
 };
 
 /**
+ * ABBA2 augments CUBIC and Cuback to respond quickly to increases in available bandwidth, while retaining their ordinary window
+ * growth and congestion response.
+ *
+ * It models the relationship between CWND and RTT using the congestion watermark and the lowest RTT observed afterward. An RTT
+ * below the model's prediction signals room for faster window growth. It also accelerates when RTT is near the connection's
+ * minimum, independently of the model. On each ACK, it selects the larger of ordinary growth and these accelerated candidates.
+ */
+struct st_quicly_cc_abba2_t {
+    /**
+     * Retains the watermarks of one congestion-avoidance period. `congested` is the high watermark taken at the congestion event
+     * starting the period. `empty` tracks the low watermark through the ensuing recovery and congestion avoidance.
+     */
+    struct {
+        uint32_t cwnd;
+        float rtt;
+    } congested, empty;
+    /**
+     * RTT = a * CWND + b. An unfitted or unusable model has a == 0 and b set to NaN: zero slope disables inversion, while NaN
+     * permits the later proportional-model switch (which tests b != 0). A horizontal fit has a == 0, b > 0; a proportional
+     * fit has a > 0, b == 0. Thus b == 0 means a model through the origin has already been established, not that it is absent.
+     */
+    float a, b;
+    /**
+     * Fractional bytes retained when accelerated growth determines the window.
+     */
+    float increase_remainder;
+};
+
+/**
  * State used by the Cubic policy implemented by cc-pico.c; see `quicly_cc_type_cubic`.
  */
 struct st_quicly_cc_cubic_t {
@@ -188,6 +217,10 @@ typedef struct st_quicly_cc_t {
      */
     unsigned normalize_mtu : 1;
     /**
+     * Enables ABBA2 accelerated bandwidth adaptation for CUBIC and Cuback.
+     */
+    unsigned abba : 1;
+    /**
      * State information specific to the congestion controller implementation.
      */
     union {
@@ -212,6 +245,10 @@ typedef struct st_quicly_cc_t {
                 struct st_quicly_cc_cubic_t cubic;
             };
             /**
+             * Bandwidth adaptation state shared by CUBIC and Cuback.
+             */
+            struct st_quicly_cc_abba2_t abba2;
+            /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
              * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
              * declared lost and have not yet been late-ACKed. Other fields retain the values to be restored when
@@ -223,6 +260,7 @@ typedef struct st_quicly_cc_t {
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_to_mtu_increase;
+                struct st_quicly_cc_abba2_t abba2;
                 union {
                     uint32_t bytes_per_mtu_increase;
                     struct st_quicly_cc_cuback_t cuback;
