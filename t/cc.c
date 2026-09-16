@@ -855,7 +855,7 @@ static void test_abba2_model(void)
 
     /* The high watermark pairs the pre-reduction window with the recovery minimum, not SRTT. */
     quicly_rtt_t rtt = {.latest = 80, .smoothed = 115, .minimum = 20};
-    abba2_on_congestion(&state, 100000, &rtt);
+    abba2_on_congestion(&state, 100000, &rtt, 0);
     ok(state.congested.cwnd == 100000 && state.congested.rtt == 80);
     ok(state.empty.cwnd == 0);
     rtt.latest = 70;
@@ -892,7 +892,7 @@ static void test_abba2_model(void)
     /* Without an intervening recovery ACK, retain the congestion sample even when SRTT is lower. */
     rtt.latest = 160;
     rtt.smoothed = 125;
-    abba2_on_congestion(&state, 100000, &rtt);
+    abba2_on_congestion(&state, 100000, &rtt, 0);
     ok(state.congested.rtt == 160 && state.empty.cwnd == 0);
     rtt.latest = 170;
     abba2_on_acked(&state, 70000, &rtt, 0);
@@ -901,7 +901,7 @@ static void test_abba2_model(void)
 
     /* Without a sample at congestion, SRTT supplies the initial estimate; recovery samples can lower it. */
     quicly_rtt_init(&rtt, &quicly_spec_context.loss, 120);
-    abba2_on_congestion(&state, 100000, &rtt);
+    abba2_on_congestion(&state, 100000, &rtt, 0);
     ok(state.congested.rtt == 120 && state.empty.cwnd == 0);
     abba2_on_acked(&state, 70000, &rtt, 1);
     abba2_on_acked(&state, 70000, &rtt, 0);
@@ -919,7 +919,7 @@ static void test_abba2_model(void)
 
     /* If there are no recovery samples, the SRTT fallback remains the high watermark at recovery exit. */
     quicly_rtt_init(&rtt, &quicly_spec_context.loss, 120);
-    abba2_on_congestion(&state, 100000, &rtt);
+    abba2_on_congestion(&state, 100000, &rtt, 0);
     quicly_rtt_update(&rtt, 150, 0, 3);
     abba2_on_acked(&state, 70000, &rtt, 0);
     ok(state.congested.rtt == 120 && state.empty.rtt == 120);
@@ -1212,6 +1212,8 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     ok(memcmp(&cc.state.pico.abba2, &saved, sizeof(saved)) == 0);
 
     /* ECN uses its own beta and cannot be undone by a late ACK. */
+    quicly_rtt_init(&loss.rtt, &quicly_spec_context.loss, 115);
+    quicly_rtt_update(&loss.rtt, 80, 0, 1500);
     cc.type->cc_on_lost(&cc, &loss, 0, 30, 40, 1500, mtu);
     ok(cc.cwnd == (uint32_t)(before * QUICLY_BETA_ECN));
     cc.type->cc_on_late_ack(&cc, 30, 1550);
@@ -1222,6 +1224,72 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     ok(cc.state.pico.abba2.congested.cwnd == before);
     cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 1700, mtu);
     ok(cc.state.pico.abba2.empty.cwnd == cc.cwnd);
+}
+
+static void test_abba2_ecn_floor(quicly_init_cc_t *init)
+{
+    uint32_t mtu = 1200, initcwnd = 100 * mtu;
+    for (int no_sample = 0; no_sample != 2; ++no_sample) {
+        for (int undo_loss = 0; undo_loss != 2; ++undo_loss) {
+            quicly_cc_t cc, control;
+            quicly_loss_t loss = {};
+            init->cb(init, &cc, initcwnd, 0, 1, 0);
+            quicly_rtt_init(&loss.rtt, &quicly_spec_context.loss, 80);
+            if (!no_sample) {
+                quicly_rtt_update(&loss.rtt, 80, 0, 900);
+                quicly_rtt_update(&loss.rtt, 120, 0, 901);
+            }
+
+            /* CE captures a floor of 80, distinct from latest (120) and SRTT (85), or the initial estimate without samples. */
+            cc.type->cc_on_lost(&cc, &loss, 0, 10, 20, 1000, mtu);
+            ok(cc.cwnd == initcwnd / 2);
+            quicly_rtt_update(&loss.rtt, 60, 0, 1050);
+            cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1050, mtu);
+
+            if (undo_loss) {
+                /* Undoing a later packet loss must restore the fixed CE watermark. */
+                cc.type->cc_on_lost(&cc, &loss, mtu, 20, 30, 1060, mtu);
+                quicly_rtt_update(&loss.rtt, 50, 0, 1070);
+                cc.type->cc_on_acked(&cc, &loss, mtu, 29, mtu, 1, 30, 1070, mtu);
+                cc.type->cc_on_late_ack(&cc, 20, 1080);
+                ok(cc.cwnd == initcwnd / 2);
+            }
+
+            if (!undo_loss) {
+                quicly_rtt_update(&loss.rtt, 60, 0, 1090);
+                cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1090, mtu);
+            }
+            quicly_rtt_update(&loss.rtt, 70, 0, 1100);
+            cc.type->cc_on_acked(&cc, &loss, 0, 30, 0, 1, 31, 1100, mtu);
+
+            /* The model through (120000, 80) and (60000, 70) maps RTT 75 to CWND 90000. At CWND 120000,
+             * acknowledging 24000 bytes therefore adds 24000 * (1 - 90000 / 120000) / 2 = 3000 bytes. */
+            cc.cwnd = initcwnd;
+            control = cc;
+            control.abba = 0;
+            quicly_rtt_update(&loss.rtt, 75, 0, 1150);
+            cc.type->cc_on_acked(&cc, &loss, 24000, 40, 24000, 1, 41, 1150, mtu);
+            control.type->cc_on_acked(&control, &loss, 24000, 40, 24000, 1, 41, 1150, mtu);
+            ok(abs((int)cc.cwnd - 123000) <= 1);
+            ok(cc.cwnd > control.cwnd);
+
+            /* A subsequent packet-loss event must resume tracking recovery minima. With a recovery minimum of 45
+             * and exit RTT of 50, the model is horizontal, so growth at RTT 55 must match the unaccelerated policy. */
+            uint32_t peak = cc.cwnd;
+            cc.type->cc_on_lost(&cc, &loss, mtu, 41, 50, 1200, mtu);
+            quicly_rtt_update(&loss.rtt, 45, 0, 1250);
+            cc.type->cc_on_acked(&cc, &loss, mtu, 49, mtu, 1, 50, 1250, mtu);
+            quicly_rtt_update(&loss.rtt, 50, 0, 1300);
+            cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 1300, mtu);
+            cc.cwnd = peak;
+            control = cc;
+            control.abba = 0;
+            quicly_rtt_update(&loss.rtt, 55, 0, 1350);
+            cc.type->cc_on_acked(&cc, &loss, 24000, 51, 24000, 1, 52, 1350, mtu);
+            control.type->cc_on_acked(&control, &loss, 24000, 51, 24000, 1, 52, 1350, mtu);
+            ok(cc.cwnd == control.cwnd);
+        }
+    }
 }
 
 static void test_abba2_ack_accounting(quicly_init_cc_t *init)
@@ -1358,6 +1426,8 @@ static void test_abba2(void)
     subtest("float-precision", test_abba2_float_precision);
     subtest("cubic-lifecycle", test_abba2_lifecycle, &quicly_cc_cubic_init);
     subtest("cuback-lifecycle", test_abba2_lifecycle, &quicly_cc_cuback_init);
+    subtest("cubic-ecn-floor", test_abba2_ecn_floor, &quicly_cc_cubic_init);
+    subtest("cuback-ecn-floor", test_abba2_ecn_floor, &quicly_cc_cuback_init);
     subtest("cubic-ack-accounting", test_abba2_ack_accounting, &quicly_cc_cubic_init);
     subtest("cuback-ack-accounting", test_abba2_ack_accounting, &quicly_cc_cuback_init);
     subtest("cuback-partial-credit", test_abba2_cuback_partial_credit);

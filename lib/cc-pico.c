@@ -406,14 +406,15 @@ static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
     }
 }
 
-static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt)
+static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int by_ecn)
 {
-    /* Pair the pre-reduction window with the minimum RTT observed from congestion through recovery. If no sample is available
-     * at congestion, use SRTT as the initial estimate. The empty point is initialized separately at recovery exit. */
+    /* ECN-CE captures the floor at the event; packet loss starts a minimum tracker that runs through recovery. Both fall back
+     * to SRTT without samples. The empty point is initialized separately at recovery exit. */
     *state = (struct st_quicly_cc_abba2_t){
-        .congested = {cwnd, rtt->latest != 0 ? rtt->latest : rtt->smoothed},
+        .congested = {cwnd, by_ecn ? quicly_rtt_get_floor(rtt) : (rtt->latest != 0 ? rtt->latest : rtt->smoothed)},
         .a = 0,
         .b = NAN,
+        .by_ecn = by_ecn,
     };
 }
 
@@ -423,15 +424,14 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
         return;
 
     if (in_recovery) {
-        if (rtt->latest < state->congested.rtt)
+        if (!state->by_ecn && rtt->latest < state->congested.rtt)
             state->congested.rtt = rtt->latest;
         return;
     }
 
     int fit = 0;
     if (state->empty.cwnd == 0) {
-        /* Freeze the recovery minimum as the high watermark and use it as the ceiling for the CA minimum tracker. Defer the
-         * window coordinate until here because Jump Start and Rapid Start may adjust CWND during recovery. */
+        /* Lazy Initialization of `empty`, because Jump Start and Rapid Start may adjust CWND during recovery. */
         state->empty.cwnd = cwnd;
         state->empty.rtt = state->congested.rtt;
         fit = 1;
@@ -679,7 +679,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
     }
 
     if (abba2_enabled(cc))
-        abba2_on_congestion(&cc->state.pico.abba2, cc->cwnd, &loss->rtt);
+        abba2_on_congestion(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, bytes == 0);
 
     cc->recovery_end = next_pn;
     ++cc->num_loss_episodes;

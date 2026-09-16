@@ -136,9 +136,11 @@ struct st_quicly_cc_cuback_t {
  */
 struct st_quicly_cc_abba2_t {
     /**
-     * Retains the watermarks of one congestion-avoidance period. `congested` pairs the pre-reduction window with the minimum RTT
-     * observed from congestion through recovery. `empty` starts at recovery exit and tracks the low watermark during congestion
-     * avoidance, using the recovery minimum as its initial RTT ceiling.
+     * Retains the watermarks of one congestion-avoidance period. `congested` pairs the pre-reduction window with the RTT upon
+     * congestion; if it was a packet loss, the minimum RTT observed through recovery is adopted, because senders continue pushing
+     * until loss feedback arrives after 1 RTT, keeping the queue full. If it was an ECN-CE event, minimum RTT observed within 1
+     * RTT before CE is adopted, since CE is an indication of *persistent* congestion (Section 5.1 of RFC 3168). `empty` starts at
+     * recovery exit and tracks the low watermark during congestion avoidance.
      */
     struct {
         uint32_t cwnd;
@@ -153,6 +155,10 @@ struct st_quicly_cc_abba2_t {
      * Fractional bytes retained when accelerated growth determines the window.
      */
     float increase_remainder;
+    /**
+     * ECN-CE fixes the congestion RTT at the event; only packet-loss recovery can lower it.
+     */
+    unsigned by_ecn : 1;
 };
 
 /**
