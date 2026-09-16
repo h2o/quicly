@@ -467,7 +467,7 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
         return cubic_cwnd;
 
     double gain = 0;
-    if (state->a > 0 && isfinite(state->a) && state->b >= 0 && isfinite(state->b)) {
+    if (state->a > 0 && state->b >= 0) {
         /* Wref is the window associated with latest RTT by the model. Each ACK contributes (acked / W) * (W - Wref) / 2:
          * approximately half the positive gap over a window's worth of ACKs, rather than half the gap for every ACK. */
         double wref = ((double)rtt->latest - state->b) / state->a;
