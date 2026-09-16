@@ -37,6 +37,11 @@
 #define QUICLY_ABBA2_MIN_RTT_SPAN 5
 
 /**
+ * Minimum RTT shortfall below the model prediction required for model-based acceleration.
+ */
+#define QUICLY_ABBA2_MIN_RTT_SHORTFALL 2
+
+/**
  * Fast approximation of cbrt(). The input is reduced to a mantissa in [1, 2), to which a fourth-degree polynomial is applied.
  * The polynomial's value and slope join smoothly at powers of two; continuity of the slope is important to Cuback, which
  * subtracts the inverse curve at adjacent CWNDs to calculate each per-MTU increase. The maximum relative error of the result is
@@ -466,7 +471,8 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
         return cubic_cwnd;
 
     double gain = 0;
-    if (state->a > 0 && state->b >= 0) {
+    if (state->a > 0 && state->b >= 0 &&
+        (double)state->a * cwnd + state->b - rtt->latest >= QUICLY_ABBA2_MIN_RTT_SHORTFALL) {
         /* Wref is the window associated with latest RTT by the model. Each ACK contributes (acked / W) * (W - Wref) / 2:
          * approximately half the positive gap over a window's worth of ACKs, rather than half the gap for every ACK. */
         double wref = ((double)rtt->latest - state->b) / state->a;

@@ -942,13 +942,14 @@ static void test_abba2_min_rtt_span(void)
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         for (int beyond_threshold = 0; beyond_threshold != 2; ++beyond_threshold) {
             state = (struct st_quicly_cc_abba2_t){.high = {100000, 100}, .low = {0, 100}, .a = 0, .b = NAN};
-            quicly_rtt_t rtt = {.latest = 96, .smoothed = 98, .minimum = 96};
+            quicly_rtt_t rtt = {.latest = 96, .smoothed = 99, .minimum = 96};
             uint32_t cwnd = beyond_threshold ? 140000 : 70000;
             abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
             ok(state.low.cwnd == cwnd && state.low.rtt == 96);
             if (beyond_threshold) {
-                /* The proportional switch does not require a two-point fit or a minimum RTT span. */
-                ok(state.a == (float)(98. / cwnd) && state.b == 0);
+                /* The proportional switch does not require a two-point fit or a minimum RTT span. The 3ms shortfall
+                 * permits model acceleration independently of the 5ms fitting span. */
+                ok(state.a == (float)(99. / cwnd) && state.b == 0);
                 ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) > cwnd);
             } else {
                 ok(state.a == 0);
@@ -960,7 +961,7 @@ static void test_abba2_min_rtt_span(void)
             abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
             ok(state.a > 0);
             if (beyond_threshold) {
-                ok(state.a == (float)(98. / cwnd) && state.b == 0);
+                ok(state.a == (float)(99. / cwnd) && state.b == 0);
             } else {
                 ok(state.a == (float)(5. / 30000) && state.b > 0);
             }
@@ -1117,6 +1118,37 @@ static void test_abba2_growth(void)
     ok(abba2_on_growth(&state, cwnd, cwnd, 1000, &rtt) == cwnd);
     rtt.latest = 8;
     ok(abba2_on_growth(&state, cwnd, cwnd, 0, &rtt) == cwnd);
+}
+
+static void test_abba2_model_rtt_margin(void)
+{
+    struct st_quicly_cc_abba2_t state = {.a = 1.f / 1024, .b = 50};
+    quicly_rtt_t rtt = {.latest = 112, .smoothed = 112, .minimum = 20};
+    uint32_t cwnd = 65536;
+
+    /* At this window the model predicts 114ms. A 1.5ms shortfall must leave ordinary growth unchanged. */
+    state.b = 49.5f;
+    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd);
+    ok(abba2_on_growth(&state, cwnd, cwnd + 1200, cwnd, &rtt) == cwnd + 1200);
+
+    /* Exactly 2ms enables the full model gain: half of the 2048-byte inverse-window gap. */
+    state.b = 50;
+    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd + 1024);
+    ok(abba2_on_growth(&state, cwnd, cwnd + 2048, cwnd, &rtt) == cwnd + 2048);
+    state.b = 50.5f;
+    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd + 1280);
+
+    /* The same margin applies to a proportional model. */
+    state.b = 0;
+    rtt.latest = 63;
+    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd);
+    rtt.latest = 62;
+    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd + 1024);
+
+    /* Independent low-RTT acceleration remains eligible even with less than 2ms of model shortfall. */
+    state.high.rtt = 68;
+    rtt.latest = rtt.minimum = 63;
+    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd + 2080);
 }
 
 static void test_abba2_low_rtt_acceleration(void)
@@ -1462,6 +1494,7 @@ static void test_abba2(void)
     subtest("proportional-switch", test_abba2_proportional_switch);
     subtest("minimum-at-larger-window", test_abba2_minimum_at_larger_window);
     subtest("growth", test_abba2_growth);
+    subtest("model-rtt-margin", test_abba2_model_rtt_margin);
     subtest("low-rtt-acceleration", test_abba2_low_rtt_acceleration);
     subtest("float-precision", test_abba2_float_precision);
     subtest("cubic-lifecycle", test_abba2_lifecycle, &quicly_cc_cubic_init);
