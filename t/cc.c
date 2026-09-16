@@ -828,7 +828,7 @@ static void test_rapid_start(void)
 
 static void test_abba2_model(void)
 {
-    struct st_quicly_cc_abba2_t state = {.congested = {100000, 120}, .empty = {70000, 100}};
+    struct st_quicly_cc_abba2_t state = {.high = {100000, 120}, .low = {70000, 100}};
     abba2_fit_model(&state);
     ok(fabs(state.a - 1. / 1500) < FLT_EPSILON / 1500);
     ok(fabs(state.b - 160. / 3) < FLT_EPSILON * 160 / 3);
@@ -836,85 +836,85 @@ static void test_abba2_model(void)
     ok(fabs((double)state.a * 100000 + state.b - 120) < FLT_EPSILON * 120);
 
     /* A steep fit is capped at the line through the origin and the left point. */
-    state.congested.rtt = 200;
+    state.high.rtt = 200;
     abba2_fit_model(&state);
     ok(state.a == (float)(100. / 70000));
     ok(state.b == 0);
-    state.congested.rtt = 100;
+    state.high.rtt = 100;
     abba2_fit_model(&state);
     ok(state.a == 0 && state.b == 100);
-    state.congested.rtt = 120;
+    state.high.rtt = 120;
     abba2_fit_model(&state);
     float a = state.a, b = state.b;
-    state.empty.cwnd = 100000;
+    state.low.cwnd = 100000;
     abba2_fit_model(&state);
     ok(state.a == a && state.b == b);
-    state.empty.cwnd = 110000;
+    state.low.cwnd = 110000;
     abba2_fit_model(&state);
     ok(state.a == a && state.b == b);
 
     /* The high watermark pairs the pre-reduction window with the recovery minimum, not SRTT. */
     quicly_rtt_t rtt = {.latest = 80, .smoothed = 115, .minimum = 20};
     abba2_on_congestion(&state, 100000, &rtt, 0);
-    ok(state.congested.cwnd == 100000 && state.congested.rtt == 80);
-    ok(state.empty.cwnd == 0);
+    ok(state.high.cwnd == 100000 && state.high.rtt == 80);
+    ok(state.low.cwnd == 0);
     rtt.latest = 70;
     abba2_on_acked(&state, 80000, &rtt, 1, 0);
-    ok(state.congested.cwnd == 100000 && state.congested.rtt == 70);
-    ok(state.empty.cwnd == 0);
+    ok(state.high.cwnd == 100000 && state.high.rtt == 70);
+    ok(state.low.cwnd == 0);
     rtt.latest = 75;
     rtt.smoothed = 110;
     abba2_on_acked(&state, 75000, &rtt, 1, 0);
-    ok(state.congested.rtt == 70 && state.empty.cwnd == 0);
+    ok(state.high.rtt == 70 && state.low.cwnd == 0);
     rtt.latest = 90;
     abba2_on_acked(&state, 70000, &rtt, 0, 0);
-    ok(state.empty.cwnd == 70000 && state.empty.rtt == 70);
-    ok(state.congested.rtt == 70);
+    ok(state.low.cwnd == 70000 && state.low.rtt == 70);
+    ok(state.high.rtt == 70);
     ok(state.a == 0 && state.b == 70);
     a = state.a;
     b = state.b;
     abba2_on_acked(&state, 72000, &rtt, 0, 0);
-    ok(state.empty.cwnd == 70000 && state.empty.rtt == 70);
+    ok(state.low.cwnd == 70000 && state.low.rtt == 70);
     ok(state.a == a && state.b == b);
     rtt.latest = 70;
     abba2_on_acked(&state, 75000, &rtt, 0, 0);
-    ok(state.empty.cwnd == 70000); /* Equal samples do not move the point. */
+    ok(state.low.cwnd == 70000); /* Equal samples do not move the point. */
     ok(state.a == a && state.b == b);
     rtt.latest = 69;
     abba2_on_acked(&state, 76000, &rtt, 0, 0);
-    ok(state.empty.cwnd == 76000 && state.empty.rtt == 69);
-    ok(state.congested.rtt == 70 && state.a == 0 && state.b == 69);
+    ok(state.low.cwnd == 76000 && state.low.rtt == 69);
+    ok(state.high.rtt == 70 && state.a == 0 && state.b == 69);
     rtt.latest = 65;
     abba2_on_acked(&state, 78000, &rtt, 0, 0);
-    ok(state.congested.rtt == 70 && state.empty.rtt == 65);
+    ok(state.high.rtt == 70 && state.low.rtt == 65);
     ok(state.a == (float)(5. / 22000) && state.b > 0);
 
     /* Without an intervening recovery ACK, retain the congestion sample even when SRTT is lower. */
     rtt.latest = 160;
     rtt.smoothed = 125;
     abba2_on_congestion(&state, 100000, &rtt, 0);
-    ok(state.congested.rtt == 160 && state.empty.cwnd == 0);
+    ok(state.high.rtt == 160 && state.low.cwnd == 0);
     rtt.latest = 170;
     abba2_on_acked(&state, 70000, &rtt, 0, 0);
-    ok(state.congested.rtt == 160 && state.empty.rtt == 160);
+    ok(state.high.rtt == 160 && state.low.rtt == 160);
     ok(state.a == 0 && state.b == 160);
 
     /* Without a sample at congestion, SRTT supplies the initial estimate; recovery samples can lower it. */
     quicly_rtt_init(&rtt, &quicly_spec_context.loss, 120);
     abba2_on_congestion(&state, 100000, &rtt, 0);
-    ok(state.congested.rtt == 120 && state.empty.cwnd == 0);
+    ok(state.high.rtt == 120 && state.low.cwnd == 0);
     abba2_on_acked(&state, 70000, &rtt, 1, 0);
     abba2_on_acked(&state, 70000, &rtt, 0, 0);
-    ok(state.congested.rtt == 120 && state.empty.cwnd == 0);
+    ok(state.high.rtt == 120 && state.low.cwnd == 0);
     ok(state.a == 0 && isnan(state.b));
     quicly_rtt_update(&rtt, 140, 0, 1);
     abba2_on_acked(&state, 70000, &rtt, 1, 0);
-    ok(state.congested.rtt == 120 && state.empty.cwnd == 0);
+    ok(state.high.rtt == 120 && state.low.cwnd == 0);
     quicly_rtt_update(&rtt, 100, 0, 2);
     abba2_on_acked(&state, 70000, &rtt, 1, 0);
-    ok(state.congested.rtt == 100 && state.empty.cwnd == 0);
+    ok(state.high.rtt == 100 && state.low.cwnd == 0);
     abba2_on_acked(&state, 70000, &rtt, 0, 0);
-    ok(state.empty.cwnd == 70000 && state.empty.rtt == 100);
+    ok(state.low.cwnd == 70000 && state.low.rtt == 100);
     ok(state.a == 0 && state.b == 100);
 
     /* If there are no recovery samples, the SRTT fallback remains the high watermark at recovery exit. */
@@ -922,30 +922,30 @@ static void test_abba2_model(void)
     abba2_on_congestion(&state, 100000, &rtt, 0);
     quicly_rtt_update(&rtt, 150, 0, 3);
     abba2_on_acked(&state, 70000, &rtt, 0, 0);
-    ok(state.congested.rtt == 120 && state.empty.rtt == 120);
+    ok(state.high.rtt == 120 && state.low.rtt == 120);
     ok(state.a == 0 && state.b == 120);
 }
 
 static void test_abba2_min_rtt_span(void)
 {
     /* The fitting boundary is inclusive, including fractional stored RTTs. */
-    struct st_quicly_cc_abba2_t state = {.congested = {100000, 104.999f}, .empty = {70000, 100}};
+    struct st_quicly_cc_abba2_t state = {.high = {100000, 104.999f}, .low = {70000, 100}};
     abba2_fit_model(&state);
     ok(state.a == 0 && state.b == 100);
-    state.congested.rtt = 105;
+    state.high.rtt = 105;
     abba2_fit_model(&state);
     ok(state.a == (float)(5. / 30000) && state.b > 0);
-    state.congested.rtt = 105.001f;
+    state.high.rtt = 105.001f;
     abba2_fit_model(&state);
     ok(state.a > (float)(5. / 30000) && state.b > 0);
 
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         for (int beyond_threshold = 0; beyond_threshold != 2; ++beyond_threshold) {
-            state = (struct st_quicly_cc_abba2_t){.congested = {100000, 100}, .empty = {0, 100}, .a = 0, .b = NAN};
+            state = (struct st_quicly_cc_abba2_t){.high = {100000, 100}, .low = {0, 100}, .a = 0, .b = NAN};
             quicly_rtt_t rtt = {.latest = 96, .smoothed = 98, .minimum = 96};
             uint32_t cwnd = beyond_threshold ? 140000 : 70000;
             abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
-            ok(state.empty.cwnd == cwnd && state.empty.rtt == 96);
+            ok(state.low.cwnd == cwnd && state.low.rtt == 96);
             if (beyond_threshold) {
                 /* The proportional switch does not require a two-point fit or a minimum RTT span. */
                 ok(state.a == (float)(98. / cwnd) && state.b == 0);
@@ -971,7 +971,7 @@ static void test_abba2_min_rtt_span(void)
 static void test_abba2_proportional_switch(void)
 {
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
-        struct st_quicly_cc_abba2_t state = {.congested = {100000, 120}, .empty = {70000, 100}, .a = 0, .b = NAN};
+        struct st_quicly_cc_abba2_t state = {.high = {100000, 120}, .low = {70000, 100}, .a = 0, .b = NAN};
         quicly_rtt_t rtt = {.latest = 110, .smoothed = 105, .minimum = 20};
         uint32_t threshold = by_ecn ? 115000 : 130000;
         abba2_fit_model(&state);
@@ -981,22 +981,22 @@ static void test_abba2_proportional_switch(void)
         double a = state.a;
         ok(a == (float)(105. / (threshold + 1)) && state.b == 0);
 
-        /* New minima invoke fitting, which preserves the model when the empty window is at or beyond the congestion window. */
+        /* New minima invoke fitting, which preserves the model when the low window is at or beyond the congestion window. */
         rtt.latest = 80;
         rtt.smoothed = 90;
         abba2_on_acked(&state, 150000, &rtt, 0, by_ecn);
-        ok(state.empty.cwnd == 150000 && state.empty.rtt == 80);
+        ok(state.low.cwnd == 150000 && state.low.rtt == 80);
         ok(state.a == a && state.b == 0);
 
         /* A fit already passing through the origin is not reanchored at the threshold. */
-        state = (struct st_quicly_cc_abba2_t){.congested = {100000, 200}, .empty = {70000, 100}};
+        state = (struct st_quicly_cc_abba2_t){.high = {100000, 200}, .low = {70000, 100}};
         abba2_fit_model(&state);
         a = state.a;
         abba2_on_acked(&state, 150000, &rtt, 0, by_ecn);
         ok(state.a == a && state.b == 0);
 
         /* An unfitted model with no ordered window span still permits a later switch using current SRTT. */
-        state = (struct st_quicly_cc_abba2_t){.congested = {100000, 120}, .empty = {100000, 80}, .a = 0, .b = NAN};
+        state = (struct st_quicly_cc_abba2_t){.high = {100000, 120}, .low = {100000, 80}, .a = 0, .b = NAN};
         abba2_on_acked(&state, threshold, &rtt, 0, by_ecn);
         ok(state.a == 0 && isnan(state.b));
         ok(abba2_on_growth(&state, threshold, threshold, 1000, &rtt) == threshold);
@@ -1009,7 +1009,7 @@ static void test_abba2_minimum_at_larger_window(void)
 {
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         for (int beyond = 0; beyond != 2; ++beyond) {
-            struct st_quicly_cc_abba2_t state = {.congested = {65536, 120}, .empty = {49152, 100}};
+            struct st_quicly_cc_abba2_t state = {.high = {65536, 120}, .low = {49152, 100}};
             quicly_rtt_t rtt = {.latest = 100, .smoothed = 110, .minimum = 20};
             abba2_fit_model(&state);
             float a = state.a, b = state.b;
@@ -1018,29 +1018,29 @@ static void test_abba2_minimum_at_larger_window(void)
             /* Reaching or passing the congestion window without a new minimum preserves both points and their fit. */
             uint32_t cwnd = beyond ? 73728 : 65536;
             abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
-            ok(state.empty.cwnd == 49152 && state.empty.rtt == 100);
+            ok(state.low.cwnd == 49152 && state.low.rtt == 100);
             ok(state.a == a && state.b == b);
             uint32_t previous_growth = abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) - cwnd;
 
-            /* A new minimum moves the empty point but preserves the model, increasing acceleration as RTT falls. */
+            /* A new minimum moves the low point but preserves the model, increasing acceleration as RTT falls. */
             rtt.latest = beyond ? 72 : 64;
             abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
-            ok(state.empty.cwnd == cwnd && state.empty.rtt == rtt.latest);
-            ok(state.congested.cwnd == 65536 && state.congested.rtt == 120);
+            ok(state.low.cwnd == cwnd && state.low.rtt == rtt.latest);
+            ok(state.high.cwnd == 65536 && state.high.rtt == 120);
             ok(state.a == a && state.b == b);
             ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) - cwnd > previous_growth);
 
-            /* Further window growth without a new minimum leaves both the empty point and the model unchanged. */
+            /* Further window growth without a new minimum leaves both the low point and the model unchanged. */
             uint32_t grown_cwnd = cwnd + 512;
             abba2_on_acked(&state, grown_cwnd, &rtt, 0, by_ecn);
-            ok(state.empty.cwnd == cwnd);
+            ok(state.low.cwnd == cwnd);
             ok(state.a == a && state.b == b);
             previous_growth = abba2_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd, &rtt) - grown_cwnd;
 
             /* Another minimum below the switch threshold likewise increases acceleration without refitting. */
             --rtt.latest;
             abba2_on_acked(&state, grown_cwnd, &rtt, 0, by_ecn);
-            ok(state.empty.cwnd == grown_cwnd && state.empty.rtt == rtt.latest);
+            ok(state.low.cwnd == grown_cwnd && state.low.rtt == rtt.latest);
             ok(state.a == a && state.b == b);
             ok(abba2_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd, &rtt) - grown_cwnd > previous_growth);
 
@@ -1048,13 +1048,13 @@ static void test_abba2_minimum_at_larger_window(void)
             --rtt.latest;
             rtt.smoothed = 90;
             abba2_on_acked(&state, 90000, &rtt, 0, by_ecn);
-            ok(state.empty.cwnd == 90000 && state.empty.rtt == rtt.latest);
+            ok(state.low.cwnd == 90000 && state.low.rtt == rtt.latest);
             a = state.a;
             ok(a == (float)(90. / 90000) && state.b == 0);
             --rtt.latest;
             rtt.smoothed = 80;
             abba2_on_acked(&state, 91000, &rtt, 0, by_ecn);
-            ok(state.empty.cwnd == 91000 && state.empty.rtt == rtt.latest);
+            ok(state.low.cwnd == 91000 && state.low.rtt == rtt.latest);
             ok(state.a == a && state.b == 0);
         }
     }
@@ -1120,16 +1120,16 @@ static void test_abba2_growth(void)
 
 static void test_abba2_low_rtt_acceleration(void)
 {
-    struct st_quicly_cc_abba2_t state = {.congested = {100000, 24.999f}, .empty = {70000, 21}, .a = 0, .b = 21};
+    struct st_quicly_cc_abba2_t state = {.high = {100000, 24.999f}, .low = {70000, 21}, .a = 0, .b = 21};
     quicly_rtt_t rtt = {.latest = 21, .smoothed = 22, .minimum = 20};
     ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 101000);
 
-    /* Exactly 5ms above minRTT enables independent acceleration even though the empty-point span is only 4ms. */
-    state.congested.rtt = 25;
+    /* Exactly 5ms above minRTT enables independent acceleration even though the low-point span is only 4ms. */
+    state.high.rtt = 25;
     abba2_fit_model(&state);
     ok(state.a == 0 && state.b == 21);
     ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 104761);
-    state.congested.rtt = 25.001f;
+    state.high.rtt = 25.001f;
     state.increase_remainder = 0;
     ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 104761);
 
@@ -1146,7 +1146,7 @@ static void test_abba2_low_rtt_acceleration(void)
     ok(abba2_on_growth(&state, 98304, 98304, 98304, &rtt) == 104448);
 
     /* Independent acceleration still respects the half-window cap. */
-    state = (struct st_quicly_cc_abba2_t){.congested = {100000, 6}, .empty = {70000, 1}, .a = 0, .b = NAN};
+    state = (struct st_quicly_cc_abba2_t){.high = {100000, 6}, .low = {70000, 1}, .a = 0, .b = NAN};
     rtt.latest = rtt.minimum = 1;
     ok(abba2_on_growth(&state, 100000, 100000, 100000, &rtt) == 150000);
 }
@@ -1155,16 +1155,16 @@ static void test_abba2_float_precision(void)
 {
     /* A nearly flat model at a large window must retain its slope and small ACK-driven increments. */
     uint32_t cwnd = (1U << 30) + 1;
-    struct st_quicly_cc_abba2_t state = {.congested = {cwnd, 105.125f}, .empty = {1U << 29, 100}};
+    struct st_quicly_cc_abba2_t state = {.high = {cwnd, 105.125f}, .low = {1U << 29, 100}};
     abba2_fit_model(&state);
     ok(state.a > 0 && state.b > 0);
-    ok(fabs((double)state.a * state.empty.cwnd + state.b - 100) < 100 * FLT_EPSILON);
+    ok(fabs((double)state.a * state.low.cwnd + state.b - 100) < 100 * FLT_EPSILON);
     ok(fabs((double)state.a * cwnd + state.b - 105.125) < 105.125 * FLT_EPSILON);
     quicly_rtt_t rtt = {.latest = 100, .smoothed = 100, .minimum = 20};
     ok(abba2_on_growth(&state, cwnd, cwnd, 16, &rtt) == cwnd + 4);
 
     /* Window coordinates a byte apart must not collapse to the same float during fitting. */
-    state = (struct st_quicly_cc_abba2_t){.congested = {cwnd, 105}, .empty = {cwnd - 1, 100}};
+    state = (struct st_quicly_cc_abba2_t){.high = {cwnd, 105}, .low = {cwnd - 1, 100}};
     abba2_fit_model(&state);
     ok(state.a > 0 && state.b == 0);
 
@@ -1186,7 +1186,7 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     init->cb(init, &cc, initcwnd, 0, 1, 0);
     init->cb(init, &control, initcwnd, 0, 0, 0);
 
-    /* Startup and its congestion response are identical to CUBIC; Pcong keeps the actual pre-reduction window. */
+    /* Startup and its congestion response are identical to CUBIC; the high watermark keeps the actual pre-reduction window. */
     cc.type->cc_on_acked(&cc, &loss, mtu, 9, mtu, 1, 10, 900, mtu);
     control.type->cc_on_acked(&control, &loss, mtu, 9, mtu, 1, 10, 900, mtu);
     ok(cc.cwnd == control.cwnd);
@@ -1194,18 +1194,18 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     control.type->cc_on_lost(&control, &loss, mtu, 10, 20, 1000, mtu);
     ok(cc.cwnd == control.cwnd && cc.ssthresh == control.ssthresh);
-    ok(cc.state.pico.abba2.congested.cwnd == peak);
+    ok(cc.state.pico.abba2.high.cwnd == peak);
     ok((cc.type == &quicly_cc_type_cubic ? cc.state.pico.cubic.cwnd_prior : cc.state.pico.cuback.cwnd_prior) == peak / 2);
     loss.rtt.latest = 80;
     cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1050, mtu);
-    ok(cc.cwnd == control.cwnd && cc.state.pico.abba2.congested.rtt == 80);
-    ok(cc.state.pico.abba2.empty.cwnd == 0);
+    ok(cc.cwnd == control.cwnd && cc.state.pico.abba2.high.rtt == 80);
+    ok(cc.state.pico.abba2.low.cwnd == 0);
     ok(cc.state.pico.abba2.a == 0 && isnan(cc.state.pico.abba2.b));
     loss.rtt.latest = 90;
     uint32_t reduced = cc.cwnd;
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
-    ok(cc.state.pico.abba2.empty.cwnd == reduced);
-    ok(cc.state.pico.abba2.empty.rtt == 80);
+    ok(cc.state.pico.abba2.low.cwnd == reduced);
+    ok(cc.state.pico.abba2.low.rtt == 80);
 
     /* A rapid bandwidth increase after the proportional switch lowers RTT and accelerates growth. */
     cc.cwnd = 2 * peak;
@@ -1238,8 +1238,8 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     loss.rtt.smoothed = 115;
     cc.type->cc_on_lost(&cc, &loss, mtu, 24, 30, 1400, mtu);
     ok(cc.cwnd == (uint32_t)(before * QUICLY_BETA_LOSS));
-    ok(cc.state.pico.abba2.congested.cwnd == before);
-    ok(cc.state.pico.abba2.congested.rtt == 80);
+    ok(cc.state.pico.abba2.high.cwnd == before);
+    ok(cc.state.pico.abba2.high.rtt == 80);
     ok(cc.state.pico.abba2.a == 0 && isnan(cc.state.pico.abba2.b));
     ok(cc.state.pico.abba2.increase_remainder == 0);
     cc.type->cc_on_lost(&cc, &loss, mtu, 25, 30, 1401, mtu);
@@ -1259,9 +1259,9 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     /* A new loss can arrive beyond recovery without an intervening ACK. */
     before = cc.cwnd;
     cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 1600, mtu);
-    ok(cc.state.pico.abba2.congested.cwnd == before);
+    ok(cc.state.pico.abba2.high.cwnd == before);
     cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 1700, mtu);
-    ok(cc.state.pico.abba2.empty.cwnd == cc.cwnd);
+    ok(cc.state.pico.abba2.low.cwnd == cc.cwnd);
 }
 
 static void test_abba2_ecn_floor(quicly_init_cc_t *init)
@@ -1358,7 +1358,7 @@ static void test_abba2_ack_accounting(quicly_init_cc_t *init)
     loss.rtt.smoothed = 117.5;
     cc.type->cc_on_lost(&cc, &loss, mtu, 30, 40, 1200, mtu);
     ok(cc.type == &quicly_cc_type_cubic ? cc.state.pico.cubic.fast_convergence : cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.abba2.congested.cwnd == 100000);
+    ok(cc.state.pico.abba2.high.cwnd == 100000);
     cc.type->cc_on_acked(&cc, &loss, 0, 40, 0, 1, 41, 1300, mtu);
     cc.cwnd = 120000;
     loss.rtt.latest = 110;
@@ -1432,10 +1432,10 @@ static void test_abba2_startup_and_switch(quicly_init_cc_t *init)
         cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
         control.type->cc_on_acked(&control, &loss, 0, 20, 0, 1, 21, 1100, mtu);
         ok(cc.cwnd == control.cwnd);
-        ok(cc.state.pico.abba2.empty.cwnd == cc.cwnd);
+        ok(cc.state.pico.abba2.low.cwnd == cc.cwnd);
         cc.type->cc_on_late_ack(&cc, 10, 1150);
         ok(cc.num_loss_episodes == 0 && cc.ssthresh == UINT32_MAX);
-        ok(cc.state.pico.abba2.congested.cwnd == 0);
+        ok(cc.state.pico.abba2.high.cwnd == 0);
         ok(cc.state.pico.abba2.a == 0 && isnan(cc.state.pico.abba2.b));
     }
 
@@ -1450,7 +1450,7 @@ static void test_abba2_startup_and_switch(quicly_init_cc_t *init)
         ok(cc.type == *type && cc.normalize_mtu && cc.abba);
         ok(original->cc_switch(&cc));
         ok(cc.type == original && cc.normalize_mtu && cc.abba);
-        ok(cc.state.pico.abba2.congested.cwnd == 0);
+        ok(cc.state.pico.abba2.high.cwnd == 0);
     }
 }
 

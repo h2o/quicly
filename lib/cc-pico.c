@@ -381,38 +381,38 @@ static int abba2_enabled(const quicly_cc_t *cc)
 
 static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
 {
-    double we = state->empty.cwnd, re = state->empty.rtt;
-    double wc = state->congested.cwnd, rc = state->congested.rtt;
+    double wl = state->low.cwnd, rl = state->low.rtt;
+    double wh = state->high.cwnd, rh = state->high.rtt;
 
-    /* A new minimum can move the empty point to or beyond the congestion window. Preserve the previous model so that the
-     * lower RTT increases acceleration; refitting through the new empty point would erase that growth signal. */
-    if (wc <= we)
+    /* A new minimum can move the low point to or beyond the congestion window. Preserve the previous model so that the
+     * lower RTT increases acceleration; refitting through the new low point would erase that growth signal. */
+    if (wh <= wl)
         return;
     /* A small RTT span is not enough to estimate a useful slope; retain a horizontal model until the queue has drained enough. */
-    if (rc - re < QUICLY_ABBA2_MIN_RTT_SPAN) {
+    if (rh - rl < QUICLY_ABBA2_MIN_RTT_SPAN) {
         state->a = 0;
-        state->b = re;
+        state->b = rl;
         return;
     }
 
     /* Preserve the left point and cap the slope at the line through the origin, ensuring a nonnegative intercept. */
-    double slope = (rc - re) / (wc - we);
-    if (slope >= re / we) {
-        state->a = re / we;
+    double slope = (rh - rl) / (wh - wl);
+    if (slope >= rl / wl) {
+        state->a = rl / wl;
         /* Assign exactly zero: the proportional-switch guard must not see a positive rounding residue. */
         state->b = 0;
     } else {
         state->a = slope;
-        state->b = re - slope * we;
+        state->b = rl - slope * wl;
     }
 }
 
 static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int by_ecn)
 {
     /* ECN-CE captures the floor at the event; packet loss starts a minimum tracker that runs through recovery. Both fall back
-     * to SRTT without samples. The empty point is initialized separately at recovery exit. */
+     * to SRTT without samples. The low point is initialized separately at recovery exit. */
     *state = (struct st_quicly_cc_abba2_t){
-        .congested = {cwnd, by_ecn ? quicly_rtt_get_floor(rtt) : (rtt->latest != 0 ? rtt->latest : rtt->smoothed)},
+        .high = {cwnd, by_ecn ? quicly_rtt_get_floor(rtt) : (rtt->latest != 0 ? rtt->latest : rtt->smoothed)},
         .a = 0,
         .b = NAN,
     };
@@ -420,38 +420,38 @@ static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwn
 
 static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int in_recovery, int by_ecn)
 {
-    if (state->congested.cwnd == 0 || rtt->latest == 0)
+    if (state->high.cwnd == 0 || rtt->latest == 0)
         return;
 
     if (in_recovery) {
-        if (!by_ecn && rtt->latest < state->congested.rtt)
-            state->congested.rtt = rtt->latest;
+        if (!by_ecn && rtt->latest < state->high.rtt)
+            state->high.rtt = rtt->latest;
         return;
     }
 
     int fit = 0;
-    if (state->empty.cwnd == 0) {
-        /* Lazy Initialization of `empty`, because Jump Start and Rapid Start may adjust CWND during recovery. */
-        state->empty.cwnd = cwnd;
-        state->empty.rtt = state->congested.rtt;
+    if (state->low.cwnd == 0) {
+        /* Lazy Initialization of `low`, because Jump Start and Rapid Start may adjust CWND during recovery. */
+        state->low.cwnd = cwnd;
+        state->low.rtt = state->high.rtt;
         fit = 1;
     }
-    if (rtt->latest < state->empty.rtt) {
-        state->empty.cwnd = cwnd;
-        state->empty.rtt = rtt->latest;
+    if (rtt->latest < state->low.rtt) {
+        state->low.cwnd = cwnd;
+        state->low.rtt = rtt->latest;
         fit = 1;
     }
 
-    /* Fit only when the empty point is initialized or updated, before considering the proportional-model switch. */
+    /* Fit only when the low point is initialized or updated, before considering the proportional-model switch. */
     if (fit)
         abba2_fit_model(state);
 
-    /* Beyond Wc * (2 - beta), stop extrapolating the two-point fit and adopt RTT proportional to CWND, anchored at the current
+    /* Beyond Wh * (2 - beta), stop extrapolating the two-point fit and adopt RTT proportional to CWND, anchored at the current
      * SRTT and pre-growth window. Use the actual congestion window, not a Wmax modified by fast convergence or startup handling.
      * Test b after fitting: an unfitted (b is NaN) or affine model can switch, while a proportional model is left unchanged. */
     double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
-    /* This form avoids rounding 1.15 * Wc just below an integral threshold for the ECN beta. */
-    if (state->b != 0 && cwnd > state->congested.cwnd + state->congested.cwnd * (1 - beta)) {
+    /* This form avoids rounding 1.15 * Wh just below an integral threshold for the ECN beta. */
+    if (state->b != 0 && cwnd > state->high.cwnd + state->high.cwnd * (1 - beta)) {
         state->a = (double)rtt->smoothed / cwnd;
         state->b = 0;
     }
@@ -476,8 +476,8 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
             gain = model_gain;
     }
     /* Independently accelerate toward minRTT + 2ms only if congestion was observed sufficiently above minRTT. Unlike the
-     * two-point fit, this uses the connection's minimum RTT, not the current period's empty point. */
-    if ((double)state->congested.rtt - rtt->minimum >= QUICLY_ABBA2_MIN_RTT_SPAN && rtt->latest < (double)rtt->minimum + 2) {
+     * two-point fit, this uses the connection's minimum RTT, not the current period's low point. */
+    if ((double)state->high.rtt - rtt->minimum >= QUICLY_ABBA2_MIN_RTT_SPAN && rtt->latest < (double)rtt->minimum + 2) {
         double low_rtt_gain = ((double)rtt->minimum + 2) / rtt->latest - 1;
         if (low_rtt_gain > gain)
             gain = low_rtt_gain;

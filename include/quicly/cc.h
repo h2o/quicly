@@ -137,16 +137,16 @@ struct st_quicly_cc_cuback_t {
  */
 struct st_quicly_cc_abba2_t {
     /**
-     * Retains the watermarks of one congestion-avoidance period. `congested` pairs the pre-reduction window with the RTT upon
+     * Retains the watermarks of one congestion-avoidance period. `high` pairs the pre-reduction window with the RTT upon
      * congestion; if it was a packet loss, the minimum RTT observed through recovery is adopted, because senders continue pushing
      * until loss feedback arrives after 1 RTT, keeping the queue full. If it was an ECN-CE event, minimum RTT observed within 1
-     * RTT before CE is adopted, since CE is an indication of *persistent* congestion (Section 5.1 of RFC 3168). `empty` starts at
-     * recovery exit and tracks the low watermark during congestion avoidance.
+     * RTT before CE is adopted, since CE is an indication of *persistent* congestion (Section 5.1 of RFC 3168). `low` starts at
+     * recovery exit and tracks the point at the lowest RTT observed during congestion avoidance.
      */
     struct {
         uint32_t cwnd;
         float rtt;
-    } congested, empty;
+    } high, low;
     /**
      * RTT = a * CWND + b. An unfitted or unusable model has a == 0 and b set to NaN: zero slope disables inversion, while NaN
      * permits the later proportional-model switch (which tests b != 0). A horizontal fit has a == 0, b > 0; a proportional
