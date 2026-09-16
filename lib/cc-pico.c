@@ -415,7 +415,6 @@ static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwn
         .congested = {cwnd, by_ecn ? quicly_rtt_get_floor(rtt) : (rtt->latest != 0 ? rtt->latest : rtt->smoothed)},
         .a = 0,
         .b = NAN,
-        .by_ecn = by_ecn,
     };
 }
 
@@ -425,7 +424,7 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
         return;
 
     if (in_recovery) {
-        if (!state->by_ecn && rtt->latest < state->congested.rtt)
+        if (!by_ecn && rtt->latest < state->congested.rtt)
             state->congested.rtt = rtt->latest;
         return;
     }
@@ -558,7 +557,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
         if (abba2_enabled(cc))
-            abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 1, 0);
+            abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 1,
+                           cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
         if (quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
             if (cc->num_loss_episodes == 1) {
                 quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, bytes, 0);

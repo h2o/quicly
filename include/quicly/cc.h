@@ -157,10 +157,6 @@ struct st_quicly_cc_abba2_t {
      * Fractional bytes retained when accelerated growth determines the window.
      */
     float increase_remainder;
-    /**
-     * ECN-CE fixes the congestion RTT at the event; only packet-loss recovery can lower it.
-     */
-    unsigned by_ecn : 1;
 };
 
 /**
