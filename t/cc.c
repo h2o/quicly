@@ -975,7 +975,8 @@ static void test_abba2_proportional_switch(void)
         quicly_rtt_t rtt = {.latest = 110, .smoothed = 105, .minimum = 20};
         uint32_t threshold = by_ecn ? 115000 : 130000;
         abba2_fit_model(&state);
-        abba2_on_acked(&state, threshold, &rtt, 0, by_ecn);
+        /* Check either side of the threshold without depending on rounding at the exact boundary. */
+        abba2_on_acked(&state, threshold - 1, &rtt, 0, by_ecn);
         ok(state.b > 0);
         abba2_on_acked(&state, threshold + 1, &rtt, 0, by_ecn);
         double a = state.a;
@@ -997,9 +998,9 @@ static void test_abba2_proportional_switch(void)
 
         /* An unfitted model with no ordered window span still permits a later switch using current SRTT. */
         state = (struct st_quicly_cc_abba2_t){.high = {100000, 120}, .low = {100000, 80}, .a = 0, .b = NAN};
-        abba2_on_acked(&state, threshold, &rtt, 0, by_ecn);
+        abba2_on_acked(&state, threshold - 1, &rtt, 0, by_ecn);
         ok(state.a == 0 && isnan(state.b));
-        ok(abba2_on_growth(&state, threshold, threshold, 1000, &rtt) == threshold);
+        ok(abba2_on_growth(&state, threshold - 1, threshold - 1, 1000, &rtt) == threshold - 1);
         abba2_on_acked(&state, threshold + 1, &rtt, 0, by_ecn);
         ok(state.a == (float)(90. / (threshold + 1)) && state.b == 0);
     }

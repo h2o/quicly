@@ -450,8 +450,7 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
      * SRTT and pre-growth window. Use the actual congestion window, not a Wmax modified by fast convergence or startup handling.
      * Test b after fitting: an unfitted (b is NaN) or affine model can switch, while a proportional model is left unchanged. */
     double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
-    /* This form avoids rounding 1.15 * Wh just below an integral threshold for the ECN beta. */
-    if (state->b != 0 && cwnd > state->high.cwnd + state->high.cwnd * (1 - beta)) {
+    if (state->b != 0 && cwnd > state->high.cwnd * (2 - beta)) {
         state->a = (double)rtt->smoothed / cwnd;
         state->b = 0;
     }
