@@ -466,10 +466,9 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
     if (rtt->latest == 0 || acked == 0 || !(state->a > 0 && state->b >= 0 && rtt->latest < (double)state->a * cwnd + state->b))
         goto No_Accel;
 
-    /* Wref is the window associated with latest RTT by the model. Each ACK contributes (acked / W) * (W - Wref) / 2:
-     * approximately half the positive gap over a window's worth of ACKs, rather than half the gap for every ACK. */
+    /* Wref is the window associated with latest RTT by the model. Growth target is to fulfill 2/3 of the trailing RTT. */
     double wref = ((double)rtt->latest - state->b) / state->a;
-    double gain = 0.5 * (1 - wref / cwnd);
+    double gain = 2. / 3 * (1 - wref / cwnd);
 
     /* Compete with ordinary growth from the same pre-ACK CWND. */
     double increase = acked * gain + state->increase_remainder;
