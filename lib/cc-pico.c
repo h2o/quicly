@@ -463,16 +463,8 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
 static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, uint32_t cubic_cwnd, uint32_t acked,
                                 const quicly_rtt_t *rtt)
 {
-    /* Acceleration can put CWND ahead of CUBIC's independent Reno-friendly estimate. Closing the gates must not shrink it. */
-    if (cubic_cwnd < cwnd)
-        cubic_cwnd = cwnd;
-    if (rtt->latest == 0)
-        return cubic_cwnd;
-
-    if (acked == 0 || !(state->a > 0 && state->b >= 0 && rtt->latest < (double)state->a * cwnd + state->b)) {
-        state->increase_remainder = 0;
-        return cubic_cwnd;
-    }
+    if (rtt->latest == 0 || acked == 0 || !(state->a > 0 && state->b >= 0 && rtt->latest < (double)state->a * cwnd + state->b))
+        goto No_Accel;
 
     /* Wref is the window associated with latest RTT by the model. Each ACK contributes (acked / W) * (W - Wref) / 2:
      * approximately half the positive gap over a window's worth of ACKs, rather than half the gap for every ACK. */
@@ -486,20 +478,22 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
      the ordinary policy's candidate. Include fractional carry and round down for odd-sized windows. */
     if (increase > cwnd / 2)
         increase = cwnd / 2;
-    if (cwnd + increase > cubic_cwnd) {
-        double candidate = cwnd + increase;
-        if (candidate >= UINT32_MAX) {
-            state->increase_remainder = 0;
-            return UINT32_MAX;
-        }
-        uint32_t new_cwnd = (uint32_t)candidate;
-        state->increase_remainder = candidate - new_cwnd;
-        return new_cwnd;
-    }
 
-    /* Ordinary CUBIC has already supplied at least the requested increase. Do not bank unused acceleration. */
+    /* If ordinary CUBIC has already supplied at least the requested increase, use that and do not bank unused acceleration. */
+    if (cwnd + increase <= cubic_cwnd)
+        goto No_Accel;
+
+    double candidate = cwnd + increase;
+    if (candidate >= UINT32_MAX)
+        candidate = UINT32_MAX;
+    uint32_t new_cwnd = (uint32_t)candidate;
+    state->increase_remainder = candidate - new_cwnd;
+    return new_cwnd;
+
+No_Accel:
+    /* Acceleration can put CWND ahead of CUBIC's independent Reno-friendly estimate. Falling back must not shrink it. */
     state->increase_remainder = 0;
-    return cubic_cwnd;
+    return cubic_cwnd > cwnd ? cubic_cwnd : cwnd;
 }
 
 static void cubic_on_congestion(struct st_quicly_cc_cubic_t *state, uint32_t cwnd_prior, uint32_t previous_cwnd_epoch, int by_ecn)
