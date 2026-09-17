@@ -42,6 +42,12 @@
 #define QUICLY_ABBA2_MIN_RTT_SHORTFALL 2
 
 /**
+ * Target queueing above minRTT in milliseconds, and the maximum independent low-RTT gain per byte acknowledged.
+ */
+#define QUICLY_ABBA2_MIN_QUEUEING 2
+#define QUICLY_ABBA2_MAX_MIN_GAIN 0.1
+
+/**
  * Fast approximation of cbrt(). The input is reduced to a mantissa in [1, 2), to which a fourth-degree polynomial is applied.
  * The polynomial's value and slope join smoothly at powers of two; continuity of the slope is important to Cuback, which
  * subtracts the inverse curve at adjacent CWNDs to calculate each per-MTU increase. The maximum relative error of the result is
@@ -404,7 +410,7 @@ static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
     double slope = (rh - rl) / (wh - wl);
     if (slope >= rl / wl) {
         state->a = rl / wl;
-        /* Assign exactly zero: the proportional-switch guard must not see a positive rounding residue. */
+        /* Assign exactly zero so the proportional model has no rounding residue in its intercept. */
         state->b = 0;
     } else {
         state->a = slope;
@@ -451,12 +457,18 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
     if (fit)
         abba2_fit_model(state);
 
-    /* Beyond Wh * (2 - beta), stop extrapolating the two-point fit and adopt RTT proportional to CWND, anchored at the current
-     * SRTT and pre-growth window. Use the actual congestion window, not a Wmax modified by fast convergence or startup handling.
-     * Test b after fitting: an unfitted (b is NaN) or affine model can switch, while a proportional model is left unchanged. */
+    /* Beyond Wh * (2 - beta), adopt RTT proportional to CWND without lowering the RTT target already being pursued. Use the
+     * recent RTT floor if it is higher, or if no model exists. Leave an already proportional model unchanged, so its predicted
+     * RTT rises with CWND while RTT stays flat. Wh is the actual congestion window, not a Wmax adjusted by the policy. */
     double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
     if (state->b != 0 && cwnd > state->high.cwnd * (2 - beta)) {
-        state->a = (double)rtt->smoothed / cwnd;
+        double rtt_target = quicly_rtt_get_floor(rtt);
+        if (!isnan(state->b)) {
+            double predicted = (double)state->a * cwnd + state->b;
+            if (predicted > rtt_target)
+                rtt_target = predicted;
+        }
+        state->a = rtt_target / cwnd;
         state->b = 0;
     }
 }
@@ -481,9 +493,13 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
             gain = model_gain;
     }
     /* Independently accelerate toward minRTT + 2ms only if congestion was observed sufficiently above minRTT. Unlike the
-     * two-point fit, this uses the connection's minimum RTT, not the current period's low point. */
-    if ((double)state->high.rtt - rtt->minimum >= QUICLY_ABBA2_MIN_RTT_SPAN && rtt->latest < (double)rtt->minimum + 2) {
-        double low_rtt_gain = ((double)rtt->minimum + 2) / rtt->latest - 1;
+     * two-point fit, this uses the connection's minimum RTT, not the current period's low point. Cap the gain so a short RTT
+     * cannot make this candidate undo an ECN reduction within a round trip. */
+    if ((double)state->high.rtt - rtt->minimum >= QUICLY_ABBA2_MIN_RTT_SPAN &&
+        rtt->latest < (double)rtt->minimum + QUICLY_ABBA2_MIN_QUEUEING) {
+        double low_rtt_gain = ((double)rtt->minimum + QUICLY_ABBA2_MIN_QUEUEING) / rtt->latest - 1;
+        if (low_rtt_gain > QUICLY_ABBA2_MAX_MIN_GAIN)
+            low_rtt_gain = QUICLY_ABBA2_MAX_MIN_GAIN;
         if (low_rtt_gain > gain)
             gain = low_rtt_gain;
     }

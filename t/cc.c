@@ -942,26 +942,29 @@ static void test_abba2_min_rtt_span(void)
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         for (int beyond_threshold = 0; beyond_threshold != 2; ++beyond_threshold) {
             state = (struct st_quicly_cc_abba2_t){.high = {100000, 100}, .low = {0, 100}, .a = 0, .b = NAN};
-            quicly_rtt_t rtt = {.latest = 96, .smoothed = 99, .minimum = 96};
+            quicly_rtt_t rtt;
+            quicly_rtt_init(&rtt, &quicly_spec_context.loss, 96);
+            quicly_rtt_update(&rtt, 96, 0, 0);
             uint32_t cwnd = beyond_threshold ? 140000 : 70000;
             abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
             ok(state.low.cwnd == cwnd && state.low.rtt == 96);
             if (beyond_threshold) {
-                /* The proportional switch does not require a two-point fit or a minimum RTT span. The 3ms shortfall
-                 * permits model acceleration independently of the 5ms fitting span. */
-                ok(state.a == (float)(99. / cwnd) && state.b == 0);
-                ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) > cwnd);
+                /* A proportional model can be established without an RTT span, but anchoring at the floor does not
+                 * immediately create a shortfall. Further window growth can enable acceleration. */
+                ok(state.a == (float)(96. / cwnd) && state.b == 0);
+                ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd);
+                ok(abba2_on_growth(&state, cwnd + 10000, cwnd + 10000, cwnd, &rtt) > cwnd + 10000);
             } else {
                 ok(state.a == 0);
                 /* Proximity to minRTT alone does not accelerate growth. */
                 ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd);
                 ok(abba2_on_growth(&state, cwnd, cwnd + 1200, cwnd, &rtt) == cwnd + 1200);
             }
-            rtt.latest = rtt.minimum = 95;
+            quicly_rtt_update(&rtt, 95, 0, 1);
             abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
             ok(state.a > 0);
             if (beyond_threshold) {
-                ok(state.a == (float)(99. / cwnd) && state.b == 0);
+                ok(state.a == (float)(96. / cwnd) && state.b == 0);
             } else {
                 ok(state.a == (float)(5. / 30000) && state.b > 0);
             }
@@ -973,37 +976,62 @@ static void test_abba2_proportional_switch(void)
 {
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         struct st_quicly_cc_abba2_t state = {.high = {100000, 120}, .low = {70000, 100}, .a = 0, .b = NAN};
-        quicly_rtt_t rtt = {.latest = 110, .smoothed = 105, .minimum = 20};
+        quicly_rtt_t rtt;
+        quicly_rtt_init(&rtt, &quicly_spec_context.loss, 105);
+        quicly_rtt_update(&rtt, 20, 0, 0);
+        quicly_rtt_update(&rtt, 110, 0, 1000);
         uint32_t threshold = by_ecn ? 115000 : 130000;
         abba2_fit_model(&state);
         /* Check either side of the threshold without depending on rounding at the exact boundary. */
         abba2_on_acked(&state, threshold - 1, &rtt, 0, by_ecn);
         ok(state.b > 0);
+        double target = (double)state.a * (threshold + 1) + state.b;
         abba2_on_acked(&state, threshold + 1, &rtt, 0, by_ecn);
         double a = state.a;
-        ok(a == (float)(105. / (threshold + 1)) && state.b == 0);
+        ok(a == (float)(target / (threshold + 1)) && state.b == 0);
 
         /* New minima invoke fitting, which preserves the model when the low window is at or beyond the congestion window. */
-        rtt.latest = 80;
-        rtt.smoothed = 90;
+        quicly_rtt_update(&rtt, 80, 0, 1001);
         abba2_on_acked(&state, 150000, &rtt, 0, by_ecn);
         ok(state.low.cwnd == 150000 && state.low.rtt == 80);
         ok(state.a == a && state.b == 0);
 
-        /* A fit already passing through the origin is not reanchored at the threshold. */
+        /* A fit already passing through the origin is preserved when it predicts more RTT than the floor. */
         state = (struct st_quicly_cc_abba2_t){.high = {100000, 200}, .low = {70000, 100}};
         abba2_fit_model(&state);
         a = state.a;
         abba2_on_acked(&state, 150000, &rtt, 0, by_ecn);
         ok(state.a == a && state.b == 0);
 
-        /* An unfitted model with no ordered window span still permits a later switch using current SRTT. */
+        /* An unfitted model with no ordered window span is anchored at the RTT floor, not SRTT. */
         state = (struct st_quicly_cc_abba2_t){.high = {100000, 120}, .low = {100000, 80}, .a = 0, .b = NAN};
         abba2_on_acked(&state, threshold - 1, &rtt, 0, by_ecn);
         ok(state.a == 0 && isnan(state.b));
         ok(abba2_on_growth(&state, threshold - 1, threshold - 1, 1000, &rtt) == threshold - 1);
         abba2_on_acked(&state, threshold + 1, &rtt, 0, by_ecn);
-        ok(state.a == (float)(90. / (threshold + 1)) && state.b == 0);
+        ok(state.a == (float)(80. / (threshold + 1)) && state.b == 0);
+
+        /* Preserve the affine prediction of 128ms rather than lowering it to the 80ms floor or SRTT. */
+        state = (struct st_quicly_cc_abba2_t){.high = {40000, 120}, .low = {30000, 60}, .a = 1.f / 1024, .b = 64};
+        quicly_rtt_init(&rtt, &quicly_spec_context.loss, 80);
+        quicly_rtt_update(&rtt, 80, 0, 0);
+        quicly_rtt_update(&rtt, 96, 0, 1);
+        abba2_on_acked(&state, 65536, &rtt, 0, by_ecn);
+        ok(abba2_on_growth(&state, 65536, 65536, 8192, &rtt) == 66560);
+
+        /* Once proportional, the model is not redrawn even if the floor rises above its prediction. */
+        quicly_rtt_update(&rtt, 160, 0, 1000);
+        abba2_on_acked(&state, 65536, &rtt, 0, by_ecn);
+        quicly_rtt_update(&rtt, 120, 0, 1001);
+        abba2_on_acked(&state, 65536, &rtt, 0, by_ecn);
+        ok(abba2_on_growth(&state, 65536, 65536, 8192, &rtt) == 65792);
+        quicly_rtt_update(&rtt, 80, 0, 1002);
+        abba2_on_acked(&state, 65536, &rtt, 0, by_ecn);
+        ok(abba2_on_growth(&state, 65536, 65536, 8192, &rtt) == 67072);
+
+        /* With RTT staying flat, a larger window increases the gain per acknowledged byte. */
+        abba2_on_acked(&state, 81920, &rtt, 0, by_ecn);
+        ok(abba2_on_growth(&state, 81920, 81920, 8192, &rtt) == 83968);
     }
 }
 
@@ -1046,13 +1074,14 @@ static void test_abba2_minimum_at_larger_window(void)
             ok(state.a == a && state.b == b);
             ok(abba2_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd, &rtt) - grown_cwnd > previous_growth);
 
-            /* Crossing the switch threshold still establishes the proportional model using current SRTT. */
+            /* Crossing the switch threshold preserves the model's prediction when establishing the proportional model. */
             --rtt.latest;
             rtt.smoothed = 90;
+            double target = (double)state.a * 90000 + state.b;
             abba2_on_acked(&state, 90000, &rtt, 0, by_ecn);
             ok(state.low.cwnd == 90000 && state.low.rtt == rtt.latest);
             a = state.a;
-            ok(a == (float)(90. / 90000) && state.b == 0);
+            ok(a == (float)(target / 90000) && state.b == 0);
             --rtt.latest;
             rtt.smoothed = 80;
             abba2_on_acked(&state, 91000, &rtt, 0, by_ecn);
@@ -1178,10 +1207,21 @@ static void test_abba2_low_rtt_acceleration(void)
     rtt.minimum = 21;
     ok(abba2_on_growth(&state, 98304, 98304, 98304, &rtt) == 104448);
 
-    /* Independent acceleration still respects the half-window cap. */
+    /* Cap independent acceleration at 0.1 per acknowledged byte, even on a 1ms or 4ms path. */
     state = (struct st_quicly_cc_abba2_t){.high = {100000, 6}, .low = {70000, 1}, .a = 0, .b = NAN};
     rtt.latest = rtt.minimum = 1;
-    ok(abba2_on_growth(&state, 100000, 100000, 100000, &rtt) == 150000);
+    ok(abba2_on_growth(&state, 100000, 100000, 100000, &rtt) == 110000);
+    ok(abba2_on_growth(&state, 100000, 100000, 1000, &rtt) == 100100);
+    state.high.rtt = 9;
+    rtt.latest = rtt.minimum = 4;
+    ok(abba2_on_growth(&state, 100000, 100000, 100000, &rtt) == 110000);
+    ok(abba2_on_growth(&state, 100000, 120000, 100000, &rtt) == 120000);
+    /* Large ACKs still obey the separate per-ACK cap. */
+    ok(abba2_on_growth(&state, 100000, 100000, 1000000, &rtt) == 150000);
+    /* The independent gain cap does not constrain a larger model-based gain. */
+    state.a = 1.f / 1024;
+    state.b = 0;
+    ok(abba2_on_growth(&state, 65536, 65536, 65536, &rtt) == 96256);
 }
 
 static void test_abba2_float_precision(void)
@@ -1242,8 +1282,10 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
 
     /* A rapid bandwidth increase after the proportional switch lowers RTT and accelerates growth. */
     cc.cwnd = 2 * peak;
-    loss.rtt.latest = 50;
-    loss.rtt.smoothed = 100;
+    quicly_rtt_init(&loss.rtt, &quicly_spec_context.loss, 100);
+    quicly_rtt_update(&loss.rtt, 100, 0, 1150);
+    cc.type->cc_on_acked(&cc, &loss, 0, 21, 0, 1, 22, 1150, mtu);
+    quicly_rtt_update(&loss.rtt, 50, 0, 1200);
     control = cc;
     control.abba = 0;
     uint32_t before = cc.cwnd;

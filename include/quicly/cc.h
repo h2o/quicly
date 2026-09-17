@@ -148,9 +148,9 @@ struct st_quicly_cc_abba2_t {
         float rtt;
     } high, low;
     /**
-     * RTT = a * CWND + b. An unfitted or unusable model has a == 0 and b set to NaN: zero slope disables inversion, while NaN
-     * permits the later proportional-model switch (which tests b != 0). A horizontal fit has a == 0, b > 0; a proportional
-     * fit has a > 0, b == 0. Thus b == 0 means a model through the origin has already been established, not that it is absent.
+     * RTT = a * CWND + b. An unfitted model has a == 0 and b set to NaN: zero slope disables inversion, while NaN indicates no
+     * prediction to preserve when establishing a proportional model. A horizontal fit has a == 0, b > 0; a proportional fit
+     * has a > 0, b == 0.
      */
     float a, b;
     /**
