@@ -1126,7 +1126,8 @@ static void test_abba2_growth(void)
     rtt.latest = 200;
     ok(abba2_on_growth(&state, 100000, 90000, 100000, &rtt) == 100000);
 
-    /* Being near minRTT without a congestion watermark does not accelerate a horizontal or unfitted model. */
+    /* Being near minRTT does not accelerate a horizontal or unfitted model, even with a higher congestion watermark. */
+    state.high.rtt = 100;
     state.a = 0;
     rtt.latest = rtt.minimum = 20;
     ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 101000);
@@ -1136,7 +1137,7 @@ static void test_abba2_growth(void)
     rtt.latest = 22;
     ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 101000);
 
-    /* A usable model can accelerate at minRTT without an additional low-RTT increment. */
+    /* A usable model can still accelerate at minRTT. */
     state.a = 0.001;
     state.b = 0;
     rtt.latest = 20;
@@ -1169,7 +1170,11 @@ static void test_abba2_growth(void)
     rtt.latest = 0;
     ok(abba2_on_growth(&state, cwnd, cwnd, 1000, &rtt) == cwnd);
     rtt.latest = 8;
+    /* A zero-byte ACK discards pending fractional growth, as seen on the next one-byte ACK. */
+    ok(abba2_on_growth(&state, cwnd, cwnd, 1, &rtt) == cwnd);
     ok(abba2_on_growth(&state, cwnd, cwnd, 0, &rtt) == cwnd);
+    ok(abba2_on_growth(&state, cwnd, cwnd, 1, &rtt) == cwnd);
+    ok(abba2_on_growth(&state, cwnd, cwnd, 1, &rtt) == cwnd + 1);
 }
 
 static void test_abba2_model_shortfall(void)
@@ -1204,54 +1209,10 @@ static void test_abba2_model_shortfall(void)
     rtt.latest = 62;
     ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd + 1024);
 
-    /* Independent low-RTT acceleration wins when it supplies a larger gain. */
+    /* Reaching minRTT does not add acceleration beyond the model's gain. */
     state.high.rtt = 68;
     rtt.latest = rtt.minimum = 63;
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd + 2080);
-}
-
-static void test_abba2_low_rtt_acceleration(void)
-{
-    struct st_quicly_cc_abba2_t state = {.high = {100000, 24.999f}, .low = {70000, 21}, .a = 0, .b = 21};
-    quicly_rtt_t rtt = {.latest = 21, .smoothed = 22, .minimum = 20};
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 101000);
-
-    /* Exactly 5ms above minRTT enables independent acceleration even though the low-point span is only 4ms. */
-    state.high.rtt = 25;
-    abba2_fit_model(&state);
-    ok(state.a == 0 && state.b == 21);
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 104761);
-    state.high.rtt = 25.001f;
-    state.increase_remainder = 0;
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 104761);
-
-    /* The original minRTT + 2ms cutoff still applies. */
-    rtt.latest = 22;
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt) == 101000);
-
-    /* Choose the larger gain without adding them; disabling low-RTT acceleration does not disable model acceleration. */
-    state.a = 1.f / 4096;
-    state.b = 0;
-    rtt.latest = 21;
-    ok(abba2_on_growth(&state, 98304, 98304, 98304, &rtt) == 104448);
-    rtt.minimum = 21;
-    ok(abba2_on_growth(&state, 98304, 98304, 98304, &rtt) == 104448);
-
-    /* Cap independent acceleration at 0.1 per acknowledged byte, even on a 1ms or 4ms path. */
-    state = (struct st_quicly_cc_abba2_t){.high = {100000, 6}, .low = {70000, 1}, .a = 0, .b = NAN};
-    rtt.latest = rtt.minimum = 1;
-    ok(abba2_on_growth(&state, 100000, 100000, 100000, &rtt) == 110000);
-    ok(abba2_on_growth(&state, 100000, 100000, 1000, &rtt) == 100100);
-    state.high.rtt = 9;
-    rtt.latest = rtt.minimum = 4;
-    ok(abba2_on_growth(&state, 100000, 100000, 100000, &rtt) == 110000);
-    ok(abba2_on_growth(&state, 100000, 120000, 100000, &rtt) == 120000);
-    /* Large ACKs still obey the separate per-ACK cap. */
-    ok(abba2_on_growth(&state, 100000, 100000, 1000000, &rtt) == 150000);
-    /* The independent gain cap does not constrain a larger model-based gain. */
-    state.a = 1.f / 1024;
-    state.b = 0;
-    ok(abba2_on_growth(&state, 65536, 65536, 65536, &rtt) == 96256);
+    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt) == cwnd + 512);
 }
 
 static void test_abba2_float_precision(void)
@@ -1568,7 +1529,6 @@ static void test_abba2(void)
     subtest("minimum-at-larger-window", test_abba2_minimum_at_larger_window);
     subtest("growth", test_abba2_growth);
     subtest("model-shortfall", test_abba2_model_shortfall);
-    subtest("low-rtt-acceleration", test_abba2_low_rtt_acceleration);
     subtest("float-precision", test_abba2_float_precision);
     subtest("cubic-lifecycle", test_abba2_lifecycle, &quicly_cc_cubic_init);
     subtest("cuback-lifecycle", test_abba2_lifecycle, &quicly_cc_cuback_init);

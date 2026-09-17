@@ -32,15 +32,9 @@
 #define QUICLY_CUBIC_C 0.4
 
 /**
- * Minimum RTT span in milliseconds required for the two-point fit or independent low-RTT acceleration.
+ * Minimum RTT span in milliseconds required for the two-point fit.
  */
 #define QUICLY_ABBA2_MIN_RTT_SPAN 5
-
-/**
- * Target queueing above minRTT in milliseconds, and the maximum independent low-RTT gain per byte acknowledged.
- */
-#define QUICLY_ABBA2_MIN_QUEUEING 2
-#define QUICLY_ABBA2_MAX_MIN_GAIN 0.1
 
 /**
  * Fast approximation of cbrt(). The input is reduced to a mantissa in [1, 2), to which a fourth-degree polynomial is applied.
@@ -475,36 +469,23 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
     if (rtt->latest == 0)
         return cubic_cwnd;
 
-    double gain = 0;
-    if (state->a > 0 && state->b >= 0) {
-        /* Wref is the window associated with latest RTT by the model. Each ACK contributes (acked / W) * (W - Wref) / 2:
-         * approximately half the positive gap over a window's worth of ACKs, rather than half the gap for every ACK. */
-        double wref = ((double)rtt->latest - state->b) / state->a;
-        double model_gain = 0.5 * (1 - wref / cwnd);
-        if (model_gain > gain)
-            gain = model_gain;
-    }
-    /* Independently accelerate toward minRTT + 2ms only if congestion was observed sufficiently above minRTT. Unlike the
-     * two-point fit, this uses the connection's minimum RTT, not the current period's low point. Cap the gain so a short RTT
-     * cannot make this candidate undo an ECN reduction within a round trip. */
-    if ((double)state->high.rtt - rtt->minimum >= QUICLY_ABBA2_MIN_RTT_SPAN &&
-        rtt->latest < (double)rtt->minimum + QUICLY_ABBA2_MIN_QUEUEING) {
-        double low_rtt_gain = ((double)rtt->minimum + QUICLY_ABBA2_MIN_QUEUEING) / rtt->latest - 1;
-        if (low_rtt_gain > QUICLY_ABBA2_MAX_MIN_GAIN)
-            low_rtt_gain = QUICLY_ABBA2_MAX_MIN_GAIN;
-        if (low_rtt_gain > gain)
-            gain = low_rtt_gain;
+    if (acked == 0 || !(state->a > 0 && state->b >= 0 && rtt->latest < (double)state->a * cwnd + state->b)) {
+        state->increase_remainder = 0;
+        return cubic_cwnd;
     }
 
-    /* Choose the greater gain, not their sum, and compete with ordinary growth from the same pre-ACK CWND. */
-    double increase = acked * gain;
-    if (increase > 0) {
-        increase += state->increase_remainder;
-        /* Limit accelerated growth to half the pre-ACK CWND. This is a per-ACK safety cap, not the normal growth rate; it
-         * does not cap the ordinary policy's candidate. Include fractional carry and round down for odd-sized windows. */
-        if (increase > cwnd / 2)
-            increase = cwnd / 2;
-    }
+    /* Wref is the window associated with latest RTT by the model. Each ACK contributes (acked / W) * (W - Wref) / 2:
+     * approximately half the positive gap over a window's worth of ACKs, rather than half the gap for every ACK. */
+    double wref = ((double)rtt->latest - state->b) / state->a;
+    double gain = 0.5 * (1 - wref / cwnd);
+
+    /* Compete with ordinary growth from the same pre-ACK CWND. */
+    double increase = acked * gain + state->increase_remainder;
+
+    /* Limit accelerated growth to half the pre-ACK CWND. This is a per-ACK safety cap, not the normal growth rate; it  does not cap
+     the ordinary policy's candidate. Include fractional carry and round down for odd-sized windows. */
+    if (increase > cwnd / 2)
+        increase = cwnd / 2;
     if (cwnd + increase > cubic_cwnd) {
         double candidate = cwnd + increase;
         if (candidate >= UINT32_MAX) {
@@ -515,6 +496,7 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
         state->increase_remainder = candidate - new_cwnd;
         return new_cwnd;
     }
+
     /* Ordinary CUBIC has already supplied at least the requested increase. Do not bank unused acceleration. */
     state->increase_remainder = 0;
     return cubic_cwnd;
