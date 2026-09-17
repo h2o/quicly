@@ -37,11 +37,6 @@
 #define QUICLY_ABBA2_MIN_RTT_SPAN 5
 
 /**
- * Minimum RTT shortfall below the model prediction required for model-based acceleration.
- */
-#define QUICLY_ABBA2_MIN_RTT_SHORTFALL 2
-
-/**
  * Target queueing above minRTT in milliseconds, and the maximum independent low-RTT gain per byte acknowledged.
  */
 #define QUICLY_ABBA2_MIN_QUEUEING 2
@@ -406,16 +401,14 @@ static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
         return;
     }
 
-    /* Preserve the left point and cap the slope at the line through the origin, ensuring a nonnegative intercept. */
+    /* Cap the slope at the line through the origin, then flatten it to two thirds about the low point. This lowers predicted
+     * RTT above the low window, making acceleration more conservative, including when the origin cap was applied. */
     double slope = (rh - rl) / (wh - wl);
-    if (slope >= rl / wl) {
-        state->a = rl / wl;
-        /* Assign exactly zero so the proportional model has no rounding residue in its intercept. */
-        state->b = 0;
-    } else {
-        state->a = slope;
-        state->b = rl - slope * wl;
-    }
+    if (slope > rl / wl)
+        slope = rl / wl;
+    slope *= 2. / 3;
+    state->a = slope;
+    state->b = rl - slope * wl;
 }
 
 static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int by_ecn)
@@ -483,8 +476,7 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
         return cubic_cwnd;
 
     double gain = 0;
-    if (state->a > 0 && state->b >= 0 &&
-        (double)state->a * cwnd + state->b - rtt->latest >= QUICLY_ABBA2_MIN_RTT_SHORTFALL) {
+    if (state->a > 0 && state->b >= 0) {
         /* Wref is the window associated with latest RTT by the model. Each ACK contributes (acked / W) * (W - Wref) / 2:
          * approximately half the positive gap over a window's worth of ACKs, rather than half the gap for every ACK. */
         double wref = ((double)rtt->latest - state->b) / state->a;
