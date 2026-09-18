@@ -29,6 +29,7 @@
 #include <time.h>
 #include <sys/types.h>
 #include <getopt.h>
+#include <math.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
@@ -766,10 +767,11 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                 quicly_context_t *ctx = quicly_get_context(conn);
                 double now;
                 ctx->now->cb(ctx->now, &now);
-                int64_t delta = timeout_at - (int64_t)now;
+                double delta = timeout_at - now;
                 if (delta > 0) {
-                    tvbuf.tv_sec = delta / 1000;
-                    tvbuf.tv_usec = (delta % 1000) * 1000;
+                    int64_t delta_usec = ceil(delta * 1000);
+                    tvbuf.tv_sec = delta_usec / 1000000;
+                    tvbuf.tv_usec = delta_usec % 1000000;
                 } else {
                     tvbuf.tv_sec = 0;
                     tvbuf.tv_usec = 0;
@@ -826,7 +828,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                             if (request_interval != 0 && client_gotsig != SIGTERM) {
                                 if (enqueue_requests_at == INT64_MAX) {
                                     ctx.now->cb(ctx.now, &now);
-                                    enqueue_requests_at = (int64_t)now + request_interval;
+                                    enqueue_requests_at = ceil(now + request_interval);
                                 }
                             } else {
                                 static int close_called;
@@ -878,12 +880,12 @@ static void on_server_signal(int signo)
 static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls_iovec_t server_cid,
                           quicly_address_token_plaintext_t *token, const char **err_desc)
 {
-    int64_t age;
+    double age;
 
     /* calculate and normalize age */
     double now;
     ctx.now->cb(ctx.now, &now);
-    if ((age = (int64_t)now - token->issued_at) < 0)
+    if ((age = now - token->issued_at) < 0)
         age = 0;
 
     /* type-specific checks */
@@ -973,10 +975,11 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
             if (timeout_at != INT64_MAX) {
                 double now;
                 ctx.now->cb(ctx.now, &now);
-                int64_t delta = timeout_at - (int64_t)now;
+                double delta = timeout_at - now;
                 if (delta > 0) {
-                    tvbuf.tv_sec = delta / 1000;
-                    tvbuf.tv_usec = (delta % 1000) * 1000;
+                    int64_t delta_usec = ceil(delta * 1000);
+                    tvbuf.tv_sec = delta_usec / 1000000;
+                    tvbuf.tv_usec = delta_usec % 1000000;
                 } else {
                     tvbuf.tv_sec = 0;
                     tvbuf.tv_usec = 0;
