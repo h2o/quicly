@@ -19,6 +19,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#include <math.h>
 #include "quicly/loss.h"
 #include "quicly/defaults.h"
 #include "test.h"
@@ -41,7 +42,7 @@ static void acked(quicly_loss_t *loss, uint64_t pn, size_t epoch)
         assert(sent->packet_number != UINT64_MAX);
         quicly_sentmap_skip(&iter);
     }
-    int64_t sent_at = sent->sent_at;
+    double sent_at = sent->sent_at;
     ok(quicly_sentmap_update(&loss->sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED) == 0);
 
     quicly_loss_on_ack_received(loss, pn, UINT64_MAX, pn + 1, epoch, now, sent_at, 0,
@@ -225,8 +226,85 @@ static void test_late_ack_threshold_adjustment(void)
     quicly_loss_dispose(&loss);
 }
 
+static void test_fractional_rtt(void)
+{
+    quicly_loss_t loss;
+    const double sent_at = 1800000000000.125;
+    const uint16_t max_ack_delay = 1;
+    const uint8_t ack_delay_exponent = 3;
+    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &max_ack_delay, &ack_delay_exponent);
+
+    /* Fractional measurements are retained even with epoch-scale timestamps. */
+    quicly_loss_on_ack_received(&loss, 0, UINT64_MAX, 1, QUICLY_EPOCH_1RTT, sent_at + 1.125, sent_at, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(loss.rtt.latest == 1.125f && loss.rtt.minimum == 1.125f);
+    ok(loss.rtt.smoothed == 1.125f && loss.rtt.variance == 0.5625f);
+    ok(quicly_rtt_get_pto(&loss.rtt, 0, 1) == 3); /* timer granularity is still milliseconds */
+
+    /* Subtract an encoded 256us ACK delay without rounding it to milliseconds. */
+    quicly_loss_on_ack_received(&loss, 1, UINT64_MAX, 2, QUICLY_EPOCH_1RTT, sent_at + 1.625, sent_at, 32,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(fabsf(loss.rtt.latest - 1.369f) < 0.000001f);
+    ok(loss.rtt.minimum == 1.125f);
+    ok(fabsf(loss.rtt.smoothed - 1.1555f) < 0.000001f);
+    ok(fabsf(loss.rtt.variance - 0.482875f) < 0.000001f);
+
+    /* The peer's maximum ACK delay is still expressed in milliseconds and caps even a huge encoded delay. */
+    quicly_loss_on_ack_received(&loss, 2, UINT64_MAX, 3, QUICLY_EPOCH_1RTT, sent_at + 2.625, sent_at, UINT64_C(0x3fffffffffffffff),
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(loss.rtt.latest == 1.625f);
+
+    /* Sub-millisecond measurements and zero-duration samples retain the 1ms minimum. */
+    quicly_loss_on_ack_received(&loss, 3, UINT64_MAX, 4, QUICLY_EPOCH_1RTT, sent_at + 0.001, sent_at, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(loss.rtt.latest == 1 && loss.rtt.minimum == 1);
+    quicly_loss_on_ack_received(&loss, 4, UINT64_MAX, 5, QUICLY_EPOCH_1RTT, sent_at, sent_at, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(loss.rtt.latest == 1);
+    quicly_loss_dispose(&loss);
+}
+
+static void test_fractional_sentmap_timers(void)
+{
+    quicly_loss_t loss;
+    const int64_t millisec = INT64_C(1800000000000);
+    const double sent_at = millisec + 0.75;
+    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+                     &quicly_spec_context.transport_params.ack_delay_exponent);
+    for (uint64_t pn = 0; pn != 2; ++pn) {
+        ok(quicly_sentmap_prepare(&loss.sentmap, pn, sent_at, QUICLY_EPOCH_1RTT) == 0);
+        quicly_sentmap_commit(&loss.sentmap, 10, 0, 0);
+    }
+    quicly_sentmap_iter_t iter;
+    quicly_sentmap_init_iter(&loss.sentmap, &iter);
+    quicly_sentmap_skip(&iter);
+    ok(quicly_sentmap_update(&loss.sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED) == 0);
+    quicly_loss_on_ack_received(&loss, 1, UINT64_MAX, 2, QUICLY_EPOCH_1RTT, sent_at + 1.125, sent_at, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+
+    num_packets_lost = 0;
+    /* The 1.125ms RTT gives a 2ms loss delay; sent at +0.75ms, the packet must survive the +2ms tick. */
+    ok(quicly_loss_detect_loss(&loss, millisec + 2, 0, 1, on_loss_detected) == 0);
+    ok(num_packets_lost == 0 && loss.loss_time == millisec + 3);
+    ok(quicly_loss_detect_loss(&loss, millisec + 3, 0, 1, on_loss_detected) == 0);
+    ok(num_packets_lost == 1 && loss.loss_time == INT64_MAX);
+
+    /* Closing-state expiration waits until the first timer tick past the fractional deadline. */
+    int64_t expires_at = millisec + quicly_loss_get_sentmap_expiration_time(&loss, 0) + 1;
+    ok(quicly_loss_init_sentmap_iter(&loss, &iter, expires_at - 1, 0, 1) == 0);
+    ok(quicly_sentmap_get(&iter)->packet_number == 0);
+    ok(quicly_loss_init_sentmap_iter(&loss, &iter, expires_at, 0, 1) == 0);
+    ok(quicly_sentmap_get(&iter)->packet_number == UINT64_MAX);
+    /* Even the largest finite timer value must not retire the end-of-iteration sentinel. */
+    ok(quicly_loss_init_sentmap_iter(&loss, &iter, INT64_MAX, 0, 1) == 0);
+    ok(quicly_sentmap_get(&iter)->packet_number == UINT64_MAX);
+    quicly_loss_dispose(&loss);
+}
+
 void test_loss(void)
 {
+    subtest("fractional-rtt", test_fractional_rtt);
+    subtest("fractional-sentmap-timers", test_fractional_sentmap_timers);
     subtest("time-detection", test_time_detection);
     subtest("pn-detection", test_pn_detection);
     subtest("slow-cert-verify", test_slow_cert_verify);

@@ -335,7 +335,7 @@ static uint32_t cubic_update_w_est(struct st_quicly_cc_cubic_t *state, uint32_t 
 }
 
 static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, uint32_t cwnd_epoch, uint32_t bytes, int cc_limited,
-                           uint32_t rtt, int64_t now, uint32_t actual_mtu, uint32_t reference_mtu)
+                           float rtt, int64_t now, uint32_t actual_mtu, uint32_t reference_mtu)
 {
     uint32_t w_est = cubic_quantized_w_est(state, cwnd_epoch, actual_mtu);
     if (cc_limited)

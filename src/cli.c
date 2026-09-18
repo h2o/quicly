@@ -159,7 +159,7 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             ", initial-packets-sent: %" PRIu64 ", 0rtt-packets-sent: %" PRIu64 ", handshake-packets-sent: %" PRIu64
             ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", ack-ecn-ect0: %" PRIu64 ", ack-ecn-ect1: %" PRIu64
             ", ack-ecn-ce: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64
-            ", paths-created %" PRIu64 ", paths-validated %" PRIu64 ", paths-promoted: %" PRIu64 ", srtt: %" PRIu32
+            ", paths-created %" PRIu64 ", paths-validated %" PRIu64 ", paths-promoted: %" PRIu64 ", srtt: %g"
             ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 ", delivery-rate: %" PRIu64 ", cwnd: %" PRIu32
             ", cwnd-exiting-slow-start: %" PRIu32 ", slow-start-exit-at: %" PRId64 ", jumpstart-cwnd: %" PRIu32
             ", jumpstart-exit: %" PRIu32 ", jumpstart-prev-rate: %" PRIu64 ", jumpstart-prev-rtt: %" PRIu32
@@ -764,7 +764,9 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                 timeout_at = enqueue_requests_at;
             if (timeout_at != INT64_MAX) {
                 quicly_context_t *ctx = quicly_get_context(conn);
-                int64_t delta = timeout_at - ctx->now->cb(ctx->now);
+                double now;
+                ctx->now->cb(ctx->now, &now);
+                int64_t delta = timeout_at - (int64_t)now;
                 if (delta > 0) {
                     tvbuf.tv_sec = delta / 1000;
                     tvbuf.tv_usec = (delta % 1000) * 1000;
@@ -789,7 +791,9 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             FD_ZERO(&readfds);
             FD_SET(fd, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
-        if (enqueue_requests_at <= ctx.now->cb(ctx.now))
+        double now;
+        ctx.now->cb(ctx.now, &now);
+        if (enqueue_requests_at <= now)
             enqueue_requests(conn);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
@@ -820,8 +824,10 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                     } else {
                         if (quicly_num_streams(conn) == 0) {
                             if (request_interval != 0 && client_gotsig != SIGTERM) {
-                                if (enqueue_requests_at == INT64_MAX)
-                                    enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
+                                if (enqueue_requests_at == INT64_MAX) {
+                                    ctx.now->cb(ctx.now, &now);
+                                    enqueue_requests_at = (int64_t)now + request_interval;
+                                }
                             } else {
                                 static int close_called;
                                 if (!close_called) {
@@ -875,7 +881,9 @@ static int validate_token(struct sockaddr *remote, ptls_iovec_t client_cid, ptls
     int64_t age;
 
     /* calculate and normalize age */
-    if ((age = ctx.now->cb(ctx.now) - token->issued_at) < 0)
+    double now;
+    ctx.now->cb(ctx.now, &now);
+    if ((age = (int64_t)now - token->issued_at) < 0)
         age = 0;
 
     /* type-specific checks */
@@ -963,7 +971,9 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     timeout_at = conn_to;
             }
             if (timeout_at != INT64_MAX) {
-                int64_t delta = timeout_at - ctx.now->cb(ctx.now);
+                double now;
+                ctx.now->cb(ctx.now, &now);
+                int64_t delta = timeout_at - (int64_t)now;
                 if (delta > 0) {
                     tvbuf.tv_sec = delta / 1000;
                     tvbuf.tv_usec = (delta % 1000) * 1000;
@@ -1084,7 +1094,9 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
         {
             size_t i;
             for (i = 0; i != num_conns; ++i) {
-                if (quicly_get_first_timeout(conns[i]) <= ctx.now->cb(ctx.now)) {
+                double now;
+                ctx.now->cb(ctx.now, &now);
+                if (quicly_get_first_timeout(conns[i]) <= now) {
                     if (send_pending(fd, conns[i]) != 0) {
                         dump_stats(stderr, conns[i]);
                         quicly_free(conns[i]);

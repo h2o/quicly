@@ -139,10 +139,10 @@ QUICLY_CALLBACK_TYPE(void, receive_datagram_frame, quicly_conn_t *conn, ptls_iov
  */
 QUICLY_CALLBACK_TYPE(void, closed, quicly_conn_t *conn);
 /**
- * Returns current time in milliseconds. The returned value MUST monotonically increase (i.e., it is the responsibility of the
- * callback implementation to guarantee that the returned value never goes back to the past).
+ * Returns current time in milliseconds, retaining fractional milliseconds. The value MUST monotonically increase
+ * (i.e., it is the responsibility of the callback implementation to guarantee that the value never goes back to the past).
  */
-QUICLY_CALLBACK_TYPE0(int64_t, now);
+QUICLY_CALLBACK_TYPE(void, now, double *now);
 /**
  * called when a NEW_TOKEN token is received on a connection
  */

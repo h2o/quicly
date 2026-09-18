@@ -202,7 +202,9 @@ static int run_loop(int fd, quicly_conn_t *client)
         fd_set readfds;
         struct timeval tv;
         do {
-            int64_t first_timeout = INT64_MAX, now = ctx.now->cb(ctx.now);
+            double now_double;
+            ctx.now->cb(ctx.now, &now_double);
+            int64_t first_timeout = INT64_MAX, now = now_double;
             for (i = 0; conns[i] != NULL; ++i) {
                 int64_t conn_timeout = quicly_get_first_timeout(conns[i]);
                 if (conn_timeout < first_timeout)
