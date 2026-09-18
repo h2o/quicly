@@ -4224,7 +4224,6 @@ static quicly_error_t send_ack(quicly_conn_t *conn, struct st_quicly_pn_space_t 
 
     /* calc ack_delay */
     if (space->largest_pn_received_at < conn->stash.now_double) {
-        /* With QUICLY_LOCAL_ACK_DELAY_EXPONENT of 10, rounding down underreports ACK delay by less than 1.024ms. */
         ack_delay = (uint64_t)((conn->stash.now_double - space->largest_pn_received_at) * 1000) >> QUICLY_LOCAL_ACK_DELAY_EXPONENT;
     } else {
         ack_delay = 0;

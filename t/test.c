@@ -1333,6 +1333,7 @@ static void test_fractional_rtt_measurement(void)
     quic_now = INT64_C(1800000000000);
     quicly_conn_t *client, *server;
     test_setup_connected_peers(&client, &server);
+    ok(quicly_get_remote_transport_parameters(client)->ack_delay_exponent == 3);
 
     quicly_stream_t *stream;
     ok(quicly_open_stream(client, &stream, 0) == 0);
@@ -1351,7 +1352,7 @@ static void test_fractional_rtt_measurement(void)
     quic_now_submillisec += 0.625;
     ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
 
-    /* Hold the ACK for 1.5ms, then return it over another 625us of propagation delay. Exponent 10 encodes 1.024ms. */
+    /* Hold the ACK for 1.5ms, then return it over another 625us of propagation delay. Exponent 3 encodes 1.496ms. */
     quic_now += 2;
     quic_now_submillisec = 0.25;
     quicly_send_context_t s;
@@ -1366,7 +1367,7 @@ static void test_fractional_rtt_measurement(void)
     /* Observe the public statistics, exercising the clock, sentmap, ACK encoding and RTT update together. */
     quicly_stats_t stats;
     quicly_get_stats(client, &stats);
-    ok(fabsf(stats.rtt.latest - 1.726f) < 0.000001f);
+    ok(fabsf(stats.rtt.latest - 1.254f) < 0.000001f);
 
     quicly_free(client);
     quicly_free(server);
