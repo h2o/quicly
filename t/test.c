@@ -1221,6 +1221,32 @@ void test_ecn_index_from_bits(void)
     ok(get_ecn_index_from_bits(3) == 2);
 }
 
+static void test_resume_sendrate(void)
+{
+    quicly_conn_t conn = {0};
+    uint64_t rate;
+    uint32_t rtt;
+    const struct {
+        float minimum;
+        uint32_t stored;
+    } cases[] = {{0.001f, 1}, {0.25f, 1}, {1, 1}, {1.25f, 2}, {250, 250}};
+
+    quicly_ratemeter_init(&conn.egress.ratemeter);
+    conn.egress.loss.rtt.minimum = 0.25f;
+    calc_resume_sendrate(&conn, &rate, &rtt);
+    ok(rate == 0 && rtt == 0);
+
+    quicly_ratemeter_enter_cc_limited(&conn.egress.ratemeter, 0);
+    quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1000, 1000, 0);
+    quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1050, 51000, 1);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(cases); ++i) {
+        conn.egress.loss.rtt.minimum = cases[i].minimum;
+        calc_resume_sendrate(&conn, &rate, &rtt);
+        ok(rate == 1000000);
+        ok(rtt == cases[i].stored);
+    }
+}
+
 static void test_jumpstart_cwnd(void)
 {
     quicly_context_t unbounded_max = {
@@ -1228,6 +1254,7 @@ static void test_jumpstart_cwnd(void)
         .transport_params.max_udp_payload_size = 1200,
     };
     ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 250) == 250000);
+    ok(derive_jumpstart_cwnd(&unbounded_max, 0.25f, 1000000, 1) == 250);
     ok(derive_jumpstart_cwnd(&unbounded_max, 1.25f, 1000000, 2) == 1250);
     ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 400) == 250000); /* if RTT increases, CWND stays same */
     ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
@@ -1656,6 +1683,7 @@ int main(int argc, char **argv)
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
+    subtest("resume-sendrate", test_resume_sendrate);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
     subtest("ack-frequency", test_ack_frequency);
