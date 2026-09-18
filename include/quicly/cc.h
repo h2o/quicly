@@ -132,7 +132,9 @@ struct st_quicly_cc_cuback_t {
  * It models the relationship between CWND and RTT using the congestion watermark and the lowest RTT observed afterward. An RTT
  * below the model's prediction signals room for faster window growth. Fitting requires enough RTT variation to estimate a useful
  * slope, which is reduced to two thirds while keeping the low point fixed. Far beyond the congestion window, the model instead
- * assumes RTT is proportional to CWND. On each ACK, it selects the larger of ordinary growth and model-based acceleration.
+ * assumes RTT is proportional to CWND. Until CWND reaches the policy's cwnd_prior / beta, the model's growth multiplier is capped
+ * at beta^(-2/3) to yield under persistent congestion. On each ACK, it selects the larger of ordinary growth and model-based
+ * acceleration.
  */
 struct st_quicly_cc_abba2_t {
     /**

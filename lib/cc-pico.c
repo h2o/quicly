@@ -462,7 +462,7 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
 }
 
 static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, uint32_t cubic_cwnd, uint32_t acked,
-                                const quicly_rtt_t *rtt)
+                                const quicly_rtt_t *rtt, uint32_t cwnd_prior, int by_ecn)
 {
     if (rtt->latest == 0 || acked == 0 || !(state->a > 0 && state->b >= 0 && rtt->latest < (double)state->a * cwnd + state->b))
         goto No_Accel;
@@ -470,6 +470,16 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
     /* Wref is the window associated with latest RTT by the model. Growth target is to fulfill 2/3 of the trailing RTT. */
     double wref = ((double)rtt->latest - state->b) / state->a;
     double gain = 2. / 3 * (1 - wref / cwnd);
+
+    /* Yield under persistent congestion: until CWND reaches cwnd_prior / beta, limit the growth multiplier to beta^(-2/3).
+     * If congestion occurs below cwnd_prior, allow for another RTT of growth before its feedback arrives. Since beta^(-2/3)
+     * is less than 1 / beta, ABBA's growth keeps CWND below cwnd_prior / beta at feedback, so reducing by beta yields a window
+     * below cwnd_prior. Ordinary CUBIC/Cuback growth is still allowed to win and remains the policy's responsibility.
+     * These precomputed additive gains are pow(beta, -2. / 3) - 1 for loss and ECN, respectively. */
+    static const double max_gain[2] = {0.2684342882037154, 0.11443322021871727};
+    double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    if (cwnd < cwnd_prior / beta && gain > max_gain[by_ecn])
+        gain = max_gain[by_ecn];
 
     /* Compete with ordinary growth from the same pre-ACK CWND. */
     double increase = acked * gain + state->increase_remainder;
@@ -586,7 +596,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             if (cc->cwnd < pre_cwnd)
                 cc->cwnd = pre_cwnd;
             if (cc_limited && state->cc_limited)
-                cc->cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt);
+                cc->cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt, state->cwnd_prior,
+                                          state->by_ecn);
         }
         goto Cleanup;
     }
@@ -615,7 +626,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     if (abba2_enabled(cc) && pre_cwnd >= cc->ssthresh) {
         /* Keep the partially consumed Cuback interval even when acceleration supplies the larger window. */
-        cc->cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt);
+        cc->cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
+                                  cc->state.pico.cuback.cwnd_prior, cc->state.pico.cuback.by_ecn);
     }
 
 Cleanup:
