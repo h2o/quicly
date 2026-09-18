@@ -818,10 +818,26 @@ static void test_rapid_start(void)
     ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt));
 }
 
+static void test_rapid_start_fractional_rtt(void)
+{
+    struct st_quicly_cc_rapid_start_t rs;
+    quicly_rtt_t rtt = {.minimum = 16.25f, .latest = 20.5f};
+    quicly_cc_init_rapid_start(&rs, 1);
+    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 1);
+    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* 20.5ms is above the 20.25ms threshold */
+    rtt.latest = 20.125f;
+    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 1);
+    ok(quicly_cc_rapid_start_use_3x(&rs, &rtt));
+    rtt.latest = 20.5f;
+    quicly_cc_rapid_start_update_rtt(&rs, &rtt, 21);
+    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* the lower fractional sample has expired */
+}
+
 void test_cc(void)
 {
     subtest("fast-cbrt", test_fast_cbrt);
     subtest("rapid-start", test_rapid_start);
+    subtest("rapid-start-fractional-rtt", test_rapid_start_fractional_rtt);
     subtest("reno", test_reno);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
