@@ -370,7 +370,7 @@ struct st_quicly_conn_t {
         /**
          *
          */
-        int64_t last_retransmittable_sent_at;
+        double last_retransmittable_sent_at;
         /**
          * when to send an ACK, connection close frames or to destroy the connection
          */
@@ -755,7 +755,7 @@ static int needs_cid_auth(quicly_conn_t *conn)
     }
 }
 
-static int64_t get_sentmap_expiration_time(quicly_conn_t *conn)
+static double get_sentmap_expiration_time(quicly_conn_t *conn)
 {
     return quicly_loss_get_sentmap_expiration_time(&conn->egress.loss, conn->super.remote.transport_params.max_ack_delay);
 }
@@ -787,7 +787,7 @@ static void update_ecn_state(quicly_conn_t *conn, enum en_quicly_ecn_state new_s
 static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
 {
     if (conn->super.remote.transport_params.min_ack_delay_usec != UINT64_MAX)
-        conn->egress.ack_frequency.update_at = conn->stash.now + get_sentmap_expiration_time(conn);
+        conn->egress.ack_frequency.update_at = (int64_t)ceil(conn->stash.now_double + get_sentmap_expiration_time(conn));
 }
 
 size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *datagram, size_t datagram_size,
@@ -1528,9 +1528,9 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
     if (idle_msec == INT64_MAX)
         return;
 
-    uint32_t three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.remote.transport_params.max_ack_delay,
-                                                conn->egress.loss.conf->min_pto);
-    conn->idle_timeout.at = conn->stash.now + (idle_msec > three_pto ? idle_msec : three_pto);
+    double three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.remote.transport_params.max_ack_delay,
+                                              conn->egress.loss.conf->min_pto);
+    conn->idle_timeout.at = (int64_t)ceil(conn->stash.now_double + (idle_msec > three_pto ? idle_msec : three_pto));
     conn->idle_timeout.should_rearm_on_send = is_in_receive;
 }
 
@@ -4196,7 +4196,7 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
 TargetReady:
     if (frame_type != ALLOCATE_FRAME_TYPE_NON_ACK_ELICITING) {
         s->target.ack_eliciting = 1;
-        conn->egress.last_retransmittable_sent_at = conn->stash.now;
+        conn->egress.last_retransmittable_sent_at = conn->stash.now_double;
     }
     return 0;
 }
@@ -5214,7 +5214,7 @@ static quicly_error_t send_handshake_flow(quicly_conn_t *conn, size_t epoch, qui
             if ((ret = do_allocate_frame(conn, s, 1, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
                 goto Exit;
             *s->dst++ = QUICLY_FRAME_TYPE_PING;
-            conn->egress.last_retransmittable_sent_at = conn->stash.now;
+            conn->egress.last_retransmittable_sent_at = conn->stash.now_double;
             ++conn->super.stats.num_frames_sent.ping;
             QUICLY_PROBE(PING_SEND, conn, conn->stash.now);
             QUICLY_LOG_CONN(ping_send, conn, {});

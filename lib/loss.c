@@ -27,7 +27,7 @@ quicly_error_t quicly_loss_init_sentmap_iter(quicly_loss_t *loss, quicly_sentmap
 {
     quicly_sentmap_init_iter(&loss->sentmap, iter);
 
-    int64_t retire_before = now - quicly_loss_get_sentmap_expiration_time(loss, max_ack_delay);
+    double retire_before = now - quicly_loss_get_sentmap_expiration_time(loss, max_ack_delay);
 
     /* Retire entries older than the time specified, unless the connection is alive and the number of packets in the sentmap is
      * below 32 packets. This exception (the threshold of 32) exists to be capable of recognizing excessively late-ACKs when under

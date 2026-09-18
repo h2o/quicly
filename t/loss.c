@@ -134,7 +134,7 @@ static void test_pn_detection(void)
 static void test_slow_cert_verify(void)
 {
     quicly_loss_t loss;
-    int64_t last_retransmittable_sent_at;
+    double last_retransmittable_sent_at;
     size_t min_packets_to_send;
     int restrict_sending;
 
@@ -239,7 +239,7 @@ static void test_fractional_rtt(void)
                                 QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
     ok(loss.rtt.latest == 1.125f && loss.rtt.minimum == 1.125f);
     ok(loss.rtt.smoothed == 1.125f && loss.rtt.variance == 0.5625f);
-    ok(quicly_rtt_get_pto(&loss.rtt, 0, 1) == 3); /* timer granularity is still milliseconds */
+    ok(quicly_rtt_get_pto(&loss.rtt, 0, 1) == 3.375);
 
     /* Subtract an encoded 256us ACK delay without rounding it to milliseconds. */
     quicly_loss_on_ack_received(&loss, 1, UINT64_MAX, 2, QUICLY_EPOCH_1RTT, sent_at + 1.625, sent_at, 32,
@@ -261,6 +261,51 @@ static void test_fractional_rtt(void)
     quicly_loss_on_ack_received(&loss, 4, UINT64_MAX, 5, QUICLY_EPOCH_1RTT, sent_at, sent_at, 0,
                                 QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
     ok(loss.rtt.latest == 1);
+    quicly_loss_dispose(&loss);
+}
+
+static void test_fractional_pto(void)
+{
+    quicly_loss_t loss;
+    quicly_loss_conf_t conf = quicly_spec_context.loss;
+    conf.min_pto = 1;
+    const uint16_t max_ack_delay = 1;
+    const uint8_t ack_delay_exponent = 3;
+    const int64_t millisec = INT64_C(1800000000000);
+    quicly_loss_init(&loss, &conf, 20, &max_ack_delay, &ack_delay_exponent);
+    quicly_rtt_update(&loss.rtt, 1.125f, 0);
+
+    /* PTO is 3.375ms before ACK delay. Back off without rounding; ceil only after adding the send timestamp. */
+    static const struct {
+        int pto_count, handshake;
+        int64_t delay_at_125us, delay_at_750us;
+    } tests[] = {
+        {-2, 0, 2, 2}, /* speculative PTO is clamped to the 1ms minimum */
+        {-1, 0, 2, 3}, /* speculative PTO excludes ACK delay */
+        {0, 0, 5, 6},
+        {1, 0, 9, 10},
+        {2, 0, 18, 19},
+        {0, 1, 4, 5}, /* handshake PTO excludes ACK delay */
+        {1, 1, 7, 8},
+    };
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(tests); ++i) {
+        loss.pto_count = tests[i].pto_count;
+        quicly_loss_update_alarm(&loss, millisec, millisec + 0.125, 1, 1, tests[i].handshake, 0, 1);
+        ok(loss.alarm_at == millisec + tests[i].delay_at_125us);
+        quicly_loss_update_alarm(&loss, millisec, millisec + 0.75, 1, 1, tests[i].handshake, 0, 1);
+        ok(loss.alarm_at == millisec + tests[i].delay_at_750us);
+    }
+
+    /* An overdue alarm is still clamped to now; no outstanding packets disables it. */
+    quicly_loss_update_alarm(&loss, millisec + 100, millisec + 0.75, 1, 1, 0, 0, 0);
+    ok(loss.alarm_at == millisec + 100);
+    quicly_loss_update_alarm(&loss, millisec + 100, millisec + 0.75, 0, 1, 0, 0, 0);
+    ok(loss.alarm_at == INT64_MAX);
+
+    /* The variance floor does not round SRTT down. */
+    for (size_t i = 0; i != 16; ++i)
+        quicly_rtt_update(&loss.rtt, 1.125f, 0);
+    ok(quicly_rtt_get_pto(&loss.rtt, 0, 1) == 2.125);
     quicly_loss_dispose(&loss);
 }
 
@@ -289,8 +334,9 @@ static void test_fractional_sentmap_timers(void)
     ok(quicly_loss_detect_loss(&loss, millisec + 3, 0, 1, on_loss_detected) == 0);
     ok(num_packets_lost == 1 && loss.loss_time == INT64_MAX);
 
-    /* Closing-state expiration waits until the first timer tick past the fractional deadline. */
-    int64_t expires_at = millisec + quicly_loss_get_sentmap_expiration_time(&loss, 0) + 1;
+    /* Four PTOs are 13.5ms; sent at +0.75ms, the packet expires on the +15ms tick. */
+    ok(quicly_loss_get_sentmap_expiration_time(&loss, 0) == 13.5);
+    int64_t expires_at = millisec + 15;
     ok(quicly_loss_init_sentmap_iter(&loss, &iter, expires_at - 1, 0, 1) == 0);
     ok(quicly_sentmap_get(&iter)->packet_number == 0);
     ok(quicly_loss_init_sentmap_iter(&loss, &iter, expires_at, 0, 1) == 0);
@@ -304,6 +350,7 @@ static void test_fractional_sentmap_timers(void)
 void test_loss(void)
 {
     subtest("fractional-rtt", test_fractional_rtt);
+    subtest("fractional-pto", test_fractional_pto);
     subtest("fractional-sentmap-timers", test_fractional_sentmap_timers);
     subtest("time-detection", test_time_detection);
     subtest("pn-detection", test_pn_detection);
