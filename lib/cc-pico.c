@@ -467,9 +467,11 @@ static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwn
     if (rtt->latest == 0 || acked == 0 || !(state->a > 0 && state->b >= 0 && rtt->latest < (double)state->a * cwnd + state->b))
         goto No_Accel;
 
-    /* Wref is the window associated with latest RTT by the model. Growth target is to fulfill 2/3 of the trailing RTT. */
+    /* Wref is the window associated with latest RTT by the model, and its slope is flattened to 2/3 of the fitted slope. With one
+     * RTT of delayed feedback, using 3/5 of the observed inverse-window gap limits the geometric tail to no more than 3/2 of the
+     * flattened gap, i.e. the full margin back to the pre-flattened line: (2/3) * (3/5) / (1 - 3/5) = 1. */
     double wref = ((double)rtt->latest - state->b) / state->a;
-    double gain = 2. / 3 * (1 - wref / cwnd);
+    double gain = 3. / 5 * (1 - wref / cwnd);
 
     /* Yield under persistent congestion: until CWND reaches cwnd_prior / beta, limit the growth multiplier to beta^(-2/3).
      * If congestion occurs below cwnd_prior, allow for another RTT of growth before its feedback arrives. Since beta^(-2/3)
