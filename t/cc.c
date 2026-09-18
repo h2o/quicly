@@ -880,6 +880,14 @@ static void test_abba2_model(void)
     abba2_on_acked(&state, 75000, &rtt, 0, 0);
     ok(state.low.cwnd == 70000); /* Equal samples do not move the point. */
     ok(state.a == a && state.b == b);
+    /* Sub-millisecond improvements retain both low-point fields and the model until the total reaches 1ms. */
+    const float samples[] = {69.5f, 69.001f};
+    for (size_t i = 0; i != sizeof(samples) / sizeof(samples[0]); ++i) {
+        rtt.latest = samples[i];
+        abba2_on_acked(&state, 76000, &rtt, 0, 0);
+        ok(state.low.cwnd == 70000 && state.low.rtt == 70);
+        ok(state.a == a && state.b == b);
+    }
     rtt.latest = 69;
     abba2_on_acked(&state, 76000, &rtt, 0, 0);
     ok(state.low.cwnd == 76000 && state.low.rtt == 69);

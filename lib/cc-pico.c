@@ -434,7 +434,8 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
         state->low.rtt = state->high.rtt;
         fit = 1;
     }
-    if (rtt->latest < state->low.rtt) {
+    /* Retain the low point until RTT improves by at least 1ms, ignoring smaller changes as noise. */
+    if (state->low.rtt - rtt->latest >= 1) {
         state->low.cwnd = cwnd;
         state->low.rtt = rtt->latest;
         fit = 1;
