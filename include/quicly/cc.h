@@ -597,7 +597,7 @@ inline int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, c
     /* If the latest RTT is below max(min_rtt + 4ms, min_rtt * 1.1), adopt a higher increase rate (i.e., 3x per RTT) than the
      * ordinary Slow Start (2x per RTT). The thresholds are chosen so that they do not overlap with HyStart++, which reduces the
      * increase rate to 1.25x. */
-    uint32_t threshold = rtt->minimum + 4;
+    float threshold = rtt->minimum + 4;
     if (threshold < rtt->minimum * 35 / 32)
         threshold = rtt->minimum * 35 / 32;
 

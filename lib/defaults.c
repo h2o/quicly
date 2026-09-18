@@ -384,17 +384,17 @@ void quicly_default_free_stream(quicly_stream_t *stream)
     free(stream);
 }
 
-static int64_t default_now(quicly_now_t *self)
+static void default_now(quicly_now_t *self, double *value)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    int64_t tv_now = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    double tv_now = (double)tv.tv_sec * 1000 + tv.tv_usec / 1000.;
 
     /* make sure that the time does not get rewind */
-    static __thread int64_t now;
+    static __thread double now;
     if (now < tv_now)
         now = tv_now;
-    return now;
+    *value = now;
 }
 
 quicly_now_t quicly_default_now = {default_now};

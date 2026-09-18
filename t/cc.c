@@ -1543,11 +1543,27 @@ static void test_abba2(void)
     subtest("cuback-startup-and-switch", test_abba2_startup_and_switch, &quicly_cc_cuback_init);
 }
 
+static void test_rapid_start_fractional_rtt(void)
+{
+    struct st_quicly_cc_rapid_start_t rs;
+    quicly_rtt_t rtt;
+    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 16.25f);
+    quicly_rtt_update(&rtt, 16.25f, 0, 1);
+    quicly_cc_init_rapid_start(&rs, 21);
+    quicly_rtt_update(&rtt, 20.5f, 0, 21);
+    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* 20.5ms is above the 20.25ms threshold */
+    quicly_rtt_update(&rtt, 20.125f, 0, 21);
+    ok(quicly_cc_rapid_start_use_3x(&rs, &rtt));
+    quicly_rtt_update(&rtt, 20.5f, 0, 41);
+    ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* the lower fractional sample has expired */
+}
+
 void test_cc(void)
 {
     subtest("fast-cbrt", test_fast_cbrt);
     subtest("rapid-start", test_rapid_start);
     subtest("abba2", test_abba2);
+    subtest("rapid-start-fractional-rtt", test_rapid_start_fractional_rtt);
     subtest("reno", test_reno);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);
     subtest("cubic-target-bounds", test_cubic_target_bounds);
