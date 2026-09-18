@@ -787,7 +787,7 @@ static void update_ecn_state(quicly_conn_t *conn, enum en_quicly_ecn_state new_s
 static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
 {
     if (conn->super.remote.transport_params.min_ack_delay_usec != UINT64_MAX)
-        conn->egress.ack_frequency.update_at = (int64_t)ceil(conn->stash.now_double + get_sentmap_expiration_time(conn));
+        conn->egress.ack_frequency.update_at = ceil(conn->stash.now_double + get_sentmap_expiration_time(conn));
 }
 
 size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *datagram, size_t datagram_size,
@@ -1530,7 +1530,7 @@ static void update_idle_timeout(quicly_conn_t *conn, int is_in_receive)
 
     double three_pto = 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.remote.transport_params.max_ack_delay,
                                               conn->egress.loss.conf->min_pto);
-    conn->idle_timeout.at = (int64_t)ceil(conn->stash.now_double + (idle_msec > three_pto ? idle_msec : three_pto));
+    conn->idle_timeout.at = ceil(conn->stash.now_double + (idle_msec > three_pto ? idle_msec : three_pto));
     conn->idle_timeout.should_rearm_on_send = is_in_receive;
 }
 
@@ -5613,7 +5613,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
     /* disable ECN if zero packets where acked in the first 3 PTO of the connection during which all sent packets are ECT(0) */
     if (conn->egress.ecn.state == QUICLY_ECN_PROBING &&
-        conn->created_at + (int64_t)(conn->egress.loss.rtt.smoothed * 3) < conn->stash.now) {
+        conn->created_at + 3. * conn->egress.loss.rtt.smoothed < conn->stash.now) {
         update_ecn_state(conn, QUICLY_ECN_OFF);
         /* TODO reset CC? */
     }
@@ -5899,7 +5899,7 @@ static quicly_error_t do_send_closed(quicly_conn_t *conn, quicly_send_context_t 
     }
 
     /* wait at least 1ms */
-    if ((conn->egress.send_ack_at = (int64_t)ceil(quicly_sentmap_get(&iter)->sent_at + get_sentmap_expiration_time(conn))) <=
+    if ((conn->egress.send_ack_at = ceil(quicly_sentmap_get(&iter)->sent_at + get_sentmap_expiration_time(conn))) <=
         conn->stash.now)
         conn->egress.send_ack_at = conn->stash.now + 1;
 
@@ -6116,7 +6116,7 @@ static quicly_error_t enter_close(quicly_conn_t *conn, int local_is_initiating, 
         conn->egress.send_ack_at = 0;
     } else {
         conn->super.state = QUICLY_STATE_DRAINING;
-        conn->egress.send_ack_at = wait_draining ? (int64_t)ceil(conn->stash.now_double + get_sentmap_expiration_time(conn)) : 0;
+        conn->egress.send_ack_at = wait_draining ? ceil(conn->stash.now_double + get_sentmap_expiration_time(conn)) : 0;
     }
 
     setup_next_send(conn);

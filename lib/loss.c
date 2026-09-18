@@ -59,7 +59,9 @@ quicly_error_t quicly_loss_detect_loss(quicly_loss_t *loss, int64_t now, uint32_
      * detection. if no timer is required, loss_time is set to INT64_MAX. */
 
     const float rtt_for_threshold = loss->rtt.latest > loss->rtt.smoothed ? loss->rtt.latest : loss->rtt.smoothed;
-    const uint32_t delay_until_lost = (uint32_t)ceilf(rtt_for_threshold * (1024 + loss->thresholds.time_based_percentile) / 1024);
+    double delay_until_lost = (double)rtt_for_threshold * (1024 + loss->thresholds.time_based_percentile) / 1024;
+    if (delay_until_lost < 1)
+        delay_until_lost = 1;
     quicly_sentmap_iter_t iter;
     const quicly_sent_packet_t *sent;
     quicly_error_t ret;
@@ -108,7 +110,7 @@ quicly_error_t quicly_loss_detect_loss(quicly_loss_t *loss, int64_t now, uint32_
     while (sent->sent_at != INFINITY && sent->packet_number + 1 < loss->largest_acked_packet_plus1.per_epoch[sent->ack_epoch]) {
         if (sent->cc_bytes_in_flight != 0) {
             assert(now < sent->sent_at + delay_until_lost);
-            loss->loss_time = (int64_t)ceil(sent->sent_at + delay_until_lost);
+            loss->loss_time = ceil(sent->sent_at + delay_until_lost);
             break;
         }
         quicly_sentmap_skip(&iter);

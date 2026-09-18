@@ -364,7 +364,7 @@ static void test_fractional_sentmap_timers(void)
 {
     quicly_loss_t loss;
     const int64_t millisec = INT64_C(1800000000000);
-    const double sent_at = millisec + 0.75;
+    const double sent_at = millisec + 0.125;
     quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
                      &quicly_spec_context.transport_params.ack_delay_exponent);
     for (uint64_t pn = 0; pn != 2; ++pn) {
@@ -379,15 +379,15 @@ static void test_fractional_sentmap_timers(void)
                                 QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
 
     num_packets_lost = 0;
-    /* The 1.125ms RTT gives a 2ms loss delay; sent at +0.75ms, the packet must survive the +2ms tick. */
+    /* A 1.125ms RTT gives a 1.265625ms loss delay. Round the +1.390625ms deadline, not the duration, to the +2ms tick. */
+    ok(quicly_loss_detect_loss(&loss, millisec + 1, 0, 1, on_loss_detected) == 0);
+    ok(num_packets_lost == 0 && loss.loss_time == millisec + 2);
     ok(quicly_loss_detect_loss(&loss, millisec + 2, 0, 1, on_loss_detected) == 0);
-    ok(num_packets_lost == 0 && loss.loss_time == millisec + 3);
-    ok(quicly_loss_detect_loss(&loss, millisec + 3, 0, 1, on_loss_detected) == 0);
     ok(num_packets_lost == 1 && loss.loss_time == INT64_MAX);
 
-    /* Four PTOs are 13.5ms; sent at +0.75ms, the packet expires on the +15ms tick. */
+    /* Four PTOs are 13.5ms; sent at +0.125ms, the packet expires on the +14ms tick. */
     ok(quicly_loss_get_sentmap_expiration_time(&loss, 0) == 13.5);
-    int64_t expires_at = millisec + 15;
+    int64_t expires_at = millisec + 14;
     ok(quicly_loss_init_sentmap_iter(&loss, &iter, expires_at - 1, 0, 1) == 0);
     ok(quicly_sentmap_get(&iter)->packet_number == 0);
     ok(quicly_loss_init_sentmap_iter(&loss, &iter, expires_at, 0, 1) == 0);
