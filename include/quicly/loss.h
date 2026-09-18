@@ -176,7 +176,7 @@ typedef enum quicly_loss_ack_received_kind_t {
     QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING_LATE_ACK,
 } quicly_loss_ack_received_kind_t;
 
-static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
+static void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, float initial_rtt, const uint16_t *max_ack_delay,
                              const uint8_t *ack_delay_exponent);
 static void quicly_loss_dispose(quicly_loss_t *r);
 static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, double last_retransmittable_sent_at, int has_outstanding,
@@ -257,7 +257,7 @@ inline double quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint
     return (double)rtt->smoothed + (rtt->variance * 4 >= min_pto ? rtt->variance * 4 : min_pto) + max_ack_delay;
 }
 
-inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, uint32_t initial_rtt, const uint16_t *max_ack_delay,
+inline void quicly_loss_init(quicly_loss_t *r, const quicly_loss_conf_t *conf, float initial_rtt, const uint16_t *max_ack_delay,
                              const uint8_t *ack_delay_exponent)
 {
     *r = (quicly_loss_t){.conf = conf,
