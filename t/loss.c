@@ -254,13 +254,64 @@ static void test_fractional_rtt(void)
                                 QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
     ok(loss.rtt.latest == 1.625f);
 
-    /* Sub-millisecond measurements and zero-duration samples retain the 1ms minimum. */
-    quicly_loss_on_ack_received(&loss, 3, UINT64_MAX, 4, QUICLY_EPOCH_1RTT, sent_at + 0.001, sent_at, 0,
+    /* Sub-millisecond samples are retained; sub-microsecond and zero-duration samples are clamped to 1us. */
+    quicly_loss_on_ack_received(&loss, 3, UINT64_MAX, 4, QUICLY_EPOCH_1RTT, sent_at + 0.25, sent_at, 0,
                                 QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
-    ok(loss.rtt.latest == 1 && loss.rtt.minimum == 1);
-    quicly_loss_on_ack_received(&loss, 4, UINT64_MAX, 5, QUICLY_EPOCH_1RTT, sent_at, sent_at, 0,
+    ok(loss.rtt.latest == 0.25f && loss.rtt.minimum == 0.25f);
+    quicly_loss_on_ack_received(&loss, 4, UINT64_MAX, 5, QUICLY_EPOCH_1RTT, sent_at + 0.0005, sent_at, 0,
                                 QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
-    ok(loss.rtt.latest == 1);
+    ok(loss.rtt.latest == 0.001f && loss.rtt.minimum == 0.001f);
+    quicly_loss_on_ack_received(&loss, 5, UINT64_MAX, 6, QUICLY_EPOCH_1RTT, sent_at, sent_at, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(loss.rtt.latest == 0.001f);
+    quicly_loss_dispose(&loss);
+}
+
+static void test_rtt_sample_floor(void)
+{
+    quicly_rtt_t rtt;
+    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 20);
+    quicly_rtt_update(&rtt, 0, 0);
+    ok(rtt.latest == 0.001f && rtt.minimum == 0.001f && rtt.smoothed == 0.001f);
+    ok(rtt.variance == 0.0005f);
+
+    /* The zero-duration sample is not mistaken for "no sample" on the next update. */
+    quicly_rtt_update(&rtt, 0.25f, 0.125f);
+    ok(rtt.latest == 0.125f && rtt.minimum == 0.001f);
+    ok(fabsf(rtt.smoothed - 0.0165f) < 0.000001f);
+
+    /* Reject an ACK delay that would reduce the adjusted sample below the measured minimum. */
+    quicly_rtt_update(&rtt, 0.125f, 0.1245f);
+    ok(rtt.latest == 0.125f && rtt.minimum == 0.001f);
+    ok(rtt.smoothed >= 0.001f && rtt.variance >= 0);
+    ok(quicly_rtt_get_pto(&rtt, 0, 1) == (double)rtt.smoothed + 1);
+}
+
+static void test_submillisecond_timers(void)
+{
+    quicly_loss_t loss;
+    const int64_t millisec = INT64_C(1800000000000);
+    const double sent_at = millisec + 0.75;
+    const uint16_t max_ack_delay = 0;
+    const uint8_t ack_delay_exponent = 3;
+    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &max_ack_delay, &ack_delay_exponent);
+    ok(quicly_sentmap_prepare(&loss.sentmap, 0, sent_at, QUICLY_EPOCH_1RTT) == 0);
+    quicly_sentmap_commit(&loss.sentmap, 10, 0, 0);
+
+    /* ACK of a later packet supplies a 125us RTT, while packet 0 remains outstanding. */
+    quicly_loss_on_ack_received(&loss, 1, UINT64_MAX, 2, QUICLY_EPOCH_1RTT, sent_at + 0.125, sent_at, 0,
+                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    ok(loss.rtt.latest == 0.125f);
+    ok(quicly_rtt_get_pto(&loss.rtt, 0, 1) == 1.125);
+    quicly_loss_update_alarm(&loss, millisec, sent_at, 1, 1, 0, 0, 1);
+    ok(loss.alarm_at == millisec + 2);
+
+    /* The loss delay is still at least 1ms, despite the smaller RTT. */
+    num_packets_lost = 0;
+    ok(quicly_loss_detect_loss(&loss, millisec + 1, 0, 1, on_loss_detected) == 0);
+    ok(num_packets_lost == 0 && loss.loss_time == millisec + 2);
+    ok(quicly_loss_detect_loss(&loss, millisec + 2, 0, 1, on_loss_detected) == 0);
+    ok(num_packets_lost == 1 && loss.loss_time == INT64_MAX);
     quicly_loss_dispose(&loss);
 }
 
@@ -350,6 +401,8 @@ static void test_fractional_sentmap_timers(void)
 void test_loss(void)
 {
     subtest("fractional-rtt", test_fractional_rtt);
+    subtest("rtt-sample-floor", test_rtt_sample_floor);
+    subtest("submillisecond-timers", test_submillisecond_timers);
     subtest("fractional-pto", test_fractional_pto);
     subtest("fractional-sentmap-timers", test_fractional_sentmap_timers);
     subtest("time-detection", test_time_detection);

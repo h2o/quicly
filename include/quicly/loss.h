@@ -229,7 +229,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, float latest_rtt, float ack_del
     int is_first_sample = rtt->latest == 0;
 
     assert(latest_rtt >= 0);
-    rtt->latest = latest_rtt >= 1 ? latest_rtt : 1; /* Force minimum RTT sample to 1ms */
+    rtt->latest = latest_rtt >= 0.001f ? latest_rtt : 0.001f; /* Force minimum RTT sample to 1us */
 
     /* update min_rtt */
     if (rtt->latest < rtt->minimum)
