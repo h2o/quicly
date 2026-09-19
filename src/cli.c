@@ -1330,6 +1330,7 @@ static void usage(const char *cmd)
            "                            multiple times)\n"
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
+           "  --abba                    enables ABBA2 bandwidth adaptation\n"
            "  --rapid-start             turns on rapid start\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
@@ -1616,6 +1617,7 @@ int main(int argc, char **argv)
                                              {"max-crypto-bytes", required_argument, NULL, 0},
                                              {"no-normalize-cc-mtu", no_argument, NULL, 0},
                                              {"rapid-start", no_argument, NULL, 0},
+                                             {"abba", no_argument, NULL, 0},
                                              {"sockfd", required_argument, NULL, 0},
                                              {"exit-after-handshake", no_argument, NULL, 0},
                                              {"calc-initial-secret", required_argument, NULL, 0},
@@ -1653,6 +1655,8 @@ int main(int argc, char **argv)
                 }
             } else if (strcmp(longopts[opt_index].name, "no-normalize-cc-mtu") == 0) {
                 ctx.normalize_cc_mtu = 0;
+            } else if (strcmp(longopts[opt_index].name, "abba") == 0) {
+                ctx.abba = 1;
             } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
                 ctx.enable_ratio.rapid_start = 255;
             } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {
