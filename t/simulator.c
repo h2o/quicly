@@ -828,9 +828,9 @@ static uint64_t tls_now_cb(ptls_get_time_t *self)
     return (uint64_t)(now * 1000);
 }
 
-static int64_t quic_now_cb(quicly_now_t *self)
+static void quic_now_cb(quicly_now_t *self, double *value)
 {
-    return (int64_t)(now * 1000);
+    *value = now * 1000;
 }
 
 static void stream_destroy_cb(quicly_stream_t *stream, quicly_error_t err)

@@ -96,6 +96,7 @@ static void on_ingress_reset(quicly_stream_t *stream, quicly_error_t err);
 
 quicly_address_t fake_address;
 int64_t quic_now = 1;
+static double quic_now_submillisec;
 quicly_context_t quic_ctx;
 quicly_stream_callbacks_t stream_callbacks = {
     on_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_egress_stop, on_ingress_receive, on_ingress_reset};
@@ -245,9 +246,9 @@ static void test_adjust_stream_frame_layout(void)
 #undef TEST
 }
 
-static int64_t get_now_cb(quicly_now_t *self)
+static void get_now_cb(quicly_now_t *self, double *now)
 {
-    return quic_now;
+    *now = quic_now + quic_now_submillisec;
 }
 
 static quicly_now_t get_now = {get_now_cb};
@@ -1213,11 +1214,69 @@ static void test_set_cc(void)
     ok(strcmp(stats.cc.type->name, "reno") == 0);
 }
 
+static void test_cc_accel_context(void)
+{
+    quicly_init_cc_t *const policies[] = {&quicly_cc_cubic_init, &quicly_cc_cuback_init};
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
+        quicly_context_t ctx = quic_ctx;
+        ctx.init_cc = policies[i];
+        ctx.abba = 1;
+        quicly_conn_t *conn;
+        ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                          NULL) == 0);
+        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.state.pico.abba2.high.cwnd == 0);
+
+        /* Path promotion uses configured policy and discards the old path's measurements. */
+        conn->egress.cc.abba = 0;
+        conn->egress.cc.state.pico.abba2.high.cwnd = 100000;
+        quicly_rtt_update(&conn->egress.loss.rtt, 20, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20);
+        ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
+        ok(promote_path(conn, 1) == 0);
+        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.type->cc_init == policies[i]);
+        ok(conn->egress.cc.state.pico.abba2.high.cwnd == 0);
+        ok(conn->egress.loss.rtt.latest == 0);
+        ok(conn->egress.loss.rtt.floor.newest_sample_until == 0);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20); /* initial estimate inherited from the old path */
+        quicly_rtt_update(&conn->egress.loss.rtt, 80, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 80);
+        quicly_free(conn);
+    }
+}
+
 void test_ecn_index_from_bits(void)
 {
     ok(get_ecn_index_from_bits(1) == 1);
     ok(get_ecn_index_from_bits(2) == 0);
     ok(get_ecn_index_from_bits(3) == 2);
+}
+
+static void test_resume_sendrate(void)
+{
+    quicly_conn_t conn = {0};
+    uint64_t rate;
+    uint32_t rtt;
+    const struct {
+        float minimum;
+        uint32_t stored;
+    } cases[] = {{0.001f, 1}, {0.25f, 1}, {1, 1}, {1.25f, 2}, {250, 250}};
+
+    quicly_ratemeter_init(&conn.egress.ratemeter);
+    conn.egress.loss.rtt.minimum = 0.25f;
+    calc_resume_sendrate(&conn, &rate, &rtt);
+    ok(rate == 0 && rtt == 0);
+
+    quicly_ratemeter_enter_cc_limited(&conn.egress.ratemeter, 0);
+    quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1000, 1000, 0);
+    quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1050, 51000, 1);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(cases); ++i) {
+        conn.egress.loss.rtt.minimum = cases[i].minimum;
+        calc_resume_sendrate(&conn, &rate, &rtt);
+        ok(rate == 1000000);
+        ok(rtt == cases[i].stored);
+    }
 }
 
 static void test_jumpstart_cwnd(void)
@@ -1227,6 +1286,8 @@ static void test_jumpstart_cwnd(void)
         .transport_params.max_udp_payload_size = 1200,
     };
     ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 250) == 250000);
+    ok(derive_jumpstart_cwnd(&unbounded_max, 0.25f, 1000000, 1) == 250);
+    ok(derive_jumpstart_cwnd(&unbounded_max, 1.25f, 1000000, 2) == 1250);
     ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 400) == 250000); /* if RTT increases, CWND stays same */
     ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
 
@@ -1279,6 +1340,109 @@ static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *
     };
     lock_now(conn, 0);
     setup_send_space(conn, QUICLY_EPOCH_1RTT, s);
+}
+
+static void test_fractional_close_timeout(void)
+{
+    int64_t saved_now = quic_now;
+    for (int draining = 0; draining != 2; ++draining) {
+        quic_now = INT64_C(1800000000000);
+        quicly_conn_t *client, *server;
+        test_setup_connected_peers(&client, &server);
+
+        quic_now_submillisec = 0.75;
+        ok(quicly_close(client, 0, "") == 0);
+        quicly_address_t dest, src;
+        struct iovec datagram;
+        uint8_t buf[1500];
+        size_t num_datagrams = 1;
+        ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
+        ok(num_datagrams == 1);
+        quicly_decoded_packet_t decoded;
+        ok(decode_packets(&decoded, &datagram, 1) == 1);
+        ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+
+        quicly_conn_t *conn = draining ? server : client;
+        quicly_stats_t stats;
+        quicly_get_stats(conn, &stats);
+        int64_t expires_at = ceil(
+            quic_now + quic_now_submillisec +
+            4 * quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(conn)->max_ack_delay, quic_ctx.loss.min_pto));
+        ok(quicly_get_first_timeout(conn) == expires_at);
+
+        /* Closing and draining both retain state until the first whole-millisecond tick past the deadline. */
+        quic_now_submillisec = 0;
+        quic_now = expires_at - 1;
+        num_datagrams = 1;
+        ok(quicly_send(conn, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
+        ok(quicly_get_first_timeout(conn) == expires_at);
+        quic_now = expires_at;
+        num_datagrams = 1;
+        ok(quicly_send(conn, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == QUICLY_ERROR_FREE_CONNECTION);
+        quicly_free(client);
+        quicly_free(server);
+    }
+    quic_now = saved_now;
+}
+
+static void test_fractional_rtt_measurement(void)
+{
+    int64_t saved_now = quic_now;
+    quic_now = INT64_C(1800000000000);
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_get_remote_transport_parameters(client)->ack_delay_exponent == 3);
+
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(stream, "a", 1) == 0);
+    struct iovec datagram;
+    uint8_t buf[1500];
+    quicly_address_t dest, src;
+    size_t num_datagrams = 1;
+    quicly_decoded_packet_t decoded;
+    quic_now_submillisec = 0.125;
+    ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(num_datagrams == 1);
+    /* The outstanding packet's PTO is still an absolute millisecond deadline. */
+    quicly_stats_t stats;
+    quicly_get_stats(client, &stats);
+    double pto =
+        quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay, quic_ctx.loss.min_pto);
+    ok(quicly_get_first_timeout(client) == ceil(quic_now + quic_now_submillisec + pto));
+    ok(decode_packets(&decoded, &datagram, 1) == 1);
+    quic_now_submillisec += 0.625;
+    ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+
+    /* Hold the ACK for 1.5ms, then return it over another 625us of propagation delay. Exponent 3 encodes 1.496ms. */
+    quic_now += 2;
+    quic_now_submillisec = 0.25;
+    quicly_send_context_t s;
+    test_setup_send_context(server, &s, &datagram, buf, sizeof(buf));
+    ok(send_ack(server, &server->application->super, &s) == 0);
+    ok(commit_send_packet(server, &s, 0) == 0);
+    unlock_now(server);
+    ok(decode_packets(&decoded, &datagram, 1) == 1);
+    quic_now_submillisec += 0.625;
+    ok(quicly_receive(client, NULL, &fake_address.sa, &decoded) == 0);
+
+    /* Observe the public statistics, exercising the clock, sentmap, ACK encoding and RTT update together. */
+    quicly_get_stats(client, &stats);
+    ok(fabsf(stats.rtt.latest - 1.254f) < 0.000001f);
+
+    /* Closing retains the fractional PTO derived from that measurement. */
+    pto = quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay, quic_ctx.loss.min_pto);
+    ok(pto != floor(pto));
+    ok(quicly_close(client, 0, "") == 0);
+    num_datagrams = 1;
+    ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(num_datagrams == 1);
+    ok(quicly_get_first_timeout(client) == ceil(quic_now + quic_now_submillisec + 4 * pto));
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_now_submillisec = 0;
+    quic_now = saved_now;
 }
 
 /**
@@ -1436,6 +1600,12 @@ static void test_stats_foreach_field(size_t off, size_t size)
 {
     ok(test_stats_foreach_next_off == off);
 
+    /* The RTT floor's sampling state is internal, not a set of exported statistics. */
+    if (off == offsetof(quicly_stats_t, rtt.latest)) {
+        test_stats_foreach_next_off = offsetof(quicly_stats_t, loss_thresholds.use_packet_based);
+        return;
+    }
+
     /* Due to alignment, padding might exist between two fields when their types are different. The `gaps` list calls out the ones
      * that "might" have such padding on some architectures. */
     static const size_t gaps[] = {
@@ -1445,6 +1615,7 @@ static void test_stats_foreach_field(size_t off, size_t size)
         GAP(loss_thresholds.use_packet_based, loss_thresholds.time_based_percentile),
         GAP(loss_thresholds.time_based_percentile, cc.cwnd),
         GAP(cc.ssthresh, cc.cwnd_initial),
+        GAP(cc.cwnd_exiting_slow_start, cc.exit_slow_start_at),
         GAP(cc.num_ecn_loss_episodes, delivery_rate.latest),
 #undef GAP
         SIZE_MAX};
@@ -1550,11 +1721,15 @@ int main(int argc, char **argv)
     subtest("lossy", test_lossy);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
+    subtest("cc-accel-context", test_cc_accel_context);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
+    subtest("resume-sendrate", test_resume_sendrate);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
+    subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
+    subtest("fractional-close-timeout", test_fractional_close_timeout);
 
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
