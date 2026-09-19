@@ -184,8 +184,8 @@ static void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 /**
  * called when an ACK is received
  */
-static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, uint64_t largest_late_acked, uint64_t next_pn,
-                                        size_t epoch, int64_t now, int64_t sent_at, uint64_t ack_delay_encoded,
+static void quicly_loss_on_ack_received(quicly_loss_t *r, uint64_t largest_newly_acked, uint64_t largest_late_acked,
+                                        uint64_t next_pn, size_t epoch, int64_t now, int64_t sent_at, uint64_t ack_delay_encoded,
                                         quicly_loss_ack_received_kind_t kind);
 /* This function updates the loss detection timer and indicates to the caller how many packets should be sent.
  * After calling this function, app should:
@@ -294,13 +294,16 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, int64_t last
 #define SET_ALARM(t)                                                                                                               \
     do {                                                                                                                           \
         int64_t _t = (t);                                                                                                          \
-        if (is_after_send) {                                                                                                       \
-            assert(now < _t);                                                                                                      \
-        } else if (_t < now) {                                                                                                     \
-            _t = now;                                                                                                              \
+        if (_t <= now) {                                                                                                           \
+            _t = now + (is_after_send != 0);                                                                                       \
         }                                                                                                                          \
         r->alarm_at = _t;                                                                                                          \
     } while (0)
+
+    /* Recalculating another path's alarm (or processing an ACK) must leave an
+     * overdue deadline due. Moving it to now+1 on every scheduler scan can
+     * postpone PTO forever. Only the serviced path needs a future deadline to
+     * avoid immediately repeating a send attempt that made no progress. */
 
     /* time-threshold loss detection */
     if (r->loss_time != INT64_MAX) {

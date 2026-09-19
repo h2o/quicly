@@ -164,6 +164,10 @@ struct st_quicly_cc_cubic_t {
 
 typedef struct st_quicly_cc_t {
     /**
+     * Back-pointer to connection.
+     */
+    struct st_quicly_conn_t *conn;
+    /**
      * Congestion controller type.
      */
     quicly_cc_type_t *type;
