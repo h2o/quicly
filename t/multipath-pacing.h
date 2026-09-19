@@ -8,17 +8,15 @@ static void test_multipath_pacing(void)
     quic_ctx.enable_ratio.pacing = 255;
     quic_ctx.path_scheduler = &quicly_round_robin_path_scheduler;
     char cid_key[] = "0123456789abcdef";
-    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb,
-                                                             &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
+    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+                                                              ptls_iovec_init(cid_key, strlen(cid_key)));
     ok(quic_ctx.cid_encryptor != NULL);
     quicly_conn_t *client, *server;
     test_setup_connected_peers(&client, &server);
     get_path(client, 0)->address.local = get_path(client, 0)->address.remote = fake_address;
     get_path(server, 0)->address.local = get_path(server, 0)->address.remote = fake_address;
-    struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(10000),
-                                 .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(20000),
-                                .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(10000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(20000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
     ok(quicly_open_path(client, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
     for (size_t i = 0; i < 100; ++i) {
         ++quic_now;

@@ -23,14 +23,12 @@ static void test_multipath_delivery_rate(void)
     quicly_cid_encryptor_t *orig_cid_encryptor = quic_ctx.cid_encryptor;
     char cid_key[] = "0123456789abcdef";
     quic_ctx.transport_params.initial_max_path_id = 4;
-    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb,
-                                                           &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
+    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+                                                              ptls_iovec_init(cid_key, strlen(cid_key)));
     quicly_conn_t *client, *server;
     test_setup_connected_peers(&client, &server);
-    struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(12345),
-                                 .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)}};
-    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(54321),
-                                .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)}};
+    struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(12345), .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)}};
+    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(54321), .sin_addr = {.s_addr = htonl(INADDR_LOOPBACK)}};
     ok(new_path(client, 1, 1, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
     get_path(client, 1)->probe_only = 0;
 
