@@ -411,12 +411,9 @@ static void test_fractional_pto(void)
         int pto_count, handshake;
         int64_t delay_at_125us, delay_at_750us;
     } tests[] = {
-        {-2, 0, 2, 2}, /* speculative PTO is clamped to the 1ms minimum */
-        {-1, 0, 2, 3}, /* speculative PTO excludes ACK delay */
-        {0, 0, 5, 6},
-        {1, 0, 9, 10},
-        {2, 0, 18, 19},
-        {0, 1, 4, 5}, /* handshake PTO excludes ACK delay */
+        {-2, 0, 2, 2},                                              /* speculative PTO is clamped to the 1ms minimum */
+        {-1, 0, 2, 3},                                              /* speculative PTO excludes ACK delay */
+        {0, 0, 5, 6},  {1, 0, 9, 10}, {2, 0, 18, 19}, {0, 1, 4, 5}, /* handshake PTO excludes ACK delay */
         {1, 1, 7, 8},
     };
     for (size_t i = 0; i != PTLS_ELEMENTSOF(tests); ++i) {
