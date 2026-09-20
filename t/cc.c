@@ -826,10 +826,10 @@ static void test_rapid_start(void)
     ok(!quicly_cc_rapid_start_is_active(&rs));
 }
 
-static void test_abba2_model(void)
+static void test_abba_model(void)
 {
-    struct st_quicly_cc_abba2_t state = {.high = {100000, 120}, .low = {70000, 100}};
-    abba2_fit_model(&state);
+    struct st_quicly_cc_abba_t state = {.high = {100000, 120}, .low = {70000, 100}};
+    abba_fit_model(&state);
     ok(fabs(state.a - 1. / 2250) < FLT_EPSILON / 2250);
     ok(fabs(state.b - 620. / 9) < FLT_EPSILON * 620 / 9);
     ok(fabs((double)state.a * 70000 + state.b - 100) < FLT_EPSILON * 100);
@@ -837,163 +837,163 @@ static void test_abba2_model(void)
 
     /* A steep fit is capped at the origin before flattening about the low point. */
     state.high.rtt = 200;
-    abba2_fit_model(&state);
+    abba_fit_model(&state);
     ok(state.a == (float)(100. / 70000 * (2. / 3)));
     ok(state.b == (float)(100. / 3));
     state.high.rtt = 100;
-    abba2_fit_model(&state);
+    abba_fit_model(&state);
     ok(state.a == 0 && state.b == 100);
     state.high.rtt = 120;
-    abba2_fit_model(&state);
+    abba_fit_model(&state);
     float a = state.a, b = state.b;
     state.low.cwnd = 100000;
-    abba2_fit_model(&state);
+    abba_fit_model(&state);
     ok(state.a == a && state.b == b);
     state.low.cwnd = 110000;
-    abba2_fit_model(&state);
+    abba_fit_model(&state);
     ok(state.a == a && state.b == b);
 
     /* The high watermark pairs the pre-reduction window with the recovery minimum, not SRTT. */
     quicly_rtt_t rtt = {.latest = 80, .smoothed = 115, .minimum = 20};
-    abba2_on_congestion(&state, 100000, &rtt, 0);
+    abba_on_congestion(&state, 100000, &rtt, 0);
     ok(state.high.cwnd == 100000 && state.high.rtt == 80);
     ok(state.low.cwnd == 0);
     rtt.latest = 70;
-    abba2_on_acked(&state, 80000, &rtt, 1, 0);
+    abba_on_acked(&state, 80000, &rtt, 1, 0);
     ok(state.high.cwnd == 100000 && state.high.rtt == 70);
     ok(state.low.cwnd == 0);
     rtt.latest = 75;
     rtt.smoothed = 110;
-    abba2_on_acked(&state, 75000, &rtt, 1, 0);
+    abba_on_acked(&state, 75000, &rtt, 1, 0);
     ok(state.high.rtt == 70 && state.low.cwnd == 0);
     rtt.latest = 90;
-    abba2_on_acked(&state, 70000, &rtt, 0, 0);
+    abba_on_acked(&state, 70000, &rtt, 0, 0);
     ok(state.low.cwnd == 70000 && state.low.rtt == 70);
     ok(state.high.rtt == 70);
     ok(state.a == 0 && state.b == 70);
     a = state.a;
     b = state.b;
-    abba2_on_acked(&state, 72000, &rtt, 0, 0);
+    abba_on_acked(&state, 72000, &rtt, 0, 0);
     ok(state.low.cwnd == 70000 && state.low.rtt == 70);
     ok(state.a == a && state.b == b);
     rtt.latest = 70;
-    abba2_on_acked(&state, 75000, &rtt, 0, 0);
+    abba_on_acked(&state, 75000, &rtt, 0, 0);
     ok(state.low.cwnd == 70000); /* Equal samples do not move the point. */
     ok(state.a == a && state.b == b);
     /* Sub-millisecond improvements retain both low-point fields and the model until the total reaches 1ms. */
     const float samples[] = {69.5f, 69.001f};
     for (size_t i = 0; i != sizeof(samples) / sizeof(samples[0]); ++i) {
         rtt.latest = samples[i];
-        abba2_on_acked(&state, 76000, &rtt, 0, 0);
+        abba_on_acked(&state, 76000, &rtt, 0, 0);
         ok(state.low.cwnd == 70000 && state.low.rtt == 70);
         ok(state.a == a && state.b == b);
     }
     rtt.latest = 69;
-    abba2_on_acked(&state, 76000, &rtt, 0, 0);
+    abba_on_acked(&state, 76000, &rtt, 0, 0);
     ok(state.low.cwnd == 76000 && state.low.rtt == 69);
     ok(state.high.rtt == 70 && state.a == 0 && state.b == 69);
     rtt.latest = 65;
-    abba2_on_acked(&state, 78000, &rtt, 0, 0);
+    abba_on_acked(&state, 78000, &rtt, 0, 0);
     ok(state.high.rtt == 70 && state.low.rtt == 65);
     ok(state.a == (float)(5. / 22000 * (2. / 3)) && state.b > 0);
 
     /* Without an intervening recovery ACK, retain the congestion sample even when SRTT is lower. */
     rtt.latest = 160;
     rtt.smoothed = 125;
-    abba2_on_congestion(&state, 100000, &rtt, 0);
+    abba_on_congestion(&state, 100000, &rtt, 0);
     ok(state.high.rtt == 160 && state.low.cwnd == 0);
     rtt.latest = 170;
-    abba2_on_acked(&state, 70000, &rtt, 0, 0);
+    abba_on_acked(&state, 70000, &rtt, 0, 0);
     ok(state.high.rtt == 160 && state.low.rtt == 160);
     ok(state.a == 0 && state.b == 160);
 
     /* Without a sample at congestion, SRTT supplies the initial estimate; recovery samples can lower it. */
     quicly_rtt_init(&rtt, &quicly_spec_context.loss, 120);
-    abba2_on_congestion(&state, 100000, &rtt, 0);
+    abba_on_congestion(&state, 100000, &rtt, 0);
     ok(state.high.rtt == 120 && state.low.cwnd == 0);
-    abba2_on_acked(&state, 70000, &rtt, 1, 0);
-    abba2_on_acked(&state, 70000, &rtt, 0, 0);
+    abba_on_acked(&state, 70000, &rtt, 1, 0);
+    abba_on_acked(&state, 70000, &rtt, 0, 0);
     ok(state.high.rtt == 120 && state.low.cwnd == 0);
     ok(state.a == 0 && isnan(state.b));
     quicly_rtt_update(&rtt, 140, 0, 1);
-    abba2_on_acked(&state, 70000, &rtt, 1, 0);
+    abba_on_acked(&state, 70000, &rtt, 1, 0);
     ok(state.high.rtt == 120 && state.low.cwnd == 0);
     quicly_rtt_update(&rtt, 100, 0, 2);
-    abba2_on_acked(&state, 70000, &rtt, 1, 0);
+    abba_on_acked(&state, 70000, &rtt, 1, 0);
     ok(state.high.rtt == 100 && state.low.cwnd == 0);
-    abba2_on_acked(&state, 70000, &rtt, 0, 0);
+    abba_on_acked(&state, 70000, &rtt, 0, 0);
     ok(state.low.cwnd == 70000 && state.low.rtt == 100);
     ok(state.a == 0 && state.b == 100);
 
     /* If there are no recovery samples, the SRTT fallback remains the high watermark at recovery exit. */
     quicly_rtt_init(&rtt, &quicly_spec_context.loss, 120);
-    abba2_on_congestion(&state, 100000, &rtt, 0);
+    abba_on_congestion(&state, 100000, &rtt, 0);
     quicly_rtt_update(&rtt, 150, 0, 3);
-    abba2_on_acked(&state, 70000, &rtt, 0, 0);
+    abba_on_acked(&state, 70000, &rtt, 0, 0);
     ok(state.high.rtt == 120 && state.low.rtt == 120);
     ok(state.a == 0 && state.b == 120);
 }
 
-static void test_abba2_fit_growth(void)
+static void test_abba_fit_growth(void)
 {
     /* Flattening changes the high-window prediction from 112ms to 96ms, but leaves the low point at 64ms. */
-    struct st_quicly_cc_abba2_t state = {.high = {65536, 112}, .low = {32768, 64}};
+    struct st_quicly_cc_abba_t state = {.high = {65536, 112}, .low = {32768, 64}};
     quicly_rtt_t rtt = {.latest = 64, .smoothed = 64, .minimum = 20};
-    abba2_fit_model(&state);
-    ok(abba2_on_growth(&state, 32768, 32768, 32768, &rtt, 0, 0) == 32768);
+    abba_fit_model(&state);
+    ok(abba_on_growth(&state, 32768, 32768, 32768, &rtt, 0, 0) == 32768);
     rtt.latest = 95;
-    ok(abba2_on_growth(&state, 65536, 65536, 65536, &rtt, 0, 0) == 66150);
+    ok(abba_on_growth(&state, 65536, 65536, 65536, &rtt, 0, 0) == 66150);
     rtt.latest = 94;
     /* Include the fractional carry from the preceding ACK. */
-    ok(abba2_on_growth(&state, 65536, 65536, 65536, &rtt, 0, 0) == 66765);
+    ok(abba_on_growth(&state, 65536, 65536, 65536, &rtt, 0, 0) == 66765);
 
     /* Apply the factor after the origin cap: the high-window prediction is 160ms, not the unscaled cap's 192ms. */
-    state = (struct st_quicly_cc_abba2_t){.high = {65536, 256}, .low = {32768, 96}};
-    abba2_fit_model(&state);
+    state = (struct st_quicly_cc_abba_t){.high = {65536, 256}, .low = {32768, 96}};
+    abba_fit_model(&state);
     rtt.latest = 96;
-    ok(abba2_on_growth(&state, 32768, 32768, 32768, &rtt, 0, 0) == 32768);
+    ok(abba_on_growth(&state, 32768, 32768, 32768, &rtt, 0, 0) == 32768);
     rtt.latest = 160;
-    ok(abba2_on_growth(&state, 65536, 65536, 65536, &rtt, 0, 0) == 65536);
+    ok(abba_on_growth(&state, 65536, 65536, 65536, &rtt, 0, 0) == 65536);
     rtt.latest = 120;
-    ok(abba2_on_growth(&state, 65536, 65536, 65536, &rtt, 0, 0) == 77824);
+    ok(abba_on_growth(&state, 65536, 65536, 65536, &rtt, 0, 0) == 77824);
 }
 
-static void test_abba2_min_rtt_span(void)
+static void test_abba_min_rtt_span(void)
 {
     /* The fitting boundary is inclusive, including fractional stored RTTs. */
-    struct st_quicly_cc_abba2_t state = {.high = {100000, 104.999f}, .low = {70000, 100}};
-    abba2_fit_model(&state);
+    struct st_quicly_cc_abba_t state = {.high = {100000, 104.999f}, .low = {70000, 100}};
+    abba_fit_model(&state);
     ok(state.a == 0 && state.b == 100);
     state.high.rtt = 105;
-    abba2_fit_model(&state);
+    abba_fit_model(&state);
     ok(state.a == (float)(5. / 30000 * (2. / 3)) && state.b > 0);
     state.high.rtt = 105.001f;
-    abba2_fit_model(&state);
+    abba_fit_model(&state);
     ok(state.a > (float)(5. / 30000 * (2. / 3)) && state.b > 0);
 
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         for (int beyond_threshold = 0; beyond_threshold != 2; ++beyond_threshold) {
-            state = (struct st_quicly_cc_abba2_t){.high = {100000, 100}, .low = {0, 100}, .a = 0, .b = NAN};
+            state = (struct st_quicly_cc_abba_t){.high = {100000, 100}, .low = {0, 100}, .a = 0, .b = NAN};
             quicly_rtt_t rtt;
             quicly_rtt_init(&rtt, &quicly_spec_context.loss, 96);
             quicly_rtt_update(&rtt, 96, 0, 0);
             uint32_t cwnd = beyond_threshold ? 140000 : 70000;
-            abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
+            abba_on_acked(&state, cwnd, &rtt, 0, by_ecn);
             ok(state.low.cwnd == cwnd && state.low.rtt == 96);
             if (beyond_threshold) {
                 /* A proportional model can be established without an RTT span, but anchoring at the floor does not
                  * immediately create a shortfall. Further window growth can enable acceleration. */
                 ok(state.a == (float)(96. / cwnd) && state.b == 0);
-                ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd);
-                ok(abba2_on_growth(&state, cwnd + 10000, cwnd + 10000, cwnd, &rtt, 0, 0) > cwnd + 10000);
+                ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd);
+                ok(abba_on_growth(&state, cwnd + 10000, cwnd + 10000, cwnd, &rtt, 0, 0) > cwnd + 10000);
             } else {
                 ok(state.a == 0);
                 /* Proximity to minRTT alone does not accelerate growth. */
-                ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd);
-                ok(abba2_on_growth(&state, cwnd, cwnd + 1200, cwnd, &rtt, 0, 0) == cwnd + 1200);
+                ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd);
+                ok(abba_on_growth(&state, cwnd, cwnd + 1200, cwnd, &rtt, 0, 0) == cwnd + 1200);
             }
             quicly_rtt_update(&rtt, 95, 0, 1);
-            abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
+            abba_on_acked(&state, cwnd, &rtt, 0, by_ecn);
             ok(state.a > 0);
             if (beyond_threshold) {
                 ok(state.a == (float)(96. / cwnd) && state.b == 0);
@@ -1004,190 +1004,190 @@ static void test_abba2_min_rtt_span(void)
     }
 }
 
-static void test_abba2_proportional_switch(void)
+static void test_abba_proportional_switch(void)
 {
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
-        struct st_quicly_cc_abba2_t state = {.high = {100000, 120}, .low = {70000, 100}, .a = 0, .b = NAN};
+        struct st_quicly_cc_abba_t state = {.high = {100000, 120}, .low = {70000, 100}, .a = 0, .b = NAN};
         quicly_rtt_t rtt;
         quicly_rtt_init(&rtt, &quicly_spec_context.loss, 105);
         quicly_rtt_update(&rtt, 20, 0, 0);
         quicly_rtt_update(&rtt, 110, 0, 1000);
         uint32_t threshold = by_ecn ? 115000 : 130000;
-        abba2_fit_model(&state);
+        abba_fit_model(&state);
         /* Check either side of the threshold without depending on rounding at the exact boundary. */
-        abba2_on_acked(&state, threshold - 1, &rtt, 0, by_ecn);
+        abba_on_acked(&state, threshold - 1, &rtt, 0, by_ecn);
         ok(state.b > 0);
         double target = (double)state.a * (threshold + 1) + state.b;
-        abba2_on_acked(&state, threshold + 1, &rtt, 0, by_ecn);
+        abba_on_acked(&state, threshold + 1, &rtt, 0, by_ecn);
         double a = state.a;
         ok(a == (float)(target / (threshold + 1)) && state.b == 0);
 
         /* New minima invoke fitting, which preserves the model when the low window is at or beyond the congestion window. */
         quicly_rtt_update(&rtt, 80, 0, 1001);
-        abba2_on_acked(&state, 150000, &rtt, 0, by_ecn);
+        abba_on_acked(&state, 150000, &rtt, 0, by_ecn);
         ok(state.low.cwnd == 150000 && state.low.rtt == 80);
         ok(state.a == a && state.b == 0);
 
         /* Flattening an origin-capped fit leaves a positive intercept, permitting the later proportional switch. */
-        state = (struct st_quicly_cc_abba2_t){.high = {100000, 200}, .low = {70000, 100}};
-        abba2_fit_model(&state);
+        state = (struct st_quicly_cc_abba_t){.high = {100000, 200}, .low = {70000, 100}};
+        abba_fit_model(&state);
         target = (double)state.a * 150000 + state.b;
-        abba2_on_acked(&state, 150000, &rtt, 0, by_ecn);
+        abba_on_acked(&state, 150000, &rtt, 0, by_ecn);
         ok(state.a == (float)(target / 150000) && state.b == 0);
 
         /* An unfitted model with no ordered window span is anchored at the RTT floor, not SRTT. */
-        state = (struct st_quicly_cc_abba2_t){.high = {100000, 120}, .low = {100000, 80}, .a = 0, .b = NAN};
-        abba2_on_acked(&state, threshold - 1, &rtt, 0, by_ecn);
+        state = (struct st_quicly_cc_abba_t){.high = {100000, 120}, .low = {100000, 80}, .a = 0, .b = NAN};
+        abba_on_acked(&state, threshold - 1, &rtt, 0, by_ecn);
         ok(state.a == 0 && isnan(state.b));
-        ok(abba2_on_growth(&state, threshold - 1, threshold - 1, 1000, &rtt, 0, 0) == threshold - 1);
-        abba2_on_acked(&state, threshold + 1, &rtt, 0, by_ecn);
+        ok(abba_on_growth(&state, threshold - 1, threshold - 1, 1000, &rtt, 0, 0) == threshold - 1);
+        abba_on_acked(&state, threshold + 1, &rtt, 0, by_ecn);
         ok(state.a == (float)(80. / (threshold + 1)) && state.b == 0);
 
         /* Preserve the affine prediction of 128ms rather than lowering it to the 80ms floor or SRTT. */
-        state = (struct st_quicly_cc_abba2_t){.high = {40000, 120}, .low = {30000, 60}, .a = 1.f / 1024, .b = 64};
+        state = (struct st_quicly_cc_abba_t){.high = {40000, 120}, .low = {30000, 60}, .a = 1.f / 1024, .b = 64};
         quicly_rtt_init(&rtt, &quicly_spec_context.loss, 80);
         quicly_rtt_update(&rtt, 80, 0, 0);
         quicly_rtt_update(&rtt, 96, 0, 1);
-        abba2_on_acked(&state, 65536, &rtt, 0, by_ecn);
-        ok(abba2_on_growth(&state, 65536, 65536, 12288, &rtt, 0, 0) == 67379);
+        abba_on_acked(&state, 65536, &rtt, 0, by_ecn);
+        ok(abba_on_growth(&state, 65536, 65536, 12288, &rtt, 0, 0) == 67379);
 
         /* Once proportional, the model is not redrawn even if the floor rises above its prediction. */
         quicly_rtt_update(&rtt, 160, 0, 1000);
-        abba2_on_acked(&state, 65536, &rtt, 0, by_ecn);
+        abba_on_acked(&state, 65536, &rtt, 0, by_ecn);
         quicly_rtt_update(&rtt, 120, 0, 1001);
-        abba2_on_acked(&state, 65536, &rtt, 0, by_ecn);
-        ok(abba2_on_growth(&state, 65536, 65536, 12288, &rtt, 0, 0) == 65997);
+        abba_on_acked(&state, 65536, &rtt, 0, by_ecn);
+        ok(abba_on_growth(&state, 65536, 65536, 12288, &rtt, 0, 0) == 65997);
         quicly_rtt_update(&rtt, 80, 0, 1002);
-        abba2_on_acked(&state, 65536, &rtt, 0, by_ecn);
-        ok(abba2_on_growth(&state, 65536, 65536, 12288, &rtt, 0, 0) == 68300);
+        abba_on_acked(&state, 65536, &rtt, 0, by_ecn);
+        ok(abba_on_growth(&state, 65536, 65536, 12288, &rtt, 0, 0) == 68300);
 
         /* With RTT staying flat, a larger window increases the gain per acknowledged byte. */
-        abba2_on_acked(&state, 81920, &rtt, 0, by_ecn);
-        ok(abba2_on_growth(&state, 81920, 81920, 12288, &rtt, 0, 0) == 85607);
+        abba_on_acked(&state, 81920, &rtt, 0, by_ecn);
+        ok(abba_on_growth(&state, 81920, 81920, 12288, &rtt, 0, 0) == 85607);
     }
 }
 
-static void test_abba2_minimum_at_larger_window(void)
+static void test_abba_minimum_at_larger_window(void)
 {
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         for (int beyond = 0; beyond != 2; ++beyond) {
-            struct st_quicly_cc_abba2_t state = {.high = {65536, 120}, .low = {49152, 100}};
+            struct st_quicly_cc_abba_t state = {.high = {65536, 120}, .low = {49152, 100}};
             quicly_rtt_t rtt = {.latest = 100, .smoothed = 110, .minimum = 20};
-            abba2_fit_model(&state);
+            abba_fit_model(&state);
             float a = state.a, b = state.b;
             ok(a > 0 && b > 0);
 
             /* Reaching or passing the congestion window without a new minimum preserves both points and their fit. */
             uint32_t cwnd = beyond ? 73728 : 65536;
-            abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
+            abba_on_acked(&state, cwnd, &rtt, 0, by_ecn);
             ok(state.low.cwnd == 49152 && state.low.rtt == 100);
             ok(state.a == a && state.b == b);
             /* ACK half a window so the per-ACK cap does not mask increases in model gain. */
-            uint32_t previous_growth = abba2_on_growth(&state, cwnd, cwnd, cwnd / 2, &rtt, 0, 0) - cwnd;
+            uint32_t previous_growth = abba_on_growth(&state, cwnd, cwnd, cwnd / 2, &rtt, 0, 0) - cwnd;
 
             /* A new minimum moves the low point but preserves the model, increasing acceleration as RTT falls. */
             rtt.latest = beyond ? 72 : 64;
-            abba2_on_acked(&state, cwnd, &rtt, 0, by_ecn);
+            abba_on_acked(&state, cwnd, &rtt, 0, by_ecn);
             ok(state.low.cwnd == cwnd && state.low.rtt == rtt.latest);
             ok(state.high.cwnd == 65536 && state.high.rtt == 120);
             ok(state.a == a && state.b == b);
-            ok(abba2_on_growth(&state, cwnd, cwnd, cwnd / 2, &rtt, 0, 0) - cwnd > previous_growth);
+            ok(abba_on_growth(&state, cwnd, cwnd, cwnd / 2, &rtt, 0, 0) - cwnd > previous_growth);
 
             /* Further window growth without a new minimum leaves both the low point and the model unchanged. */
             uint32_t grown_cwnd = cwnd + 512;
-            abba2_on_acked(&state, grown_cwnd, &rtt, 0, by_ecn);
+            abba_on_acked(&state, grown_cwnd, &rtt, 0, by_ecn);
             ok(state.low.cwnd == cwnd);
             ok(state.a == a && state.b == b);
-            previous_growth = abba2_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd / 2, &rtt, 0, 0) - grown_cwnd;
+            previous_growth = abba_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd / 2, &rtt, 0, 0) - grown_cwnd;
 
             /* Another minimum below the switch threshold likewise increases acceleration without refitting. */
             --rtt.latest;
-            abba2_on_acked(&state, grown_cwnd, &rtt, 0, by_ecn);
+            abba_on_acked(&state, grown_cwnd, &rtt, 0, by_ecn);
             ok(state.low.cwnd == grown_cwnd && state.low.rtt == rtt.latest);
             ok(state.a == a && state.b == b);
-            ok(abba2_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd / 2, &rtt, 0, 0) - grown_cwnd > previous_growth);
+            ok(abba_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd / 2, &rtt, 0, 0) - grown_cwnd > previous_growth);
 
             /* Crossing the switch threshold preserves the model's prediction when establishing the proportional model. */
             --rtt.latest;
             rtt.smoothed = 90;
             double target = (double)state.a * 90000 + state.b;
-            abba2_on_acked(&state, 90000, &rtt, 0, by_ecn);
+            abba_on_acked(&state, 90000, &rtt, 0, by_ecn);
             ok(state.low.cwnd == 90000 && state.low.rtt == rtt.latest);
             a = state.a;
             ok(a == (float)(target / 90000) && state.b == 0);
             --rtt.latest;
             rtt.smoothed = 80;
-            abba2_on_acked(&state, 91000, &rtt, 0, by_ecn);
+            abba_on_acked(&state, 91000, &rtt, 0, by_ecn);
             ok(state.low.cwnd == 91000 && state.low.rtt == rtt.latest);
             ok(state.a == a && state.b == 0);
         }
     }
 }
 
-static void test_abba2_growth(void)
+static void test_abba_growth(void)
 {
-    struct st_quicly_cc_abba2_t state = {.a = 0.001, .b = 50};
+    struct st_quicly_cc_abba_t state = {.a = 0.001, .b = 50};
     quicly_rtt_t rtt = {.latest = 100, .smoothed = 100, .minimum = 20};
     /* The inverse model gives 50kB, so a 100kB flight adds three fifths of the 50kB gap. */
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 130000);
-    ok(abba2_on_growth(&state, 100000, 140000, 100000, &rtt, 0, 0) == 140000);
+    ok(abba_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 130000);
+    ok(abba_on_growth(&state, 100000, 140000, 100000, &rtt, 0, 0) == 140000);
     rtt.latest = 150;
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 101000);
+    ok(abba_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 101000);
     rtt.latest = 200;
-    ok(abba2_on_growth(&state, 100000, 90000, 100000, &rtt, 0, 0) == 100000);
+    ok(abba_on_growth(&state, 100000, 90000, 100000, &rtt, 0, 0) == 100000);
 
     /* Being near minRTT does not accelerate a horizontal or unfitted model, even with a higher congestion watermark. */
     state.high.rtt = 100;
     state.a = 0;
     rtt.latest = rtt.minimum = 20;
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 101000);
+    ok(abba_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 101000);
     state.b = NAN;
-    ok(abba2_on_growth(&state, 100000, 100000, 100000, &rtt, 0, 0) == 100000);
+    ok(abba_on_growth(&state, 100000, 100000, 100000, &rtt, 0, 0) == 100000);
     state.increase_remainder = 0;
     rtt.latest = 22;
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 101000);
+    ok(abba_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 101000);
 
     /* A usable model can still accelerate at minRTT. */
     state.a = 0.001;
     state.b = 0;
     rtt.latest = 20;
-    ok(abba2_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 148000);
+    ok(abba_on_growth(&state, 100000, 101000, 100000, &rtt, 0, 0) == 148000);
 
     /* A negative inverse window is allowed; the final per-ACK cap bounds its increase. */
     state.b = 100;
-    ok(abba2_on_growth(&state, 100001, 100001, 100001, &rtt, 0, 0) == 150001);
+    ok(abba_on_growth(&state, 100001, 100001, 100001, &rtt, 0, 0) == 150001);
     state.increase_remainder = 0.9;
-    ok(abba2_on_growth(&state, 100001, 100001, 100001, &rtt, 0, 0) == 150001);
+    ok(abba_on_growth(&state, 100001, 100001, 100001, &rtt, 0, 0) == 150001);
     /* The cap applies to acceleration, not the ordinary CUBIC candidate. */
-    ok(abba2_on_growth(&state, 100000, 160000, 100000, &rtt, 0, 0) == 160000);
+    ok(abba_on_growth(&state, 100000, 160000, 100000, &rtt, 0, 0) == 160000);
     rtt.latest = rtt.minimum = 1;
-    ok(abba2_on_growth(&state, 100000, 100000, 100000, &rtt, 0, 0) == 150000);
-    ok(abba2_on_growth(&state, UINT32_MAX - 10, UINT32_MAX - 10, 100, &rtt, 0, 0) == UINT32_MAX);
+    ok(abba_on_growth(&state, 100000, 100000, 100000, &rtt, 0, 0) == 150000);
+    ok(abba_on_growth(&state, UINT32_MAX - 10, UINT32_MAX - 10, 100, &rtt, 0, 0) == UINT32_MAX);
 
     /* Three-fifths-byte increments accumulate: five one-byte ACKs add three bytes to CWND. */
-    state = (struct st_quicly_cc_abba2_t){.a = 1.f / 1024, .b = 8};
+    state = (struct st_quicly_cc_abba_t){.a = 1.f / 1024, .b = 8};
     rtt.latest = rtt.minimum = 8;
     uint32_t cwnd = 100000;
     for (int i = 0; i != 5; ++i)
-        cwnd = abba2_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0);
+        cwnd = abba_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0);
     ok(cwnd == 100003);
-    ok(abba2_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd);
+    ok(abba_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd);
     /* Ordinary growth discards the fractional carry. */
-    ok(abba2_on_growth(&state, cwnd, cwnd + 2, 1, &rtt, 0, 0) == cwnd + 2);
-    ok(abba2_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd);
+    ok(abba_on_growth(&state, cwnd, cwnd + 2, 1, &rtt, 0, 0) == cwnd + 2);
+    ok(abba_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd);
 
     /* An absent RTT sample and zero-byte ACKs cannot grow the window. */
     rtt.latest = 0;
-    ok(abba2_on_growth(&state, cwnd, cwnd, 1000, &rtt, 0, 0) == cwnd);
+    ok(abba_on_growth(&state, cwnd, cwnd, 1000, &rtt, 0, 0) == cwnd);
     rtt.latest = 8;
     /* A zero-byte ACK discards pending fractional growth, as seen on the next one-byte ACK. */
-    ok(abba2_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd);
-    ok(abba2_on_growth(&state, cwnd, cwnd, 0, &rtt, 0, 0) == cwnd);
-    ok(abba2_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd);
-    ok(abba2_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd + 1);
+    ok(abba_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd);
+    ok(abba_on_growth(&state, cwnd, cwnd, 0, &rtt, 0, 0) == cwnd);
+    ok(abba_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd);
+    ok(abba_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0) == cwnd + 1);
 }
 
-static void test_abba2_gain_cap(void)
+static void test_abba_gain_cap(void)
 {
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
@@ -1197,28 +1197,28 @@ static void test_abba2_gain_cap(void)
 
         /* A model gain of 3/5 is capped below prior / beta (100000), but not at or above it. */
         for (uint32_t cwnd = 99999; cwnd <= 100001; ++cwnd) {
-            struct st_quicly_cc_abba2_t state = {.a = 1.f / 1024, .b = 8};
+            struct st_quicly_cc_abba_t state = {.a = 1.f / 1024, .b = 8};
             uint32_t expected = cwnd + 12000 * (cwnd < 100000 ? cap : 3. / 5);
-            ok(abba2_on_growth(&state, cwnd, cwnd, 12000, &rtt, prior, by_ecn) == expected);
+            ok(abba_on_growth(&state, cwnd, cwnd, 12000, &rtt, prior, by_ecn) == expected);
         }
 
         /* The gain cap does not cap ordinary growth or raise a smaller model gain. */
-        struct st_quicly_cc_abba2_t state = {.a = 1.f / 1024, .b = 8};
-        ok(abba2_on_growth(&state, 65536, 70000, 12000, &rtt, prior, by_ecn) == 70000);
+        struct st_quicly_cc_abba_t state = {.a = 1.f / 1024, .b = 8};
+        ok(abba_on_growth(&state, 65536, 70000, 12000, &rtt, prior, by_ecn) == 70000);
         rtt.latest = 68; /* Wref = 61440, giving a gain of 3/80. */
-        ok(abba2_on_growth(&state, 65536, 65536, 12000, &rtt, prior, by_ecn) == 65986);
+        ok(abba_on_growth(&state, 65536, 65536, 12000, &rtt, prior, by_ecn) == 65986);
 
         /* Capped fractional increments survive ACK splitting. */
         rtt.latest = 8;
         state.increase_remainder = 0;
         uint32_t cwnd = 50000;
         for (int i = 0; i != 1000; ++i)
-            cwnd = abba2_on_growth(&state, cwnd, cwnd, 1, &rtt, prior, by_ecn);
+            cwnd = abba_on_growth(&state, cwnd, cwnd, 1, &rtt, prior, by_ecn);
         ok(cwnd == 50000 + (uint32_t)(1000 * cap));
     }
 }
 
-static void test_abba2_gain_cap_policy(quicly_init_cc_t *init)
+static void test_abba_gain_cap_policy(quicly_init_cc_t *init)
 {
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
@@ -1234,8 +1234,8 @@ static void test_abba2_gain_cap_policy(quicly_init_cc_t *init)
             cc.type->cc_on_lost(&cc, &loss, by_ecn ? 0 : mtu, 30, 40, 1200, mtu);
             cc.type->cc_on_acked(&cc, &loss, 0, 40, 0, 1, 41, 1300, mtu);
             cc.cwnd = cwnd;
-            cc.state.pico.abba2.a = 1.f / 1024;
-            cc.state.pico.abba2.b = 0;
+            cc.state.pico.abba.a = 1.f / 1024;
+            cc.state.pico.abba.b = 0;
             double gain = cwnd < 100000 ? pow(beta, -2. / 3) - 1 : 3. / 5 * (1 - 8192. / cwnd);
             uint32_t expected = cwnd + acked * gain;
             cc.type->cc_on_acked(&cc, &loss, acked, 41, acked, 1, 42, 1300, mtu);
@@ -1244,72 +1244,72 @@ static void test_abba2_gain_cap_policy(quicly_init_cc_t *init)
     }
 }
 
-static void test_abba2_model_shortfall(void)
+static void test_abba_model_shortfall(void)
 {
-    struct st_quicly_cc_abba2_t state = {.a = 1.f / 1024, .b = 50};
+    struct st_quicly_cc_abba_t state = {.a = 1.f / 1024, .b = 50};
     quicly_rtt_t rtt = {.latest = 112, .smoothed = 112, .minimum = 20};
     uint32_t cwnd = 65536;
 
     /* A 1.5ms shortfall yields three fifths of the 1536-byte inverse-window gap, unless ordinary growth is larger. */
     state.b = 49.5f;
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 921);
-    ok(abba2_on_growth(&state, cwnd, cwnd + 1200, cwnd, &rtt, 0, 0) == cwnd + 1200);
+    ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 921);
+    ok(abba_on_growth(&state, cwnd, cwnd + 1200, cwnd, &rtt, 0, 0) == cwnd + 1200);
 
     /* Gain scales continuously with the shortfall; 2ms is no longer a threshold. */
     state.b = 50;
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 1228);
-    ok(abba2_on_growth(&state, cwnd, cwnd + 2048, cwnd, &rtt, 0, 0) == cwnd + 2048);
+    ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 1228);
+    ok(abba_on_growth(&state, cwnd, cwnd + 2048, cwnd, &rtt, 0, 0) == cwnd + 2048);
     state.b = 50.5f;
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 1536);
+    ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 1536);
 
     /* At or above the prediction, the model supplies no acceleration. */
     state.b = 48;
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd);
+    ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd);
     state.b = 47;
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd);
-    ok(abba2_on_growth(&state, cwnd, cwnd + 1200, cwnd, &rtt, 0, 0) == cwnd + 1200);
+    ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd);
+    ok(abba_on_growth(&state, cwnd, cwnd + 1200, cwnd, &rtt, 0, 0) == cwnd + 1200);
 
     /* A proportional model also accelerates for a shortfall smaller than 2ms. */
     state.b = 0;
     rtt.latest = 63;
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 614);
+    ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 614);
     rtt.latest = 62;
     /* The preceding ACK's fractional carry supplies the extra byte. */
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 1229);
+    ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 1229);
 
     /* Reaching minRTT does not add acceleration beyond the model's gain. */
     state.high.rtt = 68;
     rtt.latest = rtt.minimum = 63;
-    ok(abba2_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 614);
+    ok(abba_on_growth(&state, cwnd, cwnd, cwnd, &rtt, 0, 0) == cwnd + 614);
 }
 
-static void test_abba2_float_precision(void)
+static void test_abba_float_precision(void)
 {
     /* A nearly flat model at a large window must retain its slope and small ACK-driven increments. */
     uint32_t cwnd = (1U << 30) + 1;
-    struct st_quicly_cc_abba2_t state = {.high = {cwnd, 105.125f}, .low = {1U << 29, 100}};
-    abba2_fit_model(&state);
+    struct st_quicly_cc_abba_t state = {.high = {cwnd, 105.125f}, .low = {1U << 29, 100}};
+    abba_fit_model(&state);
     ok(state.a > 0 && state.b > 0);
     ok(fabs((double)state.a * state.low.cwnd + state.b - 100) < 100 * FLT_EPSILON);
     ok(fabs((double)state.a * cwnd + state.b - (100 + 5.125 * (2. / 3))) < 105.125 * FLT_EPSILON);
     quicly_rtt_t rtt = {.latest = 100, .smoothed = 100, .minimum = 20};
-    ok(abba2_on_growth(&state, cwnd, cwnd, 16, &rtt, 0, 0) == cwnd + 4);
+    ok(abba_on_growth(&state, cwnd, cwnd, 16, &rtt, 0, 0) == cwnd + 4);
 
     /* Window coordinates a byte apart must not collapse to the same float during fitting. */
-    state = (struct st_quicly_cc_abba2_t){.high = {cwnd, 105}, .low = {cwnd - 1, 100}};
-    abba2_fit_model(&state);
+    state = (struct st_quicly_cc_abba_t){.high = {cwnd, 105}, .low = {cwnd - 1, 100}};
+    abba_fit_model(&state);
     ok(state.a > 0 && state.b == (float)(100. / 3));
 
     /* Fractional growth must survive when the entire window is far larger than a float's byte-level precision. */
-    state = (struct st_quicly_cc_abba2_t){.a = 1.f / 1024, .b = 8};
+    state = (struct st_quicly_cc_abba_t){.a = 1.f / 1024, .b = 8};
     rtt.latest = rtt.minimum = 8;
     uint32_t before = cwnd;
     for (int i = 0; i != 10; ++i)
-        cwnd = abba2_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0);
+        cwnd = abba_on_growth(&state, cwnd, cwnd, 1, &rtt, 0, 0);
     ok(cwnd == before + 5);
 }
 
-static void test_abba2_lifecycle(quicly_init_cc_t *init)
+static void test_abba_lifecycle(quicly_init_cc_t *init)
 {
     quicly_cc_t cc, control;
     quicly_loss_t loss = {.rtt = {.latest = 120, .smoothed = 120, .minimum = 20}};
@@ -1325,18 +1325,18 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     cc.type->cc_on_lost(&cc, &loss, mtu, 10, 20, 1000, mtu);
     control.type->cc_on_lost(&control, &loss, mtu, 10, 20, 1000, mtu);
     ok(cc.cwnd == control.cwnd && cc.ssthresh == control.ssthresh);
-    ok(cc.state.pico.abba2.high.cwnd == peak);
+    ok(cc.state.pico.abba.high.cwnd == peak);
     ok((cc.type == &quicly_cc_type_cubic ? cc.state.pico.cubic.cwnd_prior : cc.state.pico.cuback.cwnd_prior) == peak / 2);
     loss.rtt.latest = 80;
     cc.type->cc_on_acked(&cc, &loss, mtu, 19, mtu, 1, 20, 1050, mtu);
-    ok(cc.cwnd == control.cwnd && cc.state.pico.abba2.high.rtt == 80);
-    ok(cc.state.pico.abba2.low.cwnd == 0);
-    ok(cc.state.pico.abba2.a == 0 && isnan(cc.state.pico.abba2.b));
+    ok(cc.cwnd == control.cwnd && cc.state.pico.abba.high.rtt == 80);
+    ok(cc.state.pico.abba.low.cwnd == 0);
+    ok(cc.state.pico.abba.a == 0 && isnan(cc.state.pico.abba.b));
     loss.rtt.latest = 90;
     uint32_t reduced = cc.cwnd;
     cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
-    ok(cc.state.pico.abba2.low.cwnd == reduced);
-    ok(cc.state.pico.abba2.low.rtt == 80);
+    ok(cc.state.pico.abba.low.cwnd == reduced);
+    ok(cc.state.pico.abba.low.rtt == 80);
 
     /* A rapid bandwidth increase after the proportional switch lowers RTT and accelerates growth. */
     cc.cwnd = 2 * peak;
@@ -1349,7 +1349,7 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     uint32_t before = cc.cwnd;
     cc.type->cc_on_acked(&cc, &loss, before, 21, before, 1, 22, 1200, mtu);
     control.type->cc_on_acked(&control, &loss, before, 21, before, 1, 22, 1200, mtu);
-    ok(cc.state.pico.abba2.a == (float)(100. / before) && cc.state.pico.abba2.b == 0);
+    ok(cc.state.pico.abba.a == (float)(100. / before) && cc.state.pico.abba.b == 0);
     ok(fabs((double)cc.cwnd - before * 1.3) <= 1);
     ok(cc.cwnd > control.cwnd);
 
@@ -1365,22 +1365,22 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     }
 
     /* The next loss retains CUBIC's reduction, resets the model, and can be undone with its fractional credit. */
-    cc.state.pico.abba2.increase_remainder = 0.25;
-    struct st_quicly_cc_abba2_t saved = cc.state.pico.abba2;
+    cc.state.pico.abba.increase_remainder = 0.25;
+    struct st_quicly_cc_abba_t saved = cc.state.pico.abba;
     loss.rtt.latest = 80;
     loss.rtt.smoothed = 115;
     cc.type->cc_on_lost(&cc, &loss, mtu, 24, 30, 1400, mtu);
     ok(cc.cwnd == (uint32_t)(before * QUICLY_BETA_LOSS));
-    ok(cc.state.pico.abba2.high.cwnd == before);
-    ok(cc.state.pico.abba2.high.rtt == 80);
-    ok(cc.state.pico.abba2.a == 0 && isnan(cc.state.pico.abba2.b));
-    ok(cc.state.pico.abba2.increase_remainder == 0);
+    ok(cc.state.pico.abba.high.cwnd == before);
+    ok(cc.state.pico.abba.high.rtt == 80);
+    ok(cc.state.pico.abba.a == 0 && isnan(cc.state.pico.abba.b));
+    ok(cc.state.pico.abba.increase_remainder == 0);
     cc.type->cc_on_lost(&cc, &loss, mtu, 25, 30, 1401, mtu);
     cc.type->cc_on_late_ack(&cc, 24, 1450);
     ok(cc.cwnd < before);
     cc.type->cc_on_late_ack(&cc, 25, 1451);
     ok(cc.cwnd == before);
-    ok(memcmp(&cc.state.pico.abba2, &saved, sizeof(saved)) == 0);
+    ok(memcmp(&cc.state.pico.abba, &saved, sizeof(saved)) == 0);
 
     /* ECN uses its own beta and cannot be undone by a late ACK. */
     quicly_rtt_init(&loss.rtt, &quicly_spec_context.loss, 115);
@@ -1392,12 +1392,12 @@ static void test_abba2_lifecycle(quicly_init_cc_t *init)
     /* A new loss can arrive beyond recovery without an intervening ACK. */
     before = cc.cwnd;
     cc.type->cc_on_lost(&cc, &loss, mtu, 40, 50, 1600, mtu);
-    ok(cc.state.pico.abba2.high.cwnd == before);
+    ok(cc.state.pico.abba.high.cwnd == before);
     cc.type->cc_on_acked(&cc, &loss, 0, 50, 0, 1, 51, 1700, mtu);
-    ok(cc.state.pico.abba2.low.cwnd == cc.cwnd);
+    ok(cc.state.pico.abba.low.cwnd == cc.cwnd);
 }
 
-static void test_abba2_ecn_floor(quicly_init_cc_t *init)
+static void test_abba_ecn_floor(quicly_init_cc_t *init)
 {
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
     for (int no_sample = 0; no_sample != 2; ++no_sample) {
@@ -1463,7 +1463,7 @@ static void test_abba2_ecn_floor(quicly_init_cc_t *init)
     }
 }
 
-static void test_abba2_ack_accounting(quicly_init_cc_t *init)
+static void test_abba_ack_accounting(quicly_init_cc_t *init)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 8, .smoothed = 8, .minimum = 8}};
@@ -1474,14 +1474,14 @@ static void test_abba2_ack_accounting(quicly_init_cc_t *init)
     /* Above the gain-cap threshold, isolate fractional-byte accounting with a gain of three fifths per byte ACKed. */
     cc.cwnd = initcwnd;
     uint32_t before = cc.cwnd;
-    cc.state.pico.abba2.a = 1.f / 1024;
-    cc.state.pico.abba2.b = 8;
+    cc.state.pico.abba.a = 1.f / 1024;
+    cc.state.pico.abba.b = 8;
     for (uint64_t pn = 21; pn != 26; ++pn) {
         cc.type->cc_on_acked(&cc, &loss, 1, pn, 1, 1, pn + 1, 1100, mtu);
         ok(cc.cwnd == before + (pn - 20) * 3 / 5);
     }
 
-    /* Fast convergence changes the policy's Wmax but not the ABBA2 switching threshold. */
+    /* Fast convergence changes the policy's Wmax but not the ABBA switching threshold. */
     cc.cwnd = 100000;
     if (cc.type == &quicly_cc_type_cubic) {
         cc.state.pico.cubic.cwnd_prior = 200000;
@@ -1492,15 +1492,15 @@ static void test_abba2_ack_accounting(quicly_init_cc_t *init)
     loss.rtt.smoothed = 117.5;
     cc.type->cc_on_lost(&cc, &loss, mtu, 30, 40, 1200, mtu);
     ok(cc.type == &quicly_cc_type_cubic ? cc.state.pico.cubic.fast_convergence : cc.state.pico.cuback.fast_convergence);
-    ok(cc.state.pico.abba2.high.cwnd == 100000);
+    ok(cc.state.pico.abba.high.cwnd == 100000);
     cc.type->cc_on_acked(&cc, &loss, 0, 40, 0, 1, 41, 1300, mtu);
     cc.cwnd = 120000;
     loss.rtt.latest = 110;
     cc.type->cc_on_acked(&cc, &loss, 0, 41, 0, 1, 42, 1300, mtu);
-    ok(cc.state.pico.abba2.b > 0);
+    ok(cc.state.pico.abba.b > 0);
 }
 
-static void test_abba2_cuback_partial_credit(void)
+static void test_abba_cuback_partial_credit(void)
 {
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
     for (int crosses_interval = 0; crosses_interval != 2; ++crosses_interval) {
@@ -1511,8 +1511,8 @@ static void test_abba2_cuback_partial_credit(void)
         cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
 
         /* Seed model acceleration independently of the Cuback interval under test. */
-        cc.state.pico.abba2.a = 1.f / 1024;
-        cc.state.pico.abba2.b = 0;
+        cc.state.pico.abba.a = 1.f / 1024;
+        cc.state.pico.abba.b = 0;
         /* Begin partway through an interval. Exercise both an ACK staying within that interval and one completing it. */
         cc.state.pico.bytes_to_mtu_increase = crosses_interval ? mtu : 3 * mtu;
         uint32_t acked = crosses_interval ? 10 * mtu : 2 * mtu;
@@ -1543,7 +1543,7 @@ static void test_abba2_cuback_partial_credit(void)
     }
 }
 
-static void test_abba2_startup_and_switch(quicly_init_cc_t *init)
+static void test_abba_startup_and_switch(quicly_init_cc_t *init)
 {
     uint32_t mtu = 1200, initcwnd = 100 * mtu;
     for (int rapid = 0; rapid != 2; ++rapid) {
@@ -1566,11 +1566,11 @@ static void test_abba2_startup_and_switch(quicly_init_cc_t *init)
         cc.type->cc_on_acked(&cc, &loss, 0, 20, 0, 1, 21, 1100, mtu);
         control.type->cc_on_acked(&control, &loss, 0, 20, 0, 1, 21, 1100, mtu);
         ok(cc.cwnd == control.cwnd);
-        ok(cc.state.pico.abba2.low.cwnd == cc.cwnd);
+        ok(cc.state.pico.abba.low.cwnd == cc.cwnd);
         cc.type->cc_on_late_ack(&cc, 10, 1150);
         ok(cc.num_loss_episodes == 0 && cc.ssthresh == UINT32_MAX);
-        ok(cc.state.pico.abba2.high.cwnd == 0);
-        ok(cc.state.pico.abba2.a == 0 && isnan(cc.state.pico.abba2.b));
+        ok(cc.state.pico.abba.high.cwnd == 0);
+        ok(cc.state.pico.abba.a == 0 && isnan(cc.state.pico.abba.b));
     }
 
     /* Switching policies preserves the configured flag and resets stale model state. */
@@ -1584,32 +1584,32 @@ static void test_abba2_startup_and_switch(quicly_init_cc_t *init)
         ok(cc.type == *type && cc.normalize_mtu && cc.abba);
         ok(original->cc_switch(&cc));
         ok(cc.type == original && cc.normalize_mtu && cc.abba);
-        ok(cc.state.pico.abba2.high.cwnd == 0);
+        ok(cc.state.pico.abba.high.cwnd == 0);
     }
 }
 
-static void test_abba2(void)
+static void test_abba(void)
 {
-    subtest("model", test_abba2_model);
-    subtest("fit-growth", test_abba2_fit_growth);
-    subtest("minimum-rtt-span", test_abba2_min_rtt_span);
-    subtest("proportional-switch", test_abba2_proportional_switch);
-    subtest("minimum-at-larger-window", test_abba2_minimum_at_larger_window);
-    subtest("growth", test_abba2_growth);
-    subtest("gain-cap", test_abba2_gain_cap);
-    subtest("cubic-gain-cap", test_abba2_gain_cap_policy, &quicly_cc_cubic_init);
-    subtest("cuback-gain-cap", test_abba2_gain_cap_policy, &quicly_cc_cuback_init);
-    subtest("model-shortfall", test_abba2_model_shortfall);
-    subtest("float-precision", test_abba2_float_precision);
-    subtest("cubic-lifecycle", test_abba2_lifecycle, &quicly_cc_cubic_init);
-    subtest("cuback-lifecycle", test_abba2_lifecycle, &quicly_cc_cuback_init);
-    subtest("cubic-ecn-floor", test_abba2_ecn_floor, &quicly_cc_cubic_init);
-    subtest("cuback-ecn-floor", test_abba2_ecn_floor, &quicly_cc_cuback_init);
-    subtest("cubic-ack-accounting", test_abba2_ack_accounting, &quicly_cc_cubic_init);
-    subtest("cuback-ack-accounting", test_abba2_ack_accounting, &quicly_cc_cuback_init);
-    subtest("cuback-partial-credit", test_abba2_cuback_partial_credit);
-    subtest("cubic-startup-and-switch", test_abba2_startup_and_switch, &quicly_cc_cubic_init);
-    subtest("cuback-startup-and-switch", test_abba2_startup_and_switch, &quicly_cc_cuback_init);
+    subtest("model", test_abba_model);
+    subtest("fit-growth", test_abba_fit_growth);
+    subtest("minimum-rtt-span", test_abba_min_rtt_span);
+    subtest("proportional-switch", test_abba_proportional_switch);
+    subtest("minimum-at-larger-window", test_abba_minimum_at_larger_window);
+    subtest("growth", test_abba_growth);
+    subtest("gain-cap", test_abba_gain_cap);
+    subtest("cubic-gain-cap", test_abba_gain_cap_policy, &quicly_cc_cubic_init);
+    subtest("cuback-gain-cap", test_abba_gain_cap_policy, &quicly_cc_cuback_init);
+    subtest("model-shortfall", test_abba_model_shortfall);
+    subtest("float-precision", test_abba_float_precision);
+    subtest("cubic-lifecycle", test_abba_lifecycle, &quicly_cc_cubic_init);
+    subtest("cuback-lifecycle", test_abba_lifecycle, &quicly_cc_cuback_init);
+    subtest("cubic-ecn-floor", test_abba_ecn_floor, &quicly_cc_cubic_init);
+    subtest("cuback-ecn-floor", test_abba_ecn_floor, &quicly_cc_cuback_init);
+    subtest("cubic-ack-accounting", test_abba_ack_accounting, &quicly_cc_cubic_init);
+    subtest("cuback-ack-accounting", test_abba_ack_accounting, &quicly_cc_cuback_init);
+    subtest("cuback-partial-credit", test_abba_cuback_partial_credit);
+    subtest("cubic-startup-and-switch", test_abba_startup_and_switch, &quicly_cc_cubic_init);
+    subtest("cuback-startup-and-switch", test_abba_startup_and_switch, &quicly_cc_cuback_init);
 }
 
 static void test_rapid_start_fractional_rtt(void)
@@ -1631,7 +1631,7 @@ void test_cc(void)
 {
     subtest("fast-cbrt", test_fast_cbrt);
     subtest("rapid-start", test_rapid_start);
-    subtest("abba2", test_abba2);
+    subtest("abba", test_abba);
     subtest("rapid-start-fractional-rtt", test_rapid_start_fractional_rtt);
     subtest("reno", test_reno);
     subtest("cubic-fast-convergence", test_cubic_fast_convergence);

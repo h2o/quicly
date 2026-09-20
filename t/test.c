@@ -1225,18 +1225,18 @@ static void test_cc_accel_context(void)
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
         ok(conn->egress.cc.abba);
-        ok(conn->egress.cc.state.pico.abba2.high.cwnd == 0);
+        ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
 
         /* Path promotion uses configured policy and discards the old path's measurements. */
         conn->egress.cc.abba = 0;
-        conn->egress.cc.state.pico.abba2.high.cwnd = 100000;
+        conn->egress.cc.state.pico.abba.high.cwnd = 100000;
         quicly_rtt_update(&conn->egress.loss.rtt, 20, 0, conn->stash.now);
         ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20);
         ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
         ok(promote_path(conn, 1) == 0);
         ok(conn->egress.cc.abba);
         ok(conn->egress.cc.type->cc_init == policies[i]);
-        ok(conn->egress.cc.state.pico.abba2.high.cwnd == 0);
+        ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
         ok(conn->egress.loss.rtt.latest == 0);
         ok(conn->egress.loss.rtt.floor.newest_sample_until == 0);
         ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20); /* initial estimate inherited from the old path */

@@ -380,7 +380,7 @@ struct st_quicly_context_t {
          */
         uint8_t respect_app_limited;
         /**
-         * if ABBA2 accelerated bandwidth adaptation should be used when using CUBIC or Cuback
+         * if ABBA accelerated bottleneck bandwidth adaptation should be used when using CUBIC or Cuback
          */
         uint8_t abba;
     } enable_ratio;

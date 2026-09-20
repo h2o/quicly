@@ -1330,7 +1330,7 @@ static void usage(const char *cmd)
            "                            multiple times)\n"
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
-           "  --abba                    enables ABBA2 bandwidth adaptation\n"
+           "  --abba                    enables ABBA bandwidth adaptation\n"
            "  --rapid-start             turns on rapid start\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"

@@ -34,7 +34,7 @@
 /**
  * Minimum RTT span in milliseconds required for the two-point fit.
  */
-#define QUICLY_ABBA2_MIN_RTT_SPAN 5
+#define QUICLY_ABBA_MIN_RTT_SPAN 5
 
 /**
  * Fast approximation of cbrt(). The input is reduced to a mantissa in [1, 2), to which a fourth-degree polynomial is applied.
@@ -374,12 +374,12 @@ static void cubic_on_acked(struct st_quicly_cc_cubic_t *state, uint32_t *cwnd, u
     }
 }
 
-static int abba2_enabled(const quicly_cc_t *cc)
+static int abba_enabled(const quicly_cc_t *cc)
 {
     return cc->abba && (cc->type == &quicly_cc_type_cubic || cc->type == &quicly_cc_type_cuback);
 }
 
-static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
+static void abba_fit_model(struct st_quicly_cc_abba_t *state)
 {
     double wl = state->low.cwnd, rl = state->low.rtt;
     double wh = state->high.cwnd, rh = state->high.rtt;
@@ -389,7 +389,7 @@ static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
     if (wh <= wl)
         return;
     /* A small RTT span is not enough to estimate a useful slope; retain a horizontal model until the queue has drained enough. */
-    if (rh - rl < QUICLY_ABBA2_MIN_RTT_SPAN) {
+    if (rh - rl < QUICLY_ABBA_MIN_RTT_SPAN) {
         state->a = 0;
         state->b = rl;
         return;
@@ -405,18 +405,18 @@ static void abba2_fit_model(struct st_quicly_cc_abba2_t *state)
     state->b = rl - slope * wl;
 }
 
-static void abba2_on_congestion(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int by_ecn)
+static void abba_on_congestion(struct st_quicly_cc_abba_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int by_ecn)
 {
     /* ECN-CE captures the floor at the event; packet loss starts a minimum tracker that runs through recovery. Both fall back
      * to SRTT without samples. The low point is initialized separately at recovery exit. */
-    *state = (struct st_quicly_cc_abba2_t){
+    *state = (struct st_quicly_cc_abba_t){
         .high = {cwnd, by_ecn ? quicly_rtt_get_floor(rtt) : (rtt->latest != 0 ? rtt->latest : rtt->smoothed)},
         .a = 0,
         .b = NAN,
     };
 }
 
-static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int in_recovery, int by_ecn)
+static void abba_on_acked(struct st_quicly_cc_abba_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int in_recovery, int by_ecn)
 {
     if (state->high.cwnd == 0 || rtt->latest == 0)
         return;
@@ -443,7 +443,7 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
 
     /* Fit only when the low point is initialized or updated, before considering the proportional-model switch. */
     if (fit)
-        abba2_fit_model(state);
+        abba_fit_model(state);
 
     /* Beyond Wh * (2 - beta), adopt RTT proportional to CWND without lowering the RTT target already being pursued. Use the
      * recent RTT floor if it is higher, or if no model exists. Leave an already proportional model unchanged, so its predicted
@@ -461,7 +461,7 @@ static void abba2_on_acked(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, co
     }
 }
 
-static uint32_t abba2_on_growth(struct st_quicly_cc_abba2_t *state, uint32_t cwnd, uint32_t cubic_cwnd, uint32_t acked,
+static uint32_t abba_on_growth(struct st_quicly_cc_abba_t *state, uint32_t cwnd, uint32_t cubic_cwnd, uint32_t acked,
                                 const quicly_rtt_t *rtt, uint32_t cwnd_prior, int by_ecn)
 {
     if (rtt->latest == 0 || acked == 0 || !(state->a > 0 && state->b >= 0 && rtt->latest < (double)state->a * cwnd + state->b))
@@ -557,8 +557,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
-        if (abba2_enabled(cc))
-            abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 1,
+        if (abba_enabled(cc))
+            abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 1,
                            cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
         if (quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
             if (cc->num_loss_episodes == 1) {
@@ -573,11 +573,11 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
-    if (abba2_enabled(cc) && cc->cwnd >= cc->ssthresh) {
-        int was_fit = cc->state.pico.abba2.a > 0;
-        abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 0,
+    if (abba_enabled(cc) && cc->cwnd >= cc->ssthresh) {
+        int was_fit = cc->state.pico.abba.a > 0;
+        abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 0,
                        cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
-        if (!was_fit && cc->state.pico.abba2.a > 0)
+        if (!was_fit && cc->state.pico.abba.a > 0)
             ++cc->num_accel_eligible_episodes;
     }
 
@@ -598,11 +598,11 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         uint32_t pre_cwnd = cc->cwnd;
         cubic_on_acked(state, &cc->cwnd, cc->ssthresh, bytes, cc_limited, loss->rtt.smoothed, now, max_udp_payload_size,
                        reference_mtu);
-        if (abba2_enabled(cc)) {
+        if (abba_enabled(cc)) {
             if (cc->cwnd < pre_cwnd)
                 cc->cwnd = pre_cwnd;
             if (cc_limited && state->cc_limited) {
-                uint32_t accel_cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
+                uint32_t accel_cwnd = abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
                                                       state->cwnd_prior, state->by_ecn);
                 if (cc->cwnd < accel_cwnd) {
                     cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
@@ -637,9 +637,9 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     cc->state.pico.bytes_to_mtu_increase -= bytes_available;
     assert(cc->state.pico.bytes_to_mtu_increase != 0);
 
-    if (abba2_enabled(cc) && pre_cwnd >= cc->ssthresh) {
+    if (abba_enabled(cc) && pre_cwnd >= cc->ssthresh) {
         /* Keep the partially consumed Cuback interval even when acceleration supplies the larger window. */
-        uint32_t accel_cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
+        uint32_t accel_cwnd = abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
                                               cc->state.pico.cuback.cwnd_prior, cc->state.pico.cuback.by_ecn);
         if (cc->cwnd < accel_cwnd) {
             cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
@@ -696,7 +696,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         }
         cc->state.pico.undo.ssthresh = cc->ssthresh;
         cc->state.pico.undo.bytes_to_mtu_increase = cc->state.pico.bytes_to_mtu_increase;
-        cc->state.pico.undo.abba2 = cc->state.pico.abba2;
+        cc->state.pico.undo.abba = cc->state.pico.abba;
         cc->state.pico.undo.cwnd_increase_ca = cc->cwnd_increase_ca;
         cc->state.pico.undo.cwnd_increase_accel = cc->cwnd_increase_accel;
         if (cc->type == &quicly_cc_type_cuback) {
@@ -712,8 +712,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->state.pico.undo.num_packets_lost = 0;
     }
 
-    if (abba2_enabled(cc))
-        abba2_on_congestion(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, bytes == 0);
+    if (abba_enabled(cc))
+        abba_on_congestion(&cc->state.pico.abba, cc->cwnd, &loss->rtt, bytes == 0);
 
     cc->recovery_end = next_pn;
     ++cc->num_loss_episodes;
@@ -829,9 +829,9 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     cc->cwnd = cc->state.pico.undo.cwnd;
     cc->ssthresh = cc->state.pico.undo.ssthresh;
     cc->state.pico.bytes_to_mtu_increase = cc->state.pico.undo.bytes_to_mtu_increase;
-    if (abba2_enabled(cc) && cc->state.pico.abba2.a > 0)
+    if (abba_enabled(cc) && cc->state.pico.abba.a > 0)
         --cc->num_accel_eligible_episodes;
-    cc->state.pico.abba2 = cc->state.pico.undo.abba2;
+    cc->state.pico.abba = cc->state.pico.undo.abba;
     cc->cwnd_increase_ca = cc->state.pico.undo.cwnd_increase_ca;
     cc->cwnd_increase_accel = cc->state.pico.undo.cwnd_increase_accel;
     if (cc->type == &quicly_cc_type_cuback) {
@@ -865,7 +865,7 @@ static void pico_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 static void pico_init_pico_state(quicly_cc_t *cc)
 {
     /* Initialize the state overlaid by each policy implemented in this file. */
-    cc->state.pico.abba2 = (struct st_quicly_cc_abba2_t){.a = 0, .b = NAN};
+    cc->state.pico.abba = (struct st_quicly_cc_abba_t){.a = 0, .b = NAN};
     cc->state.pico.bytes_to_mtu_increase = 0;
     if (cc->type == &quicly_cc_type_cuback) {
         cc->state.pico.cuback = (struct st_quicly_cc_cuback_t){0};

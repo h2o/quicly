@@ -126,7 +126,7 @@ struct st_quicly_cc_cuback_t {
 };
 
 /**
- * ABBA2 augments CUBIC and Cuback to respond quickly to increases in available bandwidth, while retaining their ordinary window
+ * ABBA augments CUBIC and Cuback to respond quickly to increases in available bandwidth, while retaining their ordinary window
  * growth and congestion response.
  *
  * It models the relationship between CWND and RTT using the congestion watermark and the lowest RTT observed afterward. An RTT
@@ -136,7 +136,7 @@ struct st_quicly_cc_cuback_t {
  * at beta^(-2/3) to yield under persistent congestion. On each ACK, it selects the larger of ordinary growth and model-based
  * acceleration.
  */
-struct st_quicly_cc_abba2_t {
+struct st_quicly_cc_abba_t {
     /**
      * Retains the watermarks of one congestion-avoidance period. `high` pairs the pre-reduction window with the RTT upon
      * congestion; if it was a packet loss, the minimum RTT observed through recovery is adopted, because senders continue pushing
@@ -225,7 +225,7 @@ typedef struct st_quicly_cc_t {
      */
     unsigned normalize_mtu : 1;
     /**
-     * Enables ABBA2 accelerated bandwidth adaptation for CUBIC and Cuback.
+     * Enables ABBA accelerated bottleneck bandwidth adaptation for CUBIC and Cuback.
      */
     unsigned abba : 1;
     /**
@@ -255,7 +255,7 @@ typedef struct st_quicly_cc_t {
             /**
              * Bandwidth adaptation state shared by CUBIC and Cuback.
              */
-            struct st_quicly_cc_abba2_t abba2;
+            struct st_quicly_cc_abba_t abba;
             /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
              * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
@@ -268,7 +268,7 @@ typedef struct st_quicly_cc_t {
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_to_mtu_increase;
-                struct st_quicly_cc_abba2_t abba2;
+                struct st_quicly_cc_abba_t abba;
                 union {
                     uint32_t bytes_per_mtu_increase;
                     struct st_quicly_cc_cuback_t cuback;
