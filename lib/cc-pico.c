@@ -462,7 +462,7 @@ static void abba_on_acked(struct st_quicly_cc_abba_t *state, uint32_t cwnd, cons
 }
 
 static uint32_t abba_on_growth(struct st_quicly_cc_abba_t *state, uint32_t cwnd, uint32_t cubic_cwnd, uint32_t acked,
-                                const quicly_rtt_t *rtt, uint32_t cwnd_prior, int by_ecn)
+                               const quicly_rtt_t *rtt, uint32_t cwnd_prior, int by_ecn)
 {
     if (rtt->latest == 0 || acked == 0 || !(state->a > 0 && state->b >= 0 && rtt->latest < (double)state->a * cwnd + state->b))
         goto No_Accel;
@@ -559,7 +559,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (largest_acked < cc->recovery_end) {
         if (abba_enabled(cc))
             abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 1,
-                           cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
+                          cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
         if (quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
             if (cc->num_loss_episodes == 1) {
                 quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, bytes, 0);
@@ -576,7 +576,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (abba_enabled(cc) && cc->cwnd >= cc->ssthresh) {
         int was_fit = cc->state.pico.abba.a > 0;
         abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 0,
-                       cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
+                      cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
         if (!was_fit && cc->state.pico.abba.a > 0)
             ++cc->num_accel_eligible_episodes;
     }
@@ -602,8 +602,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
             if (cc->cwnd < pre_cwnd)
                 cc->cwnd = pre_cwnd;
             if (cc_limited && state->cc_limited) {
-                uint32_t accel_cwnd = abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
-                                                      state->cwnd_prior, state->by_ecn);
+                uint32_t accel_cwnd =
+                    abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt, state->cwnd_prior, state->by_ecn);
                 if (cc->cwnd < accel_cwnd) {
                     cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
                     cc->cwnd = accel_cwnd;
@@ -640,7 +640,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (abba_enabled(cc) && pre_cwnd >= cc->ssthresh) {
         /* Keep the partially consumed Cuback interval even when acceleration supplies the larger window. */
         uint32_t accel_cwnd = abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
-                                              cc->state.pico.cuback.cwnd_prior, cc->state.pico.cuback.by_ecn);
+                                             cc->state.pico.cuback.cwnd_prior, cc->state.pico.cuback.by_ecn);
         if (cc->cwnd < accel_cwnd) {
             cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
             cc->cwnd = accel_cwnd;
