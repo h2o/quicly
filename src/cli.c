@@ -1656,7 +1656,7 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "no-normalize-cc-mtu") == 0) {
                 ctx.normalize_cc_mtu = 0;
             } else if (strcmp(longopts[opt_index].name, "abba") == 0) {
-                ctx.abba = 1;
+                ctx.enable_ratio.abba = 255;
             } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
                 ctx.enable_ratio.rapid_start = 255;
             } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {

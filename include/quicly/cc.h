@@ -274,6 +274,8 @@ typedef struct st_quicly_cc_t {
                     struct st_quicly_cc_cuback_t cuback;
                     struct st_quicly_cc_cubic_t cubic;
                 };
+                uint64_t cwnd_increase_ca;
+                uint64_t cwnd_increase_accel;
             } undo;
         } pico;
         /**
@@ -367,6 +369,19 @@ typedef struct st_quicly_cc_t {
      * Total number of loss episodes that was reported only by ECN (hence no packet loss).
      */
     uint32_t num_ecn_loss_episodes;
+    /**
+     * Total number of congestion-avoidance episodes for which ABBA's model became fit (i.e., obtained a usable, non-horizontal
+     * RTT/CWND slope), making acceleration possible. This does not imply that acceleration actually increased CWND.
+     */
+    uint32_t num_accel_eligible_episodes;
+    /**
+     * Total bytes added to CWND while in congestion avoidance.
+     */
+    uint64_t cwnd_increase_ca;
+    /**
+     * Total bytes added to CWND by ABBA's growth model; a subset of `cwnd_increase_ca`.
+     */
+    uint64_t cwnd_increase_accel;
 } quicly_cc_t;
 
 struct st_quicly_cc_type_t {

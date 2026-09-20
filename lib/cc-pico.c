@@ -573,9 +573,13 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
-    if (abba2_enabled(cc) && cc->cwnd >= cc->ssthresh)
+    if (abba2_enabled(cc) && cc->cwnd >= cc->ssthresh) {
+        int was_fit = cc->state.pico.abba2.a > 0;
         abba2_on_acked(&cc->state.pico.abba2, cc->cwnd, &loss->rtt, 0,
                        cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
+        if (!was_fit && cc->state.pico.abba2.a > 0)
+            ++cc->num_accel_eligible_episodes;
+    }
 
     /* Cubic: unlike other policies, congestion avoidance cannot be driven by bytes_to_mtu_increase. */
     if (cc->type == &quicly_cc_type_cubic && cc->cwnd >= cc->ssthresh) {
@@ -597,10 +601,17 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         if (abba2_enabled(cc)) {
             if (cc->cwnd < pre_cwnd)
                 cc->cwnd = pre_cwnd;
-            if (cc_limited && state->cc_limited)
-                cc->cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt, state->cwnd_prior,
-                                          state->by_ecn);
+            if (cc_limited && state->cc_limited) {
+                uint32_t accel_cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
+                                                      state->cwnd_prior, state->by_ecn);
+                if (cc->cwnd < accel_cwnd) {
+                    cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
+                    cc->cwnd = accel_cwnd;
+                }
+            }
         }
+        if (cc->cwnd > pre_cwnd)
+            cc->cwnd_increase_ca += cc->cwnd - pre_cwnd;
         goto Cleanup;
     }
 
@@ -628,9 +639,15 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     if (abba2_enabled(cc) && pre_cwnd >= cc->ssthresh) {
         /* Keep the partially consumed Cuback interval even when acceleration supplies the larger window. */
-        cc->cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
-                                  cc->state.pico.cuback.cwnd_prior, cc->state.pico.cuback.by_ecn);
+        uint32_t accel_cwnd = abba2_on_growth(&cc->state.pico.abba2, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
+                                              cc->state.pico.cuback.cwnd_prior, cc->state.pico.cuback.by_ecn);
+        if (cc->cwnd < accel_cwnd) {
+            cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
+            cc->cwnd = accel_cwnd;
+        }
     }
+    if (pre_cwnd >= cc->ssthresh && cc->cwnd > pre_cwnd)
+        cc->cwnd_increase_ca += cc->cwnd - pre_cwnd;
 
 Cleanup:
     if (cc->cwnd_maximum < cc->cwnd)
@@ -680,6 +697,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->state.pico.undo.ssthresh = cc->ssthresh;
         cc->state.pico.undo.bytes_to_mtu_increase = cc->state.pico.bytes_to_mtu_increase;
         cc->state.pico.undo.abba2 = cc->state.pico.abba2;
+        cc->state.pico.undo.cwnd_increase_ca = cc->cwnd_increase_ca;
+        cc->state.pico.undo.cwnd_increase_accel = cc->cwnd_increase_accel;
         if (cc->type == &quicly_cc_type_cuback) {
             cc->state.pico.undo.cuback = cc->state.pico.cuback;
         } else if (cc->type == &quicly_cc_type_cubic) {
@@ -810,7 +829,11 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
     cc->cwnd = cc->state.pico.undo.cwnd;
     cc->ssthresh = cc->state.pico.undo.ssthresh;
     cc->state.pico.bytes_to_mtu_increase = cc->state.pico.undo.bytes_to_mtu_increase;
+    if (abba2_enabled(cc) && cc->state.pico.abba2.a > 0)
+        --cc->num_accel_eligible_episodes;
     cc->state.pico.abba2 = cc->state.pico.undo.abba2;
+    cc->cwnd_increase_ca = cc->state.pico.undo.cwnd_increase_ca;
+    cc->cwnd_increase_accel = cc->state.pico.undo.cwnd_increase_accel;
     if (cc->type == &quicly_cc_type_cuback) {
         cc->state.pico.cuback = cc->state.pico.undo.cuback;
     } else if (cc->type == &quicly_cc_type_cubic) {

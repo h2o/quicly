@@ -1220,7 +1220,7 @@ static void test_cc_accel_context(void)
     for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
         quicly_context_t ctx = quic_ctx;
         ctx.init_cc = policies[i];
-        ctx.abba = 1;
+        ctx.enable_ratio.abba = 255;
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
@@ -1616,7 +1616,6 @@ static void test_stats_foreach_field(size_t off, size_t size)
         GAP(loss_thresholds.time_based_percentile, cc.cwnd),
         GAP(cc.ssthresh, cc.cwnd_initial),
         GAP(cc.cwnd_exiting_slow_start, cc.exit_slow_start_at),
-        GAP(cc.num_ecn_loss_episodes, delivery_rate.latest),
 #undef GAP
         SIZE_MAX};
     for (size_t i = 0; gaps[i] != SIZE_MAX; i += 2) {

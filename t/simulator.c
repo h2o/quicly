@@ -977,7 +977,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
         switch (ch) {
         case 0:
             if (strcmp(longopts[opt_index].name, "abba") == 0) {
-                quicctx->abba = 1;
+                quicctx->enable_ratio.abba = 255;
             } else {
                 assert(!"unexpected longname");
             }
