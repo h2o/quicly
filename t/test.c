@@ -483,6 +483,24 @@ static void test_transport_parameters(void)
     ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, reset_stream_at_nonempty_bytes,
                                               reset_stream_at_nonempty_bytes + sizeof(reset_stream_at_nonempty_bytes)) ==
        QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
+
+    /* reset_stream_at is bound into the session ticket auth data, so that toggling it refuses 0-RTT */
+    {
+        quicly_context_t ctx = quic_ctx;
+        ptls_buffer_t without, with;
+
+        ctx.transport_params.reset_stream_at = 0;
+        ptls_buffer_init(&without, "", 0);
+        ok(quicly_build_session_ticket_auth_data(&without, &ctx) == 0);
+
+        ctx.transport_params.reset_stream_at = 1;
+        ptls_buffer_init(&with, "", 0);
+        ok(quicly_build_session_ticket_auth_data(&with, &ctx) == 0);
+
+        ok(without.off != with.off || memcmp(without.base, with.base, without.off) != 0);
+        ptls_buffer_dispose(&without);
+        ptls_buffer_dispose(&with);
+    }
 }
 
 size_t decode_packets(quicly_decoded_packet_t *decoded, struct iovec *raw, size_t cnt)

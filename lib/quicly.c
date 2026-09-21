@@ -3079,6 +3079,7 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
         APPLY(max_stream_data.uni);
         APPLY(max_streams_bidi);
         APPLY(max_streams_uni);
+        APPLY(reset_stream_at);
 #undef APPLY
         if ((ret = apply_remote_transport_params(conn)) != 0)
             goto Exit;
@@ -8391,6 +8392,10 @@ int quicly_build_session_ticket_auth_data(ptls_buffer_t *auth_data, const quicly
                 { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_streams_bidi); });
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAMS_UNI,
                 { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_streams_uni); });
+        /* Binding reset_stream_at makes a server that turns the extension off after issuing the ticket refuse 0-RTT, as required by
+         * draft-ietf-quic-reliable-stream-reset, section 3. */
+        if (ctx->transport_params.reset_stream_at)
+            PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT, {});
     });
 
 #undef PUSH_TP
