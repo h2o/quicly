@@ -8071,8 +8071,12 @@ void quicly_request_stop(quicly_stream_t *stream, quicly_error_t err)
     assert(quicly_stream_has_receive_side(quicly_is_client(stream->conn), stream->stream_id));
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
 
-    /* send STOP_SENDING if the incoming side of the stream is still open */
-    if (stream->recvstate.eos == UINT64_MAX && stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {
+    /* Send STOP_SENDING if the incoming side of the stream is still open. A stream that the peer has reset while remaining
+     * committed to delivering a reliable prefix counts as open as well; draft-ietf-quic-reliable-stream-reset section 5.3 leaves
+     * the receiving part in the "Size Known" state, in which RFC 9000 section 3.5 permits STOP_SENDING. */
+    if ((stream->recvstate.eos == UINT64_MAX ||
+         (stream->recvstate.reliable_size != UINT64_MAX && !quicly_recvstate_transfer_complete(&stream->recvstate))) &&
+        stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_NONE) {
         stream->_send_aux.stop_sending.sender_state = QUICLY_SENDER_STATE_SEND;
         stream->_send_aux.stop_sending.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
         sched_stream_control(stream);

@@ -818,7 +818,6 @@ static void test_stop_sending(void)
 {
     quicly_stream_t *client_stream, *server_stream;
     quicly_stats_t stats;
-    uint64_t eos;
 
     connect_pair();
     open_stream(0, 3, &client_stream, &server_stream);
@@ -828,12 +827,8 @@ static void test_stop_sending(void)
     ok(server_stream->recvstate.reliable_size == 5);
     ok(!quicly_recvstate_transfer_complete(&server_stream->recvstate));
 
-    /* `quicly_request_stop` is a no-op once the final size is known, hence hide it for the duration of the call; that emulates a
-     * peer that stops reading while the reliable prefix is still being delivered */
-    eos = server_stream->recvstate.eos;
-    server_stream->recvstate.eos = UINT64_MAX;
+    /* the application stops reading while the reliable prefix is still being delivered */
     quicly_request_stop(server_stream, APP_ERROR(7));
-    server_stream->recvstate.eos = eos;
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(server, client);
     ok(client_stream->_send_aux.reset_stream.reliable_size == 0);
