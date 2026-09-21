@@ -1665,6 +1665,7 @@ int main(int argc, char **argv)
     subtest("cid", test_cid);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
+    subtest("reset-stream-at", test_reset_stream_at);
     subtest("lossy", test_lossy);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
