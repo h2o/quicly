@@ -1635,6 +1635,7 @@ int main(int argc, char **argv)
     subtest("is-duplicate-pn", test_is_duplicate_pn);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
+    subtest("sendstate", test_sendstate);
     subtest("pacer", test_pacer);
     subtest("sentmap", test_sentmap);
     subtest("loss", test_loss);

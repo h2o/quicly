@@ -63,6 +63,13 @@ static int quicly_sendstate_is_fully_inflight(quicly_sendstate_t *state);
 int quicly_sendstate_activate(quicly_sendstate_t *state);
 int quicly_sendstate_shutdown(quicly_sendstate_t *state, uint64_t final_size);
 void quicly_sendstate_reset(quicly_sendstate_t *state);
+/**
+ * Resets the stream, but retains the state of the bytes below `reliable_size` so that they continue to be sent and retransmitted
+ * until they are acked; see draft-ietf-quic-reliable-stream-reset. `reliable_size` must not be greater than `size_inflight`, and
+ * once called, must not increase. `quicly_sendstate_transfer_complete` returns true once all the bytes below `reliable_size` are
+ * acked. Calling this function with `reliable_size` being zero is identical to calling `quicly_sendstate_reset`.
+ */
+int quicly_sendstate_reset_at(quicly_sendstate_t *state, uint64_t reliable_size);
 int quicly_sendstate_acked(quicly_sendstate_t *state, quicly_sendstate_sent_t *args, size_t *bytes_to_shift);
 int quicly_sendstate_lost(quicly_sendstate_t *state, quicly_sendstate_sent_t *args);
 

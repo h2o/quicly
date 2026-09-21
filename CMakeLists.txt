@@ -76,6 +76,7 @@ SET(UNITTEST_SOURCE_FILES
     t/ranges.c
     t/rate.c
     t/remote_cid.c
+    t/sendstate.c
     t/sentmap.c
     t/simple.c
     t/stream-concurrency.c

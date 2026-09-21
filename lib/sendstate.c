@@ -86,12 +86,27 @@ void quicly_sendstate_reset(quicly_sendstate_t *state)
 {
     int ret;
 
+    ret = quicly_sendstate_reset_at(state, 0);
+    assert(ret == 0 && "guaranteed to succeed, because the number of ranges never increases");
+}
+
+int quicly_sendstate_reset_at(quicly_sendstate_t *state, uint64_t reliable_size)
+{
+    int ret;
+
     if (state->final_size == UINT64_MAX)
         state->final_size = state->size_inflight;
+    assert(reliable_size <= state->size_inflight);
 
-    ret = quicly_ranges_add(&state->acked, 0, state->final_size + 1);
-    assert(ret == 0 && "guaranteed to succeed, because the number of ranges never increases");
-    quicly_ranges_clear(&state->pending);
+    /* Stop sending the bytes at and above the Reliable Size by recording them as if they have been acked; that also stops them from
+     * being retransmitted when lost. The bytes below the Reliable Size are left intact, as the sender is committed to delivering
+     * them (draft-ietf-quic-reliable-stream-reset, section 5). */
+    if (reliable_size == 0) {
+        quicly_ranges_clear(&state->pending);
+    } else if ((ret = quicly_ranges_subtract(&state->pending, reliable_size, UINT64_MAX)) != 0) {
+        return ret;
+    }
+    return quicly_ranges_add(&state->acked, reliable_size, state->final_size + 1);
 }
 
 static int check_amount_of_state(quicly_sendstate_t *state)
