@@ -3508,8 +3508,12 @@ static quicly_error_t on_ack_reset_stream(quicly_sentmap_t *map, const quicly_se
 
     if ((stream = quicly_get_stream(conn, sent->data.stream_state_sender.stream_id)) != NULL) {
         on_ack_stream_state_sender(&stream->_send_aux.reset_stream.sender_state, acked);
-        if (stream_is_destroyable(stream))
+        if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_ACKED) {
+            /* the frame has been lost; schedule retransmission */
+            sched_stream_control(stream);
+        } else if (stream_is_destroyable(stream)) {
             destroy_stream(stream, 0);
+        }
     }
 
     return 0;

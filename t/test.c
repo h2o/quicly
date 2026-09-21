@@ -1282,6 +1282,66 @@ static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *
 }
 
 /**
+ * This test checks that a RESET_STREAM frame is retransmitted when the packet carrying it is declared lost. Otherwise, the peer
+ * would never learn about the reset, and the stream would be retained until the connection is closed.
+ */
+static void test_retransmit_lost_reset_stream(void)
+{
+    uint64_t orig_max_streams_uni = quic_ctx.transport_params.max_streams_uni;
+    quic_ctx.transport_params.max_streams_uni = 1; /* use a unidirectional stream, as that allows us to observe the disposal */
+
+    quicly_conn_t *client, *server;
+    quicly_stream_t *reset_stream, *other_stream;
+    quicly_address_t dest, src;
+    struct iovec datagrams[4];
+    uint8_t datagramsbuf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams;
+    quicly_stats_t stats;
+    quicly_error_t ret;
+
+    test_setup_connected_peers(&client, &server);
+
+    /* reset a freshly opened stream, dropping the datagram that carries the RESET_STREAM frame */
+    ret = quicly_open_stream(client, &reset_stream, 1);
+    ok(ret == 0);
+    ok(reset_stream->stream_id == 2);
+    quicly_reset_stream(reset_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ret = quicly_send(client, &dest, &src, datagrams, &num_datagrams, datagramsbuf, sizeof(datagramsbuf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_frames_sent.reset_stream == 1);
+
+    /* send a packet that follows and have it acknowledged, so that the loss timer for the dropped packet gets armed */
+    ret = quicly_open_stream(client, &other_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(other_stream, "hello", 5);
+    transmit(client, server);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+
+    /* when the loss timer fires, the RESET_STREAM frame being declared lost is retransmitted */
+    quic_now = quicly_get_first_timeout(client);
+    transmit(client, server);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_packets.lost == 1);
+    ok(stats.num_frames_sent.reset_stream == 2);
+    quicly_get_stats(server, &stats);
+    ok(stats.num_frames_received.reset_stream == 1);
+
+    /* once the retransmission is acknowledged, the stream is disposed */
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+    ok(quicly_get_stream(client, 2) == NULL);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quic_ctx.transport_params.max_streams_uni = orig_max_streams_uni;
+}
+
+/**
  * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
  * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
  */
@@ -1556,6 +1616,7 @@ int main(int argc, char **argv)
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
 
+    subtest("retransmit-lost-reset-stream", test_retransmit_lost_reset_stream);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
