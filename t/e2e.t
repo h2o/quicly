@@ -594,6 +594,52 @@ subtest "reset-stream-overflow-connection" => sub {
     like $received, qr/^\x1c\x03\x04/, "responds with CONNECTION_CLOSE(FLOW_CONTROL_ERROR) for RESET_STREAM";
 };
 
+subtest "reset-stream-at" => sub {
+    subtest "delivers the reliable prefix" => sub {
+        my $guard = spawn_server("--reset-stream-at=2000");
+        my $resp = `$cli --reset-stream-at -p /100000 127.0.0.1 $port 2> $tempdir/reset-stream-at.log`;
+        my $log = do {
+            open my $fh, "<", "$tempdir/reset-stream-at.log" or die $!;
+            local $/;
+            <$fh>;
+        };
+        like $log, qr/^received RESET_STREAM_AT: 0, reliable_size: 2000$/m, "peer sent RESET_STREAM_AT";
+        cmp_ok length($resp), '>=', 2000, "the reliable prefix has been delivered";
+    };
+    subtest "falls back to RESET_STREAM" => sub {
+        # the transport parameter is not advertised by the client, so the server must not use the extension
+        my $guard = spawn_server("--reset-stream-at=2000");
+        `$cli -p /100000 127.0.0.1 $port 2> $tempdir/reset-stream-plain.log`;
+        my $log = do {
+            open my $fh, "<", "$tempdir/reset-stream-plain.log" or die $!;
+            local $/;
+            <$fh>;
+        };
+        like $log, qr/^received RESET_STREAM: 0$/m, "peer sent RESET_STREAM";
+        unlike $log, qr/RESET_STREAM_AT/, "peer did not use the extension";
+    };
+};
+
+subtest "reset-stream-at-reliable-size-overflow" => sub {
+    my $server = spawn_server("--reset-stream-at");
+    my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
+    $conn->send("\x24\x00\x00\x01\x02"); # RESET_STREAM_AT with reliable_size=2 exceeding final_size=1
+    sleep 0.5;
+    ok !$server->is_dead(), "server process must be alive";
+    my $received = $conn->receive();
+    like $received, qr/^\x1c\x07\x24/, "responds with CONNECTION_CLOSE(FRAME_ENCODING_ERROR) for RESET_STREAM_AT";
+};
+
+subtest "reset-stream-at-not-advertised" => sub {
+    my $server = spawn_server();
+    my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
+    $conn->send("\x24\x00\x00\x00\x00"); # RESET_STREAM_AT, which has not been advertised by the server
+    sleep 0.5;
+    ok !$server->is_dead(), "server process must be alive";
+    my $received = $conn->receive();
+    like $received, qr/^\x1c\x07\x24/, "responds with CONNECTION_CLOSE(FRAME_ENCODING_ERROR) for RESET_STREAM_AT";
+};
+
 subtest "stream-open-after-connection-close" => sub {
     my $server = spawn_server(qw(-e /dev/stderr));
     my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);

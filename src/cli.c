@@ -134,6 +134,15 @@ static void on_receive_reset(quicly_stream_t *stream, quicly_error_t err);
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 
+/**
+ * `--reset-stream-at` exercises draft-ietf-quic-reliable-stream-reset. When `reliable_size` is set, the server abandons each
+ * response once that many bytes have been sent, committing to the delivery of that prefix.
+ */
+static struct {
+    unsigned reset : 1;
+    uint64_t reliable_size;
+} reset_stream_at;
+
 static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streambuf_destroy,
                                                                   quicly_streambuf_egress_shift,
                                                                   quicly_streambuf_egress_emit,
@@ -332,7 +341,12 @@ static void on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 static void on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
-    fprintf(stderr, "received RESET_STREAM: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    if (stream->recvstate.reliable_size != 0) {
+        fprintf(stderr, "received RESET_STREAM_AT: %" PRIu64 ", reliable_size: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err),
+                stream->recvstate.reliable_size);
+    } else {
+        fprintf(stderr, "received RESET_STREAM: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    }
 }
 
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
@@ -941,6 +955,18 @@ CIDMismatch:
     return 0;
 }
 
+static int64_t reset_stream_at_if_ready(void *unused, quicly_stream_t *stream)
+{
+    /* Abandon the remainder of the response once the Reliable Size has been put on the wire, retaining the commitment to deliver
+     * that prefix. The reset has to wait until then, as `quicly_reset_stream_at` caps the Reliable Size to the amount of data that
+     * has already been sent. */
+    if (quicly_stream_has_send_side(0, stream->stream_id) &&
+        stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE &&
+        !quicly_sendstate_transfer_complete(&stream->sendstate) && stream->sendstate.size_inflight >= reset_stream_at.reliable_size)
+        quicly_reset_stream_at(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), reset_stream_at.reliable_size);
+    return 0;
+}
+
 static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
 {
     signal(SIGINT, on_server_signal);
@@ -1080,6 +1106,11 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                     }
                 }
             }
+        }
+        if (reset_stream_at.reset) {
+            size_t i;
+            for (i = 0; i != num_conns; ++i)
+                quicly_foreach_stream(conns[i], NULL, reset_stream_at_if_ready);
         }
         {
             size_t i;
@@ -1316,6 +1347,10 @@ static void usage(const char *cmd)
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  --rapid-start             turns on rapid start\n"
+           "  --reset-stream-at[=size]  advertises the reset_stream_at transport parameter;\n"
+           "                            when a size is given, the server abandons each\n"
+           "                            response once that many bytes have been sent, using\n"
+           "                            a RESET_STREAM_AT frame to commit to that prefix\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
            "  --sockfd fd               specifies the UDP socket to be used\n"
@@ -1601,6 +1636,7 @@ int main(int argc, char **argv)
                                              {"max-crypto-bytes", required_argument, NULL, 0},
                                              {"no-normalize-cc-mtu", no_argument, NULL, 0},
                                              {"rapid-start", no_argument, NULL, 0},
+                                             {"reset-stream-at", optional_argument, NULL, 0},
                                              {"sockfd", required_argument, NULL, 0},
                                              {"exit-after-handshake", no_argument, NULL, 0},
                                              {"calc-initial-secret", required_argument, NULL, 0},
@@ -1640,6 +1676,15 @@ int main(int argc, char **argv)
                 ctx.normalize_cc_mtu = 0;
             } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
                 ctx.enable_ratio.rapid_start = 255;
+            } else if (strcmp(longopts[opt_index].name, "reset-stream-at") == 0) {
+                ctx.transport_params.reset_stream_at = 1;
+                if (optarg != NULL) {
+                    if (sscanf(optarg, "%" SCNu64, &reset_stream_at.reliable_size) != 1) {
+                        fprintf(stderr, "failed to parse reset-stream-at size: %s\n", optarg);
+                        exit(1);
+                    }
+                    reset_stream_at.reset = 1;
+                }
             } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {
                 if (sscanf(optarg, "%d", &fd) != 1) {
                     fprintf(stderr, "invalid argument passed to --sockfd\n");
