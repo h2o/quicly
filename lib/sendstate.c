@@ -94,17 +94,34 @@ int quicly_sendstate_reset_at(quicly_sendstate_t *state, uint64_t reliable_size)
 {
     int ret;
 
-    if (state->final_size == UINT64_MAX)
-        state->final_size = state->size_inflight;
-    assert(reliable_size <= state->size_inflight);
+    /* The final size is the greater of what has been sent and what the sender commits to sending. It is recalculated on every call
+     * so that reducing the Reliable Size before the RESET_STREAM_AT frame is sent reduces the final size as well; once the frame is
+     * sent `size_inflight` can no longer grow, hence the value stops changing as required by section 5.2 of
+     * draft-ietf-quic-reliable-stream-reset. The zero case retains the final size declared by the application, if any. */
+    if (reliable_size == 0) {
+        if (state->final_size == UINT64_MAX)
+            state->final_size = state->size_inflight;
+    } else {
+        assert(state->final_size == UINT64_MAX || reliable_size <= state->final_size);
+        state->final_size = state->size_inflight > reliable_size ? state->size_inflight : reliable_size;
+        /* discard what had been recorded above a greater final size declared by a preceding call; only the offsets at and above the
+         * Reliable Size are ever recorded there, hence nothing that has actually been acked is being dropped */
+        if ((ret = quicly_ranges_subtract(&state->acked, state->final_size + 1, UINT64_MAX)) != 0)
+            return ret;
+    }
 
     /* Stop sending the bytes at and above the Reliable Size by recording them as if they have been acked; that also stops them from
-     * being retransmitted when lost. The bytes below the Reliable Size are left intact, as the sender is committed to delivering
-     * them (draft-ietf-quic-reliable-stream-reset, section 5). */
+     * being retransmitted when lost, and keeps the EOS position out of `pending` so that the FIN bit is never used to convey the
+     * final size. The bytes below the Reliable Size are left intact, as the sender is committed to delivering them (section 5). */
     if (reliable_size == 0) {
         quicly_ranges_clear(&state->pending);
-    } else if ((ret = quicly_ranges_subtract(&state->pending, reliable_size, UINT64_MAX)) != 0) {
-        return ret;
+    } else {
+        if ((ret = quicly_ranges_subtract(&state->pending, reliable_size, UINT64_MAX)) != 0)
+            return ret;
+        /* commit to sending the bytes below the Reliable Size that have not been sent yet */
+        if (reliable_size > state->size_inflight &&
+            (ret = quicly_ranges_add(&state->pending, state->size_inflight, reliable_size)) != 0)
+            return ret;
     }
     return quicly_ranges_add(&state->acked, reliable_size, state->final_size + 1);
 }

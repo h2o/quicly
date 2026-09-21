@@ -957,12 +957,11 @@ CIDMismatch:
 
 static int64_t reset_stream_at_if_ready(void *unused, quicly_stream_t *stream)
 {
-    /* Abandon the remainder of the response once the Reliable Size has been put on the wire, retaining the commitment to deliver
-     * that prefix. The reset has to wait until then, as `quicly_reset_stream_at` caps the Reliable Size to the amount of data that
-     * has already been sent. */
+    /* Abandon the remainder of the response, retaining the commitment to deliver the first `reliable_size` bytes. Those bytes need
+     * not have been sent yet; quicly withholds the RESET_STREAM_AT frame until they are on the wire. */
     if (quicly_stream_has_send_side(0, stream->stream_id) &&
         stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE &&
-        !quicly_sendstate_transfer_complete(&stream->sendstate) && stream->sendstate.size_inflight >= reset_stream_at.reliable_size)
+        !quicly_sendstate_transfer_complete(&stream->sendstate))
         quicly_reset_stream_at(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), reset_stream_at.reliable_size);
     return 0;
 }

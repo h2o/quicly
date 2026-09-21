@@ -228,7 +228,8 @@ static void test_already_acked(void)
 }
 
 /**
- * The final size is retained when the stream is reset after having been shut down.
+ * Resetting a stream that has been shut down without the FIN bit having been sent reduces the final size to the amount of data that
+ * has been sent, as that is the value that the RESET_STREAM_AT frame declares.
  */
 static void test_after_shutdown(void)
 {
@@ -243,16 +244,51 @@ static void test_after_shutdown(void)
 
     ret = quicly_sendstate_reset_at(&state, 300);
     ok(ret == 0);
-    ok(state.final_size == 1000);
+    ok(state.final_size == 400);
     CHECK_RANGES(&state.pending, {100, 200});
-    CHECK_RANGES(&state.acked, {0, 0}, {300, 1001});
+    CHECK_RANGES(&state.acked, {0, 0}, {300, 401});
     ok(!quicly_sendstate_transfer_complete(&state));
 
     record_acked(&state, 100, 200);
     ok(!quicly_sendstate_transfer_complete(&state));
     ok(record_acked(&state, 0, 100) == 200);
     ok(!quicly_sendstate_transfer_complete(&state));
-    ok(record_acked(&state, 200, 300) == 800);
+    ok(record_acked(&state, 200, 300) == 200);
+    ok(quicly_sendstate_transfer_complete(&state));
+
+    quicly_sendstate_dispose(&state);
+}
+
+/**
+ * The Reliable Size may cover bytes that have not been sent yet; those bytes become pending.
+ */
+static void test_above_size_inflight(void)
+{
+    quicly_sendstate_t state;
+    int ret;
+
+    init_with_sent(&state, 400);
+    record_lost(&state, 100, 200);
+    CHECK_RANGES(&state.pending, {100, 200}, {400, UINT64_MAX});
+
+    ret = quicly_sendstate_reset_at(&state, 600);
+    ok(ret == 0);
+    ok(state.final_size == 600);
+    CHECK_RANGES(&state.pending, {100, 200}, {400, 600});
+    CHECK_RANGES(&state.acked, {0, 0}, {600, 601});
+    ok(!quicly_sendstate_transfer_complete(&state));
+
+    /* reducing the Reliable Size before the frame is sent reduces the final size as well */
+    ret = quicly_sendstate_reset_at(&state, 500);
+    ok(ret == 0);
+    ok(state.final_size == 500);
+    CHECK_RANGES(&state.pending, {100, 200}, {400, 500});
+    CHECK_RANGES(&state.acked, {0, 0}, {500, 501});
+
+    ok(record_acked(&state, 0, 100) == 100);
+    record_acked(&state, 100, 200);
+    ok(!quicly_sendstate_transfer_complete(&state));
+    ok(record_acked(&state, 200, 500) == 300);
     ok(quicly_sendstate_transfer_complete(&state));
 
     quicly_sendstate_dispose(&state);
@@ -266,4 +302,5 @@ void test_sendstate(void)
     subtest("reliable-size-eq-final-size", test_reliable_size_eq_final_size);
     subtest("already-acked", test_already_acked);
     subtest("after-shutdown", test_after_shutdown);
+    subtest("above-size-inflight", test_above_size_inflight);
 }

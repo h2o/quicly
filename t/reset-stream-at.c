@@ -381,20 +381,25 @@ static void test_raise_is_ignored_on_wire(void)
 }
 
 /**
- * Section 4: a Reliable Size greater than the Final Size is a FRAME_ENCODING_ERROR (rather than a FINAL_SIZE_ERROR).
+ * Section 4: a frame whose Reliable Size is greater than the Final Size is never sent; the frame is withheld until the bytes below
+ * the Reliable Size have been sent, which is also what makes the Final Size being declared reach the Reliable Size. The rejection
+ * of such a frame upon receipt is covered by `t/frame.c` and by `t/e2e.t`.
  */
 static void test_reliable_size_above_final_size(void)
 {
     quicly_stream_t *client_stream, *server_stream;
+    quicly_stats_t stats;
 
     connect_pair();
     open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
 
-    /* craft a frame whose Reliable Size is above the Final Size, which is `size_inflight` */
     quicly_reset_stream_at(client_stream, APP_ERROR(1), 5);
     client_stream->_send_aux.reset_stream.reliable_size = TEST_DATA_LEN + 1;
     transmit(client, server);
-    ok(local_close_error(server, QUICLY_FRAME_TYPE_RESET_STREAM_AT) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_frames_sent.reset_stream_at == 0);
+    ok(stats.num_frames_sent.reset_stream == 0);
+    ok(local_close_error(server, UINT64_MAX) == 0); /* the peer has nothing to complain about */
 
     free_pair();
 }
@@ -941,15 +946,15 @@ static void test_discard_receive_side(void)
 }
 
 /**
- * Documented limitation: `quicly_reset_stream_at` caps the Reliable Size to `size_inflight`, as quicly declares the Final Size to
- * be that value and a larger one would call for deferring the frame until flow control credit becomes available (section 4).
- * Resetting with a Reliable Size covering bytes that the application has written but quicly has not sent yet therefore degrades to
- * a smaller Reliable Size. This test pins that behaviour; it is to be revisited if the cap is ever lifted.
+ * A Reliable Size covering bytes that the application has written but quicly has not sent yet is honoured in full; the frame is
+ * withheld until those bytes are on the wire, at which point the Final Size being declared has reached the Reliable Size (section
+ * 4).
  */
-static void test_cap_to_size_inflight(void)
+static void test_defer_until_prefix_sent(void)
 {
     quicly_stream_t *client_stream, *server_stream;
     test_streambuf_t *server_streambuf;
+    quicly_stats_t stats;
 
     connect_pair();
     open_stream(0, 3, &client_stream, &server_stream);
@@ -959,20 +964,24 @@ static void test_cap_to_size_inflight(void)
     quicly_streambuf_egress_write(client_stream, "abcde", 5);
     ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN);
     quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
-    ok(client_stream->_send_aux.reset_stream.reliable_size == TEST_DATA_LEN); /* capped, rather than deferred */
-    ok(client_stream->sendstate.final_size == TEST_DATA_LEN);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == TEST_DATA_LEN + 5); /* retained in full */
+    ok(client_stream->sendstate.final_size == TEST_DATA_LEN + 5);
+
+    /* the frame is withheld until the bytes below the Reliable Size have been sent */
     transmit(client, server);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_frames_sent.reset_stream_at == 1);
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 5);
+    ok(server_stream->recvstate.eos == TEST_DATA_LEN + 5);
+    ok(server_stream->recvstate.reliable_size == TEST_DATA_LEN + 5);
 
-    ok(server_stream->recvstate.eos == TEST_DATA_LEN);
-    ok(server_stream->recvstate.reliable_size == TEST_DATA_LEN);
-
-    /* the bytes below the cap are still delivered reliably */
     for (size_t i = 0; i < 10 && !quicly_recvstate_transfer_complete(&server_stream->recvstate); ++i) {
         quic_now = quicly_get_first_timeout(client);
         transmit(client, server);
     }
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
-    ok(buffer_is(&server_streambuf->super.ingress, test_data));
+    ok(buffer_is(&server_streambuf->super.ingress, "0123456789abcde"));
+    ok(max_data_is_equal(client, server));
 
     free_pair();
 }
@@ -1060,7 +1069,7 @@ void test_reset_stream_at(void)
     subtest("flow-control-error", test_flow_control_error);
     subtest("stop-sending", test_stop_sending);
     subtest("discard-receive-side", test_discard_receive_side);
-    subtest("cap-to-size-inflight", test_cap_to_size_inflight);
+    subtest("defer-until-prefix-sent", test_defer_until_prefix_sent);
     subtest("degrade-without-tp", test_degrade_without_tp);
     subtest("tp-not-advertised", test_tp_not_advertised);
 
