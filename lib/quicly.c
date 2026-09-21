@@ -1023,6 +1023,16 @@ static int stream_is_destroyable(quicly_stream_t *stream)
     return 1;
 }
 
+/**
+ * Returns if stream data is to be sent (and retransmitted when lost). Data below the Reliable Size of a RESET_STREAM_AT frame
+ * continues to be sent even after the stream has been reset (draft-ietf-quic-reliable-stream-reset, section 5).
+ */
+static int stream_data_is_sendable(quicly_stream_t *stream)
+{
+    return stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE ||
+           stream->_send_aux.reset_stream.reliable_size != 0;
+}
+
 static void sched_stream_control(quicly_stream_t *stream)
 {
     assert(stream->stream_id >= 0);
@@ -1290,6 +1300,7 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     stream->_send_aux.stop_sending.error_code = 0;
     stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_NONE;
     stream->_send_aux.reset_stream.error_code = 0;
+    stream->_send_aux.reset_stream.reliable_size = 0;
     quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender, initial_max_stream_data_local);
     stream->_send_aux.blocked = QUICLY_SENDER_STATE_NONE;
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
@@ -3380,7 +3391,7 @@ static quicly_error_t on_ack_stream_ack_one(quicly_conn_t *conn, quicly_stream_i
     }
     if (stream_is_destroyable(stream)) {
         destroy_stream(stream, 0);
-    } else if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE) {
+    } else if (stream_data_is_sendable(stream)) {
         resched_stream_data(stream);
     }
 
@@ -3446,7 +3457,7 @@ static quicly_error_t on_ack_stream(quicly_sentmap_t *map, const quicly_sent_pac
         /* FIXME handle rto error */
         if ((ret = quicly_sendstate_lost(&stream->sendstate, &sent->data.stream.args)) != 0)
             return ret;
-        if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE)
+        if (stream_data_is_sendable(stream))
             resched_stream_data(stream);
     }
 
@@ -3511,12 +3522,18 @@ static quicly_error_t on_ack_reset_stream(quicly_sentmap_t *map, const quicly_se
     quicly_stream_t *stream;
 
     if ((stream = quicly_get_stream(conn, sent->data.stream_state_sender.stream_id)) != NULL) {
-        on_ack_stream_state_sender(&stream->_send_aux.reset_stream.sender_state, acked);
-        if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_ACKED) {
+        /* Ignore the event unless the frame in question is the one carrying the smallest Reliable Size, as it is that frame that
+         * has to be delivered to the peer (draft-ietf-quic-reliable-stream-reset, section 5.2). */
+        if (sent->data.stream_state_sender.reliable_size != stream->_send_aux.reset_stream.reliable_size)
+            return 0;
+        if (acked) {
+            stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_ACKED;
+            if (stream_is_destroyable(stream))
+                destroy_stream(stream, 0);
+        } else if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_ACKED) {
             /* the frame has been lost; schedule retransmission */
+            stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_SEND;
             sched_stream_control(stream);
-        } else if (stream_is_destroyable(stream)) {
-            destroy_stream(stream, 0);
         }
     }
 
@@ -4316,7 +4333,7 @@ Emit: /* emit an ACK frame */
 }
 
 static quicly_error_t prepare_stream_state_sender(quicly_stream_t *stream, quicly_sender_state_t *sender, quicly_send_context_t *s,
-                                                  size_t min_space, quicly_sent_acked_cb ack_cb)
+                                                  size_t min_space, quicly_sent_acked_cb ack_cb, uint64_t reliable_size)
 {
     quicly_sent_t *sent;
     quicly_error_t ret;
@@ -4324,6 +4341,7 @@ static quicly_error_t prepare_stream_state_sender(quicly_stream_t *stream, quicl
     if ((ret = allocate_ack_eliciting_frame(stream->conn, s, min_space, &sent, ack_cb)) != 0)
         return ret;
     sent->data.stream_state_sender.stream_id = stream->stream_id;
+    sent->data.stream_state_sender.reliable_size = reliable_size;
     *sender = QUICLY_SENDER_STATE_UNACKED;
 
     return 0;
@@ -4337,7 +4355,7 @@ static quicly_error_t send_control_frames_of_stream(quicly_stream_t *stream, qui
     if (stream->_send_aux.stop_sending.sender_state == QUICLY_SENDER_STATE_SEND) {
         /* FIXME also send an empty STREAM frame */
         if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.stop_sending.sender_state, s,
-                                               QUICLY_STOP_SENDING_FRAME_CAPACITY, on_ack_stop_sending)) != 0)
+                                               QUICLY_STOP_SENDING_FRAME_CAPACITY, on_ack_stop_sending, 0)) != 0)
             return ret;
         s->dst = quicly_encode_stop_sending_frame(s->dst, stream->stream_id, stream->_send_aux.stop_sending.error_code);
         ++stream->conn->super.stats.num_frames_sent.stop_sending;
@@ -4371,21 +4389,40 @@ static quicly_error_t send_control_frames_of_stream(quicly_stream_t *stream, qui
         });
     }
 
-    /* send RESET_STREAM if necessary */
+    /* Send RESET_STREAM or RESET_STREAM_AT if necessary. Note that the Final Size being sent is `size_inflight`; it never grows
+     * once the stream has been reset, as the bytes being retained for delivery are all below that offset. */
     if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_SEND) {
-        if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.reset_stream.sender_state, s, QUICLY_RST_FRAME_CAPACITY,
-                                               on_ack_reset_stream)) != 0)
-            return ret;
-        s->dst = quicly_encode_reset_stream_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
-                                                  stream->sendstate.size_inflight);
-        ++stream->conn->super.stats.num_frames_sent.reset_stream;
-        QUICLY_PROBE(RESET_STREAM_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
-                     stream->_send_aux.reset_stream.error_code, stream->sendstate.size_inflight);
-        QUICLY_LOG_CONN(reset_stream_send, stream->conn, {
-            PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
-            PTLS_LOG_ELEMENT_UNSIGNED(error_code, stream->_send_aux.reset_stream.error_code);
-            PTLS_LOG_ELEMENT_UNSIGNED(final_size, stream->sendstate.size_inflight);
-        });
+        uint64_t reliable_size = stream->_send_aux.reset_stream.reliable_size;
+        if (reliable_size == 0) {
+            if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.reset_stream.sender_state, s,
+                                                   QUICLY_RST_FRAME_CAPACITY, on_ack_reset_stream, 0)) != 0)
+                return ret;
+            s->dst = quicly_encode_reset_stream_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
+                                                      stream->sendstate.size_inflight);
+            ++stream->conn->super.stats.num_frames_sent.reset_stream;
+            QUICLY_PROBE(RESET_STREAM_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
+                         stream->_send_aux.reset_stream.error_code, stream->sendstate.size_inflight);
+            QUICLY_LOG_CONN(reset_stream_send, stream->conn, {
+                PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
+                PTLS_LOG_ELEMENT_UNSIGNED(error_code, stream->_send_aux.reset_stream.error_code);
+                PTLS_LOG_ELEMENT_UNSIGNED(final_size, stream->sendstate.size_inflight);
+            });
+        } else {
+            if ((ret = prepare_stream_state_sender(stream, &stream->_send_aux.reset_stream.sender_state, s,
+                                                   QUICLY_RST_AT_FRAME_CAPACITY, on_ack_reset_stream, reliable_size)) != 0)
+                return ret;
+            s->dst = quicly_encode_reset_stream_at_frame(s->dst, stream->stream_id, stream->_send_aux.reset_stream.error_code,
+                                                         stream->sendstate.size_inflight, reliable_size);
+            ++stream->conn->super.stats.num_frames_sent.reset_stream_at;
+            QUICLY_PROBE(RESET_STREAM_AT_SEND, stream->conn, stream->conn->stash.now, stream->stream_id,
+                         stream->_send_aux.reset_stream.error_code, stream->sendstate.size_inflight, reliable_size);
+            QUICLY_LOG_CONN(reset_stream_at_send, stream->conn, {
+                PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
+                PTLS_LOG_ELEMENT_UNSIGNED(error_code, stream->_send_aux.reset_stream.error_code);
+                PTLS_LOG_ELEMENT_UNSIGNED(final_size, stream->sendstate.size_inflight);
+                PTLS_LOG_ELEMENT_UNSIGNED(reliable_size, reliable_size);
+            });
+        }
     }
 
     /* send STREAM_DATA_BLOCKED if necessary */
@@ -4599,7 +4636,10 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
     stream->callbacks->on_send_emit(stream, emit_off, dst, &len, &wrote_all);
     if (stream->conn->super.state >= QUICLY_STATE_CLOSING) {
         return QUICLY_ERROR_IS_CLOSING;
-    } else if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE) {
+    } else if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE &&
+               off + len > stream->_send_aux.reset_stream.reliable_size) {
+        /* The stream has been reset; drop the bytes that are at or above the Reliable Size (which is zero unless RESET_STREAM_AT is
+         * being used). Bytes below that offset are sent, as the sender is committed to delivering them. */
         return 0;
     }
     assert(len != 0);
@@ -6724,6 +6764,10 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
         stream->callbacks->on_send_stop(stream, err);
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
             return QUICLY_ERROR_IS_CLOSING;
+    } else if (stream->_send_aux.reset_stream.reliable_size != 0) {
+        /* The peer will not read the bytes that are being delivered in spite of the reset; stop sending them by lowering the
+         * Reliable Size to zero, which sends a RESET_STREAM frame (draft-ietf-quic-reliable-stream-reset, section 5.4). */
+        quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code));
     }
 
     return 0;
@@ -7925,17 +7969,43 @@ quicly_error_t quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream
 
 void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err)
 {
+    quicly_reset_stream_at(stream, err, 0);
+}
+
+void quicly_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size)
+{
     assert(quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id));
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
-    assert(stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE);
-    assert(!quicly_sendstate_transfer_complete(&stream->sendstate));
 
-    /* dispose sendbuf state */
-    quicly_sendstate_reset(&stream->sendstate);
+    /* Cap the Reliable Size to what can be delivered by sending a RESET_STREAM_AT frame: the peer has to be willing to receive the
+     * frame, and the bytes have to be within `size_inflight`, which is the Final Size being declared and hence the amount of flow
+     * control credit that has already been consumed (draft-ietf-quic-reliable-stream-reset, section 4). */
+    if (!stream->conn->super.remote.transport_params.reset_stream_at)
+        reliable_size = 0;
+    if (reliable_size > stream->sendstate.size_inflight)
+        reliable_size = stream->sendstate.size_inflight;
 
-    /* setup RESET_STREAM */
+    if (stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE) {
+        assert(!quicly_sendstate_transfer_complete(&stream->sendstate));
+        stream->_send_aux.reset_stream.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+    } else {
+        /* A stream that has been reset can be reset again, but only to reduce the Reliable Size, and while retaining the error code
+         * and the Final Size of the first reset (draft-ietf-quic-reliable-stream-reset, section 5.2). */
+        if (reliable_size >= stream->_send_aux.reset_stream.reliable_size || quicly_sendstate_transfer_complete(&stream->sendstate))
+            return;
+    }
+
+    /* dispose sendbuf state, retaining the bytes below the Reliable Size */
+    if (reliable_size != 0 && quicly_sendstate_reset_at(&stream->sendstate, reliable_size) != 0) {
+        /* when the state cannot be retained (i.e., upon memory allocation failure), reset the stream without partial delivery */
+        reliable_size = 0;
+    }
+    if (reliable_size == 0)
+        quicly_sendstate_reset(&stream->sendstate);
+
+    /* setup RESET_STREAM (or RESET_STREAM_AT) */
     stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_SEND;
-    stream->_send_aux.reset_stream.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+    stream->_send_aux.reset_stream.reliable_size = reliable_size;
 
     /* schedule for delivery */
     sched_stream_control(stream);

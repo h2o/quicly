@@ -1038,6 +1038,12 @@ struct st_quicly_stream_t {
              */
             quicly_sender_state_t sender_state;
             uint64_t error_code;
+            /**
+             * Amount of data that is delivered even though the stream is being reset. Zero indicates that a RESET_STREAM frame is
+             * to be sent; otherwise, a RESET_STREAM_AT frame carrying this value as the Reliable Size is sent. Once set, this value
+             * can only be reduced.
+             */
+            uint64_t reliable_size;
         } reset_stream;
         /**
          * sends receive window updates to remote peer
@@ -1485,6 +1491,16 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
  *
  */
 void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
+/**
+ * Resets the stream, requesting the peer to deliver the first `reliable_size` bytes to the application even though the stream is
+ * being reset; see draft-ietf-quic-reliable-stream-reset. `reliable_size` is capped to the amount of data that has already been
+ * sent at least once, as well as to the value supplied by the preceding call (the Reliable Size can only be reduced). If the peer
+ * has not advertised the willingness to receive RESET_STREAM_AT frames, `reliable_size` is ignored and a RESET_STREAM frame is sent
+ * instead; applications cannot know the transport parameters of the peer at the moment they reset a stream. Calling this function
+ * with `reliable_size` being zero is identical to calling `quicly_reset_stream`. When called for the second time, the error code of
+ * the first call is retained, as required by the draft.
+ */
+void quicly_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
 /**
  *
  */

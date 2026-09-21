@@ -158,6 +158,11 @@ struct st_quicly_sent_t {
         } streams_blocked;
         struct {
             quicly_stream_id_t stream_id;
+            /**
+             * Reliable Size carried by the RESET_STREAM_AT frame being sent; zero for the other frames. This value is necessary for
+             * determining if the frame being acked is the one carrying the smallest Reliable Size.
+             */
+            uint64_t reliable_size;
         } stream_state_sender;
         struct {
             int is_inflight;
