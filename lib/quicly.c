@@ -6296,10 +6296,63 @@ static quicly_error_t handle_stream_frame(quicly_conn_t *conn, struct st_quicly_
     return apply_stream_frame(stream, &frame);
 }
 
+/**
+ * Handles a received RESET_STREAM or RESET_STREAM_AT frame; the former is equivalent to the latter carrying a reliable size of
+ * zero. See draft-ietf-quic-reliable-stream-reset.
+ */
+static quicly_error_t handle_reset_of_stream(quicly_conn_t *conn, uint64_t stream_id, uint64_t app_error_code, uint64_t final_size,
+                                             uint64_t reliable_size)
+{
+    quicly_stream_t *stream;
+    uint64_t bytes_missing;
+    int is_first_reset;
+    quicly_error_t ret;
+
+    if ((ret = quicly_get_or_open_stream(conn, stream_id, &stream)) != 0 || stream == NULL)
+        return ret;
+
+    if (final_size > stream->recvstate.data_off + stream->_recv_aux.window)
+        return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
+
+    if (quicly_recvstate_transfer_complete(&stream->recvstate))
+        return 0;
+
+    /* Section 5.2: the application error code cannot change between the resets received for one stream. The final size is validated
+     * by `quicly_recvstate_reset_at`. */
+    is_first_reset = stream->recvstate.reliable_size == UINT64_MAX;
+    if (!is_first_reset && stream->recvstate.app_error_code != app_error_code)
+        return QUICLY_TRANSPORT_ERROR_STREAM_STATE;
+
+    if ((ret = quicly_recvstate_reset_at(&stream->recvstate, final_size, reliable_size, &bytes_missing)) != 0)
+        return ret;
+    stream->recvstate.app_error_code = app_error_code;
+    if (conn->ingress.max_data.bytes_consumed + bytes_missing > conn->ingress.max_data.sender.max_committed)
+        return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
+    conn->ingress.max_data.bytes_consumed += bytes_missing;
+
+    /* Notify the application once, when the stream is reset for the first time. Subsequent frames can only reduce the reliable
+     * size, and the stream remains open until the bytes below it have been received (section 5.3). */
+    if (is_first_reset) {
+        quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(app_error_code);
+        QUICLY_PROBE(STREAM_ON_RECEIVE_RESET, conn, conn->stash.now, stream, err);
+        QUICLY_LOG_CONN(stream_on_receive_reset, conn, {
+            PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
+            PTLS_LOG_ELEMENT_SIGNED(err, err);
+        });
+        stream->callbacks->on_receive_reset(stream, err);
+        if (conn->super.state >= QUICLY_STATE_CLOSING)
+            return QUICLY_ERROR_IS_CLOSING;
+    }
+
+    if (stream_is_destroyable(stream))
+        destroy_stream(stream, 0);
+
+    return 0;
+}
+
 static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     quicly_reset_stream_frame_t frame;
-    quicly_stream_t *stream;
     quicly_error_t ret;
 
     if ((ret = quicly_decode_reset_stream_frame(&state->src, state->end, &frame)) != 0)
@@ -6311,33 +6364,30 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
         PTLS_LOG_ELEMENT_UNSIGNED(final_size, frame.final_size);
     });
 
-    if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
+    return handle_reset_of_stream(conn, frame.stream_id, frame.app_error_code, frame.final_size, 0);
+}
+
+static quicly_error_t handle_reset_stream_at_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
+{
+    quicly_reset_stream_at_frame_t frame;
+    quicly_error_t ret;
+
+    /* recognize the frame only when the support has been advertised */
+    if (!conn->super.ctx->transport_params.reset_stream_at)
+        return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+
+    if ((ret = quicly_decode_reset_stream_at_frame(&state->src, state->end, &frame)) != 0)
         return ret;
+    QUICLY_PROBE(RESET_STREAM_AT_RECEIVE, conn, conn->stash.now, frame.stream_id, frame.app_error_code, frame.final_size,
+                 frame.reliable_size);
+    QUICLY_LOG_CONN(reset_stream_at_receive, conn, {
+        PTLS_LOG_ELEMENT_SIGNED(stream_id, (quicly_stream_id_t)frame.stream_id);
+        PTLS_LOG_ELEMENT_UNSIGNED(app_error_code, frame.app_error_code);
+        PTLS_LOG_ELEMENT_UNSIGNED(final_size, frame.final_size);
+        PTLS_LOG_ELEMENT_UNSIGNED(reliable_size, frame.reliable_size);
+    });
 
-    if (frame.final_size > stream->recvstate.data_off + stream->_recv_aux.window)
-        return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
-
-    if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        uint64_t bytes_missing;
-        if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, &bytes_missing)) != 0)
-            return ret;
-        if (stream->conn->ingress.max_data.bytes_consumed + bytes_missing > stream->conn->ingress.max_data.sender.max_committed)
-            return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
-        stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
-        quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code);
-        QUICLY_PROBE(STREAM_ON_RECEIVE_RESET, stream->conn, stream->conn->stash.now, stream, err);
-        QUICLY_LOG_CONN(stream_on_receive_reset, stream->conn, {
-            PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
-            PTLS_LOG_ELEMENT_SIGNED(err, err);
-        });
-        stream->callbacks->on_receive_reset(stream, err);
-        if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
-            return QUICLY_ERROR_IS_CLOSING;
-        if (stream_is_destroyable(stream))
-            destroy_stream(stream, 0);
-    }
-
-    return 0;
+    return handle_reset_of_stream(conn, frame.stream_id, frame.app_error_code, frame.final_size, frame.reliable_size);
 }
 
 static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
@@ -7239,15 +7289,18 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t epoch, size_t p
             offsetof(quicly_conn_t, super.stats.num_frames_received.lc)                                                            \
         },                                                                                                                         \
     }
-        /*   +----------------------------------+-------------------+---------------+---------+
-         *   |               frame              |  permitted epochs |               |         |
-         *   |------------------+---------------+----+----+----+----+ ack-eliciting | probing |
-         *   |    upper-case    |  lower-case   | IN | 0R | HS | 1R |               |         |
-         *   +------------------+---------------+----+----+----+----+---------------+---------+ */
-        FRAME( DATAGRAM_NOLEN   , datagram      ,  0 ,  1,   0,   1 ,             1 ,       0 ),
-        FRAME( DATAGRAM_WITHLEN , datagram      ,  0 ,  1,   0,   1 ,             1 ,       0 ),
-        FRAME( ACK_FREQUENCY    , ack_frequency ,  0 ,  0 ,  0 ,  1 ,             1 ,       0 ),
-        /*   +------------------+---------------+-------------------+---------------+---------+ */
+        /* Note: the rows have to be sorted in ascending order of the frame type, as `handle_payload` looks them up by a linear scan
+         * that stops at the first row whose type is not smaller than the type being looked up. */
+        /*   +------------------------------------+-------------------+---------------+---------+
+         *   |                frame               |  permitted epochs |               |         |
+         *   |------------------+-----------------+----+----+----+----+ ack-eliciting | probing |
+         *   |    upper-case    |   lower-case    | IN | 0R | HS | 1R |               |         |
+         *   +------------------+-----------------+----+----+----+----+---------------+---------+ */
+        FRAME( RESET_STREAM_AT  , reset_stream_at ,  0 ,  1 ,  0 ,  1 ,             1 ,       0 ),
+        FRAME( DATAGRAM_NOLEN   , datagram        ,  0 ,  1,   0,   1 ,             1 ,       0 ),
+        FRAME( DATAGRAM_WITHLEN , datagram        ,  0 ,  1,   0,   1 ,             1 ,       0 ),
+        FRAME( ACK_FREQUENCY    , ack_frequency   ,  0 ,  0 ,  0 ,  1 ,             1 ,       0 ),
+        /*   +------------------+-----------------+-------------------+---------------+---------+ */
 #undef FRAME
         {UINT64_MAX},
     };

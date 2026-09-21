@@ -980,7 +980,10 @@ typedef struct st_quicly_stream_callbacks_t {
      */
     void (*on_receive)(quicly_stream_t *stream, size_t off, const void *src, size_t len);
     /**
-     * called when a RESET_STREAM frame is received
+     * called when a RESET_STREAM or a RESET_STREAM_AT frame is received. In case of the latter, the callback can be followed by
+     * further `on_receive` calls, as the peer remains committed to delivering the bytes below `quicly_stream_t::recvstate`'s
+     * `reliable_size`; applications wanting those bytes are to keep reading until the transfer completes. This can only happen when
+     * the application has advertised the reset_stream_at transport parameter.
      */
     void (*on_receive_reset)(quicly_stream_t *stream, quicly_error_t err);
 } quicly_stream_callbacks_t;
