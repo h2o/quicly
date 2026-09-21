@@ -50,6 +50,7 @@ int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server);
 
 void test_ranges(void);
 void test_rate(void);
+void test_recvstate(void);
 void test_frame(void);
 void test_maxsender(void);
 void test_sendstate(void);

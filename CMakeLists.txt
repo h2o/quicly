@@ -75,6 +75,7 @@ SET(UNITTEST_SOURCE_FILES
     t/pacer.c
     t/ranges.c
     t/rate.c
+    t/recvstate.c
     t/remote_cid.c
     t/sendstate.c
     t/sentmap.c
