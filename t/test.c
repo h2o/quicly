@@ -445,6 +445,44 @@ static void test_transport_parameters(void)
     memset(&decoded, 0x55, sizeof(decoded));
     ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, dup_bytes, dup_bytes + sizeof(dup_bytes)) ==
        QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
+
+    /* reset_stream_at is emitted as a zero-length TP, and only when it is set */
+    {
+        quicly_transport_parameters_t params = default_transport_params;
+        ptls_buffer_t buf;
+        size_t off_without;
+
+        ptls_buffer_init(&buf, "", 0);
+        ok(quicly_encode_transport_parameter_list(&buf, &params, NULL, NULL, NULL, NULL, 0) == 0);
+        memset(&decoded, 0x55, sizeof(decoded));
+        decoded.reset_stream_at = 1; /* seed with the opposite value, so that the absence of the TP is what is being tested */
+        ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, buf.base, buf.base + buf.off) == 0);
+        ok(!decoded.reset_stream_at);
+        off_without = buf.off;
+        ptls_buffer_dispose(&buf);
+
+        params.reset_stream_at = 1;
+        ptls_buffer_init(&buf, "", 0);
+        ok(quicly_encode_transport_parameter_list(&buf, &params, NULL, NULL, NULL, NULL, 0) == 0);
+        ok(buf.off == off_without + 2); /* one byte for the ID, one for the zero length */
+        memset(&decoded, 0x55, sizeof(decoded));
+        ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, buf.base, buf.base + buf.off) == 0);
+        ok(decoded.reset_stream_at);
+        ptls_buffer_dispose(&buf);
+    }
+
+    static const uint8_t reset_stream_at_dup_bytes[] = {0x1d, 0x00, 0x1d, 0x00};
+    memset(&decoded, 0x55, sizeof(decoded));
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, reset_stream_at_dup_bytes,
+                                              reset_stream_at_dup_bytes + sizeof(reset_stream_at_dup_bytes)) ==
+       QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
+
+    /* a non-empty reset_stream_at is a TRANSPORT_PARAMETER_ERROR */
+    static const uint8_t reset_stream_at_nonempty_bytes[] = {0x1d, 0x01, 0x00};
+    memset(&decoded, 0x55, sizeof(decoded));
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, reset_stream_at_nonempty_bytes,
+                                              reset_stream_at_nonempty_bytes + sizeof(reset_stream_at_nonempty_bytes)) ==
+       QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
 }
 
 size_t decode_packets(quicly_decoded_packet_t *decoded, struct iovec *raw, size_t cnt)

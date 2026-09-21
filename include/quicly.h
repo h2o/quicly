@@ -263,6 +263,10 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint8_t disable_active_migration : 1;
     /**
+     * indicates the willingness to receive RESET_STREAM_AT frames
+     */
+    uint8_t reset_stream_at : 1;
+    /**
      *
      */
     uint64_t active_connection_id_limit;
