@@ -172,6 +172,94 @@ static void test_ack_encode(void)
     quicly_ranges_clear(&ranges);
 }
 
+static void test_reset_stream_at_boundaries(void)
+{
+    static const uint64_t values[] = {0, 63, 64, 16383, 16384, 1073741823, 1073741824, 4611686018427387903};
+
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(values); ++i) {
+        uint64_t value = values[i];
+        size_t expected_size = 1 + 4 * quicly_encodev_capacity(value);
+        uint8_t buf[QUICLY_RST_AT_FRAME_CAPACITY], *end;
+        const uint8_t *src;
+        quicly_reset_stream_at_frame_t decoded;
+
+        ok(expected_size <= QUICLY_RST_AT_FRAME_CAPACITY);
+        end = quicly_encode_reset_stream_at_frame(buf, value, value, value, value);
+        ok((size_t)(end - buf) == expected_size);
+        src = buf + 1;
+        ok(quicly_decode_reset_stream_at_frame(&src, end, &decoded) == 0);
+        ok(src == end);
+        ok(decoded.stream_id == value);
+        ok(decoded.app_error_code == value);
+        ok(decoded.final_size == value);
+        ok(decoded.reliable_size == value);
+    }
+}
+
+static void test_reset_stream_at_reliable_size(void)
+{
+    uint8_t buf[QUICLY_RST_AT_FRAME_CAPACITY], *end;
+    const uint8_t *src;
+    quicly_reset_stream_at_frame_t decoded;
+
+    { /* nothing to deliver */
+        end = quicly_encode_reset_stream_at_frame(buf, 4, 0, 1000, 0);
+        src = buf + 1;
+        ok(quicly_decode_reset_stream_at_frame(&src, end, &decoded) == 0);
+        ok(src == end);
+        ok(decoded.reliable_size == 0);
+    }
+
+    { /* everything to deliver */
+        end = quicly_encode_reset_stream_at_frame(buf, 4, 0, 1000, 1000);
+        src = buf + 1;
+        ok(quicly_decode_reset_stream_at_frame(&src, end, &decoded) == 0);
+        ok(src == end);
+        ok(decoded.final_size == 1000);
+        ok(decoded.reliable_size == 1000);
+    }
+
+    { /* reliable size beyond final size */
+        end = quicly_encode_reset_stream_at_frame(buf, 4, 0, 1000, 1001);
+        src = buf + 1;
+        ok(quicly_decode_reset_stream_at_frame(&src, end, &decoded) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    }
+}
+
+static void test_reset_stream_at_truncated(void)
+{
+    uint8_t buf[QUICLY_RST_AT_FRAME_CAPACITY];
+    uint8_t *end = quicly_encode_reset_stream_at_frame(buf, 12, 1017, 1000000, 65535);
+
+    for (size_t size = 1; size < (size_t)(end - buf); ++size) {
+        const uint8_t *src = buf + 1;
+        quicly_reset_stream_at_frame_t decoded;
+        ok(quicly_decode_reset_stream_at_frame(&src, buf + size, &decoded) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    }
+}
+
+static void test_reset_stream_at_codec(void)
+{
+    uint8_t buf[QUICLY_RST_AT_FRAME_CAPACITY], *end;
+    const uint8_t *src;
+    quicly_reset_stream_at_frame_t decoded;
+
+    end = quicly_encode_reset_stream_at_frame(buf, 12, 1017, 1000000, 65535);
+    ok(buf[0] == QUICLY_FRAME_TYPE_RESET_STREAM_AT);
+    ok(end - buf == 1 + 1 + 2 + 4 + 4);
+    src = buf + 1;
+    ok(quicly_decode_reset_stream_at_frame(&src, end, &decoded) == 0);
+    ok(src == end);
+    ok(decoded.stream_id == 12);
+    ok(decoded.app_error_code == 1017);
+    ok(decoded.final_size == 1000000);
+    ok(decoded.reliable_size == 65535);
+
+    subtest("boundaries", test_reset_stream_at_boundaries);
+    subtest("reliable-size", test_reset_stream_at_reliable_size);
+    subtest("truncated", test_reset_stream_at_truncated);
+}
+
 static void test_mozquic(void)
 {
     quicly_stream_frame_t frame;
@@ -184,5 +272,6 @@ void test_frame(void)
 {
     subtest("ack-decode", test_ack_decode);
     subtest("ack-encode", test_ack_encode);
+    subtest("reset-stream-at", test_reset_stream_at_codec);
     subtest("mozquic", test_mozquic);
 }
