@@ -292,6 +292,21 @@ static void test_above_size_inflight(void)
     ok(quicly_sendstate_transfer_complete(&state));
 
     quicly_sendstate_dispose(&state);
+
+    /* the bytes are committed to even when `pending` does not already extend above `size_inflight` */
+    init_with_sent(&state, 400);
+    ret = quicly_ranges_subtract(&state.pending, 400, UINT64_MAX);
+    ok(ret == 0);
+    ok(state.pending.num_ranges == 0);
+
+    ret = quicly_sendstate_reset_at(&state, 600);
+    ok(ret == 0);
+    ok(state.final_size == 600);
+    CHECK_RANGES(&state.pending, {400, 600});
+    ok(record_acked(&state, 0, 600) == 600);
+    ok(quicly_sendstate_transfer_complete(&state));
+
+    quicly_sendstate_dispose(&state);
 }
 
 void test_sendstate(void)

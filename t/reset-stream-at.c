@@ -212,6 +212,7 @@ static void test_zero_is_reset_stream(void)
     ok(server_stream->recvstate.reliable_size == 0);
     ok(num_on_receive_reset == 1);
     ok(server_streambuf->error_received.reset_stream == APP_ERROR(11));
+    ok(max_data_is_equal(client, server));
 
     free_pair();
 }
@@ -338,6 +339,7 @@ static void test_raise_is_ignored_locally(void)
     transmit(client, server);
     ok(num_reset_stream_at_sent(client) == 1);
     ok(server_stream->recvstate.reliable_size == 5);
+    ok(max_data_is_equal(client, server));
 
     free_pair();
 }
@@ -400,6 +402,7 @@ static void test_reliable_size_above_final_size(void)
     ok(stats.num_frames_sent.reset_stream_at == 0);
     ok(stats.num_frames_sent.reset_stream == 0);
     ok(local_close_error(server, UINT64_MAX) == 0); /* the peer has nothing to complain about */
+    ok(max_data_is_equal(client, server));
 
     free_pair();
 }
@@ -545,6 +548,7 @@ static void test_destroyability(void)
     transmit(server, client);
     ok(client_streambuf->is_detached);
     ok(quicly_num_streams(client) == 0);
+    ok(max_data_is_equal(client, server));
 
     free_pair();
 }
@@ -625,6 +629,7 @@ static void test_retransmit_frame(void)
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
     ok(server_stream->recvstate.reliable_size == 5);
     ok(num_on_receive_reset == 1);
+    ok(max_data_is_equal(client, server));
 
     free_pair();
 }
@@ -846,6 +851,7 @@ static void test_stop_sending(void)
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
     ok(server_stream->recvstate.reliable_size == 0);
     ok(num_on_receive_reset == 1);
+    ok(max_data_is_equal(client, server));
 
     free_pair();
 }
@@ -987,6 +993,370 @@ static void test_defer_until_prefix_sent(void)
 }
 
 /**
+ * Section 4: the Reliable Size may require flow control credit that the peer has not granted at stream level, in which case the
+ * frame stays withheld and STREAM_DATA_BLOCKED reports the stall. A MAX_STREAM_DATA frame then lets the prefix run to completion,
+ * which is what takes the frame off hold (section 5.3).
+ */
+static void test_blocked_at_stream_level(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    uint64_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data.bidi_remote;
+    quicly_stats_t stats;
+
+    /* let the peer grant two bytes beyond the amount that `open_stream` sends, which the Reliable Size below overruns */
+    quic_ctx.transport_params.max_stream_data.bidi_remote = TEST_DATA_LEN + 2;
+    connect_pair();
+    open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
+    server_streambuf = server_stream->data;
+    ok(client_stream->_send_aux.max_stream_data == TEST_DATA_LEN + 2);
+
+    quicly_streambuf_egress_write(client_stream, "abcde", 5);
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    ok(client_stream->sendstate.final_size == TEST_DATA_LEN + 5);
+
+    /* only the bytes that the limit covers are sent; the frame is withheld and the stall is reported */
+    transmit(client, server);
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 2);
+    ok(num_reset_stream_at_sent(client) == 0);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_frames_sent.stream_data_blocked == 1);
+    quicly_get_stats(server, &stats);
+    ok(stats.num_frames_received.stream_data_blocked == 1);
+    ok(local_close_error(server, UINT64_MAX) == 0); /* nothing that has been sent is out of bounds */
+    ok(server_stream->recvstate.eos == UINT64_MAX); /* the peer knows nothing about the reset yet */
+    ok(buffer_is(&server_streambuf->super.ingress, "0123456789ab"));
+
+    /* the stall persists for as long as the limit is not raised */
+    for (size_t i = 0; i < 4; ++i) {
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(server, client);
+        transmit(client, server);
+    }
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 2);
+    ok(num_reset_stream_at_sent(client) == 0);
+
+    /* the application on the receiving side consumes the prefix, which raises MAX_STREAM_DATA */
+    quicly_streambuf_ingress_shift(server_stream, 6);
+    transmit(server, client);
+    ok(client_stream->_send_aux.max_stream_data > TEST_DATA_LEN + 2);
+
+    /* the rest of the prefix is sent, and the frame goes out behind it */
+    transmit(client, server);
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 5);
+    ok(num_reset_stream_at_sent(client) == 1);
+    ok(server_stream->recvstate.eos == TEST_DATA_LEN + 5);
+    ok(server_stream->recvstate.reliable_size == TEST_DATA_LEN + 5);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(num_on_receive_reset == 1);
+    ok(server_streambuf->error_received.reset_stream == APP_ERROR(1));
+    ok(buffer_is(&server_streambuf->super.ingress, "6789abcde")); /* the six bytes consumed above are gone */
+    ok(max_data_is_equal(client, server));
+
+    free_pair();
+    quic_ctx.transport_params.max_stream_data.bidi_remote = max_stream_data_orig;
+}
+
+/**
+ * Section 4: same as above, but with the connection-level limit being the one that the Reliable Size overruns. Note that
+ * `handle_max_data_frame` does not reschedule the stream; it is the scheduler that has to notice that the connection is no longer
+ * blocked.
+ */
+static void test_blocked_at_connection_level(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    uint64_t max_data_orig = quic_ctx.transport_params.max_data, permitted;
+    quicly_stats_t stats;
+
+    quic_ctx.transport_params.max_data = TEST_DATA_LEN + 2;
+    connect_pair();
+    open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
+    server_streambuf = server_stream->data;
+    quicly_get_max_data(client, &permitted, NULL, NULL, NULL);
+    ok(permitted == TEST_DATA_LEN + 2);
+
+    quicly_streambuf_egress_write(client_stream, "abcde", 5);
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    ok(client_stream->sendstate.final_size == TEST_DATA_LEN + 5);
+
+    /* only the bytes that the limit covers are sent; the frame is withheld and the stall is reported */
+    transmit(client, server);
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 2);
+    ok(num_reset_stream_at_sent(client) == 0);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_frames_sent.data_blocked == 1);
+    quicly_get_stats(server, &stats);
+    ok(stats.num_frames_received.data_blocked == 1);
+    ok(local_close_error(server, UINT64_MAX) == 0);
+    ok(server_stream->recvstate.eos == UINT64_MAX);
+    ok(buffer_is(&server_streambuf->super.ingress, "0123456789ab"));
+
+    /* the stall persists for as long as the limit is not raised */
+    for (size_t i = 0; i < 4; ++i) {
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(server, client);
+        transmit(client, server);
+    }
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 2);
+    ok(num_reset_stream_at_sent(client) == 0);
+
+    /* the application on the receiving side consumes the prefix, which raises MAX_DATA */
+    quicly_streambuf_ingress_shift(server_stream, 6);
+    transmit(server, client);
+    quicly_get_max_data(client, &permitted, NULL, NULL, NULL);
+    ok(permitted > TEST_DATA_LEN + 2);
+
+    /* the rest of the prefix is sent, and the frame goes out behind it */
+    transmit(client, server);
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 5);
+    ok(num_reset_stream_at_sent(client) == 1);
+    ok(server_stream->recvstate.eos == TEST_DATA_LEN + 5);
+    ok(server_stream->recvstate.reliable_size == TEST_DATA_LEN + 5);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(num_on_receive_reset == 1);
+    ok(server_streambuf->error_received.reset_stream == APP_ERROR(1));
+    ok(buffer_is(&server_streambuf->super.ingress, "6789abcde"));
+    ok(max_data_is_equal(client, server));
+
+    free_pair();
+    quic_ctx.transport_params.max_data = max_data_orig;
+}
+
+/**
+ * Section 5.3: a stream that has been reset never uses the FIN bit, not even when a STREAM frame ends exactly at the Final Size.
+ * The frame is held back here by raising the Reliable Size beyond the Final Size, so that the STREAM frame carrying the tail of the
+ * prefix travels on its own and the receiver can be observed not to have learnt the final size from it.
+ */
+static void test_fin_is_suppressed(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    quicly_stats_t stats;
+
+    connect_pair();
+    open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
+    server_streambuf = server_stream->data;
+
+    quicly_streambuf_egress_write(client_stream, "abcde", 5);
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    ok(client_stream->sendstate.final_size == TEST_DATA_LEN + 5);
+    client_stream->_send_aux.reset_stream.reliable_size = TEST_DATA_LEN + 6; /* withhold the frame indefinitely */
+
+    /* the prefix is sent without the FIN bit, even though it ends at the Final Size */
+    transmit(client, server);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_frames_sent.reset_stream_at == 0);
+    ok(stats.num_frames_sent.reset_stream == 0);
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 5);
+    ok(local_close_error(server, UINT64_MAX) == 0);
+    ok(buffer_is(&server_streambuf->super.ingress, "0123456789abcde"));
+    ok(server_stream->recvstate.eos == UINT64_MAX); /* no FIN has arrived */
+    ok(!quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(num_on_receive_reset == 0);
+
+    /* the final size, and with it the error code, is conveyed by the reset frame alone */
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    transmit(client, server);
+    ok(num_reset_stream_at_sent(client) == 1);
+    ok(server_stream->recvstate.eos == TEST_DATA_LEN + 5);
+    ok(server_stream->recvstate.reliable_size == TEST_DATA_LEN + 5);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(num_on_receive_reset == 1);
+    ok(server_streambuf->error_received.reset_stream == APP_ERROR(1));
+    ok(max_data_is_equal(client, server));
+
+    free_pair();
+}
+
+/**
+ * Section 5.1: reordering can deliver the frame before the STREAM frames carrying the tail of the prefix, the receiving part of the
+ * stream staying in the "Size Known" state until they arrive (section 5.3).
+ */
+static void test_reset_before_deferred_prefix(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    struct iovec reordered;
+    uint8_t reorderedbuf[quic_ctx.transport_params.max_udp_payload_size];
+
+    connect_pair();
+    open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
+    server_streambuf = server_stream->data;
+
+    /* hold back the datagram carrying the tail of the prefix, the frame being withheld while it is being sent */
+    quicly_streambuf_egress_write(client_stream, "abcde", 5);
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    client_stream->_send_aux.reset_stream.reliable_size = TEST_DATA_LEN + 6;
+    hold_datagram(client, &reordered, reorderedbuf, sizeof(reorderedbuf));
+    ok(num_reset_stream_at_sent(client) == 0);
+
+    /* deliver the frame first; the receiver knows the final size, yet waits for the prefix */
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    transmit(client, server);
+    ok(num_reset_stream_at_sent(client) == 1);
+    ok(server_stream->recvstate.eos == TEST_DATA_LEN + 5);
+    ok(server_stream->recvstate.reliable_size == TEST_DATA_LEN + 5);
+    ok(!quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(num_on_receive_reset == 1);
+    ok(buffer_is(&server_streambuf->super.ingress, "0123456789"));
+
+    /* the tail of the prefix completes the transfer */
+    deliver_datagram(server, &reordered);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(buffer_is(&server_streambuf->super.ingress, "0123456789abcde"));
+    ok(num_on_receive_reset == 1);
+    ok(max_data_is_equal(client, server));
+
+    free_pair();
+}
+
+/**
+ * Section 5.2: reducing the Reliable Size before the frame has been sent reduces the Final Size being declared as well, the value
+ * only having to stop changing once the peer might have seen it.
+ */
+static void test_lower_while_deferred(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+
+    connect_pair();
+    open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
+    server_streambuf = server_stream->data;
+
+    quicly_streambuf_egress_write(client_stream, "abcde", 5);
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    ok(client_stream->sendstate.final_size == TEST_DATA_LEN + 5);
+
+    /* lower the Reliable Size while it still covers bytes that have not been sent */
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 2);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == TEST_DATA_LEN + 2);
+    ok(client_stream->sendstate.final_size == TEST_DATA_LEN + 2);
+
+    transmit(client, server);
+    ok(num_reset_stream_at_sent(client) == 1);
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 2);
+    ok(server_stream->recvstate.eos == TEST_DATA_LEN + 2); /* the peer agrees on the lowered value */
+    ok(server_stream->recvstate.reliable_size == TEST_DATA_LEN + 2);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(num_on_receive_reset == 1);
+    ok(buffer_is(&server_streambuf->super.ingress, "0123456789ab"));
+    ok(max_data_is_equal(client, server));
+
+    free_pair();
+}
+
+/**
+ * Section 5.2: lowering the Reliable Size to zero withdraws the commitment altogether, which is the way out for a sender whose peer
+ * never grants the flow control credit that the prefix requires. A RESET_STREAM frame is sent at once, declaring the amount of data
+ * that has been sent rather than the Reliable Size that had been asked for.
+ */
+static void test_lower_to_zero_while_deferred(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    uint64_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data.bidi_remote;
+    quicly_stats_t stats;
+
+    quic_ctx.transport_params.max_stream_data.bidi_remote = TEST_DATA_LEN + 2;
+    connect_pair();
+    open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
+    server_streambuf = server_stream->data;
+
+    quicly_streambuf_egress_write(client_stream, "abcde", 5);
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    transmit(client, server);
+    ok(num_reset_stream_at_sent(client) == 0); /* blocked at stream level */
+    ok(client_stream->sendstate.size_inflight == TEST_DATA_LEN + 2);
+    ok(local_close_error(server, UINT64_MAX) == 0);
+
+    /* give up on the prefix */
+    quicly_reset_stream(client_stream, APP_ERROR(1));
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 0);
+    transmit(client, server);
+
+    quicly_get_stats(client, &stats);
+    ok(stats.num_frames_sent.reset_stream == 1);
+    ok(stats.num_frames_sent.reset_stream_at == 0);
+    ok(server_stream->recvstate.eos == TEST_DATA_LEN + 2);
+    ok(server_stream->recvstate.reliable_size == 0);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(num_on_receive_reset == 1);
+    ok(server_streambuf->error_received.reset_stream == APP_ERROR(1));
+    ok(buffer_is(&server_streambuf->super.ingress, "0123456789ab"));
+    ok(max_data_is_equal(client, server));
+
+    free_pair();
+    quic_ctx.transport_params.max_stream_data.bidi_remote = max_stream_data_orig;
+}
+
+/**
+ * Section 5.4: a STOP_SENDING frame received while the frame is being withheld collapses the reset into a plain RESET_STREAM, which
+ * is sent at once; the RESET_STREAM_AT frame never reaches the wire.
+ */
+static void test_stop_sending_while_deferred(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    uint64_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data.bidi_remote;
+    quicly_stats_t stats;
+
+    quic_ctx.transport_params.max_stream_data.bidi_remote = TEST_DATA_LEN + 2;
+    connect_pair();
+    open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
+
+    quicly_streambuf_egress_write(client_stream, "abcde", 5);
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), TEST_DATA_LEN + 5);
+    transmit(client, server);
+    ok(num_reset_stream_at_sent(client) == 0); /* blocked at stream level */
+    ok(local_close_error(server, UINT64_MAX) == 0);
+    ok(server_stream->recvstate.eos == UINT64_MAX);
+
+    /* the application stops reading before it ever learns about the reset */
+    quicly_request_stop(server_stream, APP_ERROR(7));
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 0);
+    ok(client_stream->_send_aux.reset_stream.error_code == 1); /* the error code of the first reset is retained */
+
+    transmit(client, server);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_frames_sent.reset_stream == 1);
+    ok(stats.num_frames_sent.reset_stream_at == 0);
+    ok(server_stream->recvstate.eos == TEST_DATA_LEN + 2);
+    ok(server_stream->recvstate.reliable_size == 0);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(num_on_receive_reset == 1);
+    ok(max_data_is_equal(client, server));
+
+    free_pair();
+    quic_ctx.transport_params.max_stream_data.bidi_remote = max_stream_data_orig;
+}
+
+/**
+ * Section 4: the Final Size is subject to connection-level flow control as well, a violation being a FLOW_CONTROL_ERROR. The
+ * stream-level limit is left wide open, so that it is the connection-level check that is being exercised.
+ */
+static void test_recv_final_size_above_max_data(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    uint64_t max_data_orig = quic_ctx.transport_params.max_data;
+
+    quic_ctx.transport_params.max_data = TEST_DATA_LEN + 10;
+    connect_pair();
+    open_stream(0, TEST_DATA_LEN, &client_stream, &server_stream);
+    ok(server_stream->_recv_aux.window > quic_ctx.transport_params.max_data);
+
+    /* craft the reset to declare a Final Size one above the connection-level limit */
+    quicly_reset_stream_at(client_stream, APP_ERROR(1), 5);
+    client_stream->sendstate.size_inflight = quic_ctx.transport_params.max_data + 1;
+    transmit(client, server);
+    ok(local_close_error(server, QUICLY_FRAME_TYPE_RESET_STREAM_AT) == QUICLY_TRANSPORT_ERROR_FLOW_CONTROL);
+
+    free_pair();
+    quic_ctx.transport_params.max_data = max_data_orig;
+}
+
+/**
  * Documented limitation: `quicly_reset_stream_at` degrades to a plain RESET_STREAM when the peer has not advertised the
  * reset_stream_at transport parameter.
  */
@@ -1011,6 +1381,7 @@ static void test_degrade_without_tp(void)
     ok(stats.num_frames_sent.reset_stream_at == 0);
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
     ok(server_stream->recvstate.reliable_size == 0);
+    ok(max_data_is_equal(client, server));
 
     free_pair();
 }
@@ -1070,6 +1441,14 @@ void test_reset_stream_at(void)
     subtest("stop-sending", test_stop_sending);
     subtest("discard-receive-side", test_discard_receive_side);
     subtest("defer-until-prefix-sent", test_defer_until_prefix_sent);
+    subtest("blocked-at-stream-level", test_blocked_at_stream_level);
+    subtest("blocked-at-connection-level", test_blocked_at_connection_level);
+    subtest("fin-is-suppressed", test_fin_is_suppressed);
+    subtest("reset-before-deferred-prefix", test_reset_before_deferred_prefix);
+    subtest("lower-while-deferred", test_lower_while_deferred);
+    subtest("lower-to-zero-while-deferred", test_lower_to_zero_while_deferred);
+    subtest("stop-sending-while-deferred", test_stop_sending_while_deferred);
+    subtest("recv-final-size-above-max-data", test_recv_final_size_above_max_data);
     subtest("degrade-without-tp", test_degrade_without_tp);
     subtest("tp-not-advertised", test_tp_not_advertised);
 
