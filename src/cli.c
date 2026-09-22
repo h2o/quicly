@@ -370,7 +370,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     send_header(stream, is_http1, 404, "text/plain; charset=utf-8");
     send_str(stream, "not found\n");
 Sent:
-    if (ctx.transport_params.reliable_stream_reset && quicly_get_remote_transport_parameters(stream->conn)->reliable_stream_reset) {
+    if (ctx.transport_params.reset_stream_at && quicly_get_remote_transport_parameters(stream->conn)->reset_stream_at) {
         quicly_streambuf_t *sbuf = stream->data;
         quicly_streambuf_egress_reset(stream, sbuf->egress.bytes_written, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123));
     } else {
@@ -1652,7 +1652,7 @@ int main(int argc, char **argv)
                     exit(1);
                 }
             } else if (strcmp(longopts[opt_index].name, "reliable-reset") == 0) {
-                ctx.transport_params.reliable_stream_reset = 1;
+                ctx.transport_params.reset_stream_at = 1;
             } else if (strcmp(longopts[opt_index].name, "max-crypto-bytes") == 0) {
                 if (sscanf(optarg, "%" SCNu32, &ctx.max_crypto_bytes) != 1) {
                     fprintf(stderr, "failed to parse max-crypto-bytes: %s\n", optarg);

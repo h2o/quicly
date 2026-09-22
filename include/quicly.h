@@ -265,7 +265,7 @@ typedef struct st_quicly_transport_parameters_t {
     /**
      *
      */
-    uint8_t reliable_stream_reset : 1;
+    uint8_t reset_stream_at : 1;
     /**
      *
      */

@@ -62,9 +62,9 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT 14
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_SOURCE_CONNECTION_ID 15
 #define QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID 16
-#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE 0x20
+#define QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT 29
+#define QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE 32
 #define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xff04de1b
-#define QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_STREAM_RESET 0x17f7586d2cb570
 
 /**
  * maximum size of token that quicly accepts
@@ -2506,8 +2506,8 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
     }
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
-    if (params->reliable_stream_reset)
-        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_STREAM_RESET, {});
+    if (params->reset_stream_at)
+        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT, {});
     if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); });
@@ -2708,7 +2708,7 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                 params->active_connection_id_limit = v;
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
-            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_RELIABLE_STREAM_RESET, { params->reliable_stream_reset = 1; });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT, { params->reset_stream_at = 1; });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -7239,9 +7239,9 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t epoch, size_t p
          *   |------------------+-----------------+----+----+----+----+ ack-eliciting | probing |
          *   |    upper-case    |   lower-case    | IN | 0R | HS | 1R |               |         |
          *   +------------------+-----------------+----+----+----+----+---------------+---------+ */
+        FRAME( RESET_STREAM_AT  , reset_stream_at ,  0 ,  1 ,  0 ,  1 ,             1 ,       0 ),
         FRAME( DATAGRAM_NOLEN   , datagram        ,  0 ,  1,   0,   1 ,             1 ,       0 ),
         FRAME( DATAGRAM_WITHLEN , datagram        ,  0 ,  1,   0,   1 ,             1 ,       0 ),
-        FRAME( RESET_STREAM_AT  , reset_stream_at ,  0 ,  1 ,  0 ,  1 ,             1 ,       0 ),
         FRAME( ACK_FREQUENCY    , ack_frequency   ,  0 ,  0 ,  0 ,  1 ,             1 ,       0 ),
         /*   +------------------+-----------------+-------------------+---------------+---------+ */
 #undef FRAME
