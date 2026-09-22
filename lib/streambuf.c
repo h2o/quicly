@@ -249,11 +249,14 @@ int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
     return quicly_stream_sync_sendbuf(stream, 1);
 }
 
-int quicly_streambuf_egress_reset(quicly_stream_t *stream, uint64_t reliable_size, int err)
+quicly_error_t quicly_streambuf_egress_reset(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size)
 {
+    quicly_error_t ret;
+
     assert(quicly_get_remote_transport_parameters(stream->conn)->reset_stream_at &&
            "use of reliable-reset-stream extension must be negotiated");
-    quicly_reset_stream_reliable(stream, reliable_size, err);
+    if ((ret = quicly_reset_stream_at(stream, err, reliable_size)) != 0)
+        return ret;
     return quicly_stream_sync_sendbuf(stream, 1);
 }
 

@@ -131,7 +131,7 @@ int quicly_streambuf_egress_shutdown(quicly_stream_t *stream);
 /**
  * Resets the stream while making sure that all bytes up to `reliable_size` are received.
  */
-int quicly_streambuf_egress_reset(quicly_stream_t *stream, uint64_t reliable_size, int err);
+quicly_error_t quicly_streambuf_egress_reset(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
 static void quicly_streambuf_ingress_shift(quicly_stream_t *stream, size_t delta);
 static ptls_iovec_t quicly_streambuf_ingress_get(quicly_stream_t *stream);
 /**

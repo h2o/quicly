@@ -1492,7 +1492,7 @@ void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
 /**
  *
  */
-int quicly_reset_stream_reliable(quicly_stream_t *stream, uint64_t reliable_size, int err);
+quicly_error_t quicly_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
 /**
  *
  */

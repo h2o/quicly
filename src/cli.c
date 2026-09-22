@@ -372,7 +372,7 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
 Sent:
     if (ctx.transport_params.reset_stream_at && quicly_get_remote_transport_parameters(stream->conn)->reset_stream_at) {
         quicly_streambuf_t *sbuf = stream->data;
-        quicly_streambuf_egress_reset(stream, sbuf->egress.bytes_written, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123));
+        quicly_streambuf_egress_reset(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123), sbuf->egress.bytes_written);
     } else {
         quicly_streambuf_egress_shutdown(stream);
     }

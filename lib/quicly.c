@@ -7982,7 +7982,7 @@ void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err)
     resched_stream_data(stream);
 }
 
-int quicly_reset_stream_reliable(quicly_stream_t *stream, uint64_t reliable_size, int err)
+quicly_error_t quicly_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size)
 {
     assert(stream->sendstate.final_size == UINT64_MAX && stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE &&
            "reliable reset cannot be used after the stream is shutdown or reset");
