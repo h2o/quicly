@@ -846,6 +846,101 @@ static void test_stop_sending(void)
 }
 
 /**
+ * `on_receive` calls made after the application has discarded the receive side; `end_max` is relative to `recvstate.data_off`
+ */
+static struct {
+    size_t num_calls;
+    size_t end_max;
+} received_after_discard;
+
+static void discard_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
+{
+    if (stream->recvstate.reliable_size == UINT64_MAX) {
+        stream_callbacks.on_receive(stream, off, src, len);
+        return;
+    }
+    /* discarded; the credit has been returned by `discard_on_receive_reset` already */
+    ++received_after_discard.num_calls;
+    if (off + len > received_after_discard.end_max)
+        received_after_discard.end_max = off + len;
+}
+
+static void discard_on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
+{
+    count_on_receive_reset(stream, err);
+    quicly_conn_sync_recvbuf(stream->conn, stream->recvstate.eos - stream->recvstate.data_off);
+}
+
+/**
+ * An application that is not interested in the reliable prefix can discard the receive side as a whole when RESET_STREAM_AT
+ * arrives, returning the connection-level credit up to the Final Size through `quicly_conn_sync_recvbuf`. quicly keeps receiving
+ * the prefix, handing it to `on_receive` with offsets relative to `recvstate.data_off`, and retires the stream once it is complete.
+ * The streams carry more than the connection-level window in total, so the transfer would stall if the credit were not returned.
+ */
+static void test_discard_receive_side(void)
+{
+    quicly_stream_callbacks_t discard_callbacks = stream_callbacks;
+    uint64_t max_data_orig = quic_ctx.transport_params.max_data, consumed_at_start, consumed, shifted, permitted, sent;
+
+    discard_callbacks.on_receive = discard_on_receive;
+    discard_callbacks.on_receive_reset = discard_on_receive_reset;
+    quic_ctx.transport_params.max_data = 2 * TEST_DATA_LEN;
+    connect_pair();
+    quicly_get_max_data(server, NULL, NULL, &consumed_at_start, NULL);
+
+    for (size_t i = 0; i < 4; ++i) {
+        quicly_stream_t *client_stream, *server_stream;
+        quicly_stream_id_t stream_id;
+
+        /* the application consumes the first 2 of the 3 bytes delivered, then the bytes above 3 are lost */
+        open_stream(1, 3, &client_stream, &server_stream);
+        stream_id = client_stream->stream_id;
+        server_stream->callbacks = &discard_callbacks;
+        quicly_streambuf_ingress_shift(server_stream, 2);
+        num_on_receive_reset = 0;
+        received_after_discard.num_calls = 0;
+        received_after_discard.end_max = 0;
+
+        /* upon reset, the credit up to the Final Size is returned without the stream moving past the missing bytes */
+        quicly_reset_stream_at(client_stream, APP_ERROR(1), 8);
+        transmit(client, server);
+        ok(num_on_receive_reset == 1);
+        ok(server_stream->recvstate.data_off == 2);
+        ok(!quicly_recvstate_transfer_complete(&server_stream->recvstate));
+        quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+        ok(consumed == consumed_at_start + (i + 1) * TEST_DATA_LEN);
+        ok(shifted == consumed);
+
+        /* the prefix is recovered and handed to the application after the reset, and the stream is retired */
+        for (size_t j = 0; j < 10 && quicly_get_stream(server, stream_id) != NULL; ++j) {
+            if (quicly_get_first_timeout(client) > quic_now)
+                quic_now = quicly_get_first_timeout(client);
+            transmit(client, server);
+            quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+            transmit(server, client);
+        }
+        ok(quicly_get_stream(server, stream_id) == NULL);
+        ok(quicly_get_stream(client, stream_id) == NULL);
+        ok(received_after_discard.num_calls != 0);
+        ok(received_after_discard.end_max == 8 - 2);
+        ok(num_on_receive_reset == 1);
+
+        /* the credit has been returned exactly once */
+        quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+        ok(consumed == consumed_at_start + (i + 1) * TEST_DATA_LEN);
+        ok(shifted == consumed);
+    }
+
+    quicly_get_max_data(client, &permitted, &sent, NULL, NULL);
+    ok(sent == 4 * TEST_DATA_LEN);
+    ok(permitted > 2 * TEST_DATA_LEN);
+    ok(max_data_is_equal(client, server));
+
+    free_pair();
+    quic_ctx.transport_params.max_data = max_data_orig;
+}
+
+/**
  * Documented limitation: `quicly_reset_stream_at` caps the Reliable Size to `size_inflight`, as quicly declares the Final Size to
  * be that value and a larger one would call for deferring the frame until flow control credit becomes available (section 4).
  * Resetting with a Reliable Size covering bytes that the application has written but quicly has not sent yet therefore degrades to
@@ -964,6 +1059,7 @@ void test_reset_stream_at(void)
     subtest("before-fin-size-mismatch", test_before_fin_size_mismatch);
     subtest("flow-control-error", test_flow_control_error);
     subtest("stop-sending", test_stop_sending);
+    subtest("discard-receive-side", test_discard_receive_side);
     subtest("cap-to-size-inflight", test_cap_to_size_inflight);
     subtest("degrade-without-tp", test_degrade_without_tp);
     subtest("tp-not-advertised", test_tp_not_advertised);

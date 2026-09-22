@@ -982,8 +982,11 @@ typedef struct st_quicly_stream_callbacks_t {
     /**
      * called when a RESET_STREAM or a RESET_STREAM_AT frame is received. In case of the latter, the callback can be followed by
      * further `on_receive` calls, as the peer remains committed to delivering the bytes below `quicly_stream_t::recvstate`'s
-     * `reliable_size`; applications wanting those bytes are to keep reading until the transfer completes. This can only happen when
-     * the application has advertised the reset_stream_at transport parameter.
+     * `reliable_size`; applications wanting those bytes are to keep reading until the transfer completes. Applications not wanting
+     * them can discard the receive side as a whole, returning the flow control credit through `quicly_conn_sync_recvbuf`, but the
+     * `on_receive` calls still occur until the stream is destroyed. The callback is invoked only once for each stream, even if
+     * subsequent frames reduce `reliable_size`. This can only happen when the application has advertised the reset_stream_at
+     * transport parameter.
      */
     void (*on_receive_reset)(quicly_stream_t *stream, quicly_error_t err);
 } quicly_stream_callbacks_t;
