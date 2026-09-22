@@ -1497,6 +1497,14 @@ int quicly_stream_sync_sendbuf(quicly_stream_t *stream, int activate);
  */
 void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount);
 /**
+ * Returns connection-level flow control credit for `shift_amount` bytes that the application has consumed or discarded, without
+ * touching any stream. This is for input that the application retains after the stream has received all of its data and has been
+ * destroyed, which can no longer be returned through `quicly_stream_sync_recvbuf`. `shift_amount` MUST NOT include bytes that have
+ * already been returned through either function. The stream-level limit and the amount received are not changed, and no callbacks
+ * are invoked. This function MUST NOT be called during or after `quicly_free`.
+ */
+void quicly_conn_sync_recvbuf(quicly_conn_t *conn, size_t shift_amount);
+/**
  *
  */
 static uint32_t quicly_stream_get_receive_window(quicly_stream_t *stream);
