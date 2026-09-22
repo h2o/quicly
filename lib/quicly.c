@@ -1091,6 +1091,16 @@ int quicly_stream_sync_sendbuf(quicly_stream_t *stream, int activate)
     return 0;
 }
 
+void quicly_conn_sync_recvbuf(quicly_conn_t *conn, size_t shift_amount)
+{
+    /* the application cannot return more credit than has been consumed */
+    assert(shift_amount <= conn->ingress.max_data.bytes_consumed - conn->ingress.max_data.bytes_shifted);
+
+    conn->ingress.max_data.bytes_shifted += shift_amount;
+    if (should_send_max_data(conn))
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+}
+
 void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
 {
     stream->recvstate.data_off += shift_amount;
@@ -1099,10 +1109,7 @@ void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
     if (stream->stream_id >= 0) {
         if (should_send_max_stream_data(stream))
             sched_stream_control(stream);
-        quicly_conn_t *conn = stream->conn;
-        conn->ingress.max_data.bytes_shifted += shift_amount;
-        if (should_send_max_data(conn))
-            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        quicly_conn_sync_recvbuf(stream->conn, shift_amount);
     }
 }
 
