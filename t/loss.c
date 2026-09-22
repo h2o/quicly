@@ -44,8 +44,7 @@ static void acked(quicly_loss_t *loss, uint64_t pn, size_t epoch)
     int64_t sent_at = sent->sent_at;
     ok(quicly_sentmap_update(&loss->sentmap, &iter, QUICLY_SENTMAP_EVENT_ACKED) == 0);
 
-    quicly_loss_on_ack_received(loss, pn, UINT64_MAX, pn + 1, epoch, now, sent_at, 0,
-                                QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+    quicly_loss_on_ack_received(loss, pn, UINT64_MAX, pn + 1, epoch, now, sent_at, 0, QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
 }
 
 static void test_time_detection(void)
@@ -225,8 +224,37 @@ static void test_late_ack_threshold_adjustment(void)
     quicly_loss_dispose(&loss);
 }
 
+static void test_overdue_alarm(void)
+{
+    quicly_loss_t loss;
+    quicly_loss_init(&loss, &quicly_spec_context.loss, 40, &quicly_spec_context.transport_params.max_ack_delay,
+                     &quicly_spec_context.transport_params.ack_delay_exponent);
+    quicly_loss_update_alarm(&loss, 100, 100, 1, 1, 0, 1, 1);
+    int64_t deadline = loss.alarm_at;
+    ok(deadline > 100);
+
+    /* ACK processing and sends on other paths must not indefinitely defer PTO. */
+    for (int i = 0; i != 4; ++i) {
+        int64_t at = deadline + i * 25;
+        quicly_loss_update_alarm(&loss, at, 100, 1, 1, 0, 1, 0);
+        ok(loss.alarm_at <= at);
+    }
+    quicly_loss_update_alarm(&loss, deadline + 100, 100, 1, 1, 0, 1, 1);
+    ok(loss.alarm_at > deadline + 100);
+
+    /* The same rule applies to time-threshold loss detection. */
+    loss.loss_time = deadline;
+    quicly_loss_update_alarm(&loss, deadline + 101, 100, 1, 1, 0, 1, 0);
+    ok(loss.alarm_at <= deadline + 101);
+    quicly_loss_update_alarm(&loss, deadline + 101, 100, 0, 0, 0, 1, 0);
+    ok(loss.alarm_at == INT64_MAX);
+    ok(loss.loss_time == INT64_MAX);
+    quicly_loss_dispose(&loss);
+}
+
 void test_loss(void)
 {
+    subtest("overdue-alarm", test_overdue_alarm);
     subtest("time-detection", test_time_detection);
     subtest("pn-detection", test_pn_detection);
     subtest("slow-cert-verify", test_slow_cert_verify);
