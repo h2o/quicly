@@ -1,4 +1,4 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8.12)
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8.12...4.0)
 CMAKE_POLICY(SET CMP0003 NEW)
 
 PROJECT(quicly)
@@ -48,7 +48,6 @@ SET(PICOTLS_OPENSSL_FILES
 
 SET(QUICLY_LIBRARY_FILES
     lib/frame.c
-    lib/cc-reno.c
     lib/cc-cubic.c
     lib/cc-pico.c
     lib/defaults.c
@@ -59,7 +58,6 @@ SET(QUICLY_LIBRARY_FILES
     lib/rate.c
     lib/recvstate.c
     lib/remote_cid.c
-    lib/retire_cid.c
     lib/sendstate.c
     lib/sentmap.c
     lib/streambuf.c
@@ -67,6 +65,7 @@ SET(QUICLY_LIBRARY_FILES
 
 SET(UNITTEST_SOURCE_FILES
     deps/picotest/picotest.c
+    t/cc.c
     t/frame.c
     t/jumpstart.c
     t/local_cid.c
@@ -77,7 +76,6 @@ SET(UNITTEST_SOURCE_FILES
     t/ranges.c
     t/rate.c
     t/remote_cid.c
-    t/retire_cid.c
     t/sentmap.c
     t/simple.c
     t/stream-concurrency.c
@@ -127,9 +125,30 @@ TARGET_LINK_LIBRARIES(examples-echo quicly ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_D
 
 ADD_EXECUTABLE(udpfw t/udpfw.c)
 
-ADD_CUSTOM_TARGET(check env BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR} WITH_DTRACE=${WITH_DTRACE} prove --exec "sh -c" -v ${CMAKE_CURRENT_BINARY_DIR}/*.t t/*.t
+ADD_EXECUTABLE(tunulator EXCLUDE_FROM_ALL t/tunulator.c ${PICOTLS_OPENSSL_FILES})
+TARGET_LINK_LIBRARIES(tunulator ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS} m)
+
+IF (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    ADD_EXECUTABLE(tunulator-test.t t/tunulator-test.c deps/picotest/picotest.c ${PICOTLS_OPENSSL_FILES})
+    TARGET_LINK_LIBRARIES(tunulator-test.t ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS} m)
+ENDIF ()
+
+ADD_EXECUTABLE(http09 EXCLUDE_FROM_ALL t/http09.c ${PICOTLS_OPENSSL_FILES})
+TARGET_LINK_LIBRARIES(http09 ${OPENSSL_CRYPTO_LIBRARIES} ${CMAKE_DL_LIBS})
+
+ADD_CUSTOM_TARGET(check
+    sh -c
+        "PERL5LIB='${CMAKE_CURRENT_SOURCE_DIR}'\${PERL5LIB:+:\$PERL5LIB} \
+         BINARY_DIR='${CMAKE_CURRENT_BINARY_DIR}' \
+         WITH_DTRACE=${WITH_DTRACE} \
+         exec prove --exec 'sh -c' -v ${CMAKE_CURRENT_BINARY_DIR}/*.t t/*.t"
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    DEPENDS cli udpfw test.t)
+    DEPENDS cli udpfw test.t
+    VERBATIM)
+
+IF (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    ADD_DEPENDENCIES(check tunulator-test.t)
+ENDIF ()
 
 ADD_CUSTOM_TARGET(format clang-format -i `git ls-files include lib src t | egrep '\\.[ch]$$'`)
 

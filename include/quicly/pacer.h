@@ -110,8 +110,8 @@ inline uint64_t quicly_pacer_get_window(quicly_pacer_t *pacer, int64_t now, uint
      * `bytes_per_msec`. Adjust `bytes_sent` by that amount before setting `restricted_at` to `now`. `uint64_t` is used to store
      * window and delta so that the multiplication would not overflow assuming that the quiescence period is shorter than 2**32
      * milliseconds. */
-    uint64_t window, delta = (now - pacer->at) * bytes_per_msec;
-    if (pacer->bytes_sent > delta) {
+    uint64_t window, delta;
+    if (pacer->at != INT64_MIN && pacer->bytes_sent > (delta = (now - pacer->at) * bytes_per_msec)) {
         pacer->bytes_sent -= delta;
         if (burst_window > pacer->bytes_sent) {
             window = (burst_window - pacer->bytes_sent + mtu - 1) / mtu;
@@ -138,7 +138,10 @@ inline void quicly_pacer_consume_window(quicly_pacer_t *pacer, size_t delta)
 
 inline uint32_t quicly_pacer_calc_send_rate(uint32_t multiplier, uint32_t cwnd, uint32_t rtt)
 {
-    return (cwnd * multiplier + rtt - 1) / rtt;
+    uint64_t ret = ((uint64_t)cwnd * multiplier + rtt - 1) / rtt;
+    if (ret > UINT32_MAX)
+        ret = UINT32_MAX;
+    return ret;
 }
 
 #ifdef __cplusplus

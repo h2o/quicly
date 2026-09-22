@@ -50,10 +50,8 @@ void quicly_recvstate_dispose(quicly_recvstate_t *state)
     quicly_ranges_clear(&state->received);
 }
 
-int quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin, size_t max_ranges)
+quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin, size_t max_ranges)
 {
-    int ret;
-
     assert(!quicly_recvstate_transfer_complete(state));
 
     /* eos handling */
@@ -85,6 +83,7 @@ int quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len
 
     /* update received range */
     if (*len != 0) {
+        int ret;
         if ((ret = quicly_ranges_add(&state->received, off, off + *len)) != 0)
             return ret;
         if (state->received.num_ranges > max_ranges)
@@ -105,7 +104,8 @@ Complete:
     return 0;
 }
 
-int quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_size, uint64_t reliable_size, uint64_t *bytes_missing)
+quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_size, uint64_t reliable_size,
+                                      uint64_t *bytes_missing)
 {
     assert(!quicly_recvstate_transfer_complete(state));
 

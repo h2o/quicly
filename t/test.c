@@ -27,6 +27,9 @@
 #include <openssl/engine.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+#include <openssl/provider.h>
+#endif
 #include "picotls.h"
 #include "picotls/openssl.h"
 #include "quicly.h"
@@ -86,10 +89,10 @@
     "Vw6RN5S/14SQnMYWr7E=\n"                                                                                                       \
     "-----END CERTIFICATE-----\n"
 
-static void on_destroy(quicly_stream_t *stream, int err);
-static void on_egress_stop(quicly_stream_t *stream, int err);
+static void on_destroy(quicly_stream_t *stream, quicly_error_t err);
+static void on_egress_stop(quicly_stream_t *stream, quicly_error_t err);
 static void on_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
-static void on_ingress_reset(quicly_stream_t *stream, int err);
+static void on_ingress_reset(quicly_stream_t *stream, quicly_error_t err);
 
 quicly_address_t fake_address;
 int64_t quic_now = 1;
@@ -97,6 +100,86 @@ quicly_context_t quic_ctx;
 quicly_stream_callbacks_t stream_callbacks = {
     on_destroy, quicly_streambuf_egress_shift, quicly_streambuf_egress_emit, on_egress_stop, on_ingress_receive, on_ingress_reset};
 size_t on_destroy_callcnt;
+
+static void test_error_codes(void)
+{
+    quicly_error_t a;
+
+    a = QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(0);
+    ok(QUICLY_ERROR_IS_QUIC(a));
+    ok(QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(!QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+    ok(QUICLY_ERROR_GET_ERROR_CODE(a) == 0);
+
+    a = QUICLY_ERROR_FROM_TRANSPORT_ERROR_CODE(0x3fffffffffffffff);
+    ok(QUICLY_ERROR_IS_QUIC(a));
+    ok(QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(!QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+    ok(QUICLY_ERROR_GET_ERROR_CODE(a) == 0x3fffffffffffffff);
+
+    a = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0);
+    ok(QUICLY_ERROR_IS_QUIC(a));
+    ok(!QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+    ok(QUICLY_ERROR_GET_ERROR_CODE(a) == 0);
+
+    a = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0x3fffffffffffffff);
+    ok(QUICLY_ERROR_IS_QUIC(a));
+    ok(!QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+    ok(QUICLY_ERROR_GET_ERROR_CODE(a) == 0x3fffffffffffffff);
+
+    a = 0;
+    ok(!QUICLY_ERROR_IS_QUIC(a));
+    ok(!QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(!QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+
+    a = PTLS_ALERT_UNKNOWN_CA; /* arbitrary alert */
+    ok(!QUICLY_ERROR_IS_QUIC(a));
+    ok(!QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(!QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+
+    a = 0x2ffff; /* max outside QUIC errors */
+    ok(!QUICLY_ERROR_IS_QUIC(a));
+    ok(!QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(!QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+
+    a = (int64_t)0x8000000000030000; /* min outside QUIC errors */
+    ok(!QUICLY_ERROR_IS_QUIC(a));
+    ok(!QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(!QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+
+    a = QUICLY_ERROR_PACKET_IGNORED; /* arbrary internal error */
+    ok(!QUICLY_ERROR_IS_QUIC(a));
+    ok(!QUICLY_ERROR_IS_QUIC_TRANSPORT(a));
+    ok(!QUICLY_ERROR_IS_QUIC_APPLICATION(a));
+}
+
+static uint16_t test_enable_with_ratio255_random_value;
+
+static void test_enable_with_ratio255_get_random(void *p, size_t len)
+{
+    assert(len == sizeof(test_enable_with_ratio255_random_value));
+    memcpy(p, &test_enable_with_ratio255_random_value, sizeof(test_enable_with_ratio255_random_value));
+}
+
+static void test_enable_with_ratio255(void)
+{
+    test_enable_with_ratio255_random_value = 0;
+    ok(!enable_with_ratio255(0, test_enable_with_ratio255_get_random));
+    ok(enable_with_ratio255(255, test_enable_with_ratio255_get_random));
+
+    test_enable_with_ratio255_random_value = 255;
+    ok(!enable_with_ratio255(0, test_enable_with_ratio255_get_random));
+    ok(enable_with_ratio255(255, test_enable_with_ratio255_get_random));
+
+    size_t num_enabled = 0;
+    for (test_enable_with_ratio255_random_value = 0; test_enable_with_ratio255_random_value < 0xffff;
+         ++test_enable_with_ratio255_random_value)
+        if (enable_with_ratio255(63, test_enable_with_ratio255_get_random))
+            ++num_enabled;
+    ok(num_enabled == 63 * (65535 / 255));
+}
 
 static void test_adjust_stream_frame_layout(void)
 {
@@ -169,14 +252,14 @@ static int64_t get_now_cb(quicly_now_t *self)
 
 static quicly_now_t get_now = {get_now_cb};
 
-void on_destroy(quicly_stream_t *stream, int err)
+void on_destroy(quicly_stream_t *stream, quicly_error_t err)
 {
     test_streambuf_t *sbuf = stream->data;
     sbuf->is_detached = 1;
     ++on_destroy_callcnt;
 }
 
-void on_egress_stop(quicly_stream_t *stream, int err)
+void on_egress_stop(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     test_streambuf_t *sbuf = stream->data;
@@ -188,7 +271,7 @@ void on_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, si
     quicly_streambuf_ingress_receive(stream, off, src, len);
 }
 
-void on_ingress_reset(quicly_stream_t *stream, int err)
+void on_ingress_reset(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     test_streambuf_t *sbuf = stream->data;
@@ -202,7 +285,7 @@ const quicly_cid_plaintext_t *new_master_id(void)
     return &master;
 }
 
-static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+static quicly_error_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     test_streambuf_t *sbuf;
     int ret;
@@ -295,7 +378,7 @@ static void test_vector(void)
         0x4d, 0x91, 0x9d, 0x48, 0x43, 0xb1, 0xca, 0x70, 0xa2, 0xd8, 0xd3, 0xf7, 0x25, 0xea, 0xd1, 0x39, 0x13, 0x77, 0xdc, 0xc0};
     quicly_decoded_packet_t packet;
     struct st_quicly_cipher_context_t ingress, egress;
-    uint64_t pn, next_expected_pn = 0;
+    uint64_t pn;
     ptls_iovec_t payload;
     int ret;
 
@@ -305,12 +388,11 @@ static void test_vector(void)
     ok(off == sizeof(datagram));
 
     /* decrypt */
-    const struct st_ptls_salt_t *salt = get_salt(QUICLY_PROTOCOL_VERSION_DRAFT29);
+    const quicly_salt_t *salt = quicly_get_salt(QUICLY_PROTOCOL_VERSION_DRAFT29);
     ret = setup_initial_encryption(&ptls_openssl_aes128gcmsha256, &ingress, &egress, packet.cid.dest.encrypted, 0,
                                    ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL);
     ok(ret == 0);
-    ok(decrypt_packet(ingress.header_protection, aead_decrypt_fixed_key, ingress.aead, &next_expected_pn, &packet, &pn, &payload) ==
-       0);
+    ok(decrypt_packet(ingress.header_protection, aead_decrypt_fixed_key, ingress.aead, 0, &packet, &pn, &payload) == 0);
     ok(pn == 2);
     ok(sizeof(expected_payload) <= payload.len);
     ok(memcmp(expected_payload, payload.base, sizeof(expected_payload)) == 0);
@@ -393,7 +475,7 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     uint8_t datagramsbuf[PTLS_ELEMENTSOF(datagrams) * quicly_get_context(src)->transport_params.max_udp_payload_size];
     size_t num_datagrams, i;
     quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
-    int ret;
+    quicly_error_t ret;
 
     num_datagrams = PTLS_ELEMENTSOF(datagrams);
     ret = quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, datagramsbuf, sizeof(datagramsbuf));
@@ -410,13 +492,30 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     return num_datagrams;
 }
 
+static void exchange_until_idle(quicly_conn_t *c1, quicly_conn_t *c2)
+{
+    while (1) {
+        int64_t t1 = quicly_get_first_timeout(c1), t2 = quicly_get_first_timeout(c2), tmin = t1 <= t2 ? t1 : t2;
+        if (tmin > quic_now) {
+            if (tmin - quic_now > QUICLY_DEFAULT_MAX_ACK_DELAY)
+                break;
+            quic_now = tmin;
+        }
+        if (t1 <= t2) {
+            transmit(c1, c2);
+        } else {
+            transmit(c2, c1);
+        }
+    }
+}
+
 int max_data_is_equal(quicly_conn_t *client, quicly_conn_t *server)
 {
     uint64_t client_sent, client_consumed;
     uint64_t server_sent, server_consumed;
 
-    quicly_get_max_data(client, NULL, &client_sent, &client_consumed);
-    quicly_get_max_data(server, NULL, &server_sent, &server_consumed);
+    quicly_get_max_data(client, NULL, &client_sent, &client_consumed, NULL);
+    quicly_get_max_data(server, NULL, &server_sent, &server_consumed, NULL);
 
     if (client_sent != server_consumed)
         return 0;
@@ -564,7 +663,7 @@ static void do_test_record_receipt(size_t epoch)
 
     /* if 1-RTT, test ignore-order */
     if (epoch == QUICLY_EPOCH_1RTT) {
-        space->ignore_order = 1;
+        space->reordering_threshold = 0;
         pn++; /* gap */
         ok(record_receipt(space, pn++, 0, 0, now, &send_ack_at, &out_of_order_cnt) == 0);
         ok(send_ack_at == now + QUICLY_DELAYED_ACK_TIMEOUT);
@@ -577,17 +676,415 @@ static void do_test_record_receipt(size_t epoch)
     do_free_pn_space(space);
 }
 
+static void do_test_ack_frequency_ack_logic()
+{
+    struct st_case_row_t {
+        uint64_t packet_number;
+        uint8_t send_ack;
+        uint64_t expected_smallest_unreported_missing_after_receipt;
+        int is_ack_only;
+        uint64_t advance_time_by;
+    };
+
+    struct st_test_case {
+        const struct st_case_row_t *rows;
+        size_t rows_count;
+        uint8_t reordering_threshold;
+        uint32_t packet_tolerance;
+    };
+
+    // From example 1 at https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.2.1
+    // clang-format off
+    const struct st_case_row_t example1_rows[] = {
+        {0,  0, 1,  0, 1},
+        {1,  0, 2,  0, 1},
+        {3,  0, 2,  0, 1},
+        {4,  0, 2,  0, 1},
+        {5,  1, 6,  0, 1},
+        {8,  0, 6,  0, 1},
+        {9,  1, 7,  0, 1},
+        {10, 1, 11, 0, 1},
+    };
+    // clang-format on
+    const struct st_test_case example1 = {
+        .rows = example1_rows,
+        .rows_count = PTLS_ELEMENTSOF(example1_rows),
+        .reordering_threshold = 3,
+        .packet_tolerance = 100,
+    };
+
+    // From example 1 at https://datatracker.ietf.org/doc/html/draft-ietf-quic-ack-frequency-11#section-6.2.1
+    // clang-format off
+    const struct st_case_row_t example2_rows[] = {
+        {0, 0, 1,  0, 1},
+        {1, 0, 2,  0, 1},
+        {3, 0, 2,  0, 1},
+        {5, 0, 2,  0, 1},
+        {6, 0, 2,  0, 1},
+        {7, 1, 4,  0, 1},
+        {8, 0, 4,  0, 1},
+        {9, 1, 10, 0, 1},
+    };
+    // clang-format on
+    const struct st_test_case example2 = {
+        .rows = example2_rows,
+        .rows_count = PTLS_ELEMENTSOF(example2_rows),
+        .reordering_threshold = 5,
+        .packet_tolerance = 100,
+    };
+
+    // Disable reorder threshold, test packet tolerance
+    // clang-format off
+    const struct st_case_row_t test_case_1_rows[] = {
+        // smallest unreported is n+1 because reordering threshold is set to 0
+        {1,  0, 2,  0, 1},  // No ack yet (reordering_threshold = 0, so no immediate ack for reordering)
+        {2,  1, 3,  0, 1},  // Ack because we've seen 2 packets
+        {3,  0, 4,  0, 1},  // No ack yet
+        {4,  1, 5,  0, 1},  // Ack because we've seen 2 packets
+        {5,  0, 6,  0, 1},  // ...
+        {6,  1, 7,  0, 1},
+        {7,  0, 8,  0, 1},
+        {8,  1, 9,  0, 1},
+        {9,  0, 10, 0, 1},
+    };
+    // clang-format on
+    const struct st_test_case test_case_1 = {
+        .rows = test_case_1_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_1_rows),
+        .reordering_threshold = 0,
+        .packet_tolerance = 2,
+    };
+
+    // Test reordered packets
+    // clang-format off
+    const struct st_case_row_t test_case_2_rows[] = {
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 1, 2, 0, 1}, // Ack because we've seen 3 packets
+        {2, 0, 4, 0, 1}, // No ack because 2 was never considered lost
+        {4, 0, 5, 0, 1},
+        {5, 1, 6, 0, 1}, // Ack because we've seen 3 more packets
+    };
+    // clang-format on
+    const struct st_test_case test_case_2 = {
+        .rows = test_case_2_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_2_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 3,
+    };
+
+    // Test a declared lost packet is received
+    // clang-format off
+    const struct st_case_row_t test_case_3_rows[] = {
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 1, 2, 0, 1}, // Ack because we've seen 3 packets
+        {4, 1, 5, 0, 1}, // Ack because 2 is now declared lost
+        {2, 1, 5, 0, 1}, // Ack because 2 was received (change outside the reordering window)
+        {5, 0, 6, 0, 1},
+    };
+    // clang-format on
+    const struct st_test_case test_case_3 = {
+        .rows = test_case_3_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_3_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 3,
+    };
+
+    // Test 0 is lost
+    // clang-format off
+    const struct st_case_row_t test_case_4_rows[] = {
+        {1, 0, 0, 0, 1},
+        {2, 0, 0, 0, 1},
+        {3, 1, 4, 0, 1}, // Ack because 0 is now declared lost
+        {0, 1, 4, 0, 1}, // Ack because 0 was received (change outside the reordering window)
+    };
+    // clang-format on
+    const struct st_test_case test_case_4 = {
+        .rows = test_case_4_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_4_rows),
+        .reordering_threshold = 3,
+        .packet_tolerance = 100,
+    };
+
+    // Test larget packet tolerance and reordering threshold
+    // Skipped 0
+    // clang-format off
+    const struct st_case_row_t test_case_5_rows[] = {
+        {1, 0, 0, 0, 1},
+        {2, 0, 0, 0, 1},
+        {3, 0, 0, 0, 1},
+        {4, 0, 0, 0, 1},
+        {5, 0, 0, 0, 1},
+        {6, 0, 0, 0, 1},
+        {7, 0, 0, 0, 1},
+        {8, 0, 0, 0, 1},
+        {9, 0, 0, 0, 1},
+    };
+    // clang-format on
+    const struct st_test_case test_case_5 = {
+        .rows = test_case_5_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_5_rows),
+        .reordering_threshold = 20,
+        .packet_tolerance = 20,
+    };
+
+    // ack every packet
+    // clang-format off
+    const struct st_case_row_t test_case_6_rows[] = {
+        {0, 1, 1,  0, 1},
+        {1, 1, 2,  0, 1},
+        {2, 1, 3,  0, 1},
+        {3, 1, 4,  0, 1},
+        {4, 1, 5,  0, 1},
+        {5, 1, 6,  0, 1},
+        {6, 1, 7,  0, 1},
+        {7, 1, 8,  0, 1},
+        {8, 1, 9,  0, 1},
+        {9, 1, 10, 0, 1},
+    };
+    // clang-format on
+    const struct st_test_case test_case_6 = {
+        .rows = test_case_6_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_6_rows),
+        .reordering_threshold = 0,
+        .packet_tolerance = 0,
+    };
+
+    // Send packets ack-eliciting packets [0,1,3]. Then send non-ack eliciting
+    // packets [4..7] with `QUICLY_DELAYED_ACK_TIMEOUT` amount of time between.
+    //
+    // After we send an ack for PN 4, PN 2 is declared lost, and the next
+    // smallest unreported missing PN is 5.
+    //
+    // clang-format off
+    const struct st_case_row_t test_case_7_rows[] = {
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 0, 2, 0, 1},
+        {4, 0, 5, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {5, 0, 6, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {6, 0, 7, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {7, 0, 8, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+    };
+    // clang-format on
+    const struct st_test_case test_case_7 = {
+        .rows = test_case_7_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_7_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 20,
+    };
+
+    // Send packets ack-eliciting packets [0,1,3]. Then send non-ack eliciting
+    // packets [4] with `QUICLY_DELAYED_ACK_TIMEOUT` amount of time between.
+    //
+    // After we send an ack for PN 4, PN 2 is declared lost, and the next
+    // smallest unreported missing PN is 5.
+    //
+    // Then send packet 2 as ack-eliciting packet. This should be reported right
+    // away to detect spurious losses.
+    //
+    // clang-format off
+    const struct st_case_row_t test_case_8_rows[] = {
+        {0, 0, 1, 0, 1},
+        {1, 0, 2, 0, 1},
+        {3, 0, 2, 0, 1},
+        {4, 0, 5, 1, QUICLY_DELAYED_ACK_TIMEOUT},
+        {2, 1, 5, 0, 1},
+    };
+    // clang-format on
+    const struct st_test_case test_case_8 = {
+        .rows = test_case_8_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_8_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 20,
+    };
+
+    // Same as the above test case, but packet 2 is non-ack-eliciting, so we
+    // should not trigger and ack
+    const struct st_case_row_t test_case_9_rows[] = {
+        {0, 0, 1, 0, 1}, {1, 0, 2, 0, 1}, {3, 0, 2, 0, 1}, {4, 0, 5, 1, QUICLY_DELAYED_ACK_TIMEOUT}, {2, 0, 5, 1, 1},
+    };
+    // clang-format on
+    const struct st_test_case test_case_9 = {
+        .rows = test_case_9_rows,
+        .rows_count = PTLS_ELEMENTSOF(test_case_9_rows),
+        .reordering_threshold = 2,
+        .packet_tolerance = 20,
+    };
+
+    // clang-format off
+    struct st_test_case test_cases[] = {
+        example1,
+        example2,
+        test_case_1,
+        test_case_2,
+        test_case_3,
+        test_case_4,
+        test_case_5,
+        test_case_6,
+        test_case_7,
+        test_case_8,
+        test_case_9,
+    };
+    // clang-format on
+
+    for (int i = 0; i < PTLS_ELEMENTSOF(test_cases); ++i) {
+        int64_t now = 12345;
+        uint64_t out_of_order_cnt = 0;
+        int64_t send_ack_at = INT64_MAX;
+
+        struct st_quicly_pn_space_t *space = alloc_pn_space(sizeof(*space), QUICLY_DEFAULT_PACKET_TOLERANCE);
+        space->reordering_threshold = test_cases[i].reordering_threshold;
+        space->packet_tolerance = test_cases[i].packet_tolerance;
+
+        for (int row_idx = 0; row_idx < test_cases[i].rows_count; ++row_idx) {
+            struct st_case_row_t row = test_cases[i].rows[row_idx];
+
+            ok(record_receipt(space, row.packet_number, 0, row.is_ack_only, now, &send_ack_at, &out_of_order_cnt) == 0);
+            ok(row.send_ack ? send_ack_at == now : send_ack_at > now);
+            now += row.advance_time_by;
+            if (send_ack_at <= now && space->ack_queue.num_ranges > 0) {
+                send_ack_at = INT64_MAX;
+                space->unacked_count = 0;
+                update_smallest_unreported_missing_on_send_ack(&space->ack_queue, &space->largest_acked_unacked,
+                                                               &space->smallest_unreported_missing, space->reordering_threshold);
+            }
+
+            ok(row.expected_smallest_unreported_missing_after_receipt == space->smallest_unreported_missing);
+        }
+
+        do_free_pn_space(space);
+    }
+}
+
 static void test_record_receipt(void)
 {
     do_test_record_receipt(QUICLY_EPOCH_INITIAL);
     do_test_record_receipt(QUICLY_EPOCH_1RTT);
+    do_test_ack_frequency_ack_logic();
+}
+
+static void test_is_duplicate_pn(void)
+{
+    quicly_ranges_t ranges;
+
+    /* at the beginning of a connection, the ack queue is empty and the first packet number being expected is zero */
+    quicly_ranges_init(&ranges);
+    ok(!is_duplicate_pn(&ranges, 0, 0));
+
+    /* packets at or above the one being expected next are never duplicate */
+    ok(quicly_ranges_add(&ranges, 0, 5) == 0);
+    ok(!is_duplicate_pn(&ranges, 5, 5));
+    ok(!is_duplicate_pn(&ranges, 6, 5));
+
+    /* packet numbers covered by the ack queue are duplicate */
+    ok(is_duplicate_pn(&ranges, 4, 5));
+    ok(is_duplicate_pn(&ranges, 0, 5));
+
+    /* packet numbers within a gap have not been received yet */
+    ok(quicly_ranges_add(&ranges, 8, 11) == 0);
+    ok(!is_duplicate_pn(&ranges, 5, 11));
+    ok(!is_duplicate_pn(&ranges, 7, 11));
+    ok(is_duplicate_pn(&ranges, 8, 11));
+    ok(is_duplicate_pn(&ranges, 10, 11));
+    ok(is_duplicate_pn(&ranges, 3, 11));
+
+    /* packet numbers below the oldest range being retained are discarded, as we cannot tell if they have been processed */
+    quicly_ranges_clear(&ranges);
+    ok(quicly_ranges_add(&ranges, 8, 11) == 0);
+    ok(is_duplicate_pn(&ranges, 7, 11));
+    ok(is_duplicate_pn(&ranges, 0, 11));
+
+    /* ditto, when the ack queue has been emptied by the peer acknowledging our ACKs */
+    quicly_ranges_clear(&ranges);
+    ok(is_duplicate_pn(&ranges, 10, 11));
+    ok(!is_duplicate_pn(&ranges, 11, 11));
+
+    quicly_ranges_clear(&ranges);
+}
+
+static void test_ack_frequency(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_stream_t *client_stream, *server_stream;
+    quicly_error_t ret;
+
+    quicly_context_t ctx = quic_ctx;
+    ctx.ack_frequency = 1024; // every rtt
+
+    { /* connect */
+        quicly_address_t dest, src;
+        struct iovec raw;
+        uint8_t rawbuf[quic_ctx.transport_params.max_udp_payload_size];
+        size_t num_packets;
+        quicly_decoded_packet_t decoded;
+
+        ret = quicly_connect(&client, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                             NULL, NULL);
+        ok(ret == 0);
+        num_packets = 1;
+        ret = quicly_send(client, &dest, &src, &raw, &num_packets, rawbuf, sizeof(rawbuf));
+        ok(ret == 0);
+        ok(num_packets == 1);
+        ok(decode_packets(&decoded, &raw, 1) == 1);
+        ok(num_packets == 1);
+        ret = quicly_accept(&server, &ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL, NULL);
+        ok(ret == 0);
+        transmit(server, client);
+    }
+
+    ret = quicly_open_stream(client, &client_stream, 0);
+    assert(ret == 0);
+    ret = quicly_streambuf_egress_write(client_stream, "hello", 5);
+    assert(ret == 0);
+
+    transmit(client, server);
+    transmit(server, client);
+
+    /* reset one stream in both directions and close on the client-side */
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+
+    // Set some losses to trigger ack frequency path
+    server->egress.cc.num_loss_episodes = 5;
+    client->egress.cc.num_loss_episodes = 5;
+
+    ok(server->application->super.reordering_threshold == 1);
+    ok(client->application->super.reordering_threshold == 1);
+
+    const char *testdata = "hello";
+    const int testdata_len = strlen(testdata);
+
+    const int steps = 80;
+    for (int i = 0; i < steps; i++) {
+        quicly_stream_t *s = server_stream;
+        if (i > steps / 2)
+            s = client_stream;
+
+        ret = quicly_streambuf_egress_write(s, testdata, testdata_len);
+        assert(ret == 0);
+
+        ptls_iovec_t buf = quicly_streambuf_ingress_get(s);
+        quicly_streambuf_ingress_shift(s, buf.len);
+
+        transmit(server, client);
+        transmit(client, server);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    }
+
+    // Both sides have updated their reordering thresholds
+    ok(server->application->super.reordering_threshold == 3);
+    ok(client->application->super.reordering_threshold == 3);
+
+    quicly_free(client);
+    quicly_free(server);
 }
 
 static void test_cid(void)
 {
     subtest("received cid", test_received_cid);
     subtest("local cid", test_local_cid);
-    subtest("retire cid", test_retire_cid);
 }
 
 /**
@@ -633,7 +1130,7 @@ static void test_nondecryptable_initial(void)
     struct iovec packet = {.iov_base = packetbuf, .iov_len = sizeof(packetbuf)};
     size_t num_decoded;
     quicly_decoded_packet_t decoded;
-    int ret;
+    quicly_error_t ret;
 
     /* create an Initial packet, with its payload all set to zero */
     memcpy(packetbuf, header, sizeof(header));
@@ -653,7 +1150,7 @@ static void test_nondecryptable_initial(void)
 static void test_set_cc(void)
 {
     quicly_conn_t *conn;
-    int ret;
+    quicly_error_t ret;
 
     ret = quicly_connect(&conn, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
                          NULL, NULL);
@@ -740,25 +1237,260 @@ static void test_jumpstart_cwnd(void)
     ok(derive_jumpstart_cwnd(&bounded_max, 250, 1000000, 250) == 80000);
 }
 
+static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **server)
+{
+    quicly_address_t dest, src;
+    struct iovec datagrams[8];
+    uint8_t packetsbuf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 4];
+    size_t num_datagrams, num_decoded;
+    quicly_error_t ret;
+
+    ret = quicly_connect(client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                         NULL, NULL);
+    ok(ret == 0);
+    num_datagrams = sizeof(datagrams);
+    ret = quicly_send(*client, &dest, &src, datagrams, &num_datagrams, packetsbuf, sizeof(packetsbuf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    num_decoded = decode_packets(decoded, datagrams, 1);
+    ok(num_decoded == 1);
+    ret = quicly_accept(server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL);
+    ok(ret == 0);
+    num_datagrams = transmit(*server, *client);
+    ok(num_datagrams > 0);
+    ok(quicly_get_state(*client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(*server) == QUICLY_STATE_CONNECTED);
+    exchange_until_idle(*client, *server);
+}
+
+static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, struct iovec *datagram, void *buf,
+                                    size_t bufsize)
+{
+    assert(conn->application != NULL);
+
+    *s = (quicly_send_context_t){
+        .current.first_byte = -1,
+        .datagrams = datagram,
+        .max_datagrams = 1,
+        .payload_buf = {.datagram = buf, .end = (uint8_t *)buf + bufsize},
+        .send_window = bufsize,
+        .dcid = get_dcid(conn, 0 /* path_index */),
+    };
+    lock_now(conn, 0);
+    setup_send_space(conn, QUICLY_EPOCH_1RTT, s);
+}
+
+/**
+ * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
+ * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
+ */
+static void test_state_exhaustion(void)
+{
+    uint64_t orig_max_stream_data_bidi_remote = quic_ctx.transport_params.max_stream_data.bidi_remote;
+    quic_ctx.transport_params.max_stream_data.bidi_remote = 65536; /* shrink to reduce # of gaps permitted */
+
+    quicly_conn_t *client, *server;
+    quicly_send_context_t s;
+    struct iovec datagram;
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded;
+    size_t num_datagrams, num_decoded;
+    quicly_address_t dest, src;
+    quicly_error_t ret = 0;
+
+    test_setup_connected_peers(&client, &server);
+
+    /* send up to 200 packets with stream frame having gaps and check that the receiver raises state exhaustion */
+    for (size_t i = 0; i < 200; ++i) {
+        test_setup_send_context(client, &s, &datagram, buf, sizeof(buf));
+        do_allocate_frame(client, &s, 100, ALLOCATE_FRAME_TYPE_ACK_ELICITING);
+        *s.dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
+        s.dst = quicly_encodev(s.dst, 0);     /* stream id */
+        s.dst = quicly_encodev(s.dst, i * 2); /* off */
+        s.dst = quicly_encodev(s.dst, 1);     /* len */
+        *s.dst++ = (uint8_t)('a' + (i * 2) % 26);
+        commit_send_packet(client, &s, 0);
+        unlock_now(client);
+
+        num_decoded = decode_packets(&decoded, &datagram, 1);
+        ok(num_decoded == 1);
+        if ((ret = quicly_receive(server, NULL, &fake_address.sa, &decoded)) != 0)
+            break;
+    }
+    ok(ret == QUICLY_ERROR_STATE_EXHAUSTION);
+
+    /* upon state exhaustion, the receiving endpoint MAY send CONNECTION_CLOSE (in this test, state-exhaustion is sent) */
+    quicly_close(server, ret, NULL);
+    num_datagrams = 1;
+    ret = quicly_send(server, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    num_decoded = decode_packets(&decoded, &datagram, 1);
+    ret = quicly_receive(client, NULL, &fake_address.sa, &decoded);
+    ok(ret == 0);
+    ok(quicly_get_state(client) == QUICLY_STATE_DRAINING);
+
+    /* sender should have received PROTOCOL_VIOLATION with the special reason phrase */
+    uint64_t offending_frame_type;
+    const char *reason;
+    int is_remote;
+    ret = quicly_get_close_reason(client, &offending_frame_type, &reason, &is_remote);
+    ok(ret == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    ok(strcmp(reason, "state exhaustion") == 0);
+    ok(is_remote);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quic_ctx.transport_params.max_stream_data.bidi_remote = orig_max_stream_data_bidi_remote;
+}
+
+static void do_test_migration_during_handshake(int second_flight_from_orig_address)
+{
+    quicly_conn_t *client, *server;
+    const struct sockaddr_in serveraddr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(0x7f000001), .sin_port = htons(12345)},
+                             clientaddr1 = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(0x7f000002), .sin_port = htons(12345)},
+                             clientaddr2 = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(0x7f000003), .sin_port = htons(12345)};
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[10];
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size * 10];
+    quicly_decoded_packet_t packets[40];
+    size_t num_datagrams, num_packets;
+    quicly_error_t ret;
+
+    /* client send first flight */
+    ret = quicly_connect(&client, &quic_ctx, "example.com", (void *)&serveraddr, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
+                         NULL, NULL, NULL);
+    ok(ret == 0);
+    num_datagrams = 10;
+    ret = quicly_send(client, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    ok(num_datagrams > 0);
+
+    /* server accepts and responds, but the packets are dropped */
+    num_packets = decode_packets(packets, datagrams, num_datagrams);
+    ok(num_packets == 1);
+    ret = quicly_accept(&server, &quic_ctx, &destaddr.sa, (void *)&clientaddr1, packets, NULL, new_master_id(), NULL, NULL);
+    ok(ret == 0);
+    num_datagrams = 10;
+    ret = quicly_send(server, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    ok(num_datagrams > 0);
+
+    /* loop until timeout */
+    const struct sockaddr_in *clientaddr = second_flight_from_orig_address ? &clientaddr1 : &clientaddr2;
+    while (1) {
+        int64_t client_timeout = quicly_get_first_timeout(client), server_timeout = quicly_get_first_timeout(server),
+                smaller_timeout = client_timeout < server_timeout ? client_timeout : server_timeout;
+        if (quic_now < smaller_timeout)
+            quic_now = smaller_timeout;
+
+        /* when client times out, it resends Initials but from a different address and the server drops them */
+        if (quic_now >= client_timeout) {
+            num_datagrams = 10;
+            ret = quicly_send(client, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf));
+            if (ret == QUICLY_ERROR_FREE_CONNECTION)
+                break;
+            ok(ret == 0);
+            ok(num_datagrams > 0);
+            num_packets = decode_packets(packets, datagrams, num_datagrams);
+            ok(num_packets > 0);
+            for (size_t i = 0; i < num_packets; ++i) {
+                ret = quicly_receive(server, (void *)&serveraddr, (void *)clientaddr, &packets[i]);
+                if (clientaddr == &clientaddr1) {
+                    ok(ret == 0);
+                } else {
+                    ok(ret == QUICLY_ERROR_PACKET_IGNORED);
+                }
+            }
+            clientaddr = &clientaddr2;
+        }
+
+        /* when server times out it resends packets to the old client address */
+        if (quic_now >= server_timeout) {
+            num_datagrams = 10;
+            ret = quicly_send(server, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf));
+            if (ret == QUICLY_ERROR_FREE_CONNECTION)
+                break;
+            ok(ret == 0);
+            ok(num_datagrams > 0);
+            ok(destaddr.sin.sin_family == AF_INET);
+            ok(destaddr.sin.sin_addr.s_addr == clientaddr1.sin_addr.s_addr);
+        }
+    }
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
+static void test_migration_during_handshake(void)
+{
+    subtest("migrate-before-2nd", do_test_migration_during_handshake, 0);
+    subtest("migrate-before-3nd", do_test_migration_during_handshake, 1);
+}
+
+static size_t test_stats_foreach_next_off;
+
+static void test_stats_foreach_field(size_t off, size_t size)
+{
+    ok(test_stats_foreach_next_off == off);
+
+    /* Due to alignment, padding might exist between two fields when their types are different. The `gaps` list calls out the ones
+     * that "might" have such padding on some architectures. */
+    static const size_t gaps[] = {
+#define GAP(after, before) offsetof(quicly_stats_t, after), offsetof(quicly_stats_t, before)
+        GAP(jumpstart.cwnd, token_sent.at),
+        GAP(token_sent.rtt, rtt.minimum),
+        GAP(loss_thresholds.use_packet_based, loss_thresholds.time_based_percentile),
+        GAP(loss_thresholds.time_based_percentile, cc.cwnd),
+        GAP(cc.ssthresh, cc.cwnd_initial),
+        GAP(cc.num_ecn_loss_episodes, delivery_rate.latest),
+#undef GAP
+        SIZE_MAX};
+    for (size_t i = 0; gaps[i] != SIZE_MAX; i += 2) {
+        if (test_stats_foreach_next_off == gaps[i]) {
+            test_stats_foreach_next_off = gaps[i + 1];
+            return;
+        }
+    }
+
+    /* otherwise, it is right after the current field */
+    test_stats_foreach_next_off += size;
+}
+
+static void test_stats_foreach(void)
+{
+#define CHECK(fld, name)                                                                                                           \
+    subtest(name, test_stats_foreach_field, offsetof(quicly_stats_t, fld), sizeof(((quicly_stats_t *)NULL)->fld));
+
+    /* check QUICLY_STATS_FOREACH touches all fields, in the correct order */
+    test_stats_foreach_next_off = 0;
+    QUICLY_STATS_FOREACH(CHECK);
+    ok(test_stats_foreach_next_off == sizeof(quicly_stats_t));
+
+    /* check QUICLY_STATS_FOREACH_COUNTERS only check the counters */
+    struct counters_only {
+        QUICLY_STATS_PREBUILT_COUNTERS;
+    };
+    test_stats_foreach_next_off = 0;
+    QUICLY_STATS_FOREACH_COUNTERS(CHECK);
+    ok(test_stats_foreach_next_off == sizeof(struct counters_only));
+
+#undef CHECK
+}
+
 int main(int argc, char **argv)
 {
     static ptls_iovec_t cert;
     static ptls_openssl_sign_certificate_t cert_signer;
-    static ptls_context_t tlsctx = {ptls_openssl_random_bytes,
-                                    &ptls_get_time,
-                                    ptls_openssl_key_exchanges,
-                                    ptls_openssl_cipher_suites,
-                                    {&cert, 1},
-                                    {{NULL}},
-                                    NULL,
-                                    NULL,
-                                    &cert_signer.super,
-                                    NULL,
-                                    0,
-                                    0,
-                                    0,
-                                    NULL,
-                                    1};
+    static ptls_context_t tlsctx = {.random_bytes = ptls_openssl_random_bytes,
+                                    .get_time = &ptls_get_time,
+                                    .key_exchanges = ptls_openssl_key_exchanges,
+                                    .cipher_suites = ptls_openssl_cipher_suites,
+                                    .certificates = {&cert, 1},
+                                    .sign_certificate = &cert_signer.super,
+                                    .require_dhe_on_psk = 1};
     quic_ctx = quicly_spec_context;
     quic_ctx.tls = &tlsctx;
     quic_ctx.transport_params.max_streams_bidi = 10;
@@ -769,11 +1501,10 @@ int main(int argc, char **argv)
 
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
-#if !defined(OPENSSL_NO_ENGINE)
-    /* Load all compiled-in ENGINEs */
-    ENGINE_load_builtin_engines();
-    ENGINE_register_all_ciphers();
-    ENGINE_register_all_digests();
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+    /* Explicitly load the legacy provider in addition to default, as we test Blowfish in one of the tests. */
+    (void)OSSL_PROVIDER_load(NULL, "legacy");
+    (void)OSSL_PROVIDER_load(NULL, "default");
 #endif
 
     {
@@ -796,11 +1527,14 @@ int main(int argc, char **argv)
 
     quicly_amend_ptls_context(quic_ctx.tls);
 
+    subtest("error-codes", test_error_codes);
+    subtest("enable_with_ratio255", test_enable_with_ratio255);
     subtest("next-packet-number", test_next_packet_number);
     subtest("address-token-codec", test_address_token_codec);
     subtest("ranges", test_ranges);
     subtest("rate", test_rate);
     subtest("record-receipt", test_record_receipt);
+    subtest("is-duplicate-pn", test_is_duplicate_pn);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
     subtest("pacer", test_pacer);
@@ -819,6 +1553,13 @@ int main(int argc, char **argv)
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
+    subtest("ack-frequency", test_ack_frequency);
+    subtest("cc", test_cc);
+
+    subtest("state-exhaustion", test_state_exhaustion);
+    subtest("migration-during-handshake", test_migration_during_handshake);
+
+    subtest("stats-foreach", test_stats_foreach);
 
     return done_testing();
 }

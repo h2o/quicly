@@ -9,7 +9,7 @@ use IO::Socket::INET;
 use JSON;
 use Net::EmptyPort qw(empty_port);
 use POSIX ":sys_wait_h";
-use Scope::Guard qw(scope_guard);
+use t::RawConnection;
 use Test::More;
 use Time::HiRes qw(sleep time);
 
@@ -132,13 +132,28 @@ subtest "retry" => sub {
 };
 
 subtest "large-client-hello" => sub {
-    my $guard = spawn_server();
-    my $resp = `$cli -E -e $tempdir/events -p /12 127.0.0.1 $port 2> /dev/null`;
-    is $resp, "hello world\n";
-    my $events = slurp_file("$tempdir/events");
-    complex $events, sub {
-        my $before_receive = (split /"receive"/, $_)[0];
-        $before_receive =~ /"stream_send".*?\n.*?"stream_send"/s;
+    subtest "default" => sub {
+        my $guard = spawn_server();
+        my $resp = `$cli -E -e $tempdir/events -p /12 127.0.0.1 $port 2> /dev/null`;
+        is $resp, "hello world\n";
+        my $events = slurp_file("$tempdir/events");
+        complex $events, sub {
+            my $before_receive = (split /"receive"/, $_)[0];
+            $before_receive =~ /"stream_send".*?\n.*?"stream_send"/s;
+        };
+    };
+    subtest "max-crypto-bytes" => sub {
+        my $doit = sub {
+            my $size = shift;
+            my $server = spawn_server("--max-crypto-bytes", $size);
+            `$cli -E -e $tempdir/events -p /12 127.0.0.1 $port 2>&1`;
+        };
+        subtest "1K" => sub {
+            like $doit->(1024), qr/transport close:code=0xd;frame=6;/, "CRYPTO_BUFFER_EXCEEDED error";
+        };
+        subtest "2K" => sub {
+            like $doit->(2048), qr/hello world\n/s, "got response";
+        };
     };
 };
 
@@ -297,11 +312,11 @@ subtest "0-rtt-vs-hrr" => sub {
 subtest "alpn" => sub {
     my $guard = spawn_server(qw(-a hq-23));
     my $resp = `$cli -p /12 127.0.0.1 $port 2>&1`;
-    like $resp, qr/transport close:code=0x178;/, "no ALPN";
+    like $resp, qr/TLS alert:code=120/, "no ALPN";
     $resp = `$cli -a hq-23 -p /12 127.0.0.1 $port 2>&1`;
     like $resp, qr/^hello world$/m, "ALPN match";
     $resp = `$cli -a hX-23 -p /12 127.0.0.1 $port 2>&1`;
-    like $resp, qr/transport close:code=0x178;/, "ALPN mismatch";
+    like $resp, qr/TLS alert:code=120/, "ALPN mismatch";
 };
 
 subtest "key-update" => sub {
@@ -353,6 +368,67 @@ subtest "raw-certificates-ec" => sub {
     is $resp, "hello world\n";
 };
 
+subtest "path-migration" => sub {
+    my $doit = sub {
+        my @client_opts = @_;
+        my $server_guard = spawn_server("-e", "$tempdir/events");
+        my $udpfw_guard = undef;
+        my $respawn_udpfw = sub {
+            $udpfw_guard = undef; # terminate existing process
+            $udpfw_guard = spawn_process(
+                ["sh", "-c", "exec $udpfw -b 100 -i 1 -p 0 -B 100 -I 1 -P 10000 -l $udpfw_port 127.0.0.1 $port > /dev/null 2>&1"],
+                $udpfw_port,
+            );
+        };
+        $respawn_udpfw->();
+        # spawn client that sends one request every second, recording events to file
+        my $pid = fork;
+        die "fork failed:$!"
+            unless defined $pid;
+        if ($pid == 0) {
+            exec $cli, @client_opts, qw(-O -i 1000 -p /10000 127.0.0.1), $udpfw_port;
+            die "exec $cli failed:$!";
+        }
+        # send two USR1 signals, each of them causing path migration between requests
+        sleep .5;
+        $respawn_udpfw->();
+        sleep 2;
+        $respawn_udpfw->();
+        sleep 2;
+        # kill the peers
+        kill 'TERM', $pid;
+        while (waitpid($pid, 0) != $pid) {}
+        sleep 0.5; # wait for server-side to close and emit stats
+        my $server_output = $server_guard->finalize;
+        # read the log
+        my $log = slurp_file("$tempdir/events");
+        # check that the path has migrated twice
+        like $log, qr{"type":"promote_path".*\n.*"type":"promote_path"}s;
+        subtest "CID seq 1 is used for 1st path probe" => sub {
+            plan skip_all => "zero-length CID"
+                unless @client_opts;
+            complex $log, sub {
+                /"type":"new_connection_id_receive",[^\n]*"sequence":1,[^\n]*"cid":"(.*?)"/s;
+                my $cid1 = $1;
+                /"type":"packet_prepare",[^\n]*"dcid":"([^\"]*)"[^\n]*\n[^\n]*"type":"path_challenge_send",/s;
+                my $cid_probe = $1;
+                $cid1 eq $cid_probe;
+            };
+        };
+        # check that packets are lost (or deemed lost), but that CC is in slow start
+        complex $server_output, sub {
+            /packets-lost:\s*(\d+).*num-loss-episodes:\s*(\d+)/ and $1 >= 2 and $2 == 0;
+        }, "packets-lost-but-cc-in-slow-start";
+
+    };
+    subtest "without-cid" => sub {
+        $doit->();
+    };
+    subtest "with-cid" => sub {
+        $doit->(qw(-B 01234567));
+    };
+};
+
 subtest "slow-start" => sub {
     # spawn udpfw that applies 100ms RTT but otherwise nothing
     my $udpfw_guard = spawn_process(
@@ -362,10 +438,10 @@ subtest "slow-start" => sub {
 
     # read first $size bytes from client $cli (which would be the payload received) and check RT
     my $doit = sub {
-        my ($size, $rt_min, $rt_max) = @_;
+        my ($size, $rt_min, $rt_max, @cli_args) = @_;
         subtest "${size}B" => sub {
             my $start_at = time;
-            open my $fh, "-|", "$cli -p /$size 127.0.0.1 $udpfw_port 2>&1"
+            open my $fh, "-|", "$cli -p /$size @{[ join ' ', @cli_args ]} 127.0.0.1 $udpfw_port 2>&1"
                 or die "failed to launch $cli:$!";
             for (my $total_read = 0; $total_read < $size;) {
                 IO::Select->new($fh)->can_read(); # block until the command writes something
@@ -394,8 +470,6 @@ subtest "slow-start" => sub {
         $each_cc->(sub {
             my $cc = shift;
             subtest "respect-app-limited" => sub {
-                plan skip_all => "Cubic TODO respect app-limited"
-                    if $cc eq "cubic";
                 my $guard = spawn_server("-C", "$cc:10");
                 # tail of 1st, 2nd, and 3rd batch fits into each round trip
                 $doit->(@$_)
@@ -414,8 +488,6 @@ subtest "slow-start" => sub {
         $each_cc->(sub {
             my $cc = shift;
             subtest "respect-app-limited" => sub {
-                plan skip_all => "Cubic TODO respect app-limited"
-                    if $cc eq "cubic";
                 my $guard = spawn_server("-C", "$cc:20:p");
                 # check head of 1st and 3rd batch, tail of 1st and 2nd
                 $doit->(@$_)
@@ -428,7 +500,214 @@ subtest "slow-start" => sub {
                     for ([1000, 2, 2.3], [30000, 2.3, 3], [87000, 3.3, 4], [96000, 4, 4.5]);
             };
         });
+    };
+
+    subtest "jumpstart" => sub {
+        $each_cc->(sub {
+            my $cc = shift;
+            my $guard = spawn_server("-C", "$cc:20:p", "--jumpstart-default", "80");
+            $doit->(@$_)
+                for ([1450 * 45, 2.45, 2.8], [1450 * 90, 3.0, 3.3]);
+        });
+    };
+
+    subtest "jumpstart-resume" => sub {
+        $each_cc->(sub {
+            my $cc = shift;
+            unlink "$tempdir/session";
+            my $guard = spawn_server("-C", "$cc:10:p", "--jumpstart-max", "80");
+            # test RT without jumpstart
+            $doit->(100000, 4, 5);
+            # train
+            my $pid = fork;
+            die "fork failed:$!"
+                unless defined $pid;
+            if ($pid == 0) {
+                open STDOUT, ">", "/dev/null"
+                    or die "failed to redirect STDOUT to /dev/null:$!";
+                exec $cli, qw(-p /1000000 -i 5000 -s), "$tempdir/session", "127.0.0.1", $udpfw_port;
+                die "failed to exec $cli:$!";
+            }
+            sleep 2; # wait until the connection becomes idle, at which point the token will be sent
+            kill 'KILL', $pid;
+            while (waitpid($pid, 0) != $pid) {}
+            # test RT using the obtained session information
+            $doit->(100000, $cc eq "reno" ? (2.8, 3.5) : (2, 2.999), "-s", "$tempdir/session");
+        });
+    };
+};
+
+subtest "trasport-parameters" => sub {
+    my $guard = spawn_server();
+
+    subtest "max-udp-payload-size" => sub {
+        my $do_test = sub {
+            my $max_payload_size = shift;
+            my $expected_max_payload_size = shift;
+            # we use the forwarder just to print the size of the packets
+            my $udpfw_guard = spawn_process(
+                ["sh", "-c", "exec $udpfw -b 100 -i 1 -p 0 -B 100 -I 1 -l $udpfw_port 127.0.0.1 $port > $tempdir/udpfw.events 2>&1"],
+                $udpfw_port,
+            );
+            my $resp = `$cli -e $tempdir/events -U $max_payload_size -p /12 127.0.0.1 $udpfw_port 2> /dev/null`;
+            is $resp, "hello world\n";
+            $udpfw_guard = undef;
+            open(my $fh, '<', "$tempdir/udpfw.events") or die "failed to open file: $!";
+            my $server_packets = 0;
+            while (my $line = <$fh>) {
+                if ($line =~ /^[^:]+:[^:]+:d:forward:(\d+)/) {
+                    $server_packets++;
+                    if ($server_packets == 1) {
+                        is $1, $expected_max_payload_size, 'First packet size is equal to expected max payload size';
+                    } else {
+                        cmp_ok $1, '<=', $expected_max_payload_size, 'Packet size is lower or equal to expected max payload size';
+                    }
+                }
+            }
+            cmp_ok $server_packets, '>', 0, "We have seen packets from the server";
+        };
+        $do_test->(1252, 1252);
+        $do_test->(1200, 1200);
+        $do_test->(1300, 1280);
+    };
+};
+
+subtest "reset-stream-overflow" => sub {
+    my $server = spawn_server();
+    my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
+    $conn->send("\x04\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff"); # reset stream with final_size=QUICINT_MAX
+    sleep 0.5;
+    ok !$server->is_dead(), "server process must be alive";
+    my $received = $conn->receive();
+    like $received, qr/^\x1c\x03\x04/, "responds with CONNECTION_CLOSE(FLOW_CONTROL_ERROR) for RESET_STREAM";
+};
+
+subtest "stream-open-after-connection-close" => sub {
+    my $server = spawn_server(qw(-e /dev/stderr));
+    my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
+    $conn->send("\x1c\x00\x00\x00" . "\x0a\x00\x05hello"); # CONNECTION_CLOSE -> STREAM
+    sleep 0.5;
+    ok !$server->is_dead(), "server process must be alive";
+    is `$cli -I 1000 -p /12 127.0.0.1 $port 2> /dev/null`, "hello world\n", "server is responding";
+};
+
+subtest "invalid-ack" => sub {
+    my $server = spawn_server();
+    subtest "gap" => sub {
+        my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
+        my $pn = $conn->largest_pn_received;
+        $conn->send("\x02" . chr($pn) . "\x00\x00" . chr($pn)); # ACK all PNs up to largest_pn_received
+        sleep 0.5;
+        ok !$server->is_dead(), "server is alive";
+        my $received = $conn->receive();
+        like $received, qr/^\x1c\x0a\x02/, "responds with CONNECTION_CLOSE(PROTOCOL_VIOLATION) for ACK";
+    };
+    subtest "too large" => sub {
+        my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
+        $conn->send("\x02\x3f\x00\x00\x00"); # ACK pn=63, server would not have sent so many packets
+        sleep 0.5;
+        ok !$server->is_dead(), "server is alive";
+        my $received = $conn->receive();
+        like $received, qr/^\x1c\x0a\x02/, "responds with CONNECTION_CLOSE(PROTOCOL_VIOLATION) for ACK";
+    };
+};
+ 
+subtest "coalesced-initials" => sub {
+    # Test that server processes coalesced Initial packets (RFC 9000 Section 12.2)
+    # The test uses a pre-generated coalesced datagram with [Handshake][Initial]
+    # where both packets have matching Connection IDs.
+    my $guard = spawn_server();
+
+    # Send coalesced packet
+    my $coalesced = slurp_file("t/assets/coalesced_packet.bin");
+    ok length($coalesced) > 0, "coalesced packet is non-empty";
+    my $socket = IO::Socket::INET->new(
+        Proto => 'udp',
+        PeerAddr => '127.0.0.1',
+        PeerPort => $port,
+    ) or BAIL_OUT("Cannot create socket: $!");
+    $socket->send($coalesced);
+
+    # Wait for response with timeout
+    my $ih = IO::Select->new($socket);
+    my $n = $ih->can_read(2);
+
+    if ($n && $n > 0) {
+        my $response;
+        $socket->recv($response, 65535);
+        ok length($response) > 0, "server responds to coalesced Initial packet";
+
+        # Verify response is an Initial or Handshake packet
+        my $first_byte = ord(substr($response, 0, 1));
+        ok (($first_byte & 0xF0) == 0xC0 || ($first_byte & 0xF0) == 0xD0),
+            "server response is Initial or Handshake packet";
+    } else {
+        fail "server does not respond to coalesced Initial packet";
     }
+};
+
+subtest "max-data" => sub {
+    my $server = spawn_server(qw(-M 1048576 -m 16777216 -X 100 -e), "$tempdir/events");
+    my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
+    # open 100 streams, send one byte of "X" just before 1MB
+    for (my $stream_id = 0; $stream_id < 400; $stream_id += 4) {
+        $conn->send("\x0e\x80\x00" . pack("n", $stream_id) . "\x80\x0f\xff\xff\x01X");
+        sleep 0.001
+            if $stream_id % 40 == 0;
+    }
+    # check server behavior by consulting the events log
+    my $events = slurp_file("$tempdir/events");
+    unlike $events, qr/"type":"max_data_send"/s, "MAX_DATA not sent";
+    like $events, qr/"type":"transport_close_send",.*"error_code":3,"frame_type":14,/, "flow control error caused by STREAM frame";
+    complex $events, sub {
+        my $max_stream_id = -1;
+        while (/"type":"stream_receive",.*"stream_id":([0-9]+),/g) {
+            $max_stream_id = $1
+                if $1 > $max_stream_id;
+        }
+        $max_stream_id == 64;
+    }, "16th stream (stream_id=64) causes overflow";
+};
+
+# quicly misdetects packets ending with 16 0x00 bytes as a stateless reset
+subtest "misdetected-reset" => sub {
+    # Launch a server that will send a full-sized packet with all zeros when receiving the first packet, then switch
+    # it to a real server so that the handshake succeeds. A buggy client would treat this as a stateless reset.
+    my $server_pid = fork;
+    die "fork failed:$!"
+        unless defined $server_pid;
+    if ($server_pid == 0) {
+        my $sock = IO::Socket::INET->new(
+            LocalPort => $port,
+            Proto     => "udp",
+            ReuseAddr => 1,
+        ) or die "failed to create UDP socket:$!";
+        $sock->recv(my $buf, 1500);
+        $sock->send("\0" x 1200);
+        undef $sock;
+        exec "$cli", "-k", "t/assets/server.key", "-c", "t/assets/server.crt", "127.0.0.1", $port;
+        die "failed to exec $cli:$!";
+    }
+    my $resp = `exec $cli -p /12 127.0.0.1 $port 2>&1`;
+    like $resp, qr/^hello world\n/s;
+    kill 9, $server_pid;
+    while (waitpid($server_pid, 0) != $server_pid) {
+    }
+};
+
+subtest "huge-CID" => sub {
+    # sends an Initial with a 255-byte SCID
+    my $server = spawn_server("-e", "$tempdir/events");
+
+    my $socket = IO::Socket::INET->new(
+        Proto    => 'udp',
+        PeerAddr => '127.0.0.1',
+        PeerPort => $port,
+    ) or BAIL_OUT("Cannot create socket:$!");
+    $socket->send(slurp_file("t/assets/huge_cid_packet.bin"));
+
+    sleep 1;
+    ok(!$server->is_dead);
 };
 
 done_testing;
@@ -443,26 +722,84 @@ sub spawn_server {
     spawn_process(\@cmd, $port);
 }
 
-sub spawn_process {
-    my ($cmd, $listen_port) = @_;
+package SpawnedProcess {
+    use POSIX ":sys_wait_h";
 
-    my $pid = fork;
-    die "fork failed:$!"
-        unless defined $pid;
-    if ($pid == 0) {
-        exec @$cmd;
-        die "failed to exec @{[$cmd->[0]]}:$?";
-    }
-    while (`netstat -na` !~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
-        if (waitpid($pid, WNOHANG) == $pid) {
-            die "failed to launch @{[$cmd->[0]]}:$?";
+    sub new {
+        my ($klass, $cmd, $listen_port) = @_;
+
+        my $self = bless {
+            logfh => scalar File::Temp::tempfile(),
+            pid   => fork(),
+        }, $klass;
+
+        die "fork failed:$!"
+        unless defined $self->{pid};
+        if ($self->{pid} == 0) {
+            close STDOUT;
+            open STDOUT, ">&", $self->{logfh}
+                or die "failed to dup(2) log file to STDOUT:$!";
+            open STDERR, ">&", $self->{logfh}
+                or die "failed to dup(2) log file to STDERR:$!";
+            exec @$cmd;
+            die "failed to exec @{[$cmd->[0]]}:$?";
         }
-        sleep 0.1;
+        for (1..10) {
+            if (`netstat -na` =~ /^udp.*\s(127\.0\.0\.1|0\.0\.0\.0|\*)[\.:]$listen_port\s/m) {
+                last;
+            }
+            if (waitpid($self->{pid}, WNOHANG) == $self->{pid}) {
+                undef $self->{pid};
+                die "failed to launch @{[$cmd->[0]]}:$?";
+            }
+            sleep 0.1;
+        }
+
+        $self;
     }
-    return scope_guard(sub {
-        kill 9, $pid;
-        while (waitpid($pid, 0) != $pid) {}
-    });
+
+    sub DESTROY {
+        goto \&finalize;
+    }
+
+    sub is_dead {
+        my $self = shift;
+
+        return 1
+            unless $self->{pid};
+
+        my $dead = waitpid($self->{pid}, WNOHANG) > 0;
+        undef $self->{pid}
+            if $dead;
+        $dead;
+    }
+
+    sub finalize {
+        my $self = shift;
+
+        # kill the process, if it is still alive
+        if ($self->{pid}) {
+            kill 9, $self->{pid};
+            while (waitpid($self->{pid}, 0) != $self->{pid}) {}
+            undef $self->{pid};
+        }
+
+        # fetch and close the log file
+        seek $self->{logfh}, 0, 0;
+        my $log = do {
+            local $/;
+            readline $self->{logfh};
+        };
+        close $self->{logfh};
+
+        print STDERR $log;
+
+        return $log;
+    }
+}
+
+sub spawn_process {
+    SpawnedProcess->new(@_);
 }
 
 sub slurp_file {

@@ -19,23 +19,26 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#ifdef __APPLE__
+#define __APPLE_USE_RFC_3542 /* to use IPV6_PKTINFO */
+#endif
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <time.h>
 #include <sys/types.h>
 #include <getopt.h>
+#include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <picotls.h>
 #include <openssl/err.h>
-#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
-#include <openssl/provider.h>
-#endif
 #if QUICLY_HAVE_FUSION
 #include "picotls/fusion.h"
 #endif
@@ -49,6 +52,10 @@
 FILE *quicly_trace_fp = NULL;
 static unsigned verbosity = 0;
 static int suppress_output = 0, send_datagram_frame = 0;
+static int delivery_stats = 0;
+static struct {
+    uint64_t next_at, bytes;
+} delivered;
 static int64_t enqueue_requests_at = 0, request_interval = 0;
 
 static void hexdump(const char *title, const uint8_t *p, size_t l)
@@ -67,7 +74,8 @@ static void hexdump(const char *title, const uint8_t *p, size_t l)
     }
 }
 
-static int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src);
+static int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src,
+                                  const ptls_save_ticket_properties_t *properties);
 static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_on_client_hello_parameters_t *params);
 
 static const char *session_file = NULL;
@@ -109,21 +117,23 @@ static struct {
 /**
  * list of requests to be processed, terminated by reqs[N].path == NULL
  */
-struct {
+static struct {
     const char *path;
     int to_file;
 } *reqs;
+
+static int exit_after_handshake;
 
 struct st_stream_data_t {
     quicly_streambuf_t streambuf;
     FILE *outfp;
 };
 
-static void on_stop_sending(quicly_stream_t *stream, int err);
-static void on_receive_reset(quicly_stream_t *stream, int err);
+static void on_stop_sending(quicly_stream_t *stream, quicly_error_t err);
+static void on_receive_reset(quicly_stream_t *stream, quicly_error_t err);
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
-static void client_on_receive_reset(quicly_stream_t *stream, int err);
+static void client_on_receive_reset(quicly_stream_t *stream, quicly_error_t err);
 
 static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streambuf_destroy,
                                                                   quicly_streambuf_egress_shift,
@@ -144,22 +154,30 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
 
     quicly_get_stats(conn, &stats);
     fprintf(fp,
-            "packets-received: %" PRIu64 ", received-ecn-ect0: %" PRIu64 ", received-ecn-ect1: %" PRIu64
+            "packets-received: %" PRIu64 ", initial-packets-received: %" PRIu64 ", 0rtt-packets-received: %" PRIu64
+            ", handshake-packets-received: %" PRIu64 ", received-ecn-ect0: %" PRIu64 ", received-ecn-ect1: %" PRIu64
             ", received-ecn-ce: %" PRIu64 ", packets-decryption-failed: %" PRIu64 ", packets-sent: %" PRIu64
+            ", initial-packets-sent: %" PRIu64 ", 0rtt-packets-sent: %" PRIu64 ", handshake-packets-sent: %" PRIu64
             ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", ack-ecn-ect0: %" PRIu64 ", ack-ecn-ect1: %" PRIu64
             ", ack-ecn-ce: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64
-            ", srtt: %" PRIu32 ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 ", delivery-rate: %" PRIu64
-            ", cwnd: %" PRIu32 ", cwnd-exiting-slow-start: %" PRIu32 ", slow-start-exit-at: %" PRId64 ", jumpstart-cwnd: %" PRIu32
+            ", paths-created %" PRIu64 ", paths-validated %" PRIu64 ", paths-promoted: %" PRIu64 ", srtt: %" PRIu32
+            ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 ", delivery-rate: %" PRIu64 ", cwnd: %" PRIu32
+            ", cwnd-exiting-slow-start: %" PRIu32 ", slow-start-exit-at: %" PRId64 ", jumpstart-cwnd: %" PRIu32
             ", jumpstart-exit: %" PRIu32 ", jumpstart-prev-rate: %" PRIu64 ", jumpstart-prev-rtt: %" PRIu32
-            ", token-sent-rate: %" PRIu64 ", token-sent-rtt: %" PRIu32 "\n",
-            stats.num_packets.received, stats.num_packets.received_ecn_counts[0], stats.num_packets.received_ecn_counts[1],
-            stats.num_packets.received_ecn_counts[2], stats.num_packets.decryption_failed, stats.num_packets.sent,
-            stats.num_packets.lost, stats.num_packets.ack_received, stats.num_packets.acked_ecn_counts[0],
-            stats.num_packets.acked_ecn_counts[1], stats.num_packets.acked_ecn_counts[2], stats.num_packets.late_acked,
-            stats.num_bytes.received, stats.num_bytes.sent, stats.rtt.smoothed, stats.cc.num_loss_episodes,
+            ", token-sent-rate: %" PRIu64 ", token-sent-rtt: %" PRIu32 ", ack-frequency-frames-sent: %" PRIu64
+            ", ack-frequency-frames-received: %" PRIu64 "\n",
+            stats.num_packets.received, stats.num_packets.initial_received, stats.num_packets.zero_rtt_received,
+            stats.num_packets.handshake_received, stats.num_packets.received_ecn_counts[0],
+            stats.num_packets.received_ecn_counts[1], stats.num_packets.received_ecn_counts[2], stats.num_packets.decryption_failed,
+            stats.num_packets.sent, stats.num_packets.initial_sent, stats.num_packets.zero_rtt_sent,
+            stats.num_packets.handshake_sent, stats.num_packets.lost, stats.num_packets.ack_received,
+            stats.num_packets.acked_ecn_counts[0], stats.num_packets.acked_ecn_counts[1], stats.num_packets.acked_ecn_counts[2],
+            stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent, stats.num_paths.created,
+            stats.num_paths.validated, stats.num_paths.promoted, stats.rtt.smoothed, stats.cc.num_loss_episodes,
             stats.cc.num_ecn_loss_episodes, stats.delivery_rate.smoothed, stats.cc.cwnd, stats.cc.cwnd_exiting_slow_start,
             stats.cc.exit_slow_start_at, stats.jumpstart.cwnd, stats.cc.cwnd_exiting_jumpstart, stats.jumpstart.prev_rate,
-            stats.jumpstart.prev_rtt, stats.token_sent.rate, stats.token_sent.rtt);
+            stats.jumpstart.prev_rtt, stats.token_sent.rate, stats.token_sent.rtt, stats.num_frames_sent.ack_frequency,
+            stats.num_frames_received.ack_frequency);
 }
 
 static int validate_path(const char *path)
@@ -212,7 +230,7 @@ static void send_header(quicly_stream_t *stream, int is_http1, int status, const
     send_str(stream, buf);
 }
 
-static int flatten_file_vec(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
+static quicly_error_t flatten_file_vec(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     int fd = (intptr_t)vec->cbdata;
     ssize_t rret;
@@ -253,7 +271,7 @@ static int send_file(quicly_stream_t *stream, int is_http1, const char *fn, cons
  * This function is an implementation of the quicly_sendbuf_flatten_vec_cb callback.  Refer to the doc-comments of the callback type
  * for the API.
  */
-static int flatten_sized_text(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
+static quicly_error_t flatten_sized_text(quicly_sendbuf_vec_t *vec, void *dst, size_t off, size_t len)
 {
     static const char pattern[] =
         "hello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello world\nhello "
@@ -306,16 +324,16 @@ static int send_sized_text(quicly_stream_t *stream, const char *path, int is_htt
     return 1;
 }
 
-static void on_stop_sending(quicly_stream_t *stream, int err)
+static void on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
-    fprintf(stderr, "received STOP_SENDING: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    fprintf(stderr, "received STOP_SENDING: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
 }
 
-static void on_receive_reset(quicly_stream_t *stream, int err)
+static void on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
-    fprintf(stderr, "received RESET_STREAM: %" PRIu16 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
+    fprintf(stderr, "received RESET_STREAM: %" PRIu64 "\n", QUICLY_ERROR_GET_ERROR_CODE(err));
 }
 
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
@@ -369,11 +387,36 @@ static void client_on_receive_complete(quicly_stream_t *stream)
         fclose(stream_data->outfp);
 }
 
-static void client_on_receive_reset(quicly_stream_t *stream, int err)
+static void client_on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
 {
     on_receive_reset(stream, err);
     if (quicly_recvstate_transfer_complete(&stream->recvstate))
         client_on_receive_complete(stream);
+}
+
+static uint64_t delivery_now(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        perror("clock_gettime");
+        exit(1);
+    }
+    return (uint64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+static void advance_delivery_stats(uint64_t now)
+{
+    if (now < delivered.next_at)
+        return;
+    while (now >= delivered.next_at) {
+        printf("%" PRIu64 "\n", delivered.bytes);
+        delivered.bytes = 0;
+        delivered.next_at += 1000;
+    }
+    if (fflush(stdout) != 0 || ferror(stdout)) {
+        perror("writing delivery statistics");
+        exit(1);
+    }
 }
 
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
@@ -385,6 +428,10 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
         return;
 
     if ((input = quicly_streambuf_ingress_get(stream)).len != 0) {
+        if (delivery_stats) {
+            advance_delivery_stats(delivery_now());
+            delivered.bytes += input.len;
+        }
         if (!suppress_output) {
             FILE *out = (stream_data->outfp == NULL) ? stdout : stream_data->outfp;
             fwrite(input.base, 1, input.len, out);
@@ -397,7 +444,7 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
         client_on_receive_complete(stream);
 }
 
-static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+static quicly_error_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 {
     int ret;
 
@@ -409,28 +456,36 @@ static int on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
 
 static quicly_stream_open_t stream_open = {&on_stream_open};
 
-static void on_closed_by_remote(quicly_closed_by_remote_t *self, quicly_conn_t *conn, int err, uint64_t frame_type,
-                                const char *reason, size_t reason_len)
+static void on_closed(quicly_closed_t *self, quicly_conn_t *conn)
 {
+    uint64_t frame_type;
+    const char *reason;
+    int is_remote;
+    quicly_error_t err = quicly_get_close_reason(conn, &frame_type, &reason, &is_remote);
+
+    if (!is_remote)
+        return;
+
     if (QUICLY_ERROR_IS_QUIC_TRANSPORT(err)) {
-        fprintf(stderr, "transport close:code=0x%" PRIx16 ";frame=%" PRIu64 ";reason=%.*s\n", QUICLY_ERROR_GET_ERROR_CODE(err),
-                frame_type, (int)reason_len, reason);
+        fprintf(stderr, "transport close:code=0x%" PRIx64 ";frame=%" PRIu64 ";reason=%s\n", QUICLY_ERROR_GET_ERROR_CODE(err),
+                frame_type, reason);
     } else if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
-        fprintf(stderr, "application close:code=0x%" PRIx16 ";reason=%.*s\n", QUICLY_ERROR_GET_ERROR_CODE(err), (int)reason_len,
-                reason);
+        fprintf(stderr, "application close:code=0x%" PRIx64 ";reason=%s\n", QUICLY_ERROR_GET_ERROR_CODE(err), reason);
     } else if (err == QUICLY_ERROR_RECEIVED_STATELESS_RESET) {
         fprintf(stderr, "stateless reset\n");
     } else if (err == QUICLY_ERROR_NO_COMPATIBLE_VERSION) {
         fprintf(stderr, "no compatible version\n");
+    } else if (PTLS_ERROR_GET_CLASS(err) == PTLS_ERROR_CLASS_PEER_ALERT) {
+        fprintf(stderr, "TLS alert:code=%d\n", (int)PTLS_ERROR_TO_ALERT(err));
     } else {
-        fprintf(stderr, "unexpected close:code=%d\n", err);
+        fprintf(stderr, "unexpected close:code=%" PRId64 "\n", err);
     }
 }
 
-static quicly_closed_by_remote_t closed_by_remote = {&on_closed_by_remote};
+static quicly_closed_t closed = {&on_closed};
 
-static int on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn, ptls_buffer_t *buf,
-                                        quicly_address_token_plaintext_t *token)
+static quicly_error_t on_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn,
+                                                   ptls_buffer_t *buf, quicly_address_token_plaintext_t *token)
 {
     return quicly_encrypt_address_token(tlsctx.random_bytes, address_token_aead.enc, buf, buf->off, token);
 }
@@ -438,10 +493,10 @@ static int on_generate_resumption_token(quicly_generate_resumption_token_t *self
 static quicly_generate_resumption_token_t generate_resumption_token = {&on_generate_resumption_token};
 
 /* buf should be ctx.transport_params.max_udp_payload_size bytes long */
-static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_t *ecn)
+static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *dest, quicly_address_t *src, uint8_t *ecn)
 {
     struct iovec vec = {.iov_base = buf, .iov_len = ctx.transport_params.max_udp_payload_size};
-    char cmsgbuf[CMSG_SPACE(sizeof(int) /* == max(V4_TOS, V6_TCLASS) */)] = {};
+    char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo) /* == max(V4_TOS, V6_TCLASS) */) + CMSG_SPACE(1 /* TOS */)] = {};
     struct msghdr mess = {
         .msg_name = &src->sa,
         .msg_namelen = sizeof(*src),
@@ -461,8 +516,31 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_
         ;
 
     if (rret >= 0) {
+        dest->sa.sa_family = AF_UNSPEC;
         *ecn = 0;
         for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&mess); cmsg != NULL; cmsg = CMSG_NXTHDR(&mess, cmsg)) {
+#ifdef IP_PKTINFO
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO) {
+                dest->sin.sin_family = AF_INET;
+                memcpy(&dest->sin.sin_addr, CMSG_DATA(cmsg) + offsetof(struct in_pktinfo, ipi_addr), sizeof(dest->sin.sin_addr));
+                dest->sin.sin_port = localaddr.sin.sin_port;
+            }
+#endif
+#ifdef IP_RECVDSTADDR
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_RECVDSTADDR) {
+                dest->sin.sin_family = AF_INET;
+                memcpy(&dest->sin.sin_addr, CMSG_DATA(cmsg), sizeof(dest->sin.sin_addr));
+                dest->sin.sin_port = localaddr.sin.sin_port;
+            }
+#endif
+#ifdef IPV6_PKTINFO
+            if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IPV6_PKTINFO) {
+                dest->sin6.sin6_family = AF_INET6;
+                memcpy(&dest->sin6.sin6_addr, CMSG_DATA(cmsg) + offsetof(struct in6_pktinfo, ipi6_addr),
+                       sizeof(dest->sin6.sin6_addr));
+                dest->sin6.sin6_port = localaddr.sin6.sin6_port;
+            }
+#endif
 #ifdef IP_RECVTOS
             if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type ==
 #ifdef __APPLE__
@@ -481,7 +559,47 @@ static ssize_t receive_datagram(int fd, void *buf, quicly_address_t *src, uint8_
     return rret;
 }
 
-static void set_ecn(struct msghdr *mess, int ecn)
+/* in6_pktinfo would be the largest structure among the ones that might be stored */
+static void set_srcaddr(struct msghdr *mess, quicly_address_t *addr)
+{
+    struct cmsghdr *cmsg = (struct cmsghdr *)((char *)mess->msg_control + mess->msg_controllen);
+
+    switch (addr->sa.sa_family) {
+    case AF_INET: {
+#ifdef IP_PKTINFO
+        struct in_pktinfo info = {.ipi_spec_dst = addr->sin.sin_addr};
+        cmsg->cmsg_level = IPPROTO_IP;
+        cmsg->cmsg_type = IP_PKTINFO;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(info));
+        memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
+        mess->msg_controllen += CMSG_SPACE(sizeof(info));
+#elif defined(IP_SENDSRCADDR)
+        /* TODO FreeBSD: skip setting IP_SENDSRCADDR if the socket is not bound to INADDR_ANY, as doing so results in sendmsg
+         * generating an error */
+        cmsg->cmsg_level = IPPROTO_IP;
+        cmsg->cmsg_type = IP_SENDSRCADDR;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(addr->sin.sin_addr));
+        memcpy(CMSG_DATA(cmsg), &addr->sin.sin_addr, sizeof(addr->sin.sin_addr));
+        mess->msg_controllen += CMSG_SPACE(sizeof(addr->sin.sin_addr));
+#else
+        assert(!"FIXME");
+#endif
+    } break;
+    case AF_INET6: {
+        struct in6_pktinfo info = {.ipi6_addr = addr->sin6.sin6_addr};
+        cmsg->cmsg_level = IPPROTO_IP;
+        cmsg->cmsg_type = IPV6_PKTINFO;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(info));
+        memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
+        mess->msg_controllen += CMSG_SPACE(sizeof(info));
+    } break;
+    default:
+        assert(!"FIXME");
+        break;
+    }
+}
+
+static void set_ecn(struct msghdr *mess, uint8_t ecn)
 {
     if (ecn == 0)
         return;
@@ -496,17 +614,20 @@ static void set_ecn(struct msghdr *mess, int ecn)
     mess->msg_controllen += CMSG_SPACE(sizeof(ecn));
 }
 
-static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets, uint8_t ecn)
+static void send_packets_default(int fd, quicly_address_t *dest, quicly_address_t *src, struct iovec *packets, size_t num_packets,
+                                 uint8_t ecn)
 {
     for (size_t i = 0; i != num_packets; ++i) {
-        char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo))];
+        char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(int))];
         struct msghdr mess = {
             .msg_name = dest,
-            .msg_namelen = quicly_get_socklen(dest),
+            .msg_namelen = quicly_get_socklen(&dest->sa),
             .msg_iov = &packets[i],
             .msg_iovlen = 1,
             .msg_control = cmsgbuf,
         };
+        if (src != NULL && src->sa.sa_family != AF_UNSPEC)
+            set_srcaddr(&mess, src);
         set_ecn(&mess, ecn);
         assert(mess.msg_controllen <= sizeof(cmsgbuf));
         if (mess.msg_controllen == 0)
@@ -527,27 +648,35 @@ static void send_packets_default(int fd, struct sockaddr *dest, struct iovec *pa
 #define UDP_SEGMENT 103
 #endif
 
-static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packets, size_t num_packets, uint8_t ecn)
+static void send_packets_gso(int fd, quicly_address_t *dest, quicly_address_t *src, struct iovec *packets, size_t num_packets,
+                             uint8_t ecn)
 {
     struct iovec vec = {.iov_base = (void *)packets[0].iov_base,
                         .iov_len = packets[num_packets - 1].iov_base + packets[num_packets - 1].iov_len - packets[0].iov_base};
-    char cmsgbuf[CMSG_SPACE(sizeof(uint16_t)) + CMSG_SPACE(sizeof(int))]; /* UDP_SEGMENT and IP_TOS */
+    char cmsgbuf[CMSG_SPACE(sizeof(struct in6_pktinfo)) + CMSG_SPACE(sizeof(uint16_t)) /* UDP_SEGMENT */ +
+                 CMSG_SPACE(sizeof(int)) /* IP_TOS */];
     struct msghdr mess = {
         .msg_name = dest,
-        .msg_namelen = quicly_get_socklen(dest),
+        .msg_namelen = quicly_get_socklen(&dest->sa),
         .msg_iov = &vec,
         .msg_iovlen = 1,
         .msg_control = cmsgbuf,
     };
+
+    if (src != NULL && src->sa.sa_family != AF_UNSPEC)
+        set_srcaddr(&mess, src);
     if (num_packets != 1) {
-        struct cmsghdr *cmsg = mess.msg_control;
+        struct cmsghdr *cmsg = (struct cmsghdr *)((char *)mess.msg_control + mess.msg_controllen);
         cmsg->cmsg_level = SOL_UDP;
         cmsg->cmsg_type = UDP_SEGMENT;
         cmsg->cmsg_len = CMSG_LEN(sizeof(uint16_t));
         *(uint16_t *)CMSG_DATA(cmsg) = packets[0].iov_len;
-        mess.msg_controllen = CMSG_SPACE(sizeof(uint16_t));
+        mess.msg_controllen += CMSG_SPACE(sizeof(uint16_t));
     }
     set_ecn(&mess, ecn);
+    assert(mess.msg_controllen <= sizeof(cmsgbuf));
+    if (mess.msg_controllen == 0)
+        mess.msg_control = NULL;
 
     int ret;
     while ((ret = sendmsg(fd, &mess, 0)) == -1 && errno == EINTR)
@@ -558,31 +687,32 @@ static void send_packets_gso(int fd, struct sockaddr *dest, struct iovec *packet
 
 #endif
 
-static void (*send_packets)(int, struct sockaddr *, struct iovec *, size_t, uint8_t ecn) = send_packets_default;
+static void (*send_packets)(int, quicly_address_t *, quicly_address_t *, struct iovec *, size_t, uint8_t) = send_packets_default;
 
-static void send_one_packet(int fd, struct sockaddr *dest, const void *payload, size_t payload_len)
+static void send_one_packet(int fd, quicly_address_t *dest, quicly_address_t *src, const void *payload, size_t payload_len)
 {
     struct iovec vec = {.iov_base = (void *)payload, .iov_len = payload_len};
-    send_packets(fd, dest, &vec, 1, 0);
+    send_packets(fd, dest, src, &vec, 1, 0);
 }
 
-static int send_pending(int fd, quicly_conn_t *conn)
+static quicly_error_t send_pending(int fd, quicly_conn_t *conn)
 {
     quicly_address_t dest, src;
     struct iovec packets[MAX_BURST_PACKETS];
     uint8_t buf[MAX_BURST_PACKETS * quicly_get_context(conn)->transport_params.max_udp_payload_size];
     size_t num_packets = MAX_BURST_PACKETS;
-    int ret;
+    quicly_error_t ret;
 
     if ((ret = quicly_send(conn, &dest, &src, packets, &num_packets, buf, sizeof(buf))) == 0 && num_packets != 0)
-        send_packets(fd, &dest.sa, packets, num_packets, quicly_send_get_ecn_bits(conn));
+        send_packets(fd, &dest, &src, packets, num_packets, quicly_send_get_ecn_bits(conn));
 
     return ret;
 }
 
 static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
 {
-    printf("DATAGRAM: %.*s\n", (int)payload.len, payload.base);
+    if (!delivery_stats)
+        printf("DATAGRAM: %.*s\n", (int)payload.len, payload.base);
     /* send responds with a datagram frame */
     if (!quicly_is_client(conn))
         quicly_send_datagram_frames(conn, &payload, 1);
@@ -591,7 +721,7 @@ static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, qui
 static void enqueue_requests(quicly_conn_t *conn)
 {
     size_t i;
-    int ret;
+    quicly_error_t ret;
 
     for (i = 0; reqs[i].path != NULL; ++i) {
         char req[1024], destfile[1024];
@@ -615,18 +745,29 @@ static void enqueue_requests(quicly_conn_t *conn)
     enqueue_requests_at = INT64_MAX;
 }
 
+static volatile int client_gotsig = 0;
+
+static void on_client_signal(int signo)
+{
+    client_gotsig = signo;
+}
+
 static int run_client(int fd, struct sockaddr *sa, const char *host)
 {
-    struct sockaddr_in local;
-    int ret;
+    quicly_address_t local;
+    quicly_error_t ret;
     quicly_conn_t *conn = NULL;
 
+    signal(SIGTERM, on_client_signal);
+
     memset(&local, 0, sizeof(local));
-    local.sin_family = AF_INET;
-    if (bind(fd, (void *)&local, sizeof(local)) != 0) {
+    local.sa.sa_family = sa->sa_family;
+    if (bind(fd, &local.sa, local.sa.sa_family == AF_INET ? sizeof(local.sin) : sizeof(local.sin6)) != 0) {
         perror("bind(2) failed");
         return 1;
     }
+    if (delivery_stats)
+        delivered.next_at = delivery_now() + 1000;
     ret = quicly_connect(&conn, &ctx, host, sa, NULL, &next_cid, resumption_token, &hs_properties, &resumed_transport_params, NULL);
     assert(ret == 0);
     ++next_cid.master_id;
@@ -654,6 +795,16 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             } else {
                 tv = NULL;
             }
+            if (delivery_stats) {
+                uint64_t now = delivery_now();
+                advance_delivery_stats(now);
+                uint64_t wait = delivered.next_at + 999000 - now;
+                if (tv == NULL || (uint64_t)tv->tv_sec * 1000000 + tv->tv_usec > wait) {
+                    tvbuf.tv_sec = wait / 1000000;
+                    tvbuf.tv_usec = wait % 1000000;
+                    tv = &tvbuf;
+                }
+            }
             FD_ZERO(&readfds);
             FD_SET(fd, &readfds);
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
@@ -662,8 +813,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
                 uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
-                quicly_address_t src;
-                ssize_t rret = receive_datagram(fd, buf, &src, &ecn);
+                quicly_address_t dest, src;
+                ssize_t rret = receive_datagram(fd, buf, &dest, &src, &ecn);
                 if (rret <= 0)
                     break;
                 if (verbosity >= 2)
@@ -674,23 +825,29 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                     if (quicly_decode_packet(&ctx, &packet, buf, rret, &off) == SIZE_MAX)
                         break;
                     packet.ecn = ecn;
-                    quicly_receive(conn, NULL, &src.sa, &packet);
+                    quicly_receive(conn, &dest.sa, &src.sa, &packet);
                     if (send_datagram_frame && quicly_connection_is_ready(conn)) {
                         const char *message = "hello datagram!";
                         ptls_iovec_t datagram = ptls_iovec_init(message, strlen(message));
                         quicly_send_datagram_frames(conn, &datagram, 1);
                         send_datagram_frame = 0;
                     }
-                    if (quicly_num_streams(conn) == 0) {
-                        if (request_interval != 0) {
-                            if (enqueue_requests_at == INT64_MAX)
-                                enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
-                        } else {
-                            static int close_called;
-                            if (!close_called) {
-                                dump_stats(stderr, conn);
-                                quicly_close(conn, 0, "");
-                                close_called = 1;
+                    if (exit_after_handshake) {
+                        quicly_stats_t stats;
+                        if (quicly_get_stats(conn, &stats) == 0 && stats.handshake_confirmed_msec != UINT64_MAX)
+                            exit(0);
+                    } else {
+                        if (quicly_num_streams(conn) == 0) {
+                            if (request_interval != 0 && client_gotsig != SIGTERM) {
+                                if (enqueue_requests_at == INT64_MAX)
+                                    enqueue_requests_at = ctx.now->cb(ctx.now) + request_interval;
+                            } else {
+                                static int close_called;
+                                if (!close_called) {
+                                    dump_stats(stderr, conn);
+                                    quicly_close(conn, 0, "");
+                                    close_called = 1;
+                                }
                             }
                         }
                     }
@@ -703,10 +860,12 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                 ech_save_retry_configs();
                 quicly_free(conn);
                 conn = NULL;
+                if (delivery_stats)
+                    advance_delivery_stats(delivery_now());
                 if (ret == QUICLY_ERROR_FREE_CONNECTION) {
                     return 0;
                 } else {
-                    fprintf(stderr, "quicly_send returned %d\n", ret);
+                    fprintf(stderr, "quicly_send returned %" PRId64 "\n", ret);
                     return 1;
                 }
             }
@@ -717,7 +876,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
 static quicly_conn_t **conns;
 static size_t num_conns = 0;
 
-static void on_signal(int signo)
+static void on_server_signal(int signo)
 {
     size_t i;
     for (i = 0; i != num_conns; ++i) {
@@ -803,8 +962,8 @@ CIDMismatch:
 
 static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
 {
-    signal(SIGINT, on_signal);
-    signal(SIGHUP, on_signal);
+    signal(SIGINT, on_server_signal);
+    signal(SIGHUP, on_server_signal);
 
     if (bind(fd, sa, salen) != 0) {
         perror("bind(2) failed");
@@ -840,9 +999,9 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
         } while (select(fd + 1, &readfds, NULL, NULL, tv) == -1 && errno == EINTR);
         if (FD_ISSET(fd, &readfds)) {
             while (1) {
+                quicly_address_t local, remote;
                 uint8_t buf[ctx.transport_params.max_udp_payload_size], ecn;
-                quicly_address_t remote;
-                ssize_t rret = receive_datagram(fd, buf, &remote, &ecn);
+                ssize_t rret = receive_datagram(fd, buf, &local, &remote, &ecn);
                 if (rret == -1)
                     break;
                 if (verbosity >= 2)
@@ -854,37 +1013,37 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                         break;
                     packet.ecn = ecn;
                     if (QUICLY_PACKET_IS_LONG_HEADER(packet.octets.base[0])) {
-                        if (packet.version != 0 && !quicly_is_supported_version(packet.version)) {
+                        /* handle version negotiation */
+                        if (packet.version == 0) {
+                            break;
+                        } else if (!quicly_is_supported_version(packet.version)) {
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
                             size_t payload_len = quicly_send_version_negotiation(&ctx, packet.cid.src, packet.cid.dest.encrypted,
                                                                                  quicly_supported_versions, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote.sa, payload, payload_len);
+                            send_one_packet(fd, &remote, &local, payload, payload_len);
                             break;
                         }
-                        /* there is no way to send response to these v1 packets */
-                        if (packet.cid.dest.encrypted.len > QUICLY_MAX_CID_LEN_V1 || packet.cid.src.len > QUICLY_MAX_CID_LEN_V1)
-                            break;
                     }
 
                     quicly_conn_t *conn = NULL;
                     size_t i;
                     for (i = 0; i != num_conns; ++i) {
-                        if (quicly_is_destination(conns[i], NULL, &remote.sa, &packet)) {
+                        if (quicly_is_destination(conns[i], &local.sa, &remote.sa, &packet)) {
                             conn = conns[i];
                             break;
                         }
                     }
                     if (conn != NULL) {
                         /* existing connection */
-                        quicly_receive(conn, NULL, &remote.sa, &packet);
+                        quicly_receive(conn, &local.sa, &remote.sa, &packet);
                     } else if (QUICLY_PACKET_IS_INITIAL(packet.octets.base[0])) {
                         /* long header packet; potentially a new connection */
                         quicly_address_token_plaintext_t *token = NULL, token_buf;
                         if (packet.token.len != 0) {
                             const char *err_desc = NULL;
-                            int ret = quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base,
-                                                                   packet.token.len, 0, &err_desc);
+                            quicly_error_t ret = quicly_decrypt_address_token(address_token_aead.dec, &token_buf, packet.token.base,
+                                                                              packet.token.len, 0, &err_desc);
                             if (ret == 0 &&
                                 validate_token(&remote.sa, packet.cid.src, packet.cid.dest.encrypted, &token_buf, &err_desc)) {
                                 token = &token_buf;
@@ -896,7 +1055,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                 size_t payload_len = quicly_send_close_invalid_token(&ctx, packet.version, packet.cid.src,
                                                                                      packet.cid.dest.encrypted, err_desc, payload);
                                 assert(payload_len != SIZE_MAX);
-                                send_one_packet(fd, &remote.sa, payload, payload_len);
+                                send_one_packet(fd, &remote, NULL, payload, payload_len);
                             }
                         }
                         if (enforce_retry && (token == NULL || token->address_mismatch) && packet.cid.dest.encrypted.len >= 8) {
@@ -911,11 +1070,12 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                                 ptls_iovec_init(new_server_cid, sizeof(new_server_cid)), packet.cid.dest.encrypted,
                                 ptls_iovec_init(NULL, 0), ptls_iovec_init(NULL, 0), NULL, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote.sa, payload, payload_len);
+                            send_one_packet(fd, &remote, NULL, payload, payload_len);
                             break;
                         } else {
                             /* new connection */
-                            int ret = quicly_accept(&conn, &ctx, NULL, &remote.sa, &packet, token, &next_cid, NULL, NULL);
+                            quicly_error_t ret =
+                                quicly_accept(&conn, &ctx, &local.sa, &remote.sa, &packet, token, &next_cid, NULL, NULL);
                             if (ret == 0) {
                                 assert(conn != NULL);
                                 ++next_cid.master_id;
@@ -934,7 +1094,7 @@ static int run_server(int fd, struct sockaddr *sa, socklen_t salen)
                             uint8_t payload[ctx.transport_params.max_udp_payload_size];
                             size_t payload_len = quicly_send_stateless_reset(&ctx, packet.cid.dest.encrypted.base, payload);
                             assert(payload_len != SIZE_MAX);
-                            send_one_packet(fd, &remote.sa, payload, payload_len);
+                            send_one_packet(fd, &remote, NULL, payload, payload_len);
                         }
                     }
                 }
@@ -961,7 +1121,7 @@ static void load_session(void)
 {
     static uint8_t buf[65536];
     size_t len;
-    int ret;
+    quicly_error_t ret;
 
     {
         FILE *fp;
@@ -1040,8 +1200,12 @@ Exit:
     return 0;
 }
 
-int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src)
+int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src,
+                           const ptls_save_ticket_properties_t *properties)
 {
+    if (properties->early_data && properties->max_early_data_size != UINT32_MAX)
+        return -(int)QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+
     free(session_info.tls_ticket.base);
     session_info.tls_ticket = ptls_iovec_init(malloc(src.len), src.len);
     memcpy(session_info.tls_ticket.base, src.base, src.len);
@@ -1050,7 +1214,7 @@ int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t 
     return save_session(quicly_get_remote_transport_parameters(conn));
 }
 
-static int save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
+static quicly_error_t save_resumption_token_cb(quicly_save_resumption_token_t *_self, quicly_conn_t *conn, ptls_iovec_t token)
 {
     free(session_info.address_token.base);
     session_info.address_token = ptls_iovec_init(malloc(token.len), token.len);
@@ -1085,7 +1249,7 @@ static int on_client_hello_cb(ptls_on_client_hello_t *_self, ptls_t *tls, ptls_o
     return 0;
 }
 
-static int stream_has_more_to_send(void *unused, quicly_stream_t *stream)
+static int64_t stream_has_more_to_send(void *unused, quicly_stream_t *stream)
 {
     int is_fully_inflight =
         !quicly_stream_has_send_side(0, stream->stream_id) || quicly_sendstate_is_fully_inflight(&stream->sendstate);
@@ -1097,9 +1261,10 @@ static int conn_has_more_to_send(quicly_conn_t *conn)
     return quicly_foreach_stream(conn, NULL, stream_has_more_to_send) != 0;
 }
 
-static int scheduler_do_send(quicly_stream_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s)
+static quicly_error_t scheduler_do_send(quicly_stream_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s)
 {
-    int ret, had_more_to_send = conn_has_more_to_send(conn);
+    int had_more_to_send = conn_has_more_to_send(conn);
+    quicly_error_t ret;
 
     /* call the default scheduler */
     if ((ret = quicly_default_stream_scheduler.do_send(&quicly_default_stream_scheduler, conn, s)) != 0)
@@ -1126,9 +1291,9 @@ static void usage(const char *cmd)
            "  -k key-file               specifies the credentials to be used for running the\n"
            "                            server. If omitted, the command runs as a client.\n"
            "  -C <algo>[:<iw>[:<p>]]    specifies the congestion control algorithm (\"reno\"\n"
-           "                            (default), \"cubic\", or \"pico\"), as well as\n"
-           "                            initial congestion window size (in packets, default:\n"
-           "                            10) and use of pacing.\n"
+           "                            (default), \"cubic\", \"cubic-legacy\", \"pico\", or\n"
+           "                            \"cuback\"), as well as initial congestion window size\n"
+           "                            (in packets, default: 10) and use of pacing.\n"
            "  -d draft-number           specifies the draft version number to be used (e.g.,\n"
            "                            29)\n"
            "  --disable-ecn             turns off ECN support (default is on)\n"
@@ -1141,6 +1306,8 @@ static void usage(const char *cmd)
            "                            retry_configs from the server\n"
            "  --ech-key <file>          ECH private key for each ECH config provided by\n"
            "                            --ech-config\n"
+           "  --exit-after-handshake    immediately exists one the handshake concludes,\n"
+           "                            without sending application data\n"
            "  -f fraction               increases the induced ack frequency to specified\n"
            "                            fraction of CWND (default: 0)\n"
            "  -G                        enable UDP generic segmentation offload\n"
@@ -1152,16 +1319,25 @@ static void usage(const char *cmd)
            "  -l log-file               file to log traffic secrets\n"
            "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
            "  -m <bytes>                max data (in bytes; default: 16MB)\n"
+           "  --max-crypto-bytes <N>    maximum permitted length of a CRYPTO stream\n"
+           "  --no-normalize-cc-mtu     disables packet-size normalization of congestion-control growth\n"
            "  -N                        enforce HelloRetryRequest (client-only)\n"
            "  -n                        enforce version negotiation (client-only)\n"
            "  -O                        suppress output\n"
+           "  --delivery-stats          replace response output with plaintext stream bytes\n"
+           "                            delivered per millisecond, summed across streams:\n"
+           "                            one integer per line, including zeros (client only).\n"
+           "                            Time starts before connect; output advances on I/O\n"
+           "                            and at least once per second while idle.\n"
            "  -p path                   path to request (can be set multiple times)\n"
            "  -P path                   path to request, store response to file (can be set\n"
            "                            multiple times)\n"
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
+           "  --rapid-start             turns on rapid start\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
+           "  --sockfd fd               specifies the UDP socket to be used\n"
            "  -u size                   initial size of UDP datagram payload\n"
            "  -U size                   maximum size of UDP datagram payload\n"
            "  -V                        verify peer using the default certificates\n"
@@ -1173,9 +1349,221 @@ static void usage(const char *cmd)
            "  -x named-group            named group to be used (default: secp256r1)\n"
            "  -X                        max bidirectional stream count (default: 100)\n"
            "  -y cipher-suite           cipher-suite to be used (default: all)\n"
+           "\n"
+           "Miscellaneous Options:\n"
            "  -h                        print this help\n"
+           "  --calc-initial-secret     calculate Initial client traffic secret given DCID\n"
+           "  --decrypt-packet secret[:dcid-length]\n"
+           "                            given a QUIC packet and a traffic secret, decrypts\n"
+           "                            and prints the packet payload; to decode short\n"
+           "                            header packets, DCID length must be supplied\n"
+           "  --encrypt-packet secret   given a packet without encryption applied, emits a\n"
+           "                            packet encrypted using the given traffic secret\n"
            "\n",
            cmd);
+}
+
+static int decode_hex(int ch)
+{
+    if ('0' <= ch && ch <= '9') {
+        return ch - '0';
+    } else if ('A' <= ch && ch <= 'F') {
+        return ch - 'A' + 0xa;
+    } else if ('a' <= ch && ch <= 'f') {
+        return ch - 'a' + 0xa;
+    }
+    return -1;
+}
+
+static size_t decode_hexstring(uint8_t *dst, size_t capacity, const char *src, size_t srclen)
+{
+    if (srclen == SIZE_MAX)
+        srclen = strlen(src);
+    if (srclen > capacity * 2)
+        return SIZE_MAX;
+
+    size_t dst_off = 0;
+    int hi, lo;
+
+    while (*src != '\0' && dst_off < capacity) {
+        if ((hi = decode_hex(*src++)) == -1 || (lo = decode_hex(*src++)) == -1)
+            return SIZE_MAX;
+        dst[dst_off++] = (uint8_t)(hi * 16 + lo);
+    }
+
+    return dst_off;
+}
+
+static int cmd_calc_initial_secret(const char *dcid_hex)
+{
+    static const ptls_cipher_suite_t *cs = &ptls_openssl_aes128gcmsha256;
+    uint8_t dcid[QUICLY_MAX_CID_LEN_V1], server_secret[PTLS_MAX_DIGEST_SIZE], client_secret[PTLS_MAX_DIGEST_SIZE];
+    size_t dcid_len;
+
+    /* decode dcid_hex */
+    if ((dcid_len = decode_hexstring(dcid, sizeof(dcid), dcid_hex, SIZE_MAX)) == SIZE_MAX) {
+        fprintf(stderr, "Invalid DCID: %s\n", dcid_hex);
+        return 1;
+    }
+
+    /* calc initial key */
+    const quicly_salt_t *salt = quicly_get_salt(QUICLY_PROTOCOL_VERSION_1);
+    if (quicly_calc_initial_keys(cs, server_secret, client_secret, ptls_iovec_init(dcid, dcid_len), 1,
+                                 ptls_iovec_init(salt->initial, sizeof(salt->initial))) != 0) {
+        fprintf(stderr, "Crypto failure.\n");
+        return 1;
+    }
+
+    printf("client: %s\nserver: %s\n", quicly_hexdump(client_secret, cs->hash->digest_size, SIZE_MAX),
+           quicly_hexdump(server_secret, cs->hash->digest_size, SIZE_MAX));
+
+    return 0;
+}
+
+static size_t determine_pn_offset(ptls_iovec_t input, size_t *packet_size, size_t *epoch, size_t short_packet_dcid_len)
+{
+    if (input.len < 1)
+        goto Broken;
+
+    if ((input.base[0] & QUICLY_LONG_HEADER_BIT) == QUICLY_LONG_HEADER_BIT) {
+
+        /* long header packet; at the moment, only Inital packets are supported */
+        if ((input.base[0] & QUICLY_PACKET_TYPE_BITMASK) != QUICLY_PACKET_TYPE_INITIAL)
+            goto UnexpectedType;
+
+        if (input.len < 5)
+            goto Broken;
+        size_t off = 5;
+
+        /* skip CIDs */
+        for (int i = 0; i < 2; ++i) {
+            if (off >= input.len || (off += 1 + input.base[off]) > input.len)
+                goto Broken;
+        }
+
+        { /* skip token length */
+            const uint8_t *p = input.base + off;
+            uint64_t token_len = quicly_decodev(&p, input.base + input.len);
+            if (token_len == UINT64_MAX || (off = p - input.base + token_len) > input.len)
+                goto Broken;
+        }
+
+        { /* read packet length and adjust so that `*packet_size` contains  */
+            const uint8_t *p = input.base + off;
+            if ((*packet_size = quicly_decodev(&p, input.base + input.len)) == SIZE_MAX)
+                goto Broken;
+            off = p - input.base;
+            *packet_size += off;
+        }
+
+        *epoch = QUICLY_EPOCH_INITIAL;
+        return off;
+
+    } else {
+
+        /* short header packet */
+        if (input.len < 1 + short_packet_dcid_len + 4 + 16)
+            goto Broken;
+        *packet_size = input.len;
+        *epoch = QUICLY_EPOCH_1RTT;
+        return 1 + short_packet_dcid_len;
+    }
+
+Broken:
+    fprintf(stderr, "Invalid or unsupported type of QUIC packet.\n");
+    return SIZE_MAX;
+
+UnexpectedType:
+    fprintf(stderr, "Unexpected QUIC packet type.\n"); /* TODO add support for other types */
+    return SIZE_MAX;
+}
+
+static int cmd_encrypt_packet(int is_enc, const char *secret_dcid_len)
+{
+    quicly_crypto_engine_t *engine = &quicly_default_crypto_engine;
+    ptls_cipher_suite_t *cs = &ptls_openssl_aes128gcmsha256;
+    ptls_cipher_context_t *header_protect;
+    ptls_aead_context_t *packet_protect;
+    uint8_t buf[1500] = {}, secret[PTLS_MAX_DIGEST_SIZE];
+    size_t inlen, pn_off, packet_size, short_header_dcid_len = 0, epoch;
+
+    { /* decode secret and dcid length */
+        const char *separator = strchr(secret_dcid_len, ':');
+        if (decode_hexstring(secret, cs->hash->digest_size, secret_dcid_len,
+                             separator != NULL ? separator - secret_dcid_len : strlen(secret_dcid_len)) != cs->hash->digest_size) {
+            fprintf(stderr, "Invalid secret (must be of %zu bytes in hex)\n", cs->hash->digest_size);
+            return 1;
+        }
+        if (separator != NULL &&
+            (sscanf(separator + 1, "%zu", &short_header_dcid_len) != 1 || short_header_dcid_len > QUICLY_MAX_CID_LEN_V1)) {
+            fprintf(stderr, "Invalid DCID length\n");
+            return 1;
+        }
+    }
+
+    /* read the packet */
+    inlen = fread(buf, 1, sizeof(buf) - cs->aead->tag_size, stdin);
+    if (ferror(stdin)) {
+        perror("I/O error");
+        return 1;
+    } else if (!feof(stdin)) {
+        fprintf(stderr, "Unexpected amount of input.\n");
+        return 1;
+    }
+    if ((pn_off = determine_pn_offset(ptls_iovec_init(buf, inlen), &packet_size, &epoch, short_header_dcid_len)) == SIZE_MAX)
+        return 1;
+    if (packet_size - pn_off < QUICLY_MAX_PN_SIZE + cs->aead->tag_size) {
+        fprintf(stderr, "encrypted part of the packet is too small.\n");
+        return 1;
+    }
+
+    /* setup crypto */
+    if (engine->setup_cipher(engine, NULL, epoch, is_enc, &header_protect, &packet_protect, cs->aead, cs->hash, secret) != 0) {
+        fprintf(stderr, "Crypto faiure.\n");
+        return 1;
+    }
+
+    if (is_enc) {
+        /* packet size can be greater than the input, in which case PADDING frames will be appended. However, it cannot exceed the
+         * size of the buffer. */
+        if (packet_size > sizeof(buf)) {
+            fprintf(stderr, "Length field value is too large.\n");
+            return 1;
+        }
+        if ((buf[0] & 3) + 1 != QUICLY_SEND_PN_SIZE) {
+            fprintf(stderr, "Unexpected packet number size\n");
+            return 1;
+        }
+        engine->encrypt_packet(engine, NULL, header_protect, packet_protect, ptls_iovec_init(buf, packet_size), 0,
+                               pn_off + QUICLY_SEND_PN_SIZE, buf[pn_off] * 256 + buf[pn_off + 1], 0);
+        fwrite(buf, 1, packet_size, stdout);
+    } else {
+        if (packet_size > inlen) {
+            fprintf(stderr, "Length field value is too large.\n");
+            return 1;
+        }
+        /* unprotect header protection */
+        uint8_t hpmask[5] = {};
+        ptls_cipher_init(header_protect, buf + pn_off + QUICLY_MAX_PN_SIZE);
+        ptls_cipher_encrypt(header_protect, hpmask, hpmask, sizeof(hpmask));
+        buf[0] ^= hpmask[0] & (QUICLY_PACKET_IS_LONG_HEADER(buf[0]) ? 0xf : 0x1f);
+        size_t pn_len = (buf[0] & 0x3) + 1;
+        uint64_t pn = 0;
+        for (int i = 0; i < pn_len; ++i) {
+            buf[pn_off + i] ^= hpmask[i + 1];
+            pn = (pn << 8) | buf[pn_off + i];
+        }
+        /* decrypt */
+        if (ptls_aead_decrypt(packet_protect, buf + pn_off + pn_len, buf + pn_off + pn_len, packet_size - (pn_off + pn_len), pn,
+                              buf, pn_off + pn_len) == SIZE_MAX) {
+            fprintf(stderr, "AEAD decryption failed.\n");
+            return 1;
+        }
+        /* print */
+        fwrite(buf + pn_off + pn_len, 1, packet_size - (pn_off + pn_len + cs->aead->tag_size), stdout);
+    }
+
+    return 0;
 }
 
 static void push_req(const char *path, int to_file)
@@ -1195,22 +1583,17 @@ int main(int argc, char **argv)
     struct sockaddr_storage sa;
     socklen_t salen;
     unsigned udpbufsize = 0;
-    int ch, opt_index, fd;
+    int ch, opt_index, fd = -1;
 
     ERR_load_crypto_strings();
     OpenSSL_add_all_algorithms();
-#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
-    /* Explicitly load the legacy provider in addition to default, as we test Blowfish in one of the tests. */
-    (void)OSSL_PROVIDER_load(NULL, "legacy");
-    (void)OSSL_PROVIDER_load(NULL, "default");
-#endif
 
     reqs = malloc(sizeof(*reqs));
     memset(reqs, 0, sizeof(*reqs));
     ctx = quicly_spec_context;
     ctx.tls = &tlsctx;
     ctx.stream_open = &stream_open;
-    ctx.closed_by_remote = &closed_by_remote;
+    ctx.closed = &closed;
     ctx.save_resumption_token = &save_resumption_token;
     ctx.generate_resumption_token = &generate_resumption_token;
     stream_scheduler = quicly_default_stream_scheduler;
@@ -1230,10 +1613,19 @@ int main(int argc, char **argv)
     static const struct option longopts[] = {{"ech-key", required_argument, NULL, 0},
                                              {"ech-configs", required_argument, NULL, 0},
                                              {"disable-ecn", no_argument, NULL, 0},
+                                             {"delivery-stats", no_argument, NULL, 0},
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
                                              {"reliable-reset", no_argument, NULL, 0},
+                                             {"max-crypto-bytes", required_argument, NULL, 0},
+                                             {"no-normalize-cc-mtu", no_argument, NULL, 0},
+                                             {"rapid-start", no_argument, NULL, 0},
+                                             {"sockfd", required_argument, NULL, 0},
+                                             {"exit-after-handshake", no_argument, NULL, 0},
+                                             {"calc-initial-secret", required_argument, NULL, 0},
+                                             {"decrypt-packet", required_argument, NULL, 0},
+                                             {"encrypt-packet", required_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1244,9 +1636,11 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
-                ctx.enable_ecn = 0;
+                ctx.enable_ratio.ecn = 0;
+            } else if (strcmp(longopts[opt_index].name, "delivery-stats") == 0) {
+                delivery_stats = suppress_output = 1;
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
-                ctx.respect_app_limited = 0;
+                ctx.enable_ratio.respect_app_limited = 0;
             } else if (strcmp(longopts[opt_index].name, "jumpstart-default") == 0) {
                 if (sscanf(optarg, "%" SCNu32, &ctx.default_jumpstart_cwnd_packets) != 1) {
                     fprintf(stderr, "failed to parse default jumpstart size: %s\n", optarg);
@@ -1259,6 +1653,28 @@ int main(int argc, char **argv)
                 }
             } else if (strcmp(longopts[opt_index].name, "reliable-reset") == 0) {
                 ctx.transport_params.reliable_stream_reset = 1;
+            } else if (strcmp(longopts[opt_index].name, "max-crypto-bytes") == 0) {
+                if (sscanf(optarg, "%" SCNu32, &ctx.max_crypto_bytes) != 1) {
+                    fprintf(stderr, "failed to parse max-crypto-bytes: %s\n", optarg);
+                    exit(1);
+                }
+            } else if (strcmp(longopts[opt_index].name, "no-normalize-cc-mtu") == 0) {
+                ctx.normalize_cc_mtu = 0;
+            } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
+                ctx.enable_ratio.rapid_start = 255;
+            } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {
+                if (sscanf(optarg, "%d", &fd) != 1) {
+                    fprintf(stderr, "invalid argument passed to --sockfd\n");
+                    exit(1);
+                }
+            } else if (strcmp(longopts[opt_index].name, "exit-after-handshake") == 0) {
+                exit_after_handshake = 1;
+            } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
+                return cmd_calc_initial_secret(optarg);
+            } else if (strcmp(longopts[opt_index].name, "decrypt-packet") == 0) {
+                return cmd_encrypt_packet(0, optarg);
+            } else if (strcmp(longopts[opt_index].name, "encrypt-packet") == 0) {
+                return cmd_encrypt_packet(1, optarg);
             } else {
                 assert(!"unexpected longname");
             }
@@ -1304,7 +1720,7 @@ int main(int argc, char **argv)
             /* pacing */
             if ((token = strsep(&buf, ":")) != NULL) {
                 if (strcmp(token, "p") == 0) {
-                    ctx.use_pacing = 1;
+                    ctx.enable_ratio.pacing = 255;
                 } else {
                     fprintf(stderr, "invalid pacing value: %s\n", token);
                     exit(1);
@@ -1342,8 +1758,8 @@ int main(int argc, char **argv)
                 fprintf(stderr, "failed to open file:%s:%s\n", optarg, strerror(errno));
                 exit(1);
             }
-            ptls_log_add_fd(fd);
-            ptls_log.include_appdata = 1;
+            ptls_log_add_fd(fd, 1., NULL, NULL, NULL, 1);
+            ptls_log.may_include_appdata = 1;
         } break;
         case 'f': {
             double fraction;
@@ -1446,27 +1862,17 @@ int main(int argc, char **argv)
             raw_pubkey_file = optarg;
             break;
         case 'x': {
-            size_t i;
-            for (i = 0; key_exchanges[i] != NULL; ++i)
-                ;
-#define MATCH(name)                                                                                                                \
-    if (key_exchanges[i] == NULL && strcasecmp(optarg, #name) == 0)                                                                \
-    key_exchanges[i] = &ptls_openssl_##name
-            MATCH(secp256r1);
-#if PTLS_OPENSSL_HAVE_SECP384R1
-            MATCH(secp384r1);
-#endif
-#if PTLS_OPENSSL_HAVE_SECP521R1
-            MATCH(secp521r1);
-#endif
-#if PTLS_OPENSSL_HAVE_X25519
-            MATCH(x25519);
-#endif
-#undef MATCH
-            if (key_exchanges[i] == NULL) {
+            ptls_key_exchange_algorithm_t **named, **slot;
+            for (named = ptls_openssl_key_exchanges_all; *named != NULL; ++named)
+                if (strcasecmp((*named)->name, optarg) == 0)
+                    break;
+            if (*named == NULL) {
                 fprintf(stderr, "unknown key exchange: %s\n", optarg);
                 exit(1);
             }
+            for (slot = key_exchanges; *slot != NULL; ++slot)
+                ;
+            *slot = *named;
         } break;
         case 'X':
             if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.max_streams_bidi) != 1) {
@@ -1504,8 +1910,15 @@ int main(int argc, char **argv)
     argc -= optind;
     argv += optind;
 
-    if (reqs[0].path == NULL)
-        push_req("/", 0);
+    if (exit_after_handshake) {
+        if (reqs[0].path != NULL) {
+            fprintf(stderr, "-p and --exit-after-handshake cannot be used together\n");
+            exit(1);
+        }
+    } else {
+        if (reqs[0].path == NULL)
+            push_req("/", 0);
+    }
 
     if (key_exchanges[0] == NULL)
         key_exchanges[0] = &ptls_openssl_secp256r1;
@@ -1542,6 +1955,7 @@ int main(int argc, char **argv)
         ctx.transport_params.max_datagram_frame_size = ctx.transport_params.max_udp_payload_size;
     }
 
+    int use_cid_encryptor = 0;
     if (cert_file != NULL || ctx.tls->sign_certificate != NULL) {
         /* server */
         if (cert_file == NULL || ctx.tls->sign_certificate == NULL) {
@@ -1556,13 +1970,7 @@ int main(int argc, char **argv)
         } else {
             load_certificate_chain(ctx.tls, cert_file);
         }
-        if (cid_key == NULL) {
-            static char random_key[17];
-            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
-            cid_key = random_key;
-        }
-        ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_bfecb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
-                                                             ptls_iovec_init(cid_key, strlen(cid_key)));
+        use_cid_encryptor = 1;
     } else {
         /* client */
         if (raw_pubkey_file != NULL) {
@@ -1584,6 +1992,20 @@ int main(int argc, char **argv)
             load_session();
         hs_properties.client.ech.configs = ech.config_list;
         hs_properties.client.ech.retry_configs = &ech.retry.configs;
+        use_cid_encryptor = cid_key != NULL;
+    }
+    if (use_cid_encryptor) {
+        if (cid_key == NULL) {
+            static char random_key[17];
+            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
+            cid_key = random_key;
+        }
+        ctx.cid_encryptor = quicly_new_default_cid_encryptor(
+#if QUICLY_HAVE_FUSION
+            ptls_fusion_is_supported_by_cpu() ? &ptls_fusion_quiclb :
+#endif
+                                              &ptls_openssl_quiclb,
+            &ptls_openssl_aes128ecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");
@@ -1595,7 +2017,7 @@ int main(int argc, char **argv)
     if (resolve_address((void *)&sa, &salen, host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP) != 0)
         exit(1);
 
-    if ((fd = socket(sa.ss_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
+    if (fd == -1 && (fd = socket(sa.ss_family, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         perror("socket(2) failed");
         return 1;
     }
@@ -1639,6 +2061,32 @@ int main(int argc, char **argv)
             perror("Warning: setsockopt(IP_RECVTOS) failed");
     }
 #endif
+    switch (sa.ss_family) {
+    case AF_INET: {
+#ifdef IP_PKTINFO
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_PKTINFO, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IP_PKTINFO) failed");
+            return 1;
+        }
+#elif defined(IP_RECVDSTADDR)
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IP_RECVDSTADDR, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IP_RECVDSTADDR) failed");
+            return 1;
+        }
+#endif
+    } break;
+    case AF_INET6: {
+        int on = 1;
+        if (setsockopt(fd, IPPROTO_IP, IPV6_RECVPKTINFO, &on, sizeof(on)) != 0) {
+            perror("setsockopt(IPV6_RECVPKTINNFO) failed");
+            return 1;
+        }
+    } break;
+    default:
+        break;
+    }
 
     return ctx.tls->certificates.count != 0 ? run_server(fd, (void *)&sa, salen) : run_client(fd, (void *)&sa, host);
 }
