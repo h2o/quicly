@@ -1490,7 +1490,9 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
  */
 void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
 /**
- *
+ * Resets the stream, committing to the delivery of the first `reliable_size` bytes; see draft-ietf-quic-reliable-stream-reset.
+ * Returns `PTLS_ERROR_NOT_AVAILABLE`, leaving the stream intact, if `reliable_size` is non-zero but the peer has not declared its
+ * willingness to receive RESET_STREAM_AT frames. Supplying zero sends a RESET_STREAM frame and always succeeds.
  */
 quicly_error_t quicly_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
 /**

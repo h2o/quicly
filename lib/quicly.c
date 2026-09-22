@@ -7965,27 +7965,38 @@ quicly_error_t quicly_open_stream(quicly_conn_t *conn, quicly_stream_t **_stream
 
 void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err)
 {
+    quicly_error_t ret = quicly_reset_stream_at(stream, err, 0);
+    assert(ret == 0 && "guaranteed to succeed, as a reliable size of zero sends RESET_STREAM");
+}
+
+quicly_error_t quicly_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size)
+{
     assert(quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id));
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     assert(stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE);
     assert(!quicly_sendstate_transfer_complete(&stream->sendstate));
 
-    /* dispose sendbuf state */
-    quicly_sendstate_reset(&stream->sendstate);
+    if (reliable_size == 0) {
+        /* dispose sendbuf state */
+        quicly_sendstate_reset(&stream->sendstate);
 
-    /* setup RESET_STREAM */
-    stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_SEND;
-    stream->_send_aux.reset_stream.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
+        /* setup RESET_STREAM */
+        stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_SEND;
+        stream->_send_aux.reset_stream.error_code = QUICLY_ERROR_GET_ERROR_CODE(err);
 
-    /* schedule for delivery */
-    sched_stream_control(stream);
-    resched_stream_data(stream);
-}
+        /* schedule for delivery */
+        sched_stream_control(stream);
+        resched_stream_data(stream);
 
-quicly_error_t quicly_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size)
-{
-    assert(stream->sendstate.final_size == UINT64_MAX && stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE &&
-           "reliable reset cannot be used after the stream is shutdown or reset");
+        return 0;
+    }
+
+    /* Bail out unless the peer is willing to receive RESET_STREAM_AT. The commitment to deliver the bytes below `reliable_size`
+     * cannot be honored otherwise, and it is for the application to decide what to do instead. */
+    if (!stream->conn->super.remote.transport_params.reset_stream_at)
+        return PTLS_ERROR_NOT_AVAILABLE;
+
+    assert(stream->sendstate.final_size == UINT64_MAX && "reliable reset cannot be used after the stream is shutdown");
 
     /* for simplicity, reliable size is rounded up to `size_inflight`, then that value is set as `final_size` */
     if (reliable_size < stream->sendstate.size_inflight)
