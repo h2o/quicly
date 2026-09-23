@@ -41,7 +41,7 @@ typedef struct st_quicly_recvstate_t {
      */
     uint64_t data_off;
     /**
-     * Offset at which the stream ends, or UINT64_MAX while that is unknown. Iff a reset is received before the transder is
+     * Offset at which the stream ends, or UINT64_MAX while that is unknown. Iff a reset is received before the transfer is
      * complete, it becomes max(received[0].end, min(current_eos, reset_stream.reliable_size)); i.e., bytes already available to
      * the application are never taken back, but reset is surfaced once the needed bytes are delivered.
      */
