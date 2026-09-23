@@ -882,6 +882,191 @@ static void test_reliable_reset_stop_sending(void)
     ok(max_data_is_equal(client, server));
 }
 
+/**
+ * Opens a stream on which the client has written `data`, the first `delivered` bytes of which are delivered and acknowledged, then
+ * sets the minimum reliable size and has the server send STOP_SENDING.
+ */
+static void setup_min_reliable_size(quicly_stream_t **client_stream, quicly_stream_t **server_stream, const char *data,
+                                    size_t delivered, uint64_t min_reliable_size)
+{
+    quicly_error_t ret;
+
+    ret = quicly_open_stream(client, client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(*client_stream, data, delivered);
+    transmit(client, server);
+    transmit(server, client);
+    *server_stream = quicly_get_stream(server, (*client_stream)->stream_id);
+    ok(*server_stream != NULL);
+    ok((*client_stream)->sendstate.acked.ranges[0].end == delivered);
+    quicly_streambuf_egress_write(*client_stream, data + delivered, strlen(data) - delivered);
+    quicly_set_min_reliable_size(*client_stream, min_reliable_size);
+}
+
+static void test_min_reliable_size(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *client_streambuf, *server_streambuf;
+    quicly_address_t dest, src;
+    struct iovec datagram;
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams;
+    quicly_stats_t before, after;
+    quicly_error_t ret;
+
+    /* the client delivers "he", and puts "llo" on the wire in a datagram that is lost */
+    setup_min_reliable_size(&client_stream, &server_stream, "hello", 2, 5);
+    client_streambuf = client_stream->data;
+    server_streambuf = server_stream->data;
+    num_datagrams = 1;
+    ret = quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    ok(client_stream->sendstate.size_inflight == 5);
+
+    /* STOP_SENDING causes a reliable reset carrying the error code of STOP_SENDING, before the application is notified */
+    quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    transmit(server, client);
+    ok(client_streambuf->error_received.stop_sending == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    ok(client_stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 5);
+    ok(client_stream->sendstate.final_size == 5);
+
+    /* the loss is detected, and the prefix is retransmitted, followed by RESET_STREAM_AT */
+    ok(quicly_sendstate_lost(&client_stream->sendstate, &(quicly_sendstate_sent_t){2, 5}) == 0);
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at + 1);
+    ok(after.num_frames_sent.reset_stream == before.num_frames_sent.reset_stream);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(buffer_is(&server_streambuf->super.ingress, "hello"));
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_min_reliable_size_unsent(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+
+    /* the client delivers "hello", while "world" is written but not yet sent */
+    setup_min_reliable_size(&client_stream, &server_stream, "helloworld", 5, 10);
+    server_streambuf = server_stream->data;
+    ok(client_stream->sendstate.size_inflight == 5);
+
+    /* the stream ends at the minimum reliable size, above the bytes that have been sent */
+    quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    transmit(server, client);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 10);
+    ok(client_stream->sendstate.final_size == 10);
+    transmit(client, server);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(buffer_is(&server_streambuf->super.ingress, "helloworld"));
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_min_reliable_size_acked(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    quicly_stats_t before, after;
+
+    /* the bytes up to the minimum reliable size have been acknowledged; there is nothing left to commit to */
+    setup_min_reliable_size(&client_stream, &server_stream, "helloworld", 5, 5);
+    server_streambuf = server_stream->data;
+    quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    transmit(server, client);
+    ok(client_stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_SEND);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 0);
+
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.reset_stream == before.num_frames_sent.reset_stream + 1);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at);
+    ok(after.num_frames_sent.stream == before.num_frames_sent.stream);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(buffer_is(&server_streambuf->super.ingress, "hello"));
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_min_reliable_size_not_negotiated(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    quicly_stats_t before, after;
+
+    /* the peer does not support RESET_STREAM_AT; the connection being shared by the subtests, the transport parameter is withdrawn
+     * only while STOP_SENDING is being handled */
+    quicly_transport_parameters_t *remote_params = (quicly_transport_parameters_t *)quicly_get_remote_transport_parameters(client);
+    setup_min_reliable_size(&client_stream, &server_stream, "helloworld", 5, 10);
+    remote_params->reset_stream_at = 0;
+    quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    transmit(server, client);
+    remote_params->reset_stream_at = 1;
+    ok(client_stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_SEND);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 0);
+
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.reset_stream == before.num_frames_sent.reset_stream + 1);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_min_reliable_size_pending_reset(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    quicly_stats_t before, after;
+
+    /* the client has committed to "helloworld" by a reliable reset, the application requiring the first 7 bytes */
+    setup_min_reliable_size(&client_stream, &server_stream, "helloworld", 5, 7);
+    server_streambuf = server_stream->data;
+    ok(quicly_streambuf_egress_reset(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567), 10) == 0);
+
+    /* STOP_SENDING does not downgrade the reset, as bytes below the minimum reliable size are yet to be acknowledged */
+    quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    transmit(server, client);
+    ok(client_stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 10);
+
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at + 1);
+    ok(after.num_frames_sent.reset_stream == before.num_frames_sent.reset_stream);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(buffer_is(&server_streambuf->super.ingress, "helloworld"));
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_min_reliable_size_pending_reset_acked(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    quicly_stats_t before, after;
+
+    /* as above, but the bytes below the minimum reliable size have been acknowledged; the reset is downgraded as usual */
+    setup_min_reliable_size(&client_stream, &server_stream, "helloworld", 5, 5);
+    ok(quicly_streambuf_egress_reset(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567), 10) == 0);
+    quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    transmit(server, client);
+    ok(client_stream->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_SEND);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 0);
+
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.reset_stream == before.num_frames_sent.reset_stream + 1);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(max_data_is_equal(client, server));
+}
+
 void test_simple(void)
 {
     uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
@@ -906,6 +1091,12 @@ void test_simple(void)
     subtest("reliable-reset-data-below", test_reliable_reset_data_below);
     subtest("reset-after-shutdown", test_reset_after_shutdown);
     subtest("reliable-reset-stop-sending", test_reliable_reset_stop_sending);
+    subtest("min-reliable-size", test_min_reliable_size);
+    subtest("min-reliable-size-unsent", test_min_reliable_size_unsent);
+    subtest("min-reliable-size-acked", test_min_reliable_size_acked);
+    subtest("min-reliable-size-not-negotiated", test_min_reliable_size_not_negotiated);
+    subtest("min-reliable-size-pending-reset", test_min_reliable_size_pending_reset);
+    subtest("min-reliable-size-pending-reset-acked", test_min_reliable_size_pending_reset_acked);
     subtest("close", test_close);
     subtest("tiny-connection-window", tiny_connection_window);
 

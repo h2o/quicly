@@ -1046,6 +1046,10 @@ struct st_quicly_stream_t {
              * RESET_STREAM_AT.reliable_size; valid when `error_code` is other than UINT64_MAX
              */
             uint64_t reliable_size;
+            /**
+             * the Reliable Size of the resets that quicly sends on behalf of the application; see `quicly_set_min_reliable_size`
+             */
+            uint64_t min_reliable_size;
         } reset_stream;
         /**
          * sends receive window updates to remote peer
@@ -1500,6 +1504,17 @@ void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
  * marked as shut down. `reliable_size` has to be non-zero; use `quicly_reset_stream` to reset a stream immediately.
  */
 quicly_error_t quicly_set_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
+/**
+ * Sets the Reliable Size of the resets that quicly sends on behalf of the application, that is when STOP_SENDING is received while
+ * the send side is open. If the value is non-zero and the peer supports RESET_STREAM_AT, the stream is reset with a RESET_STREAM_AT
+ * that commits to delivering the first `reliable_size` bytes, rather than with a RESET_STREAM. Likewise, a reliable reset that is
+ * pending when STOP_SENDING is received is retained rather than being downgraded to a RESET_STREAM, unless the bytes being
+ * committed to have been acknowledged. The default is zero, as section 5.4 of draft-ietf-quic-reliable-stream-reset recommends; the
+ * function exists for application protocols that require every reset to deliver a prefix of the stream, such as WebTransport over
+ * HTTP/3 (section 4.4 of draft-ietf-webtrans-http3). `reliable_size` MUST NOT exceed the number of bytes that the application has
+ * written, and those bytes MUST remain available to `on_send_emit` after `on_send_stop` is invoked.
+ */
+void quicly_set_min_reliable_size(quicly_stream_t *stream, uint64_t reliable_size);
 /**
  *
  */

@@ -1291,6 +1291,7 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     stream->_send_aux.reset_stream.sender_state = QUICLY_SENDER_STATE_NONE;
     stream->_send_aux.reset_stream.error_code = UINT64_MAX;
     stream->_send_aux.reset_stream.reliable_size = 0;
+    stream->_send_aux.reset_stream.min_reliable_size = 0;
     quicly_maxsender_init(&stream->_send_aux.max_stream_data_sender, initial_max_stream_data_local);
     stream->_send_aux.blocked = QUICLY_SENDER_STATE_NONE;
     quicly_linklist_init(&stream->_send_aux.pending_link.control);
@@ -6760,6 +6761,28 @@ static quicly_error_t handle_new_token_frame(quicly_conn_t *conn, struct st_quic
     return conn->super.ctx->save_resumption_token->cb(conn->super.ctx->save_resumption_token, conn, frame.token);
 }
 
+/**
+ * Resets the send side in response to STOP_SENDING. The reset is a RESET_STREAM_AT if the application has set a minimum reliable
+ * size that is yet to be acknowledged and the peer supports the frame, otherwise a RESET_STREAM.
+ */
+static quicly_error_t reset_stream_on_stop_sending(quicly_stream_t *stream, quicly_error_t err)
+{
+    uint64_t reliable_size = stream->_send_aux.reset_stream.min_reliable_size;
+    quicly_error_t ret;
+
+    if (reliable_size > stream->sendstate.acked.ranges[0].end) {
+        if ((ret = quicly_set_reset_stream_at(stream, err, reliable_size)) == 0) {
+            resched_stream_data(stream);
+            return 0;
+        } else if (ret != PTLS_ERROR_NOT_AVAILABLE) {
+            return ret;
+        }
+    }
+
+    quicly_reset_stream(stream, err);
+    return 0;
+}
+
 static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     quicly_stop_sending_frame_t frame;
@@ -6780,7 +6803,8 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
     if (quicly_sendstate_is_open(&stream->sendstate)) {
         /* reset the stream, then notify the application */
         quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code);
-        quicly_reset_stream(stream, err);
+        if ((ret = reset_stream_on_stop_sending(stream, err)) != 0)
+            return ret;
         QUICLY_PROBE(STREAM_ON_SEND_STOP, stream->conn, stream->conn->stash.now, stream, err);
         QUICLY_LOG_CONN(stream_on_send_stop, stream->conn, {
             PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
@@ -6790,9 +6814,14 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
             return QUICLY_ERROR_IS_CLOSING;
     } else if (stream->_send_aux.reset_stream.error_code != UINT64_MAX && !quicly_sendstate_transfer_complete(&stream->sendstate)) {
-        /* downgrade a reset-at to an immediate reset (section 5.4 of draft-ietf-quic-reliable-stream-reset) */
+        /* downgrade a reset-at to an immediate reset (section 5.4 of draft-ietf-quic-reliable-stream-reset), unless the application
+         * requires the bytes up to the minimum reliable size to be delivered and they are yet to be acknowledged */
         assert(stream->_send_aux.reset_stream.reliable_size != 0);
-        quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->_send_aux.reset_stream.error_code));
+        uint64_t required = stream->_send_aux.reset_stream.min_reliable_size;
+        if (required > stream->_send_aux.reset_stream.reliable_size)
+            required = stream->_send_aux.reset_stream.reliable_size;
+        if (required <= stream->sendstate.acked.ranges[0].end)
+            quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->_send_aux.reset_stream.error_code));
     }
 
     return 0;
@@ -8044,6 +8073,13 @@ quicly_error_t quicly_set_reset_stream_at(quicly_stream_t *stream, quicly_error_
     }
 
     return 0;
+}
+
+void quicly_set_min_reliable_size(quicly_stream_t *stream, uint64_t reliable_size)
+{
+    assert(quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id));
+
+    stream->_send_aux.reset_stream.min_reliable_size = reliable_size;
 }
 
 void quicly_request_stop(quicly_stream_t *stream, quicly_error_t err)
