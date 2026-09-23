@@ -648,6 +648,45 @@ static void test_reliable_reset(int deliver_in_order)
     ok(max_data_is_equal(client, server));
 }
 
+static void test_reliable_reset_stop_sending(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    quicly_stats_t before, after;
+    quicly_error_t ret;
+
+    /* the client writes the first half of the stream and delivers it */
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, "hello", 5);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    server_streambuf = server_stream->data;
+
+    /* the client then resets the stream, committing to deliver the second half as well */
+    quicly_streambuf_egress_write(client_stream, "world", 5);
+    ok(quicly_streambuf_egress_reset(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567), 10) == 0);
+
+    /* before any of that is sent, the server declares that it will not read the stream */
+    quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
+    transmit(server, client);
+    ok(!client_stream->_send_aux.is_reliable_reset);
+
+    /* hence what the client sends is a RESET_STREAM that retains the error code of the reset, rather than the bytes committed
+     * to and a RESET_STREAM_AT */
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.reset_stream == before.num_frames_sent.reset_stream + 1);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at);
+    ok(after.num_frames_sent.stream == before.num_frames_sent.stream);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(buffer_is(&server_streambuf->super.ingress, "hello"));
+    ok(max_data_is_equal(client, server));
+}
+
 void test_simple(void)
 {
     uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
@@ -662,6 +701,7 @@ void test_simple(void)
     subtest("reset-during-loss", test_reset_during_loss);
     subtest("reliable-reset", test_reliable_reset, 0);
     subtest("reliable-reset-in-order", test_reliable_reset, 1);
+    subtest("reliable-reset-stop-sending", test_reliable_reset_stop_sending);
     subtest("close", test_close);
     subtest("tiny-connection-window", tiny_connection_window);
 

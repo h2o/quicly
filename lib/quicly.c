@@ -6782,6 +6782,10 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
         stream->callbacks->on_send_stop(stream, err);
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
             return QUICLY_ERROR_IS_CLOSING;
+    } else if (stream->_send_aux.is_reliable_reset && !quicly_sendstate_transfer_complete(&stream->sendstate)) {
+        /* downgrade a reset-at to an immediate reset (section 5.4 of draft-ietf-quic-reliable-stream-reset) */
+        stream->_send_aux.is_reliable_reset = 0;
+        quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->_send_aux.reset_stream.error_code));
     }
 
     return 0;
