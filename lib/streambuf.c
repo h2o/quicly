@@ -253,7 +253,13 @@ quicly_error_t quicly_streambuf_egress_reset(quicly_stream_t *stream, quicly_err
 {
     quicly_error_t ret;
 
-    if ((ret = quicly_reset_stream_at(stream, err, reliable_size)) != 0)
+    /* the two have different semantics; a Reliable Size of zero is a RESET_STREAM, which needs no sync */
+    if (reliable_size == 0) {
+        quicly_reset_stream(stream, err);
+        return 0;
+    }
+
+    if ((ret = quicly_set_reset_stream_at(stream, err, reliable_size)) != 0)
         return ret;
     return quicly_stream_sync_sendbuf(stream, 1);
 }
