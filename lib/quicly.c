@@ -1393,6 +1393,16 @@ static void destroy_stream(quicly_stream_t *stream, quicly_error_t err)
     if (stream->callbacks != NULL)
         stream->callbacks->on_destroy(stream, err);
 
+    /* Return the connection-level credit of the bytes that were left unread by the application or never received after a reset.
+     * Doing so here rather than earlier is what keeps the credit tied to the memory; see GHSA-f7qr-4p37-9gx9. */
+    if (stream->recvstate.eos != UINT64_MAX) {
+        assert(stream->stream_id >= 0);
+        assert(stream->recvstate.data_off <= stream->recvstate.eos);
+        conn->ingress.max_data.bytes_shifted += stream->recvstate.eos - stream->recvstate.data_off;
+        if (should_send_max_data(conn))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    }
+
     khiter_t iter = kh_get(quicly_stream_t, conn->streams, stream->stream_id);
     assert(iter != kh_end(conn->streams));
     kh_del(quicly_stream_t, conn->streams, iter);
@@ -3534,8 +3544,11 @@ static quicly_error_t on_ack_reset_stream(quicly_sentmap_t *map, const quicly_se
 
     if ((stream = quicly_get_stream(conn, sent->data.stream_state_sender.stream_id)) != NULL) {
         on_ack_stream_state_sender(&stream->_send_aux.reset_stream.sender_state, acked);
-        if (stream_is_destroyable(stream))
+        if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_ACKED) {
+            sched_stream_control(stream);
+        } else if (stream_is_destroyable(stream)) {
             destroy_stream(stream, 0);
+        }
     }
 
     return 0;
