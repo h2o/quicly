@@ -648,6 +648,201 @@ static void test_reliable_reset(int deliver_in_order)
     ok(max_data_is_equal(client, server));
 }
 
+static void test_reliable_reset_pending(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    quicly_stats_t before, after;
+    quicly_error_t ret;
+
+    /* three bytes are put on the wire */
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, "abc", 3);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    server_streambuf = server_stream->data;
+
+    /* the stream is then reset, the commitment covering one byte that has yet to be sent */
+    quicly_streambuf_egress_write(client_stream, "d", 1);
+    ok(quicly_streambuf_egress_reset(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567), 4) == 0);
+    ok(client_stream->sendstate.final_size == 4);
+
+    /* that byte goes out carrying no FIN, the stream being ended by the reset frame that follows it */
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at + 1);
+    ok(after.num_frames_sent.reset_stream == before.num_frames_sent.reset_stream);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(buffer_is(&server_streambuf->super.ingress, "abcd"));
+    /* had a FIN been sent, the transfer would have completed before the reset arrived, leaving it unreported */
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_reliable_reset_tail(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    quicly_address_t dest, src;
+    struct iovec data_datagram, reset_datagram;
+    uint8_t databuf[quic_ctx.transport_params.max_udp_payload_size], resetbuf[quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams;
+    quicly_decoded_packet_t decoded;
+    quicly_error_t ret;
+
+    /* the client puts ten bytes on the wire, the datagram being withheld */
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, "helloworld", 10);
+    num_datagrams = 1;
+    ret = quicly_send(client, &dest, &src, &data_datagram, &num_datagrams, databuf, sizeof(databuf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+
+    /* it then resets, remaining committed to only the first half of what is in flight; the stream still ends at ten, that being
+     * the amount that has been sent and therefore charged to flow control */
+    ok(quicly_streambuf_egress_reset(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567), 5) == 0);
+    ok(client_stream->sendstate.final_size == 10);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 5);
+    num_datagrams = 1;
+    ret = quicly_send(client, &dest, &src, &reset_datagram, &num_datagrams, resetbuf, sizeof(resetbuf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+    /* nothing is left to be sent; the bytes above the reliable size are never retransmitted */
+    ok(client_stream->sendstate.pending.num_ranges == 0);
+
+    /* the reset arrives first, telling the server that the stream ends at ten but that five bytes are to be delivered */
+    ok(decode_packets(&decoded, &reset_datagram, 1) == 1);
+    ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    server_streambuf = server_stream->data;
+    ok(server_stream->recvstate.eos == 5);
+    ok(!quicly_recvstate_transfer_complete(&server_stream->recvstate));
+
+    /* The withheld bytes then arrive. All ten are handed to the application rather than the five committed to, the peer having
+     * sent them before resetting, and `eos` follows so that the stream ends where the data handed over does. */
+    ok(decode_packets(&decoded, &data_datagram, 1) == 1);
+    ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(server_stream->recvstate.eos == 10);
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(buffer_is(&server_streambuf->super.ingress, "helloworld"));
+
+    /* the ten bytes are charged to connection-level flow control on both ends */
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_reliable_reset_lost_tail(void)
+{
+    quicly_stream_t *client_stream;
+    quicly_sendstate_sent_t lost = {5, 10};
+    quicly_stats_t before, after;
+    quicly_error_t ret;
+
+    /* ten bytes are put on the wire */
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, "helloworld", 10);
+    transmit(client, server);
+    ok(client_stream->sendstate.size_inflight == 10);
+
+    /* the second half is then declared lost, and therefore awaits retransmission */
+    ok(quicly_sendstate_lost(&client_stream->sendstate, &lost) == 0);
+    ok(client_stream->sendstate.pending.num_ranges == 1);
+    ok(client_stream->sendstate.pending.ranges[0].start == 5);
+
+    /* resetting with a reliable size of five withdraws them; only the EOS byte is left to be sent */
+    ok(quicly_streambuf_egress_reset(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567), 5) == 0);
+    ok(client_stream->sendstate.final_size == 10);
+    ok(client_stream->sendstate.pending.num_ranges == 1);
+    ok(client_stream->sendstate.pending.ranges[0].start == 10);
+
+    /* hence the reset goes out without the lost bytes being retransmitted */
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at + 1);
+    ok(after.num_frames_sent.stream == before.num_frames_sent.stream);
+    ok(client_stream->sendstate.pending.num_ranges == 0);
+
+    /* the same holds when the loss is detected after the reset has been sent, those bytes having been declared acknowledged */
+    ok(quicly_sendstate_lost(&client_stream->sendstate, &lost) == 0);
+    ok(client_stream->sendstate.pending.num_ranges == 0);
+}
+
+static void test_reset_after_shutdown(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    quicly_error_t ret;
+
+    /* five bytes are put on the wire */
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, "hello", 5);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    server_streambuf = server_stream->data;
+    ok(client_stream->sendstate.size_inflight == 5);
+
+    /* five more are written and the stream is shut down, the FIN having yet to be sent */
+    quicly_streambuf_egress_write(client_stream, "world", 5);
+    ok(quicly_streambuf_egress_shutdown(client_stream) == 0);
+    ok(client_stream->sendstate.final_size == 10);
+
+    /* resetting before the FIN goes out declares the bytes that have been sent as the final size; the peer never saw the value
+     * the shutdown had set, and declaring it would announce flow control credit that was never consumed */
+    quicly_reset_stream(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(client_stream->sendstate.final_size == 5);
+    transmit(client, server);
+
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(server_stream->recvstate.eos == 5);
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(max_data_is_equal(client, server));
+}
+
+static void test_reliable_reset_data_below(void)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *server_streambuf;
+    quicly_sendstate_sent_t lost = {2, 4};
+    quicly_stats_t before, after;
+    quicly_error_t ret;
+
+    /* ten bytes are put on the wire, of which [2,4) is then declared lost */
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, "helloworld", 10);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    server_streambuf = server_stream->data;
+    ok(quicly_sendstate_lost(&client_stream->sendstate, &lost) == 0);
+
+    /* resetting with a reliable size of five leaves data pending below it, alongside the offset at which the stream ends */
+    ok(quicly_streambuf_egress_reset(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567), 5) == 0);
+    ok(client_stream->sendstate.final_size == 10);
+    ok(client_stream->sendstate.pending.num_ranges == 2);
+    ok(client_stream->sendstate.pending.ranges[0].start == 2 && client_stream->sendstate.pending.ranges[0].end == 4);
+
+    /* both go out; the STREAM frame ends below the final size and so carries no FIN, the reset following it */
+    quicly_get_stats(client, &before);
+    transmit(client, server);
+    quicly_get_stats(client, &after);
+    ok(after.num_frames_sent.stream == before.num_frames_sent.stream + 1);
+    ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at + 1);
+    ok(client_stream->sendstate.pending.num_ranges == 0);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(max_data_is_equal(client, server));
+}
+
 static void test_reliable_reset_stop_sending(void)
 {
     quicly_stream_t *client_stream, *server_stream;
@@ -671,7 +866,7 @@ static void test_reliable_reset_stop_sending(void)
     /* before any of that is sent, the server declares that it will not read the stream */
     quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
     transmit(server, client);
-    ok(!client_stream->_send_aux.is_reliable_reset);
+    ok(client_stream->_send_aux.reset_stream.reliable_size == 0);
 
     /* hence what the client sends is a RESET_STREAM that retains the error code of the reset, rather than the bytes committed
      * to and a RESET_STREAM_AT */
@@ -690,7 +885,11 @@ static void test_reliable_reset_stop_sending(void)
 void test_simple(void)
 {
     uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    uint64_t max_streams_bidi_orig = quic_ctx.transport_params.max_streams_bidi;
     quic_ctx.transport_params.reset_stream_at = 1; /* the peer has to advertise it for `reliable-reset` below */
+    /* the subtests below share one connection, each of them opening a stream that is never retired; raise the limit so that
+     * adding a subtest does not silently exhaust the credit of those that follow */
+    quic_ctx.transport_params.max_streams_bidi = 100;
 
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
@@ -701,9 +900,15 @@ void test_simple(void)
     subtest("reset-during-loss", test_reset_during_loss);
     subtest("reliable-reset", test_reliable_reset, 0);
     subtest("reliable-reset-in-order", test_reliable_reset, 1);
+    subtest("reliable-reset-pending", test_reliable_reset_pending);
+    subtest("reliable-reset-tail", test_reliable_reset_tail);
+    subtest("reliable-reset-lost-tail", test_reliable_reset_lost_tail);
+    subtest("reliable-reset-data-below", test_reliable_reset_data_below);
+    subtest("reset-after-shutdown", test_reset_after_shutdown);
     subtest("reliable-reset-stop-sending", test_reliable_reset_stop_sending);
     subtest("close", test_close);
     subtest("tiny-connection-window", tiny_connection_window);
 
     quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+    quic_ctx.transport_params.max_streams_bidi = max_streams_bidi_orig;
 }
