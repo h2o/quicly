@@ -55,15 +55,10 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, 
                 return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
         }
     } else if (off + *len > state->eos) {
-        /* Data beyond the end of the stream. Before a reset that is a violation, but afterwards `eos` is the offset the peer
-         * remains committed to delivering, and it is permitted to have sent more before resetting; discard those bytes. */
+        /* Data above the offset at which the stream ends. Before a reset that is a violation. Afterwards it is not, the peer might
+         * have had some frames already inflight. */
         if (state->app_error_code == UINT64_MAX)
             return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
-        if (off >= state->eos) {
-            *len = 0;
-            return 0;
-        }
-        *len = (size_t)(state->eos - off);
     }
 
     /* no state change; entire data has already been received */
@@ -89,6 +84,10 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, 
         if (state->received.num_ranges > max_ranges)
             return QUICLY_ERROR_STATE_EXHAUSTION;
     }
+    /* Once the stream has been reset, `eos` follows the data that has become contiguously available; the peer is permitted to
+     * have sent beyond the reliable size, and those bytes are delivered rather than withheld. */
+    if (state->app_error_code != UINT64_MAX && state->received.ranges[0].start == 0 && state->received.ranges[0].end > state->eos)
+        state->eos = state->received.ranges[0].end;
     if (state->received.num_ranges == 1 && state->received.ranges[0].start == 0 && state->received.ranges[0].end == state->eos)
         goto Complete;
 

@@ -180,17 +180,9 @@ void quicly_recvbuf_shift(quicly_stream_t *stream, ptls_buffer_t *rb, size_t del
 
 ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb)
 {
-    size_t avail;
-
-    if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        avail = rb->off;
-    } else if (stream->recvstate.data_off < stream->recvstate.received.ranges[0].end) {
-        avail = stream->recvstate.received.ranges[0].end - stream->recvstate.data_off;
-    } else {
-        avail = 0;
-    }
-
-    return ptls_iovec_init(rb->base, avail);
+    /* Hand out what the receive state deems available rather than the whole buffer; the two differ when the stream has been
+     * reset, the buffer possibly retaining bytes above the offset at which the stream was deemed to end. */
+    return ptls_iovec_init(rb->base, quicly_recvstate_bytes_available(&stream->recvstate));
 }
 
 int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t off, const void *src, size_t len)

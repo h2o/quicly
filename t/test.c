@@ -1339,6 +1339,79 @@ static void test_reset_stream_at_accounting(void)
  * ignored. Those are separate rules: a first reset whose Reliable Size equals the Final Size reduces nothing, yet its error code
  * has to be retained and surfaced once the remaining bytes arrive.
  */
+static void test_reset_stream_at_data_above(void)
+{
+    /* RESET_STREAM_AT(id=0, error=11, final=10, reliable=5), then STREAM(id=0, len=10) "0123456789" */
+    static const uint8_t reset[] = {0x24, 0x00, 0x0b, 0x0a, 0x05};
+    static const uint8_t whole[] = {0x0a, 0x00, 0x0a, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    test_streambuf_t *streambuf;
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the peer commits to the first 5 bytes of a stream that ends at 10 */
+    ok(inject_frames(server, reset, sizeof(reset)) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL);
+    streambuf = stream->data;
+    ok(stream->recvstate.eos == 5);
+    ok(!quicly_recvstate_transfer_complete(&stream->recvstate));
+
+    /* All 10 bytes then arrive in one frame. Those above the Reliable Size are delivered rather than withheld, the peer being
+     * permitted to have sent them before resetting, and `eos` follows so that the stream is reported as ending where the data
+     * being handed to the application does. */
+    ok(inject_frames(server, whole, sizeof(whole)) == 0);
+    ok(quicly_recvstate_transfer_complete(&stream->recvstate));
+    ok(stream->recvstate.eos == 10);
+    ok(quicly_recvstate_bytes_available(&stream->recvstate) == 10);
+    ok(quicly_streambuf_ingress_get(stream).len == 10);
+    ok(buffer_is(&streambuf->super.ingress, "0123456789"));
+    ok(streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+}
+
+static void test_reset_stream_at_gap_above(void)
+{
+    /* STREAM(id=0, off=7, len=3) "789", RESET_STREAM_AT(id=0, error=11, final=10, reliable=5), STREAM(id=0, len=5) "01234" */
+    static const uint8_t data_above[] = {0x0e, 0x00, 0x07, 0x03, '7', '8', '9'};
+    static const uint8_t reset[] = {0x24, 0x00, 0x0b, 0x0a, 0x05};
+    static const uint8_t prefix[] = {0x0a, 0x00, 0x05, '0', '1', '2', '3', '4'};
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* bytes above the Reliable Size land in the receive buffer before the reset is known, leaving [5,7) missing */
+    ok(inject_frames(server, data_above, sizeof(data_above)) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL);
+    ok(inject_frames(server, reset, sizeof(reset)) == 0);
+    ok(stream->recvstate.eos == 5);
+
+    /* Completing the committed prefix completes the transfer. The gap keeps `eos` where it is, and the bytes stranded above it
+     * are not handed to the application; were they, it would be reading the gap as well. */
+    ok(inject_frames(server, prefix, sizeof(prefix)) == 0);
+    ok(quicly_recvstate_transfer_complete(&stream->recvstate));
+    ok(stream->recvstate.eos == 5);
+    ok(quicly_recvstate_bytes_available(&stream->recvstate) == 5);
+    ok(quicly_streambuf_ingress_get(stream).len == 5);
+
+    /* consuming what was offered leaves the receive state consistent */
+    quicly_streambuf_ingress_shift(stream, quicly_streambuf_ingress_get(stream).len);
+    ok(stream->recvstate.data_off == 5);
+    ok(quicly_recvstate_bytes_available(&stream->recvstate) == 0);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+}
+
 static void test_reset_stream_at_after_fin(void)
 {
     /* STREAM(id=0, off=2, len=3, FIN) "234", RESET_STREAM_AT(id=0, error=11, final=5, reliable=5), STREAM(id=0, len=2) "01" */
@@ -1650,6 +1723,8 @@ int main(int argc, char **argv)
     subtest("cc", test_cc);
 
     subtest("reset-stream-at-accounting", test_reset_stream_at_accounting);
+    subtest("reset-stream-at-data-above", test_reset_stream_at_data_above);
+    subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
