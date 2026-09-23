@@ -58,8 +58,10 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, 
         }
     } else if (off + *len > state->eos) {
         /* Data above the offset at which the stream ends. Before a reset that is a violation. Afterwards it is not, the peer might
-         * have had some frames already inflight. */
-        if (state->app_error_code == UINT64_MAX)
+         * have had some frames already inflight, unless the data goes beyond the final size. The bytes up to the final size having
+         * been charged to connection-level flow control when the reset was received, that check is also what keeps the peer
+         * within the limit. */
+        if (state->app_error_code == UINT64_MAX || off + *len > state->final_size)
             return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
     }
 

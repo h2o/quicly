@@ -1535,6 +1535,30 @@ static void test_reset_stream_at_final_size_change(void)
 }
 
 /**
+ * Bytes beyond the Reliable Size are accepted after a reset, but not beyond the Final Size (RFC 9000 section 4.5). As
+ * connection-level flow control is not charged for the bytes of a stream that has been reset, the check is also what prevents the
+ * peer from exceeding the connection-level limit.
+ */
+static void test_reset_stream_at_beyond_final_size(void)
+{
+    /* STREAM(id=0, len=10) ends at the final size */
+    static const uint8_t up_to_final[] = {0x0a, 0x00, 0x0a, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    ok(inject_after_reset_stream_at(up_to_final, sizeof(up_to_final)) == 0);
+
+    /* STREAM(id=0, len=11) */
+    static const uint8_t beyond_final[] = {0x0a, 0x00, 0x0b, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a'};
+    ok(inject_after_reset_stream_at(beyond_final, sizeof(beyond_final)) == QUICLY_TRANSPORT_ERROR_FINAL_SIZE);
+
+    /* STREAM(id=0, off=8, len=3), stranded above the reliable size */
+    static const uint8_t stranded_beyond_final[] = {0x0e, 0x00, 0x08, 0x03, '8', '9', 'a'};
+    ok(inject_after_reset_stream_at(stranded_beyond_final, sizeof(stranded_beyond_final)) == QUICLY_TRANSPORT_ERROR_FINAL_SIZE);
+
+    /* STREAM(id=0, off=10, len=0, FIN) is at the final size */
+    static const uint8_t fin_at_final[] = {0x0f, 0x00, 0x0a, 0x00};
+    ok(inject_after_reset_stream_at(fin_at_final, sizeof(fin_at_final)) == 0);
+}
+
+/**
  * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
  * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
  */
@@ -1815,6 +1839,7 @@ int main(int argc, char **argv)
     subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
     subtest("reset-stream-at-final-size-change", test_reset_stream_at_final_size_change);
+    subtest("reset-stream-at-beyond-final-size", test_reset_stream_at_beyond_final_size);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
