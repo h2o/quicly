@@ -88,7 +88,9 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, 
      * have sent beyond the reliable size, and those bytes are delivered rather than withheld. */
     if (state->app_error_code != UINT64_MAX && state->received.ranges[0].start == 0 && state->received.ranges[0].end > state->eos)
         state->eos = state->received.ranges[0].end;
-    if (state->received.num_ranges == 1 && state->received.ranges[0].start == 0 && state->received.ranges[0].end == state->eos)
+    /* Completion is the contiguous prefix having reached `eos`. Ranges above it, which a reset can leave stranded behind a gap
+     * that the peer is no longer committed to filling, do not hold it back; `Complete` discards them. */
+    if (state->received.ranges[0].start == 0 && state->received.ranges[0].end >= state->eos)
         goto Complete;
 
     return 0;

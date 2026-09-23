@@ -1339,6 +1339,43 @@ static void test_reset_stream_at_accounting(void)
  * ignored. Those are separate rules: a first reset whose Reliable Size equals the Final Size reduces nothing, yet its error code
  * has to be retained and surfaced once the remaining bytes arrive.
  */
+static void test_reset_stream_at_gap_after_reset(void)
+{
+    /* RESET_STREAM_AT(id=0, error=11, final=10, reliable=5), STREAM(id=0, off=7, len=3), STREAM(id=0, len=5) */
+    static const uint8_t reset[] = {0x24, 0x00, 0x0b, 0x0a, 0x05};
+    static const uint8_t tail[] = {0x0e, 0x00, 0x07, 0x03, '7', '8', '9'};
+    static const uint8_t prefix[] = {0x0a, 0x00, 0x05, '0', '1', '2', '3', '4'};
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    test_streambuf_t *streambuf;
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the peer commits to the first five bytes of a stream that ends at ten */
+    ok(inject_frames(server, reset, sizeof(reset)) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL);
+    streambuf = stream->data;
+    ok(stream->recvstate.eos == 5);
+
+    /* bytes above the reliable size arrive, stranded behind a gap that the peer will never fill */
+    ok(inject_frames(server, tail, sizeof(tail)) == 0);
+    ok(!quicly_recvstate_transfer_complete(&stream->recvstate));
+    ok(stream->recvstate.received.num_ranges == 2);
+
+    /* completing the committed prefix completes the transfer regardless; waiting for the gap would hang the stream */
+    ok(inject_frames(server, prefix, sizeof(prefix)) == 0);
+    ok(quicly_recvstate_transfer_complete(&stream->recvstate));
+    ok(streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+    ok(quicly_recvstate_bytes_available(&stream->recvstate) == 5);
+    ok(quicly_streambuf_ingress_get(stream).len == 5);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+}
+
 static void test_reset_stream_at_data_above(void)
 {
     /* RESET_STREAM_AT(id=0, error=11, final=10, reliable=5), then STREAM(id=0, len=10) "0123456789" */
@@ -1723,6 +1760,7 @@ int main(int argc, char **argv)
     subtest("cc", test_cc);
 
     subtest("reset-stream-at-accounting", test_reset_stream_at_accounting);
+    subtest("reset-stream-at-gap-after-reset", test_reset_stream_at_gap_after_reset);
     subtest("reset-stream-at-data-above", test_reset_stream_at_data_above);
     subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
