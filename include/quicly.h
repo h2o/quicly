@@ -1034,10 +1034,18 @@ struct st_quicly_stream_t {
          */
         struct {
             /**
-             * STATE_NONE until RST is generated
+             * STATE_NONE until the reset frame is scheduled for transmission
              */
             quicly_sender_state_t sender_state;
+            /**
+             * application error code to be sent, or UINT64_MAX if the stream is not being reset; note that a reset is requested
+             * before `sender_state` leaves STATE_NONE, as the frame might not be ready to be sent at that point
+             */
             uint64_t error_code;
+            /**
+             * RESET_STREAM_AT.reliable_size; valid when `error_code` is other than UINT64_MAX
+             */
+            uint64_t reliable_size;
         } reset_stream;
         /**
          * sends receive window updates to remote peer
@@ -1054,10 +1062,6 @@ struct st_quicly_stream_t {
             quicly_linklist_t control; /* links to conn_t::control (or to conn_t::streams_blocked if the blocked flag is set) */
             quicly_linklist_t default_scheduler;
         } pending_link;
-        /**
-         * if the stream is closed using reliable reset
-         */
-        unsigned is_reliable_reset : 1;
     } _send_aux;
     /**
      *
@@ -1492,8 +1496,8 @@ void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
 /**
  * Marks the stream for a reliable reset, committing to the delivery of the first `reliable_size` bytes; see
  * draft-ietf-quic-reliable-stream-reset. Similarly to a shutdown, bytes remain to be emitted, hence the stream is to be scheduled
- * by the application calling `quicly_stream_sync_sendbuf`, rather than by this function. `reliable_size` has to be non-zero; use
- * `quicly_reset_stream` to reset a stream immediately.
+ * by the application calling `quicly_stream_sync_sendbuf`, rather than by this function. It cannot be called once the stream is
+ * marked as shut down. `reliable_size` has to be non-zero; use `quicly_reset_stream` to reset a stream immediately.
  */
 quicly_error_t quicly_set_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
 /**
