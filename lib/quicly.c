@@ -2384,7 +2384,15 @@ static quicly_error_t reinstall_initial_encryption(quicly_conn_t *conn, quicly_e
 
 static quicly_error_t notify_receive_reset(quicly_stream_t *stream)
 {
+    quicly_conn_t *conn = stream->conn;
     quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->recvstate.app_error_code);
+
+    /* The bytes between `eos` and the final size have been charged to connection-level flow control but are never delivered, hence
+     * never returned by the application calling `quicly_stream_sync_recvbuf`; return them now that the transfer is complete. */
+    assert(stream->recvstate.eos <= stream->recvstate.final_size);
+    conn->ingress.max_data.bytes_shifted += stream->recvstate.final_size - stream->recvstate.eos;
+    if (should_send_max_data(conn))
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
 
     QUICLY_PROBE(STREAM_ON_RECEIVE_RESET, stream->conn, stream->conn->stash.now, stream, err);
     QUICLY_LOG_CONN(stream_on_receive_reset, stream->conn, {

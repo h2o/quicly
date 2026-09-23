@@ -1559,6 +1559,60 @@ static void test_reset_stream_at_beyond_final_size(void)
 }
 
 /**
+ * Feeds `frames` to a new connection, the last one completing the transfer of stream 0 after a reset, and consumes the bytes that
+ * the stream delivers. Checks that all the connection-level flow control credit being charged, 10 bytes, is returned.
+ */
+static void check_reset_credit_returned(const void *frames, size_t len, size_t bytes_delivered)
+{
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint64_t consumed, shifted;
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    ok(inject_frames(server, frames, len) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL);
+    ok(quicly_recvstate_transfer_complete(&stream->recvstate));
+    ok(quicly_streambuf_ingress_get(stream).len == bytes_delivered);
+    quicly_streambuf_ingress_shift(stream, bytes_delivered);
+
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 10);
+    ok(shifted == 10);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+}
+
+/**
+ * A reset charges connection-level flow control up to the Final Size, but the bytes above `eos` are never delivered, hence never
+ * returned by the application. Unless quicly returns them, each reset shrinks the connection-level window permanently.
+ */
+static void test_reset_credit(void)
+{
+    /* RESET_STREAM_AT(id=0, error=11, final=10, reliable=5), then STREAM(id=0, len=5) delivering the committed bytes */
+    static const uint8_t committed[] = {0x24, 0x00, 0x0b, 0x0a, 0x05, 0x0a, 0x00, 0x05, '0', '1', '2', '3', '4'};
+    check_reset_credit_returned(committed, sizeof(committed), 5);
+
+    /* STREAM(id=0, off=7, len=3), RESET_STREAM_AT(id=0, error=11, final=10, reliable=5), STREAM(id=0, len=5); the bytes above
+     * the reliable size are stranded behind a gap */
+    static const uint8_t stranded[] = {0x0e, 0x00, 0x07, 0x03, '7', '8', '9', 0x24, 0x00, 0x0b, 0x0a, 0x05,
+                                       0x0a, 0x00, 0x05, '0',  '1', '2', '3', '4'};
+    check_reset_credit_returned(stranded, sizeof(stranded), 5);
+
+    /* RESET_STREAM_AT(id=0, error=11, final=10, reliable=5), then STREAM(id=0, len=10) delivering all the bytes */
+    static const uint8_t all[] = {0x24, 0x00, 0x0b, 0x0a, 0x05, 0x0a, 0x00, 0x0a, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    check_reset_credit_returned(all, sizeof(all), 10);
+
+    /* STREAM(id=0, len=3), then RESET_STREAM(id=0, error=11, final=10); the bytes received before the reset remain available */
+    static const uint8_t reset_stream[] = {0x0a, 0x00, 0x03, '0', '1', '2', 0x04, 0x00, 0x0b, 0x0a};
+    check_reset_credit_returned(reset_stream, sizeof(reset_stream), 3);
+}
+
+/**
  * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
  * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
  */
@@ -1840,6 +1894,7 @@ int main(int argc, char **argv)
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
     subtest("reset-stream-at-final-size-change", test_reset_stream_at_final_size_change);
     subtest("reset-stream-at-beyond-final-size", test_reset_stream_at_beyond_final_size);
+    subtest("reset-credit", test_reset_credit);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
