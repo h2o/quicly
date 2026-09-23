@@ -6211,6 +6211,13 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
                 QUICLY_PROBE(STREAM_ON_OPEN, conn, conn->stash.now, *stream);
                 QUICLY_LOG_CONN(stream_on_open, conn, { PTLS_LOG_ELEMENT_SIGNED(stream_id, (*stream)->stream_id); });
                 if ((ret = conn->super.ctx->stream_open->cb(conn->super.ctx->stream_open, *stream)) != 0) {
+                    /* The refused stream stays in conn->streams until the connection is freed. Count it and consume its ID as
+                     * quicly_open_stream does, so that destroy_all_streams balances the counts and a later frame does not
+                     * open the ID again; the application may not have attached callbacks. */
+                    ++group->num_streams;
+                    group->next_stream_id += 4;
+                    if ((*stream)->callbacks == NULL)
+                        (*stream)->callbacks = &quicly_stream_noop_callbacks;
                     *stream = NULL;
                     goto Exit;
                 }

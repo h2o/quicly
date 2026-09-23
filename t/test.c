@@ -1264,6 +1264,67 @@ static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **s
     exchange_until_idle(*client, *server);
 }
 
+static quicly_error_t refuse_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+{
+    return QUICLY_ERROR_STATE_EXHAUSTION; /* without attaching callbacks */
+}
+
+static quicly_error_t send_to(quicly_conn_t *src, quicly_conn_t *dst)
+{
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[4];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    quicly_error_t ret = 0;
+
+    ok(quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
+    for (size_t i = 0; i != num_packets; ++i) {
+        quicly_error_t r = quicly_receive(dst, NULL, &fake_address.sa, decoded + i);
+        if (r != 0 && r != QUICLY_ERROR_PACKET_IGNORED)
+            ret = r;
+    }
+    return ret;
+}
+
+static void test_stream_open_refused(void)
+{
+    quicly_transport_parameters_t saved_params = quic_ctx.transport_params;
+    int64_t saved_now = quic_now;
+    quic_ctx.transport_params.max_streams_uni = 1;
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+    quicly_stream_t *cs;
+    ok(quicly_open_stream(client, &cs, 1) == 0);
+    quicly_stream_id_t id = cs->stream_id;
+    test_streambuf_t *cb = cs->data;
+    ok(quicly_streambuf_egress_write(cs, "hello", 5) == 0);
+
+    /* the context is shared: refuse only after the client opened its stream */
+    quicly_stream_open_t *saved_open = quic_ctx.stream_open;
+    quic_ctx.stream_open = &(quicly_stream_open_t){refuse_stream_open};
+    ok(send_to(client, server) == QUICLY_ERROR_STATE_EXHAUSTION);
+    ok(quicly_get_stream(server, id) != NULL);
+    ok(quicly_num_streams_by_group(server, 1, 0) == 1);
+
+    /* a later frame reaches the refused stream instead of opening its ID again */
+    ok(quicly_streambuf_egress_write(cs, "world", 5) == 0);
+    quic_now += 10;
+    ok(send_to(client, server) == 0);
+    ok(quicly_num_streams_by_group(server, 1, 0) == 1);
+
+    quic_ctx.stream_open = saved_open;
+    quicly_free(server); /* destroy_all_streams asserts that the counts balance */
+    quicly_free(client);
+    assert(cb->is_detached);
+    quicly_sendbuf_dispose(&cb->super.egress);
+    ptls_buffer_dispose(&cb->super.ingress);
+    free(cb);
+    quic_ctx.transport_params = saved_params;
+    quic_now = saved_now;
+}
+
 static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, struct iovec *datagram, void *buf,
                                     size_t bufsize)
 {
@@ -1547,6 +1608,7 @@ int main(int argc, char **argv)
     subtest("cid", test_cid);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
+    subtest("stream-open-refused", test_stream_open_refused);
     subtest("lossy", test_lossy);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
