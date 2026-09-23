@@ -1282,6 +1282,99 @@ static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *
 }
 
 /**
+ * Feeds hand-crafted frames to `conn`, so that the frame sequences that quicly's own sender does not produce can be exercised.
+ */
+static quicly_error_t inject_frames(quicly_conn_t *conn, const void *frames, size_t len)
+{
+    uint64_t offending_frame_type;
+    int is_ack_only, is_probe_only;
+    quicly_error_t ret;
+
+    lock_now(conn, 0);
+    ret = handle_payload(conn, QUICLY_EPOCH_1RTT, 0, frames, len, &offending_frame_type, &is_ack_only, &is_probe_only);
+    unlock_now(conn);
+
+    return ret;
+}
+
+/**
+ * The Reliable Size can be below what the peer has already sent; quicly's own sender never does that, raising the value to
+ * `size_inflight`. Checks that the final size is charged to connection-level flow control exactly once, even though the bytes
+ * above the Reliable Size have already been received.
+ */
+static void test_reset_stream_at_accounting(void)
+{
+    /* STREAM(id=0, off=5, len=5) "56789", then RESET_STREAM_AT(id=0, error=11, final_size=10, reliable_size=3) */
+    static const uint8_t data_above[] = {0x0e, 0x00, 0x05, 0x05, '5', '6', '7', '8', '9'};
+    static const uint8_t reset[] = {0x24, 0x00, 0x0b, 0x0a, 0x03};
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint64_t consumed;
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the offsets received up to are charged, the bytes below them being still missing */
+    ok(inject_frames(server, data_above, sizeof(data_above)) == 0);
+    quicly_get_max_data(server, NULL, NULL, &consumed, NULL);
+    ok(consumed == 10);
+
+    /* the peer commits to the first 3 bytes only, although it has sent 10 */
+    ok(inject_frames(server, reset, sizeof(reset)) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL);
+    ok(stream->recvstate.app_error_code == 11);
+
+    /* the final size is charged once; the bytes above the Reliable Size that had already arrived are not charged again */
+    quicly_get_max_data(server, NULL, NULL, &consumed, NULL);
+    ok(consumed == 10);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+}
+
+/**
+ * Section 5.2 forbids changing the application error code, and requires a Reliable Size that does not reduce the commitment to be
+ * ignored. Those are separate rules: a first reset whose Reliable Size equals the Final Size reduces nothing, yet its error code
+ * has to be retained and surfaced once the remaining bytes arrive.
+ */
+static void test_reset_stream_at_after_fin(void)
+{
+    /* STREAM(id=0, off=2, len=3, FIN) "234", RESET_STREAM_AT(id=0, error=11, final=5, reliable=5), STREAM(id=0, len=2) "01" */
+    static const uint8_t fin_leaving_gap[] = {0x0f, 0x00, 0x02, 0x03, '2', '3', '4'};
+    static const uint8_t reset[] = {0x24, 0x00, 0x0b, 0x05, 0x05};
+    static const uint8_t fill_gap[] = {0x0a, 0x00, 0x02, '0', '1'};
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    test_streambuf_t *streambuf;
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the FIN makes the final size known while leaving [0,2) missing */
+    ok(inject_frames(server, fin_leaving_gap, sizeof(fin_leaving_gap)) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL);
+    streambuf = stream->data;
+    ok(!quicly_recvstate_transfer_complete(&stream->recvstate));
+
+    /* the reset reduces nothing, its Reliable Size being the Final Size, but its error code is to be retained */
+    ok(inject_frames(server, reset, sizeof(reset)) == 0);
+    ok(!quicly_recvstate_transfer_complete(&stream->recvstate));
+    ok(streambuf->error_received.reset_stream == -1);
+
+    /* filling the gap completes the transfer, and it is then that the error code of the reset is surfaced */
+    ok(inject_frames(server, fill_gap, sizeof(fill_gap)) == 0);
+    ok(quicly_recvstate_transfer_complete(&stream->recvstate));
+    ok(streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+}
+
+/**
  * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
  * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
  */
@@ -1556,6 +1649,8 @@ int main(int argc, char **argv)
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
 
+    subtest("reset-stream-at-accounting", test_reset_stream_at_accounting);
+    subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
