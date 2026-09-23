@@ -485,6 +485,8 @@ inline quicly_error_t quicly_decode_reset_stream_frame(uint64_t frame_type, cons
         assert(frame_type == QUICLY_FRAME_TYPE_RESET_STREAM_AT);
         if ((frame->reliable_size = quicly_decodev(src, end)) == UINT64_MAX)
             goto Error;
+        if (frame->reliable_size > frame->final_size)
+            goto Error;
     } else {
         frame->reliable_size = 0;
     }

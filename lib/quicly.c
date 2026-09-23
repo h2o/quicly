@@ -2382,6 +2382,20 @@ static quicly_error_t reinstall_initial_encryption(quicly_conn_t *conn, quicly_e
         ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL);
 }
 
+static quicly_error_t notify_receive_reset(quicly_stream_t *stream)
+{
+    quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->recvstate.app_error_code);
+
+    QUICLY_PROBE(STREAM_ON_RECEIVE_RESET, stream->conn, stream->conn->stash.now, stream, err);
+    QUICLY_LOG_CONN(stream_on_receive_reset, stream->conn, {
+        PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
+        PTLS_LOG_ELEMENT_SIGNED(err, err);
+    });
+    stream->callbacks->on_receive_reset(stream, err);
+
+    return stream->conn->super.state >= QUICLY_STATE_CLOSING ? QUICLY_ERROR_IS_CLOSING : 0;
+}
+
 static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *frame)
 {
     quicly_error_t ret;
@@ -2404,7 +2418,8 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
         uint64_t max_stream_data = frame->offset + frame->data.len;
         if ((int64_t)stream->_recv_aux.window < (int64_t)max_stream_data - (int64_t)stream->recvstate.data_off)
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
-        if (stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end < max_stream_data) {
+        if (stream->recvstate.app_error_code == UINT64_MAX &&
+            stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end < max_stream_data) {
             uint64_t newly_received =
                 max_stream_data - stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end;
             if (stream->conn->ingress.max_data.bytes_consumed + newly_received >
@@ -2442,6 +2457,10 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
 
     if (stream->stream_id >= 0 && should_send_max_stream_data(stream))
         sched_stream_control(stream);
+
+    if (quicly_recvstate_transfer_complete(&stream->recvstate) && stream->recvstate.app_error_code != UINT64_MAX &&
+        (ret = notify_receive_reset(stream)) != 0)
+        return ret;
 
     if (stream_is_destroyable(stream))
         destroy_stream(stream, 0);
@@ -6315,20 +6334,14 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
 
     if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
         uint64_t bytes_missing;
-        if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, frame.reliable_size, &bytes_missing)) != 0)
+        if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, frame.reliable_size, frame.app_error_code,
+                                          &bytes_missing)) != 0)
             return ret;
         if (stream->conn->ingress.max_data.bytes_consumed + bytes_missing > stream->conn->ingress.max_data.sender.max_committed)
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
         stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
-        quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code);
-        QUICLY_PROBE(STREAM_ON_RECEIVE_RESET, stream->conn, stream->conn->stash.now, stream, err);
-        QUICLY_LOG_CONN(stream_on_receive_reset, stream->conn, {
-            PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
-            PTLS_LOG_ELEMENT_SIGNED(err, err);
-        });
-        stream->callbacks->on_receive_reset(stream, err);
-        if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
-            return QUICLY_ERROR_IS_CLOSING;
+        if (quicly_recvstate_transfer_complete(&stream->recvstate) && (ret = notify_receive_reset(stream)) != 0)
+            return ret;
         if (stream_is_destroyable(stream))
             destroy_stream(stream, 0);
     }
@@ -6338,6 +6351,10 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
 
 static quicly_error_t handle_reset_stream_at_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
+    /* recognize the frame only when we have declared our willingness to receive it */
+    if (!conn->super.ctx->transport_params.reset_stream_at)
+        return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
+
     return handle_reset_stream_frame(conn, state);
 }
 

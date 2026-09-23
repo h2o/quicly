@@ -41,13 +41,15 @@ typedef struct st_quicly_recvstate_t {
      */
     uint64_t data_off;
     /**
-     * end_of_stream offset (or UINT64_MAX)
+     * Offset at which the stream ends, or UINT64_MAX while that is unknown. Iff a reset is received before the transder is
+     * complete, it becomes max(received[0].end, min(current_eos, reset_stream.reliable_size)); i.e., bytes already available to
+     * the application are never taken back, but reset is surfaced once the needed bytes are delivered.
      */
     uint64_t eos;
     /**
-     *
+     * application protocol error code of the reset that has been received, or UINT64_MAX if the stream has not been reset.
      */
-    uint64_t reliable_size;
+    uint64_t app_error_code;
 } quicly_recvstate_t;
 
 void quicly_recvstate_init(quicly_recvstate_t *state);
@@ -62,7 +64,7 @@ static size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state);
  */
 quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin, size_t max_ranges);
 quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_size, uint64_t reliable_size,
-                                      uint64_t *bytes_missing);
+                                      uint64_t app_error_code, uint64_t *bytes_missing);
 
 /* inline definitions */
 

@@ -595,8 +595,64 @@ static void tiny_connection_window(void)
     quic_ctx.transport_params.max_data = max_data_orig;
 }
 
+static void test_reliable_reset(int deliver_in_order)
+{
+    quicly_stream_t *client_stream, *server_stream;
+    struct iovec *first, *second;
+    test_streambuf_t *server_streambuf;
+    quicly_address_t dest, src;
+    struct iovec prefix_datagram, reset_datagram;
+    uint8_t prefixbuf[quic_ctx.transport_params.max_udp_payload_size], resetbuf[quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams;
+    quicly_decoded_packet_t decoded;
+    quicly_error_t ret;
+
+    /* the client writes the prefix and puts it on the wire, but the datagram is withheld */
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, "hello", 5);
+    num_datagrams = 1;
+    ret = quicly_send(client, &dest, &src, &prefix_datagram, &num_datagrams, prefixbuf, sizeof(prefixbuf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+
+    /* the stream is reset, the client remaining committed to delivering those 5 bytes */
+    ok(quicly_streambuf_egress_reset(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567), 5) == 0);
+    num_datagrams = 1;
+    ret = quicly_send(client, &dest, &src, &reset_datagram, &num_datagrams, resetbuf, sizeof(resetbuf));
+    ok(ret == 0);
+    ok(num_datagrams == 1);
+
+    /* Deliver the two datagrams. The reset is emitted behind the prefix, hence in-order delivery is what happens in the absence
+     * of loss or reordering; either way the application learns of the reset only once the prefix has arrived. */
+    first = deliver_in_order ? &prefix_datagram : &reset_datagram;
+    second = deliver_in_order ? &reset_datagram : &prefix_datagram;
+
+    /* after the first datagram the transfer is incomplete, and the application has not been notified */
+    ok(decode_packets(&decoded, first, 1) == 1);
+    ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    server_streambuf = server_stream->data;
+    ok(!quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(server_streambuf->error_received.reset_stream == -1);
+
+    /* the second completes the transfer, and it is then that the reset is surfaced */
+    ok(decode_packets(&decoded, second, 1) == 1);
+    ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
+    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(buffer_is(&server_streambuf->super.ingress, "hello"));
+
+    /* the final size is charged to connection-level flow control exactly once */
+    ok(max_data_is_equal(client, server));
+}
+
 void test_simple(void)
 {
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quic_ctx.transport_params.reset_stream_at = 1; /* the peer has to advertise it for `reliable-reset` below */
+
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
     subtest("reset-then-close", test_reset_then_close);
@@ -604,6 +660,10 @@ void test_simple(void)
     subtest("reset-after-close", test_reset_after_close);
     subtest("tiny-stream-window", tiny_stream_window);
     subtest("reset-during-loss", test_reset_during_loss);
+    subtest("reliable-reset", test_reliable_reset, 0);
+    subtest("reliable-reset-in-order", test_reliable_reset, 1);
     subtest("close", test_close);
     subtest("tiny-connection-window", tiny_connection_window);
+
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
 }
