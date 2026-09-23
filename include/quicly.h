@@ -1050,6 +1050,11 @@ struct st_quicly_stream_t {
              * the Reliable Size of the resets that quicly sends on behalf of the application; see `quicly_set_min_reliable_size`
              */
             uint64_t min_reliable_size;
+            /**
+             * STATE_NONE unless RESET_STREAM_AT is to be sent as a control frame, which is the case when the Reliable Size is set
+             * or reduced after the frame that ends the stream in the data path (i.e., FIN or RESET_STREAM_AT) might have been sent
+             */
+            quicly_sender_state_t control_frame_state;
         } reset_stream;
         /**
          * sends receive window updates to remote peer
@@ -1500,8 +1505,12 @@ void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
 /**
  * Marks the stream for a reliable reset, committing to the delivery of the first `reliable_size` bytes; see
  * draft-ietf-quic-reliable-stream-reset. Similarly to a shutdown, bytes remain to be emitted, hence the stream is to be scheduled
- * by the application calling `quicly_stream_sync_sendbuf`, rather than by this function. It cannot be called once the stream is
- * marked as shut down. `reliable_size` has to be non-zero; use `quicly_reset_stream` to reset a stream immediately.
+ * by the application calling `quicly_stream_sync_sendbuf`, rather than by this function. `reliable_size` has to be non-zero; use
+ * `quicly_reset_stream` to reset a stream immediately.
+ *
+ * The function can also be called after the stream has been shut down, in which case `reliable_size` MUST NOT exceed the final
+ * size, or called again to reduce the Reliable Size, in which case `err` MUST be the same as before (section 5.2); a call that does
+ * not reduce the Reliable Size is ignored, as is a call made once all the bytes and the end of the stream have been acknowledged.
  */
 quicly_error_t quicly_set_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
 /**

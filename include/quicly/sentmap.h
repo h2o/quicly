@@ -160,6 +160,10 @@ struct st_quicly_sent_t {
             quicly_stream_id_t stream_id;
         } stream_state_sender;
         struct {
+            quicly_stream_id_t stream_id;
+            uint64_t reliable_size;
+        } reset_stream_at;
+        struct {
             int is_inflight;
             uint64_t generation;
         } new_token;

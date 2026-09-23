@@ -51,17 +51,16 @@ void quicly_sendstate_dispose(quicly_sendstate_t *state)
 
 int quicly_sendstate_activate(quicly_sendstate_t *state)
 {
-    uint64_t end_off = state->final_size;
-
-    /* take EOS position into account */
-    if (end_off != UINT64_MAX)
-        ++end_off;
-
-    /* do nothing if already active */
-    if (state->pending.num_ranges != 0 && state->pending.ranges[state->pending.num_ranges - 1].end == end_off)
+    /* Do nothing once the stream is shut down; `quicly_sendstate_shutdown` has marked everything up to the EOS as pending, and
+     * marking it again after the EOS has been sent would resend the frame that ends the stream. */
+    if (!quicly_sendstate_is_open(state))
         return 0;
 
-    return quicly_ranges_add(&state->pending, state->size_inflight, end_off);
+    /* do nothing if already active */
+    if (state->pending.num_ranges != 0 && state->pending.ranges[state->pending.num_ranges - 1].end == UINT64_MAX)
+        return 0;
+
+    return quicly_ranges_add(&state->pending, state->size_inflight, UINT64_MAX);
 }
 
 int quicly_sendstate_shutdown(quicly_sendstate_t *state, uint64_t final_size)
