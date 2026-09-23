@@ -84,12 +84,10 @@ int quicly_sendstate_shutdown(quicly_sendstate_t *state, uint64_t final_size)
 
 void quicly_sendstate_reset(quicly_sendstate_t *state)
 {
-    int ret;
+    /* the stream ends at `size_inflight`, that being all that has been sent */
+    state->final_size = state->size_inflight;
 
-    if (state->final_size == UINT64_MAX)
-        state->final_size = state->size_inflight;
-
-    ret = quicly_ranges_add(&state->acked, 0, state->final_size + 1);
+    int ret = quicly_ranges_add(&state->acked, 0, state->final_size + 1);
     assert(ret == 0 && "guaranteed to succeed, because the number of ranges never increases");
     quicly_ranges_clear(&state->pending);
 }
