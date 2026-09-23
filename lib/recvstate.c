@@ -28,6 +28,7 @@ void quicly_recvstate_init(quicly_recvstate_t *state)
     state->data_off = 0;
     state->eos = UINT64_MAX;
     state->app_error_code = UINT64_MAX;
+    state->final_size = UINT64_MAX;
 }
 
 void quicly_recvstate_init_closed(quicly_recvstate_t *state)
@@ -36,6 +37,7 @@ void quicly_recvstate_init_closed(quicly_recvstate_t *state)
     state->data_off = 0;
     state->eos = 0;
     state->app_error_code = UINT64_MAX;
+    state->final_size = UINT64_MAX;
 }
 
 void quicly_recvstate_dispose(quicly_recvstate_t *state)
@@ -121,6 +123,10 @@ quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_
          * the rest having been accounted for as it arrived. This is done once, no byte of the stream being charged thereafter. */
         *bytes_missing = final_size - state->received.ranges[state->received.num_ranges - 1].end;
     } else {
+        /* nor can a subsequent reset change the final size, which is compared against the retained value, `eos` no longer being
+         * the final size */
+        if (state->final_size != final_size)
+            return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
         /* the application error code cannot change between the resets received for one stream (section 5.2 of
          * draft-ietf-quic-reliable-stream-reset) */
         if (state->app_error_code != app_error_code)
@@ -141,6 +147,7 @@ quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_
     /* from here on `eos` is the offset the peer remains committed to delivering, rather than the final size */
     state->eos = reliable_size;
     state->app_error_code = app_error_code;
+    state->final_size = final_size;
 
     /* if all the bytes that remain to be received have been received, clear the ranges to indicate that */
     if (state->received.num_ranges == 1 && state->received.ranges[0].start == 0 && state->received.ranges[0].end == state->eos)

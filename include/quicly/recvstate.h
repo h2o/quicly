@@ -50,6 +50,11 @@ typedef struct st_quicly_recvstate_t {
      * application protocol error code of the reset that has been received, or UINT64_MAX if the stream has not been reset.
      */
     uint64_t app_error_code;
+    /**
+     * Final Size of the reset that has been received, or UINT64_MAX if the stream has not been reset. Retained separately as `eos`
+     * ceases to indicate the final size once a reset is received.
+     */
+    uint64_t final_size;
 } quicly_recvstate_t;
 
 void quicly_recvstate_init(quicly_recvstate_t *state);

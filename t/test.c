@@ -1485,6 +1485,56 @@ static void test_reset_stream_at_after_fin(void)
 }
 
 /**
+ * Feeds RESET_STREAM_AT(id=0, error=11, final=10, reliable=5) followed by `frames` to a new connection, returning the error that
+ * the latter raised.
+ */
+static quicly_error_t inject_after_reset_stream_at(const void *frames, size_t len)
+{
+    static const uint8_t reset[] = {0x24, 0x00, 0x0b, 0x0a, 0x05};
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_error_t ret;
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    ok(inject_frames(server, reset, sizeof(reset)) == 0);
+    ret = inject_frames(server, frames, len);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+    return ret;
+}
+
+/**
+ * Once known, the final size cannot change (RFC 9000 section 4.5). That holds for the resets that follow, though `eos` stops
+ * conveying the final size once a reset is received.
+ */
+static void test_reset_stream_at_final_size_change(void)
+{
+    /* RESET_STREAM_AT(id=0, error=11, final=10, reliable=3) reduces the reliable size, keeping the final size */
+    static const uint8_t reduce[] = {0x24, 0x00, 0x0b, 0x0a, 0x03};
+    ok(inject_after_reset_stream_at(reduce, sizeof(reduce)) == 0);
+
+    /* RESET_STREAM(id=0, error=11, final=10) reduces the reliable size to zero, keeping the final size */
+    static const uint8_t reset_stream[] = {0x04, 0x00, 0x0b, 0x0a};
+    ok(inject_after_reset_stream_at(reset_stream, sizeof(reset_stream)) == 0);
+
+    /* RESET_STREAM_AT(id=0, error=11, final=20, reliable=3) */
+    static const uint8_t reduce_and_grow[] = {0x24, 0x00, 0x0b, 0x14, 0x03};
+    ok(inject_after_reset_stream_at(reduce_and_grow, sizeof(reduce_and_grow)) == QUICLY_TRANSPORT_ERROR_FINAL_SIZE);
+
+    /* RESET_STREAM_AT(id=0, error=11, final=20, reliable=5), which would be ignored as it does not reduce the reliable size */
+    static const uint8_t grow[] = {0x24, 0x00, 0x0b, 0x14, 0x05};
+    ok(inject_after_reset_stream_at(grow, sizeof(grow)) == QUICLY_TRANSPORT_ERROR_FINAL_SIZE);
+
+    /* RESET_STREAM(id=0, error=11, final=30) */
+    static const uint8_t reset_stream_grow[] = {0x04, 0x00, 0x0b, 0x1e};
+    ok(inject_after_reset_stream_at(reset_stream_grow, sizeof(reset_stream_grow)) == QUICLY_TRANSPORT_ERROR_FINAL_SIZE);
+}
+
+/**
  * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
  * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
  */
@@ -1764,6 +1814,7 @@ int main(int argc, char **argv)
     subtest("reset-stream-at-data-above", test_reset_stream_at_data_above);
     subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
+    subtest("reset-stream-at-final-size-change", test_reset_stream_at_final_size_change);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
