@@ -1546,6 +1546,49 @@ static void test_stream_open_refused(void)
 }
 
 /**
+ * This test checks that lowering the receive window does not cause the data within the limit already advertised to be rejected,
+ * while the data exceeding that limit is.
+ */
+static void test_lower_receive_window(void)
+{
+    uint64_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data.bidi_local;
+    quic_ctx.transport_params.max_stream_data.bidi_local = 4096;
+
+    quicly_conn_t *client, *server;
+    quicly_stream_t *client_stream, *server_stream;
+    static uint8_t buf[4096];
+
+    test_setup_connected_peers(&client, &server);
+
+    /* open a stream, advertising a limit of 4096 bytes to the server */
+    ok(quicly_open_stream(client, &client_stream, 0) == 0);
+    quicly_streambuf_egress_write(client_stream, "a", 1);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+
+    /* lower the receive window after the limit has been advertised */
+    quicly_stream_set_receive_window(client_stream, sizeof(buf) / 2);
+
+    /* the server sends up to the advertised limit, which is accepted */
+    quicly_streambuf_egress_write(server_stream, buf, sizeof(buf));
+    transmit(server, client);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(((quicly_streambuf_t *)client_stream->data)->ingress.off == sizeof(buf));
+
+    /* make the server send one more byte, which exceeds the advertised limit */
+    server_stream->_send_aux.max_stream_data = sizeof(buf) + 1;
+    quicly_streambuf_egress_write(server_stream, "a", 1);
+    transmit(server, client);
+    ok(quicly_get_state(client) >= QUICLY_STATE_CLOSING &&
+       quicly_get_close_reason(client, NULL, NULL, NULL) == QUICLY_TRANSPORT_ERROR_FLOW_CONTROL);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_stream_data.bidi_local = max_stream_data_orig;
+}
+
+/**
  * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
  * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
  */
@@ -1824,6 +1867,7 @@ int main(int argc, char **argv)
     subtest("destroy-returns-credit-fin", test_destroy_returns_credit_fin);
     subtest("destroy-returns-credit-reset", test_destroy_returns_credit_reset);
     subtest("stream-open-refused", test_stream_open_refused);
+    subtest("lower-receive-window", test_lower_receive_window);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
