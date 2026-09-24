@@ -57,6 +57,11 @@ int quicly_sendstate_transfer_complete(quicly_sendstate_t *state)
     return state->eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED && state->acked.ranges[0].end == state->final_size;
 }
 
+int quicly_sendstate_is_fully_inflight(quicly_sendstate_t *state)
+{
+    return state->eos_state != QUICLY_SENDSTATE_EOS_STATE_UNSENT && state->size_inflight == state->final_size;
+}
+
 int quicly_sendstate_activate(quicly_sendstate_t *state)
 {
     /* do nothing if already active */
