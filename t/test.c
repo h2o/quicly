@@ -1339,6 +1339,49 @@ static void test_destroy_returns_credit_reset(void)
     quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
 }
 
+static quicly_error_t refuse_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+{
+    return QUICLY_ERROR_STATE_EXHAUSTION;
+}
+
+static void test_stream_open_refused(void)
+{
+    uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
+    quicly_stream_open_t *stream_open_orig = quic_ctx.stream_open, refuse = {refuse_stream_open};
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[4];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams), num_packets, i;
+    quicly_error_t ret, last_ret = 0;
+
+    quic_ctx.transport_params.max_streams_uni = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the client opens a stream, which the server refuses */
+    ret = quicly_open_stream(client, &stream, 1);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(stream, "hello", 5);
+    quic_ctx.stream_open = &refuse;
+    ret = quicly_send(client, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    num_packets = decode_packets(decoded, datagrams, num_datagrams);
+    for (i = 0; i != num_packets; ++i) {
+        if ((ret = quicly_receive(server, NULL, &fake_address.sa, decoded + i)) != 0)
+            last_ret = ret;
+    }
+    ok(last_ret == QUICLY_ERROR_STATE_EXHAUSTION);
+    quic_ctx.stream_open = stream_open_orig;
+
+    /* the refusal being fatal, the server closes the connection; freeing it destroys the stream that was refused */
+    ok(quicly_close(server, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "") == 0);
+    quicly_free(server);
+    quicly_free(client);
+    quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
+}
+
 /**
  * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
  * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
@@ -1616,6 +1659,7 @@ int main(int argc, char **argv)
 
     subtest("destroy-returns-credit-fin", test_destroy_returns_credit_fin);
     subtest("destroy-returns-credit-reset", test_destroy_returns_credit_reset);
+    subtest("stream-open-refused", test_stream_open_refused);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 

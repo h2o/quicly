@@ -6220,12 +6220,13 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
                 }
                 QUICLY_PROBE(STREAM_ON_OPEN, conn, conn->stash.now, *stream);
                 QUICLY_LOG_CONN(stream_on_open, conn, { PTLS_LOG_ELEMENT_SIGNED(stream_id, (*stream)->stream_id); });
+                /* count the stream before calling the callback, as it remains in `conn->streams` even if the callback fails */
+                ++group->num_streams;
+                group->next_stream_id += 4;
                 if ((ret = conn->super.ctx->stream_open->cb(conn->super.ctx->stream_open, *stream)) != 0) {
                     *stream = NULL;
                     goto Exit;
                 }
-                ++group->num_streams;
-                group->next_stream_id += 4;
             } while (stream_id != (*stream)->stream_id);
         }
     }
