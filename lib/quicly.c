@@ -979,11 +979,8 @@ static quicly_error_t update_max_streams(struct st_quicly_max_streams_t *m, uint
     if (count > (uint64_t)1 << 60)
         return QUICLY_TRANSPORT_ERROR_STREAM_LIMIT;
 
-    if (m->count < count) {
+    if (m->count < count)
         m->count = count;
-        if (m->blocked_sender.max_acked < count)
-            m->blocked_sender.max_acked = count;
-    }
 
     return 0;
 }
@@ -6552,7 +6549,7 @@ static quicly_error_t handle_data_blocked_frame(quicly_conn_t *conn, struct st_q
     QUICLY_PROBE(DATA_BLOCKED_RECEIVE, conn, conn->stash.now, frame.offset);
     QUICLY_LOG_CONN(data_blocked_receive, conn, { PTLS_LOG_ELEMENT_UNSIGNED(off, frame.offset); });
 
-    quicly_maxsender_request_transmit(&conn->ingress.max_data.sender);
+    quicly_maxsender_blocked(&conn->ingress.max_data.sender, frame.offset);
     if (should_send_max_data(conn))
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
 
@@ -6578,7 +6575,7 @@ static quicly_error_t handle_stream_data_blocked_frame(quicly_conn_t *conn, stru
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
     if ((stream = quicly_get_stream(conn, frame.stream_id)) != NULL) {
-        quicly_maxsender_request_transmit(&stream->_send_aux.max_stream_data_sender);
+        quicly_maxsender_blocked(&stream->_send_aux.max_stream_data_sender, frame.offset);
         if (should_send_max_stream_data(stream))
             sched_stream_control(stream);
     }
@@ -6601,11 +6598,8 @@ static quicly_error_t handle_streams_blocked_frame(quicly_conn_t *conn, struct s
         PTLS_LOG_ELEMENT_BOOL(is_unidirectional, uni);
     });
 
-    if (should_send_max_streams(conn, uni)) {
-        quicly_maxsender_t *maxsender = uni ? &conn->ingress.max_streams.uni : &conn->ingress.max_streams.bidi;
-        quicly_maxsender_request_transmit(maxsender);
+    if (should_send_max_streams(conn, uni))
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
-    }
 
     return 0;
 }
