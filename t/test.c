@@ -1386,6 +1386,35 @@ static quicly_error_t inject_frames(quicly_conn_t *conn, const void *frames, siz
  * `size_inflight`. Checks that the final size is charged to connection-level flow control exactly once, even though the bytes
  * above the Reliable Size have already been received.
  */
+/**
+ * Two RESET_STREAMs, each with a final size that fits the stream-level window but which together overrun the connection-level
+ * limit. Mirrors the `reset-stream-overflow-connection` case of t/e2e.t, deterministically.
+ */
+static void test_reset_stream_overflow_connection(void)
+{
+    /* RESET_STREAM(id=0, error=0, final=1000), RESET_STREAM(id=4, error=0, final=1000) */
+    static const uint8_t reset0[] = {0x04, 0x00, 0x00, 0x43, 0xe8};
+    static const uint8_t reset4[] = {0x04, 0x04, 0x00, 0x43, 0xe8};
+    quicly_max_stream_data_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data;
+    uint64_t max_data_orig = quic_ctx.transport_params.max_data;
+    quicly_conn_t *client, *server;
+
+    quic_ctx.transport_params.max_stream_data = (quicly_max_stream_data_t){1000, 1000, 1000};
+    quic_ctx.transport_params.max_data = 1500;
+    test_setup_connected_peers(&client, &server);
+
+    /* the first fits both limits */
+    ok(inject_frames(server, reset0, sizeof(reset0)) == 0);
+
+    /* the second fits the stream-level window, but the two together exceed the connection-level limit */
+    ok(inject_frames(server, reset4, sizeof(reset4)) == QUICLY_TRANSPORT_ERROR_FLOW_CONTROL);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_stream_data = max_stream_data_orig;
+    quic_ctx.transport_params.max_data = max_data_orig;
+}
+
 static void test_reset_stream_at_accounting(void)
 {
     /* STREAM(id=0, off=5, len=5) "56789", then RESET_STREAM_AT(id=0, error=11, final_size=10, reliable_size=3) */
@@ -1857,6 +1886,7 @@ int main(int argc, char **argv)
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
 
+    subtest("reset-stream-overflow-connection", test_reset_stream_overflow_connection);
     subtest("reset-stream-at-accounting", test_reset_stream_at_accounting);
     subtest("reset-stream-at-gap-after-reset", test_reset_stream_at_gap_after_reset);
     subtest("reset-stream-at-data-above", test_reset_stream_at_data_above);

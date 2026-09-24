@@ -1030,24 +1030,6 @@ struct st_quicly_stream_t {
             uint64_t error_code;
         } stop_sending;
         /**
-         * reset_stream
-         */
-        struct {
-            /**
-             * STATE_NONE until the reset frame is scheduled for transmission
-             */
-            quicly_sender_state_t sender_state;
-            /**
-             * application error code to be sent, or UINT64_MAX if the stream is not being reset; note that a reset is requested
-             * before `sender_state` leaves STATE_NONE, as the frame might not be ready to be sent at that point
-             */
-            uint64_t error_code;
-            /**
-             * RESET_STREAM_AT.reliable_size; valid when `error_code` is other than UINT64_MAX
-             */
-            uint64_t reliable_size;
-        } reset_stream;
-        /**
          * sends receive window updates to remote peer
          */
         quicly_maxsender_t max_stream_data_sender;
@@ -1496,8 +1478,12 @@ void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
 /**
  * Marks the stream for a reliable reset, committing to the delivery of the first `reliable_size` bytes; see
  * draft-ietf-quic-reliable-stream-reset. Similarly to a shutdown, bytes remain to be emitted, hence the stream is to be scheduled
- * by the application calling `quicly_stream_sync_sendbuf`, rather than by this function. It cannot be called once the stream is
- * marked as shut down. `reliable_size` has to be non-zero; use `quicly_reset_stream` to reset a stream immediately.
+ * by the application calling `quicly_stream_sync_sendbuf`, rather than by this function. `reliable_size` has to be non-zero; use
+ * `quicly_reset_stream` to reset a stream immediately.
+ *
+ * The function can be called once per stream, including after the stream has been shut down (section 5.1), in which case
+ * `reliable_size` must not exceed the final size that the shutdown established. If every byte of the stream and the FIN have been
+ * acknowledged by then, the call is a no-op.
  */
 quicly_error_t quicly_set_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
 /**
