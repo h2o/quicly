@@ -40,14 +40,6 @@ extern "C" {
 #define QUICLY_SENDSTATE_EOS_TYPE_RESET_AT 2
 #define QUICLY_SENDSTATE_EOS_TYPE_RESET 3
 
-/**
- * How far the marker that the stream ends with has got. A frame carrying a marker that has since been superseded leaves the state
- * untouched, hence changing the marker returns it to UNSENT and a new frame is emitted in place of the old.
- */
-#define QUICLY_SENDSTATE_EOS_STATE_UNSENT 0
-#define QUICLY_SENDSTATE_EOS_STATE_INFLIGHT 1
-#define QUICLY_SENDSTATE_EOS_STATE_DELIVERED 2
-
 typedef struct st_quicly_sendstate_t {
     /**
      * ranges that have been acked (guaranteed to be non-empty; i.e., acked.ranges[0].end == contiguous_acked_offset)
@@ -75,9 +67,14 @@ typedef struct st_quicly_sendstate_t {
      */
     uint64_t reliable_size;
     /**
-     * how far the marker that the stream ends with has got (QUICLY_SENDSTATE_EOS_STATE_*)
+     * How far the marker that the stream ends with has got. A frame carrying a marker that has since been superseded leaves the
+     * state untouched, hence changing the marker returns it to UNSENT and a new frame is emitted in place of the old.
      */
-    uint8_t eos_state : 2;
+    enum {
+        QUICLY_SENDSTATE_EOS_STATE_UNSENT,
+        QUICLY_SENDSTATE_EOS_STATE_INFLIGHT,
+        QUICLY_SENDSTATE_EOS_STATE_DELIVERED,
+    } eos_state;
 } quicly_sendstate_t;
 
 typedef struct st_quicly_sendstate_sent_t {
@@ -96,7 +93,7 @@ typedef struct st_quicly_sendstate_sent_t {
 void quicly_sendstate_init(quicly_sendstate_t *state);
 void quicly_sendstate_init_closed(quicly_sendstate_t *state);
 void quicly_sendstate_dispose(quicly_sendstate_t *state);
-static int quicly_sendstate_transfer_complete(quicly_sendstate_t *state);
+int quicly_sendstate_transfer_complete(quicly_sendstate_t *state);
 /**
  * Returns the marker that the stream ends with (QUICLY_SENDSTATE_EOS_TYPE_*), NONE being returned while the stream is open.
  */
@@ -118,12 +115,6 @@ inline uint8_t quicly_sendstate_eos_type(quicly_sendstate_t *state)
     if (state->app_error_code == UINT64_MAX)
         return QUICLY_SENDSTATE_EOS_TYPE_FIN;
     return state->reliable_size != 0 ? QUICLY_SENDSTATE_EOS_TYPE_RESET_AT : QUICLY_SENDSTATE_EOS_TYPE_RESET;
-}
-
-inline int quicly_sendstate_transfer_complete(quicly_sendstate_t *state)
-{
-    return quicly_sendstate_eos_type(state) != QUICLY_SENDSTATE_EOS_TYPE_NONE &&
-           state->eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED && state->acked.ranges[0].end == state->final_size;
 }
 
 inline int quicly_sendstate_is_open(quicly_sendstate_t *state)
