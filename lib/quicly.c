@@ -1081,19 +1081,31 @@ int quicly_stream_sync_sendbuf(quicly_stream_t *stream, int activate)
     return 0;
 }
 
+static void release_ingress_credit(quicly_conn_t *conn, uint64_t bytes)
+{
+    if (bytes == 0)
+        return;
+
+    conn->ingress.max_data.bytes_shifted += bytes;
+    if (should_send_max_data(conn))
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+}
+
 void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
 {
+    uint64_t bytes_allocated = quicly_recvstate_bytes_allocated(&stream->recvstate),
+             bytes_released = bytes_allocated > stream->recvstate.data_off ? bytes_allocated - stream->recvstate.data_off : 0;
+    if (bytes_released > shift_amount)
+        bytes_released = shift_amount;
+
     stream->recvstate.data_off += shift_amount;
 
-    /* handle flow control unless the given stream is a CRYPTO stream, which are exempt from flow control */
-    if (stream->stream_id >= 0) {
-        if (should_send_max_stream_data(stream))
-            sched_stream_control(stream);
-        quicly_conn_t *conn = stream->conn;
-        conn->ingress.max_data.bytes_shifted += shift_amount;
-        if (should_send_max_data(conn))
-            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
-    }
+    if (stream->stream_id < 0)
+        return;
+
+    release_ingress_credit(stream->conn, bytes_released);
+    if (should_send_max_stream_data(stream))
+        sched_stream_control(stream);
 }
 
 /**
@@ -1393,14 +1405,12 @@ static void destroy_stream(quicly_stream_t *stream, quicly_error_t err)
     if (stream->callbacks != NULL)
         stream->callbacks->on_destroy(stream, err);
 
-    /* Return the connection-level credit of the bytes that were left unread by the application or never received after a reset.
+    /* Return the connection-level credit of the bytes that the receive buffer still holds, the application having left them unread.
      * Doing so here rather than earlier is what keeps the credit tied to the memory; see GHSA-f7qr-4p37-9gx9. */
-    if (stream->recvstate.eos != UINT64_MAX) {
-        assert(stream->stream_id >= 0);
-        assert(stream->recvstate.data_off <= stream->recvstate.eos);
-        conn->ingress.max_data.bytes_shifted += stream->recvstate.eos - stream->recvstate.data_off;
-        if (should_send_max_data(conn))
-            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    if (stream->stream_id >= 0) {
+        uint64_t allocated = quicly_recvstate_bytes_allocated(&stream->recvstate);
+        assert(stream->recvstate.data_off <= allocated);
+        release_ingress_credit(conn, allocated - stream->recvstate.data_off);
     }
 
     khiter_t iter = kh_get(quicly_stream_t, conn->streams, stream->stream_id);
@@ -2445,14 +2455,15 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
     }
 
     /* update recvbuf */
+    uint64_t apply_at = frame->offset;
     size_t apply_len = frame->data.len;
-    if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin,
-                                       stream->_recv_aux.max_ranges)) != 0)
+    if ((ret = quicly_recvstate_update(&stream->recvstate, &apply_at, &apply_len, frame->is_fin, stream->_recv_aux.max_ranges)) !=
+        0)
         return ret;
 
     if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        uint64_t buf_offset = frame->offset + frame->data.len - apply_len - stream->recvstate.data_off;
-        size_t apply_off = frame->data.len - apply_len;
+        uint64_t buf_offset = apply_len != 0 ? apply_at - stream->recvstate.data_off : 0;
+        size_t apply_off = apply_len != 0 ? (size_t)(apply_at - frame->offset) : 0;
         QUICLY_PROBE(STREAM_ON_RECEIVE, stream->conn, stream->conn->stash.now, stream, (size_t)buf_offset, apply_off, apply_len);
         QUICLY_LOG_CONN(stream_on_receive, stream->conn, {
             PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
@@ -6353,13 +6364,17 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
         return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
 
     if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        uint64_t bytes_missing;
+        uint64_t prev_eos = stream->recvstate.eos, bytes_missing;
         if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, frame.reliable_size, frame.app_error_code,
                                           &bytes_missing)) != 0)
             return ret;
         if (stream->conn->ingress.max_data.bytes_consumed + bytes_missing > stream->conn->ingress.max_data.sender.max_committed)
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
         stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
+        /* Return the credit of the bytes that the reset has placed out of reach, down to the offset up to which memory has been
+         * allocated; the credit of the rest stays tied to that memory and is returned in `destroy_stream`. */
+        release_ingress_credit(conn, (prev_eos != UINT64_MAX ? prev_eos : frame.final_size) -
+                                         quicly_recvstate_bytes_allocated(&stream->recvstate));
         if (quicly_recvstate_transfer_complete(&stream->recvstate) && (ret = notify_receive_reset(stream)) != 0)
             return ret;
         if (stream_is_destroyable(stream))

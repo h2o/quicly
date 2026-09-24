@@ -1336,6 +1336,32 @@ static void test_destroy_returns_credit_reset(void)
 
     quicly_free(client);
     quicly_free(server);
+
+    /* when the reset arrives before the bytes it accounts for, the credit of those bytes is returned at once; they are never
+     * received, no memory ever being allocated to hold them */
+    test_setup_connected_peers(&client, &server);
+    ret = quicly_open_stream(client, &stream, 1);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(stream, "hello", 5);
+    {
+        /* the datagram carrying the five bytes is dropped, the reset that follows nonetheless reporting them as the final size */
+        quicly_address_t dest, src;
+        struct iovec datagram;
+        uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+        size_t num_datagrams = 1;
+        ret = quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf));
+        ok(ret == 0);
+        ok(num_datagrams == 1);
+    }
+    quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123));
+    transmit(client, server);
+    ok(quicly_get_stream(server, stream->stream_id) == NULL);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 5);
+    ok(shifted == 5);
+
+    quicly_free(client);
+    quicly_free(server);
     quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
 }
 
@@ -1417,10 +1443,11 @@ static void test_reset_stream_at_gap_after_reset(void)
     streambuf = stream->data;
     ok(stream->recvstate.eos == 5);
 
-    /* bytes above the reliable size arrive, stranded behind a gap that the peer will never fill */
+    /* bytes above the reliable size arrive; they are dropped rather than buffered, the peer no longer being committed to the gap
+     * below them and the credit of everything above the reliable size having been returned when the reset was received */
     ok(inject_frames(server, tail, sizeof(tail)) == 0);
     ok(!quicly_recvstate_transfer_complete(&stream->recvstate));
-    ok(stream->recvstate.received.num_ranges == 2);
+    ok(stream->recvstate.received.num_ranges == 1);
 
     /* completing the committed prefix completes the transfer regardless; waiting for the gap would hang the stream */
     ok(inject_frames(server, prefix, sizeof(prefix)) == 0);
@@ -1443,6 +1470,7 @@ static void test_reset_stream_at_data_above(void)
     quicly_conn_t *client, *server;
     quicly_stream_t *stream;
     test_streambuf_t *streambuf;
+    uint64_t consumed, shifted;
 
     quic_ctx.transport_params.reset_stream_at = 1;
     test_setup_connected_peers(&client, &server);
@@ -1454,15 +1482,20 @@ static void test_reset_stream_at_data_above(void)
     ok(stream->recvstate.eos == 5);
     ok(!quicly_recvstate_transfer_complete(&stream->recvstate));
 
-    /* All 10 bytes then arrive in one frame. Those above the Reliable Size are delivered rather than withheld, the peer being
-     * permitted to have sent them before resetting, and `eos` follows so that the stream is reported as ending where the data
-     * being handed to the application does. */
+    /* the final size is charged, and the credit of the 5 bytes above the Reliable Size returned at once; that of the 5 below is
+     * not, the peer being committed to sending them and the receive buffer therefore still to allocate for them */
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 10);
+    ok(shifted == 5);
+
+    /* All 10 bytes then arrive in one frame. Only the 5 committed to are kept; the rest is dropped, the peer having been given
+     * back the credit for it when it reset. */
     ok(inject_frames(server, whole, sizeof(whole)) == 0);
     ok(quicly_recvstate_transfer_complete(&stream->recvstate));
-    ok(stream->recvstate.eos == 10);
-    ok(quicly_recvstate_bytes_available(&stream->recvstate) == 10);
-    ok(quicly_streambuf_ingress_get(stream).len == 10);
-    ok(buffer_is(&streambuf->super.ingress, "0123456789"));
+    ok(stream->recvstate.eos == 5);
+    ok(quicly_recvstate_bytes_available(&stream->recvstate) == 5);
+    ok(quicly_streambuf_ingress_get(stream).len == 5);
+    ok(buffer_is(&streambuf->super.ingress, "01234"));
     ok(streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
 
     quicly_free(client);
@@ -1479,6 +1512,7 @@ static void test_reset_stream_at_gap_above(void)
     uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
     quicly_conn_t *client, *server;
     quicly_stream_t *stream;
+    uint64_t consumed, shifted;
 
     quic_ctx.transport_params.reset_stream_at = 1;
     test_setup_connected_peers(&client, &server);
@@ -1488,6 +1522,12 @@ static void test_reset_stream_at_gap_above(void)
     ok((stream = quicly_get_stream(server, 0)) != NULL);
     ok(inject_frames(server, reset, sizeof(reset)) == 0);
     ok(stream->recvstate.eos == 5);
+
+    /* the reset returns no credit: every byte it accounts for is either still to be delivered or already in the receive buffer,
+     * the latter being held above `eos` for as long as the stream lives */
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 10);
+    ok(shifted == 0);
 
     /* Completing the committed prefix completes the transfer. The gap keeps `eos` where it is, and the bytes stranded above it
      * are not handed to the application; were they, it would be reading the gap as well. */

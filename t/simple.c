@@ -723,14 +723,14 @@ static void test_reliable_reset_tail(void)
     ok(server_stream->recvstate.eos == 5);
     ok(!quicly_recvstate_transfer_complete(&server_stream->recvstate));
 
-    /* The withheld bytes then arrive. All ten are handed to the application rather than the five committed to, the peer having
-     * sent them before resetting, and `eos` follows so that the stream ends where the data handed over does. */
+    /* The withheld bytes then arrive. Only the five committed to are handed to the application; the rest is dropped, the server
+     * having returned the credit for it the moment the reset told it those bytes would never be delivered. */
     ok(decode_packets(&decoded, &data_datagram, 1) == 1);
     ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
-    ok(server_stream->recvstate.eos == 10);
+    ok(server_stream->recvstate.eos == 5);
     ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
-    ok(buffer_is(&server_streambuf->super.ingress, "helloworld"));
+    ok(buffer_is(&server_streambuf->super.ingress, "hello"));
 
     /* the ten bytes are charged to connection-level flow control on both ends */
     ok(max_data_is_equal(client, server));

@@ -32,7 +32,7 @@ void quicly_recvstate_init(quicly_recvstate_t *state)
 
 void quicly_recvstate_init_closed(quicly_recvstate_t *state)
 {
-    quicly_ranges_init(&state->received);
+    quicly_ranges_init_with_range(&state->received, 0, 0);
     state->data_off = 0;
     state->eos = 0;
     state->app_error_code = UINT64_MAX;
@@ -43,68 +43,53 @@ void quicly_recvstate_dispose(quicly_recvstate_t *state)
     quicly_ranges_clear(&state->received);
 }
 
-quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, size_t *len, int is_fin, size_t max_ranges)
+quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t *off, size_t *len, int is_fin, size_t max_ranges)
 {
     assert(!quicly_recvstate_transfer_complete(state));
 
-    /* eos handling */
+    /* end-of-stream consistency check: the check is possible only until a reliable reset is received, since it might reduce `eos`
+     * to the reliable size */
     if (state->eos == UINT64_MAX) {
         if (is_fin) {
-            state->eos = off + *len;
+            state->eos = *off + *len;
             if (state->eos < state->received.ranges[state->received.num_ranges - 1].end)
                 return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
         }
-    } else if (off + *len > state->eos) {
-        /* Data above the offset at which the stream ends. Before a reset that is a violation. Afterwards it is not, the peer might
-         * have had some frames already inflight. */
+    } else if (*off + *len > state->eos) {
         if (state->app_error_code == UINT64_MAX)
             return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
+        /* The peer might have had frames inflight when it reset, but it is no longer committed to anything at or above `eos`. Bytes
+         * above must be dropped to retain consistency of the connection-level flow credit; only bytes up to `eos` are managed. */
+        *len = *off < state->eos ? (size_t)(state->eos - *off) : 0;
     }
 
     /* no state change; entire data has already been received */
-    if (off + *len <= state->data_off) {
+    if (*off + *len <= state->data_off) {
         *len = 0;
-        if (state->received.ranges[0].end == state->eos)
-            goto Complete;
         return 0;
     }
 
     /* adjust if partially received */
-    if (off < state->data_off) {
-        size_t delta = state->data_off - off;
-        off += delta;
+    if (*off < state->data_off) {
+        size_t delta = state->data_off - *off;
+        *off += delta;
         *len -= delta;
     }
 
     /* update received range */
     if (*len != 0) {
         int ret;
-        if ((ret = quicly_ranges_add(&state->received, off, off + *len)) != 0)
+        if ((ret = quicly_ranges_add(&state->received, *off, *off + *len)) != 0)
             return ret;
         if (state->received.num_ranges > max_ranges)
             return QUICLY_ERROR_STATE_EXHAUSTION;
     }
-    /* Once the stream has been reset, `eos` follows the data that has become contiguously available; the peer is permitted to
-     * have sent beyond the reliable size, and those bytes are delivered rather than withheld. */
-    if (state->app_error_code != UINT64_MAX && state->received.ranges[0].start == 0 && state->received.ranges[0].end > state->eos)
-        state->eos = state->received.ranges[0].end;
-    /* Completion is the contiguous prefix having reached `eos`. Ranges above it, which a reset can leave stranded behind a gap
-     * that the peer is no longer committed to filling, do not hold it back; `Complete` discards them. */
-    if (state->received.ranges[0].start == 0 && state->received.ranges[0].end >= state->eos)
-        goto Complete;
-
-    return 0;
-
-Complete:
-    quicly_ranges_clear(&state->received);
     return 0;
 }
 
 quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_size, uint64_t reliable_size,
                                       uint64_t app_error_code, uint64_t *bytes_missing)
 {
-    int ret;
-
     assert(!quicly_recvstate_transfer_complete(state));
     assert(reliable_size <= final_size);
 
@@ -132,19 +117,14 @@ quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_
     }
 
     /* Raise the reliable size to the bytes that have already been received contiguously, if that is greater; they cannot become
-     * undelivered. Offsets above are dropped, the peer no longer being committed to them. */
+     * undelivered. Ranges above it are retained; see quicly_recvstate_bytes_allocated. */
     if (state->received.ranges[0].start == 0 && reliable_size < state->received.ranges[0].end)
         reliable_size = state->received.ranges[0].end;
-    if ((ret = quicly_ranges_subtract(&state->received, reliable_size, UINT64_MAX)) != 0)
-        return ret;
 
-    /* from here on `eos` is the offset the peer remains committed to delivering, rather than the final size */
+    /* from here on `eos` is the offset the peer remains committed to delivering, rather than the final size; the transfer is
+     * complete once the contiguous prefix reaches it, which the ranges stranded above by the reset do not hold back */
     state->eos = reliable_size;
     state->app_error_code = app_error_code;
-
-    /* if all the bytes that remain to be received have been received, clear the ranges to indicate that */
-    if (state->received.num_ranges == 1 && state->received.ranges[0].start == 0 && state->received.ranges[0].end == state->eos)
-        quicly_ranges_clear(&state->received);
 
     return 0;
 }
