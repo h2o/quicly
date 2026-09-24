@@ -1425,7 +1425,7 @@ static void test_retransmit(void)
     quic_ctx.transport_params.max_stream_data.bidi_local = 4096;
     quic_ctx.transport_params.max_stream_data.bidi_remote = 4096;
     quic_ctx.transport_params.max_stream_data.uni = 4096;
-
+    
 #define TEST(frame, from_server, trigger)                                                                                          \
     subtest(#frame, do_test_retransmit, offsetof(quicly_stats_t, num_frames_sent.frame), from_server, retransmit_trigger_##trigger)
     TEST(reset_stream, 0, reset_stream);
@@ -1440,8 +1440,109 @@ static void test_retransmit(void)
     TEST(streams_blocked, 0, streams_blocked);
 #endif
 #undef TEST
-
+    
     quic_ctx.transport_params = orig;
+}
+
+static void test_destroy_returns_credit_fin(void)
+{
+    uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint64_t consumed, shifted;
+    quicly_error_t ret;
+
+    quic_ctx.transport_params.max_streams_uni = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the client sends five bytes and closes the stream */
+    ret = quicly_open_stream(client, &stream, 1);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(stream, "hello", 5);
+    ok(quicly_streambuf_egress_shutdown(stream) == 0);
+    transmit(client, server);
+
+    /* being unidirectional, the stream is destroyed as soon as it is received in full, the application never having read it */
+    ok(quicly_get_stream(server, stream->stream_id) == NULL);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 5);
+    ok(shifted == 5);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
+}
+
+static void test_destroy_returns_credit_reset(void)
+{
+    uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint64_t consumed, shifted;
+    quicly_error_t ret;
+
+    quic_ctx.transport_params.max_streams_uni = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the client sends five bytes, then resets the stream */
+    ret = quicly_open_stream(client, &stream, 1);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(stream, "hello", 5);
+    transmit(client, server);
+    quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123));
+    transmit(client, server);
+
+    ok(quicly_get_stream(server, stream->stream_id) == NULL);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 5);
+    ok(shifted == 5);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
+}
+
+static quicly_error_t refuse_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+{
+    return QUICLY_ERROR_STATE_EXHAUSTION;
+}
+
+static void test_stream_open_refused(void)
+{
+    uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
+    quicly_stream_open_t *stream_open_orig = quic_ctx.stream_open, refuse = {refuse_stream_open};
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[4];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams), num_packets, i;
+    quicly_error_t ret, last_ret = 0;
+
+    quic_ctx.transport_params.max_streams_uni = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the client opens a stream, which the server refuses */
+    ret = quicly_open_stream(client, &stream, 1);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(stream, "hello", 5);
+    quic_ctx.stream_open = &refuse;
+    ret = quicly_send(client, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    num_packets = decode_packets(decoded, datagrams, num_datagrams);
+    for (i = 0; i != num_packets; ++i) {
+        if ((ret = quicly_receive(server, NULL, &fake_address.sa, decoded + i)) != 0)
+            last_ret = ret;
+    }
+    ok(last_ret == QUICLY_ERROR_STATE_EXHAUSTION);
+    quic_ctx.stream_open = stream_open_orig;
+
+    /* the refusal being fatal, the server closes the connection; freeing it destroys the stream that was refused */
+    ok(quicly_close(server, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "") == 0);
+    quicly_free(server);
+    quicly_free(client);
+    quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
 }
 
 /**
@@ -1720,6 +1821,9 @@ int main(int argc, char **argv)
     subtest("cc", test_cc);
 
     subtest("retransmit", test_retransmit);
+    subtest("destroy-returns-credit-fin", test_destroy_returns_credit_fin);
+    subtest("destroy-returns-credit-reset", test_destroy_returns_credit_reset);
+    subtest("stream-open-refused", test_stream_open_refused);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
