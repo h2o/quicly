@@ -1353,6 +1353,17 @@ static void retransmit_trigger_streams_blocked(quicly_conn_t *client, quicly_con
     ok(quicly_open_stream(client, &stream, 1) == 0);
 }
 
+static void retransmit_trigger_new_token(quicly_conn_t *client, quicly_conn_t *server)
+{
+    ok(quicly_send_resumption_token(server) == 0);
+}
+
+static quicly_error_t retransmit_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn,
+                                                           ptls_buffer_t *buf, quicly_address_token_plaintext_t *token)
+{
+    return ptls_buffer_reserve(buf, 16) == 0 ? (buf->off += 16, 0) : PTLS_ERROR_NO_MEMORY;
+}
+
 /**
  * Tests that a frame is resent when the packet carrying it is lost. After `trigger` is run, the two endpoints exchange packets.
  * The datagrams of the first flight carrying the frame are dropped, and the frame is expected to be sent again before the sender
@@ -1418,7 +1429,9 @@ Exit:
 
 static void test_retransmit(void)
 {
+    static quicly_generate_resumption_token_t generate_resumption_token = {retransmit_generate_resumption_token};
     quicly_transport_parameters_t orig = quic_ctx.transport_params;
+    quic_ctx.generate_resumption_token = &generate_resumption_token;
     quic_ctx.transport_params.max_streams_bidi = 1;
     quic_ctx.transport_params.max_streams_uni = 1;
     quic_ctx.transport_params.max_data = 4096;
@@ -1439,9 +1452,11 @@ static void test_retransmit(void)
 #if 0 /* STREAMS_BLOCKED is not retransmitted, as RFC 9000 does not require it */
     TEST(streams_blocked, 0, streams_blocked);
 #endif
+    TEST(new_token, 1, new_token);
 #undef TEST
     
     quic_ctx.transport_params = orig;
+    quic_ctx.generate_resumption_token = NULL;
 }
 
 static void test_destroy_returns_credit_fin(void)
