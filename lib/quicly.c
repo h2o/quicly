@@ -1369,7 +1369,8 @@ static int should_send_max_streams(quicly_conn_t *conn, int uni)
     if (concurrency == 0)
         return 0;
 
-    if (!quicly_maxsender_should_send_max(maxsender, group->next_stream_id / 4, group->num_streams, 768))
+    /* the value being advertised is the number of streams that have been closed plus the concurrency */
+    if (!quicly_maxsender_should_send_max(maxsender, group->next_stream_id / 4 - group->num_streams, (uint32_t)concurrency, 768))
         return 0;
 
     return 1;
@@ -6606,6 +6607,7 @@ static quicly_error_t handle_streams_blocked_frame(quicly_conn_t *conn, struct s
         PTLS_LOG_ELEMENT_BOOL(is_unidirectional, uni);
     });
 
+    quicly_maxsender_blocked(uni ? &conn->ingress.max_streams.uni : &conn->ingress.max_streams.bidi, frame.count);
     if (should_send_max_streams(conn, uni))
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
 
