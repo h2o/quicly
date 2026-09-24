@@ -54,8 +54,7 @@ void quicly_sendstate_dispose(quicly_sendstate_t *state)
 
 int quicly_sendstate_transfer_complete(quicly_sendstate_t *state)
 {
-    return quicly_sendstate_eos_type(state) != QUICLY_SENDSTATE_EOS_TYPE_NONE &&
-           state->eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED && state->acked.ranges[0].end == state->final_size;
+    return state->eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED && state->acked.ranges[0].end == state->final_size;
 }
 
 int quicly_sendstate_activate(quicly_sendstate_t *state)
