@@ -1468,6 +1468,50 @@ static void test_retransmit(void)
     quic_ctx.transport_params = orig;
 }
 
+static void test_retransmit_max_stream_data_lower_window(void)
+{
+    uint64_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data.bidi_remote;
+    quic_ctx.transport_params.max_stream_data.bidi_remote = 4096;
+
+    quicly_conn_t *client, *server;
+    quicly_stream_t *client_stream, *server_stream;
+    static uint8_t data[3072];
+
+    test_setup_connected_peers(&client, &server);
+
+    /* consuming 3072 bytes raises the advertised limit from 4096 to 7168 */
+    ok(quicly_open_stream(client, &client_stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(client_stream, data, sizeof(data)) == 0);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    ok(((quicly_streambuf_t *)server_stream->data)->ingress.off == sizeof(data));
+    quicly_streambuf_ingress_shift(server_stream, sizeof(data));
+
+    /* send the MAX_STREAM_DATA update, dropping the datagrams */
+    quicly_address_t dest, src;
+    struct iovec datagrams[10];
+    uint8_t packetsbuf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(server, &dest, &src, datagrams, &num_datagrams, packetsbuf, sizeof(packetsbuf)) == 0);
+    ok(num_datagrams > 0);
+    ok(server->super.stats.num_frames_sent.max_stream_data == 1);
+    ok(server_stream->_send_aux.max_stream_data_sender.max_committed == 7168);
+    ok(client_stream->_send_aux.max_stream_data == 4096);
+
+    /* lower the window before PTO; retransmission must preserve the already advertised limit */
+    quicly_stream_set_receive_window(server_stream, 1024);
+    quic_now = quicly_get_first_timeout(server);
+    ok(transmit(server, client) > 0);
+    ok(server->super.stats.num_frames_sent.max_stream_data == 2);
+    ok(server_stream->_send_aux.max_stream_data_sender.max_committed == 7168);
+    ok(client_stream->_send_aux.max_stream_data == 7168);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_stream_data.bidi_remote = max_stream_data_orig;
+}
+
 static void test_destroy_returns_credit_fin(void)
 {
     uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
@@ -1845,6 +1889,7 @@ int main(int argc, char **argv)
     subtest("cc", test_cc);
 
     subtest("retransmit", test_retransmit);
+    subtest("retransmit-max-stream-data-lower-window", test_retransmit_max_stream_data_lower_window);
     subtest("destroy-returns-credit-fin", test_destroy_returns_credit_fin);
     subtest("destroy-returns-credit-reset", test_destroy_returns_credit_reset);
     subtest("stream-open-refused", test_stream_open_refused);

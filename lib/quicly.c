@@ -4344,6 +4344,9 @@ static quicly_error_t send_control_frames_of_stream(quicly_stream_t *stream, qui
     /* send MAX_STREAM_DATA if necessary */
     if (should_send_max_stream_data(stream)) {
         uint64_t new_value = stream->recvstate.data_off + stream->_recv_aux.window;
+        /* the receive window might have been lowered after a greater limit was advertised, in which case that limit is resent */
+        if (new_value < (uint64_t)stream->_send_aux.max_stream_data_sender.max_committed)
+            new_value = stream->_send_aux.max_stream_data_sender.max_committed;
         quicly_sent_t *sent;
         /* prepare */
         if ((ret = allocate_ack_eliciting_frame(stream->conn, s, QUICLY_MAX_STREAM_DATA_FRAME_CAPACITY, &sent,
