@@ -93,6 +93,10 @@ typedef struct st_quicly_sendstate_sent_t {
 void quicly_sendstate_init(quicly_sendstate_t *state);
 void quicly_sendstate_init_closed(quicly_sendstate_t *state);
 void quicly_sendstate_dispose(quicly_sendstate_t *state);
+/**
+ * Returns if the transfer has completed; i.e., all data including FIN or RESET_STREAM_AT(reliable_size!=0) have been acked.
+ * Ordinary RESET_STREAM might still be inflight.
+ */
 int quicly_sendstate_transfer_complete(quicly_sendstate_t *state);
 /**
  * Returns the marker that the stream ends with (QUICLY_SENDSTATE_EOS_TYPE_*), NONE being returned while the stream is open.

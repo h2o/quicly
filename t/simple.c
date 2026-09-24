@@ -177,7 +177,7 @@ static void test_reset_then_close(void)
     server_stream = quicly_get_stream(server, stream_id);
     ok(server_stream != NULL);
     server_streambuf = server_stream->data;
-    ok(!quicly_sendstate_is_open(&server_stream->sendstate));
+    ok(quicly_sendstate_transfer_complete(&server_stream->sendstate));
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
     ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     ok(server_streambuf->error_received.stop_sending == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
@@ -351,7 +351,7 @@ static void tiny_stream_window(void)
     ok(quicly_num_streams(client) == 1);
     ok(!server_streambuf->is_detached);
     ok(server_streambuf->error_received.stop_sending == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
-    ok(!quicly_sendstate_is_open(&server_stream->sendstate));
+    ok(quicly_sendstate_transfer_complete(&server_stream->sendstate));
 
     transmit(server, client);
 
@@ -416,14 +416,14 @@ static void test_reset_during_loss(void)
 
     /* transmit RESET_STREAM */
     quicly_reset_stream(client_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
-    ok(!quicly_sendstate_is_open(&client_stream->sendstate));
+    ok(quicly_sendstate_transfer_complete(&client_stream->sendstate));
     transmit(client, server);
 
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
     ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     quicly_reset_stream(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
     ok(!server_streambuf->is_detached);
-    ok(!quicly_sendstate_is_open(&server_stream->sendstate));
+    ok(quicly_sendstate_transfer_complete(&server_stream->sendstate));
 
     quicly_get_max_data(client, NULL, &tmp, NULL, NULL);
     ok(tmp == max_data_at_start + 8);

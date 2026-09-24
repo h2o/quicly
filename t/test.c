@@ -1600,7 +1600,8 @@ static void test_stop_sending_after_reset(int application_reset)
     transmit(client, server);
     ok(stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_INFLIGHT);
     ok(quicly_sendstate_is_fully_inflight(&stream->sendstate));
-    ok(!quicly_sendstate_transfer_complete(&stream->sendstate));
+    /* a RESET_STREAM is not part of the transfer, which is therefore complete from the moment the stream is reset */
+    ok(quicly_sendstate_transfer_complete(&stream->sendstate));
     ok(inject_frames(client, stop, sizeof(stop)) == 0);
     ok(stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_INFLIGHT);
     ok(stream->sendstate.app_error_code == error_code);
@@ -1608,6 +1609,7 @@ static void test_stop_sending_after_reset(int application_reset)
     quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
     transmit(server, client);
     ok(quicly_sendstate_transfer_complete(&stream->sendstate));
+    ok(stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED);
 
     quicly_free(client);
     quicly_free(server);

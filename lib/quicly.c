@@ -1013,7 +1013,8 @@ static int stream_is_destroyable(quicly_stream_t *stream)
         return 0;
     if (!quicly_sendstate_transfer_complete(&stream->sendstate))
         return 0;
-    return 1;
+    /* check delivery of ordinary RESET_STREAM; it is not covered by quicly_sendstate_transfer_complete */
+    return stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED;
 }
 
 static void sched_stream_control(quicly_stream_t *stream)

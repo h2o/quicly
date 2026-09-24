@@ -54,7 +54,13 @@ void quicly_sendstate_dispose(quicly_sendstate_t *state)
 
 int quicly_sendstate_transfer_complete(quicly_sendstate_t *state)
 {
-    return state->eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED && state->acked.ranges[0].end == state->final_size;
+    if (state->acked.ranges[0].end == state->final_size) {
+        if (state->eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED)
+            return 1;
+        if (state->app_error_code != UINT64_MAX && state->reliable_size == 0)
+            return 1;
+    }
+    return 0;
 }
 
 int quicly_sendstate_is_fully_inflight(quicly_sendstate_t *state)
