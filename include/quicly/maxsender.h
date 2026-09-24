@@ -71,8 +71,11 @@ static int quicly_maxsender_should_send_max(quicly_maxsender_t *m, int64_t buffe
  */
 static int quicly_maxsender_should_send_blocked(quicly_maxsender_t *m, int64_t local_max);
 static void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly_maxsender_sent_t *sent);
-static void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent);
-static void quicly_maxsender_lost(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent);
+/**
+ * Updates the state when the frame recorded as `sent` is acked or deemed lost. Returns if `max_committed` needs to be sent again
+ * for it to reach the peer; i.e., if the frame carried `max_committed` and has been deemed lost.
+ */
+static int quicly_maxsender_on_ack(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent, int acked);
 
 /* inline definitions */
 
@@ -129,18 +132,15 @@ inline void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly
     sent->value = value;
 }
 
-inline void quicly_maxsender_acked(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent)
-{
-    /* the ACK might be a late one, arriving after the frame has been deemed lost */
-    if ((int64_t)sent->value == m->max_committed)
-        m->lost = 0;
-}
-
-inline void quicly_maxsender_lost(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent)
+inline int quicly_maxsender_on_ack(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent, int acked)
 {
     /* a frame carrying an older value needs no action, as a newer one carrying `max_committed` has been sent */
-    if ((int64_t)sent->value == m->max_committed)
-        m->lost = 1;
+    if ((int64_t)sent->value != m->max_committed)
+        return 0;
+
+    /* an ACK might be a late one, arriving after the frame has been deemed lost */
+    m->lost = !acked;
+    return m->lost;
 }
 
 #ifdef __cplusplus

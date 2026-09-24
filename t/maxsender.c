@@ -41,12 +41,12 @@ static void test_basic(void)
     quicly_maxsender_record(&m, 125, &ackargs);
     ok(!quicly_maxsender_should_send_max(&m, 49, 100, 768));
     ok(quicly_maxsender_should_send_max(&m, 50, 100, 768));
-    quicly_maxsender_acked(&m, &ackargs);
+    ok(!quicly_maxsender_on_ack(&m, &ackargs, 1));
     ok(!quicly_maxsender_should_send_max(&m, 49, 100, 768));
     ok(quicly_maxsender_should_send_max(&m, 50, 100, 768));
     quicly_maxsender_record(&m, 150, &ackargs);
     ok(!quicly_maxsender_should_send_max(&m, 74, 100, 768));
-    quicly_maxsender_lost(&m, &ackargs);
+    ok(quicly_maxsender_on_ack(&m, &ackargs, 0));
     ok(quicly_maxsender_should_send_max(&m, 74, 100, 768));
 }
 
