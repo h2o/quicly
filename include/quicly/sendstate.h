@@ -124,7 +124,7 @@ inline int quicly_sendstate_is_open(quicly_sendstate_t *state)
 
 inline int quicly_sendstate_is_fully_inflight(quicly_sendstate_t *state)
 {
-    return state->size_inflight == state->final_size;
+    return state->eos_state != QUICLY_SENDSTATE_EOS_STATE_UNSENT && state->size_inflight == state->final_size;
 }
 
 #ifdef __cplusplus

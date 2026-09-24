@@ -224,8 +224,10 @@ static void test_send_then_close(void)
     ok(client_stream->sendstate.acked.ranges[0].start == 0);
     ok(client_stream->sendstate.acked.ranges[0].end == 5);
     quicly_streambuf_egress_shutdown(client_stream);
+    ok(!quicly_sendstate_is_fully_inflight(&client_stream->sendstate));
 
     transmit(client, server);
+    ok(quicly_sendstate_is_fully_inflight(&client_stream->sendstate));
 
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
     ok(buffer_is(&server_streambuf->super.ingress, ""));
@@ -920,6 +922,7 @@ static void test_reliable_reset_after_fin(void)
     ok(ret == 0);
     ok(num_datagrams == 1);
     ok(client_stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_INFLIGHT);
+    ok(quicly_sendstate_is_fully_inflight(&client_stream->sendstate));
 
     /* It then resets, committing to the first half. The stream still ends at ten, that being where the FIN in flight says it
      * does, and RESET_STREAM_AT supersedes that FIN. */
@@ -928,6 +931,7 @@ static void test_reliable_reset_after_fin(void)
     ok(client_stream->sendstate.reliable_size == 5);
     ok(client_stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_UNSENT &&
        quicly_sendstate_eos_type(&client_stream->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET_AT);
+    ok(!quicly_sendstate_is_fully_inflight(&client_stream->sendstate));
     quicly_get_stats(client, &before);
     num_datagrams = 1;
     ret = quicly_send(client, &dest, &src, &reset_datagram, &num_datagrams, resetbuf, sizeof(resetbuf));
@@ -936,6 +940,7 @@ static void test_reliable_reset_after_fin(void)
     quicly_get_stats(client, &after);
     ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at + 1);
     ok(after.num_frames_sent.stream == before.num_frames_sent.stream);
+    ok(quicly_sendstate_is_fully_inflight(&client_stream->sendstate));
 
     /* the reset arrives first, telling the server that only five bytes are to be delivered */
     ok(decode_packets(&decoded, &reset_datagram, 1) == 1);
@@ -966,6 +971,7 @@ static void test_reliable_reset_after_fin(void)
     transmit(server, client);
     ok(client_stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED);
     ok(quicly_sendstate_transfer_complete(&client_stream->sendstate));
+    ok(quicly_sendstate_is_fully_inflight(&client_stream->sendstate));
     ok(max_data_is_equal(client, server));
 
     /* On a second stream the FIN arrives first and is acknowledged, the reset being withheld. Every byte of the stream is then
