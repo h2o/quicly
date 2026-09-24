@@ -1395,6 +1395,16 @@ static void destroy_stream(quicly_stream_t *stream, quicly_error_t err)
     if (stream->callbacks != NULL)
         stream->callbacks->on_destroy(stream, err);
 
+    /* Return the connection-level credit of the bytes that were left unread by the application or never received after a reset.
+     * Doing so here rather than earlier is what keeps the credit tied to the memory; see GHSA-f7qr-4p37-9gx9. */
+    if (stream->recvstate.eos != UINT64_MAX) {
+        assert(stream->stream_id >= 0);
+        assert(stream->recvstate.data_off <= stream->recvstate.eos);
+        conn->ingress.max_data.bytes_shifted += stream->recvstate.eos - stream->recvstate.data_off;
+        if (should_send_max_data(conn))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    }
+
     khiter_t iter = kh_get(quicly_stream_t, conn->streams, stream->stream_id);
     assert(iter != kh_end(conn->streams));
     kh_del(quicly_stream_t, conn->streams, iter);
@@ -3513,8 +3523,11 @@ static quicly_error_t on_ack_reset_stream(quicly_sentmap_t *map, const quicly_se
 
     if ((stream = quicly_get_stream(conn, sent->data.stream_state_sender.stream_id)) != NULL) {
         on_ack_stream_state_sender(&stream->_send_aux.reset_stream.sender_state, acked);
-        if (stream_is_destroyable(stream))
+        if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_ACKED) {
+            sched_stream_control(stream);
+        } else if (stream_is_destroyable(stream)) {
             destroy_stream(stream, 0);
+        }
     }
 
     return 0;
@@ -3617,7 +3630,7 @@ static quicly_error_t on_ack_new_token(quicly_sentmap_t *map, const quicly_sent_
     }
 
     if (conn->egress.new_token.num_inflight == 0 && conn->egress.new_token.max_acked < conn->egress.new_token.generation)
-        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
 
     return 0;
 }
@@ -4430,7 +4443,7 @@ int quicly_is_blocked(quicly_conn_t *conn)
     /* schedule the transmission of DATA_BLOCKED frame, if it's new information */
     if (conn->egress.data_blocked == QUICLY_SENDER_STATE_NONE) {
         conn->egress.data_blocked = QUICLY_SENDER_STATE_SEND;
-        conn->egress.pending_flows = QUICLY_PENDING_FLOW_OTHERS_BIT;
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
 
     return 1;
@@ -5691,6 +5704,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         goto Exit;
                     if (s->dst_end - s->dst >= required_space) {
                         s->dst = quicly_encode_datagram_frame(s->dst, *payload);
+                        ++conn->super.stats.num_frames_sent.datagram;
                         QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, payload->base, payload->len);
                         QUICLY_LOG_CONN(datagram_send, conn,
                                         { PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(payload, payload->base, payload->len); });
@@ -6215,12 +6229,13 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
                 }
                 QUICLY_PROBE(STREAM_ON_OPEN, conn, conn->stash.now, *stream);
                 QUICLY_LOG_CONN(stream_on_open, conn, { PTLS_LOG_ELEMENT_SIGNED(stream_id, (*stream)->stream_id); });
+                /* count the stream before calling the callback, as it remains in `conn->streams` even if the callback fails */
+                ++group->num_streams;
+                group->next_stream_id += 4;
                 if ((ret = conn->super.ctx->stream_open->cb(conn->super.ctx->stream_open, *stream)) != 0) {
                     *stream = NULL;
                     goto Exit;
                 }
-                ++group->num_streams;
-                group->next_stream_id += 4;
             } while (stream_id != (*stream)->stream_id);
         }
     }
@@ -6281,6 +6296,8 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
         uint64_t bytes_missing;
         if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, &bytes_missing)) != 0)
             return ret;
+        if (stream->conn->ingress.max_data.bytes_consumed + bytes_missing > stream->conn->ingress.max_data.sender.max_committed)
+            return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
         stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
         quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code);
         QUICLY_PROBE(STREAM_ON_RECEIVE_RESET, stream->conn, stream->conn->stash.now, stream, err);

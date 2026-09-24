@@ -52,10 +52,14 @@ extern "C" {
  */
 #define QUICLY_BETA_RENO 0.5
 /**
- * Beta used when congestion is signalled by ECN-CE alone; 0.85 is the value recommended by RFC 8511 for congestion controllers
- * using 0.7 as the loss-based factor.
+ * Beta used when congestion is signalled by ECN-CE alone; 0.85 is the value recommended by ABE (RFC 8511) for congestion
+ * controllers using 0.7 as the loss-based factor. To disable, ABE set the `QUICLY_USE_ABE` macro to 0.
  */
 #define QUICLY_BETA_ECN 0.85
+
+#ifndef QUICLY_USE_ABE
+#define QUICLY_USE_ABE 1
+#endif
 
 /* factors defined by Rapid Start (see the I-D) */
 #define QUICLY_RAPID_START_K (2. / 3)
@@ -607,7 +611,7 @@ inline void quicly_cc_rapid_start_on_first_lost(struct st_quicly_cc_rapid_start_
     rs->newest_rtt_sample_until = -1;
     rs->recovery.by_ecn = by_ecn != 0;
 
-    double beta = rs->recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    double beta = QUICLY_USE_ABE && rs->recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
 
     rs->recovery.cwnd_floor = *cwnd * (1. / 3) * beta;
     if (rs->recovery.cwnd_floor < cwnd_floor)
@@ -636,7 +640,8 @@ inline void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t 
 #undef ENTRY
     };
 
-    uint32_t reduction = factors[rs->recovery.by_ecn].ack * bytes_acked + factors[rs->recovery.by_ecn].loss * bytes_lost;
+    int use_ecn_factor = QUICLY_USE_ABE && rs->recovery.by_ecn;
+    uint32_t reduction = factors[use_ecn_factor].ack * bytes_acked + factors[use_ecn_factor].loss * bytes_lost;
     assert(reduction <= *cwnd && "CWND never underflows");
     *cwnd -= reduction;
     if (*cwnd < rs->recovery.cwnd_floor)

@@ -122,7 +122,7 @@ static double cubic_fast_convergence_w_max(double cwnd_prior, double cwnd_epoch)
  */
 static uint32_t cubic_post_rapid_start_wmax(uint32_t cwnd_epoch, int by_ecn)
 {
-    double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    double beta = QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
     double w_max = 2. * cwnd_epoch / beta;
     return w_max < UINT32_MAX ? w_max : UINT32_MAX;
 }
@@ -272,9 +272,9 @@ static uint32_t cuback_bytes_per_mtu_increase(const struct st_quicly_cc_cuback_t
     double k = fast_cbrt((w_max - cwnd_epoch) / (QUICLY_CUBIC_C * reference_mtu));
 
     double bytes0 = cuback_cwnd_to_bytes_sent(cwnd, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k, actual_mtu,
-                                              reference_mtu, cubic_friendly_alpha[state->by_ecn]);
+                                              reference_mtu, cubic_friendly_alpha[QUICLY_USE_ABE && state->by_ecn]);
     double bytes1 = cuback_cwnd_to_bytes_sent((double)cwnd + actual_mtu, cwnd_epoch, w_max, state->cwnd_prior, state->bandwidth, k,
-                                              actual_mtu, reference_mtu, cubic_friendly_alpha[state->by_ecn]);
+                                              actual_mtu, reference_mtu, cubic_friendly_alpha[QUICLY_USE_ABE && state->by_ecn]);
     double bytes = bytes1 - bytes0;
 
     /* Past W_max the curve grows without bound, therefore the increase is capped at 50% of CWND per RTT as RFC 9438 does. Below
@@ -329,7 +329,7 @@ static uint32_t cubic_quantized_w_est(const struct st_quicly_cc_cubic_t *state, 
 static uint32_t cubic_update_w_est(struct st_quicly_cc_cubic_t *state, uint32_t cwnd, uint32_t cwnd_epoch, uint32_t bytes,
                                    uint32_t actual_mtu, uint32_t reference_mtu)
 {
-    double alpha = state->w_est >= state->cwnd_prior ? 1 : cubic_friendly_alpha[state->by_ecn];
+    double alpha = state->w_est >= state->cwnd_prior ? 1 : cubic_friendly_alpha[QUICLY_USE_ABE && state->by_ecn];
     state->w_est += alpha * bytes / cwnd * reference_mtu;
     return cubic_quantized_w_est(state, cwnd_epoch, actual_mtu);
 }
@@ -507,7 +507,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         pico_on_acked(cc, loss, 0, cc->recovery_end, (uint32_t)loss->sentmap.bytes_in_flight, 0, next_pn, now,
                       max_udp_payload_size);
 
-    double beta = cc->type == &quicly_cc_type_reno ? QUICLY_BETA_RENO : (bytes == 0 ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
+    double beta =
+        cc->type == &quicly_cc_type_reno ? QUICLY_BETA_RENO : (QUICLY_USE_ABE && bytes == 0 ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
 
     /* Zero-byte congestion reports are ECN signals, not lost packets. They still enter recovery below, but cannot be undone by
      * late ACKs because no packet was deemed lost. */
