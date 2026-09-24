@@ -1353,6 +1353,25 @@ static void retransmit_trigger_streams_blocked(quicly_conn_t *client, quicly_con
     ok(quicly_open_stream(client, &stream, 1) == 0);
 }
 
+/* same as above, but after a STREAMS_BLOCKED frame has been acked and the peer has raised the limit */
+static void retransmit_trigger_streams_blocked_raised(quicly_conn_t *client, quicly_conn_t *server)
+{
+    quicly_stream_t *stream, *blocked;
+    /* get blocked at the initial limit, and have the STREAMS_BLOCKED frame acked */
+    ok(quicly_open_stream(client, &stream, 1) == 0);
+    ok(quicly_open_stream(client, &blocked, 1) == 0);
+    transmit(client, server);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+    /* close the first stream so that the server raises the limit, which opens the blocked stream */
+    quicly_streambuf_egress_write(stream, "a", 1);
+    quicly_streambuf_egress_shutdown(stream);
+    transmit(client, server);
+    transmit(server, client);
+    /* get blocked again */
+    ok(quicly_open_stream(client, &stream, 1) == 0);
+}
+
 /**
  * Tests that a frame is resent when the packet carrying it is lost. After `trigger` is run, the two endpoints exchange packets.
  * The datagrams of the first flight carrying the frame are dropped, and the frame is expected to be sent again before the sender
@@ -1436,9 +1455,8 @@ static void test_retransmit(void)
     TEST(data_blocked, 0, data_blocked);
     TEST(max_streams_bidi, 1, max_streams_bidi);
     TEST(max_streams_uni, 1, max_streams_uni);
-#if 0 /* STREAMS_BLOCKED is not retransmitted, as RFC 9000 does not require it */
     TEST(streams_blocked, 0, streams_blocked);
-#endif
+    TEST(streams_blocked, 0, streams_blocked_raised);
 #undef TEST
     
     quic_ctx.transport_params = orig;

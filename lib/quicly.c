@@ -3483,6 +3483,8 @@ static quicly_error_t on_ack_max_data(quicly_sentmap_t *map, const quicly_sent_p
         quicly_maxsender_acked(&conn->ingress.max_data.sender, &sent->data.max_data.args);
     } else {
         quicly_maxsender_lost(&conn->ingress.max_data.sender, &sent->data.max_data.args);
+        if (should_send_max_data(conn))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
 
     return 0;
@@ -3498,6 +3500,8 @@ static quicly_error_t on_ack_max_streams(quicly_sentmap_t *map, const quicly_sen
         quicly_maxsender_acked(maxsender, &sent->data.max_streams.args);
     } else {
         quicly_maxsender_lost(maxsender, &sent->data.max_streams.args);
+        if (should_send_max_streams(conn, sent->data.max_streams.uni))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
 
     return 0;
@@ -3545,11 +3549,15 @@ static quicly_error_t on_ack_streams_blocked(quicly_sentmap_t *map, const quicly
     quicly_conn_t *conn = (quicly_conn_t *)((char *)map - offsetof(quicly_conn_t, egress.loss.sentmap));
     struct st_quicly_max_streams_t *m =
         sent->data.streams_blocked.uni ? &conn->egress.max_streams.uni : &conn->egress.max_streams.bidi;
+    quicly_linklist_t *blocked_list =
+        sent->data.streams_blocked.uni ? &conn->egress.pending_streams.blocked.uni : &conn->egress.pending_streams.blocked.bidi;
 
     if (acked) {
         quicly_maxsender_acked(&m->blocked_sender, &sent->data.streams_blocked.args);
     } else {
         quicly_maxsender_lost(&m->blocked_sender, &sent->data.streams_blocked.args);
+        if (quicly_linklist_is_linked(blocked_list) && quicly_maxsender_should_send_blocked(&m->blocked_sender, m->count))
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
 
     return 0;
