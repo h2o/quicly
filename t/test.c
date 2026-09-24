@@ -1576,6 +1576,89 @@ static void test_reset_stream_at_gap_above(void)
     quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
 }
 
+static void test_stop_sending_after_reset(int application_reset)
+{
+    /* STOP_SENDING(id=0, error=11) */
+    static const uint8_t stop[] = {0x05, 0x00, 0x0b};
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint64_t error_code = application_reset ? 22 : 11;
+
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(stream->stream_id == 0);
+
+    if (application_reset)
+        quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(error_code));
+    ok(inject_frames(client, stop, sizeof(stop)) == 0);
+    ok(quicly_sendstate_eos_type(&stream->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET);
+    ok(stream->sendstate.app_error_code == error_code);
+    ok(!quicly_sendstate_is_fully_inflight(&stream->sendstate));
+
+    /* a repeated STOP_SENDING is harmless both before the reset is sent and while it awaits acknowledgement */
+    ok(inject_frames(client, stop, sizeof(stop)) == 0);
+    transmit(client, server);
+    ok(stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_INFLIGHT);
+    ok(quicly_sendstate_is_fully_inflight(&stream->sendstate));
+    ok(!quicly_sendstate_transfer_complete(&stream->sendstate));
+    ok(inject_frames(client, stop, sizeof(stop)) == 0);
+    ok(stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_INFLIGHT);
+    ok(stream->sendstate.app_error_code == error_code);
+
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+    ok(quicly_sendstate_transfer_complete(&stream->sendstate));
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
+static void test_stop_sending_after_fin(int fin_state)
+{
+    /* STOP_SENDING(id=0, error=11) */
+    static const uint8_t stop[] = {0x05, 0x00, 0x0b};
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    test_streambuf_t *streambuf;
+
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(stream->stream_id == 0);
+    streambuf = stream->data;
+    ok(quicly_streambuf_egress_write(stream, "hello", 5) == 0);
+    ok(quicly_streambuf_egress_shutdown(stream) == 0);
+    if (fin_state != QUICLY_SENDSTATE_EOS_STATE_UNSENT)
+        transmit(client, server);
+    if (fin_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED) {
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(server, client);
+    }
+    ok(stream->sendstate.eos_state == fin_state);
+
+    ok(inject_frames(client, stop, sizeof(stop)) == 0);
+    if (fin_state == QUICLY_SENDSTATE_EOS_STATE_DELIVERED) {
+        /* a completed transfer stays complete and does not notify the application */
+        ok(quicly_sendstate_eos_type(&stream->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_FIN);
+        ok(quicly_sendstate_transfer_complete(&stream->sendstate));
+        ok(streambuf->error_received.stop_sending == -1);
+    } else {
+        ok(quicly_sendstate_eos_type(&stream->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET);
+        ok(stream->sendstate.eos_state == QUICLY_SENDSTATE_EOS_STATE_UNSENT);
+        ok(stream->sendstate.app_error_code == 11);
+        /* an emitted FIN fixes the final size; an unsent FIN can be withdrawn */
+        ok(stream->sendstate.final_size == (fin_state == QUICLY_SENDSTATE_EOS_STATE_UNSENT ? 0 : 5));
+        ok(streambuf->error_received.stop_sending == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+        ok(inject_frames(client, stop, sizeof(stop)) == 0);
+        transmit(client, server);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(server, client);
+        ok(quicly_sendstate_transfer_complete(&stream->sendstate));
+    }
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_reset_stream_at_after_fin(void)
 {
     /* STREAM(id=0, off=2, len=3, FIN) "234", RESET_STREAM_AT(id=0, error=11, final=5, reliable=5), STREAM(id=0, len=2) "01" */
@@ -1892,6 +1975,11 @@ int main(int argc, char **argv)
     subtest("reset-stream-at-data-above", test_reset_stream_at_data_above);
     subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
+    subtest("stop-sending-after-reset", test_stop_sending_after_reset, 1);
+    subtest("stop-sending-repeated", test_stop_sending_after_reset, 0);
+    subtest("stop-sending-before-fin", test_stop_sending_after_fin, QUICLY_SENDSTATE_EOS_STATE_UNSENT);
+    subtest("stop-sending-after-fin", test_stop_sending_after_fin, QUICLY_SENDSTATE_EOS_STATE_INFLIGHT);
+    subtest("stop-sending-after-fin-acked", test_stop_sending_after_fin, QUICLY_SENDSTATE_EOS_STATE_DELIVERED);
     subtest("destroy-returns-credit-fin", test_destroy_returns_credit_fin);
     subtest("destroy-returns-credit-reset", test_destroy_returns_credit_reset);
     subtest("state-exhaustion", test_state_exhaustion);

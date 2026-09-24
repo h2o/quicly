@@ -6780,10 +6780,17 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    if (quicly_sendstate_is_open(&stream->sendstate)) {
-        /* reset the stream, then notify the application */
-        quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(frame.app_error_code);
-        quicly_reset_stream(stream, err);
+    uint8_t eos_type = quicly_sendstate_eos_type(&stream->sendstate);
+    if (eos_type == QUICLY_SENDSTATE_EOS_TYPE_RESET || quicly_sendstate_transfer_complete(&stream->sendstate))
+        return 0;
+
+    /* preserve the error code when downgrading a reliable reset (section 5.4 of draft-ietf-quic-reliable-stream-reset) */
+    quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(
+        eos_type == QUICLY_SENDSTATE_EOS_TYPE_RESET_AT ? stream->sendstate.app_error_code : frame.app_error_code);
+    quicly_reset_stream(stream, err);
+
+    /* notify the application unless it had already reset the stream */
+    if (eos_type < QUICLY_SENDSTATE_EOS_TYPE_RESET_AT) {
         QUICLY_PROBE(STREAM_ON_SEND_STOP, stream->conn, stream->conn->stash.now, stream, err);
         QUICLY_LOG_CONN(stream_on_send_stop, stream->conn, {
             PTLS_LOG_ELEMENT_SIGNED(stream_id, stream->stream_id);
@@ -6792,10 +6799,6 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
         stream->callbacks->on_send_stop(stream, err);
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
             return QUICLY_ERROR_IS_CLOSING;
-    } else if (stream->sendstate.app_error_code != UINT64_MAX && !quicly_sendstate_transfer_complete(&stream->sendstate)) {
-        /* downgrade a reset-at to an immediate reset (section 5.4 of draft-ietf-quic-reliable-stream-reset) */
-        assert(stream->sendstate.reliable_size != 0);
-        quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->sendstate.app_error_code));
     }
 
     return 0;
