@@ -243,6 +243,9 @@ int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
 
 quicly_error_t quicly_streambuf_egress_reset(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size)
 {
+    assert(reliable_size <= ((quicly_streambuf_t *)stream->data)->egress.bytes_written &&
+           "cannot commit to delivering bytes that have not been written");
+
     quicly_error_t ret;
 
     /* the two have different semantics; a Reliable Size of zero is a RESET_STREAM, which needs no sync */
