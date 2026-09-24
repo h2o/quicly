@@ -1382,6 +1382,7 @@ static void do_test_retransmit(size_t frame_off, int from_server, void (*trigger
 #define FRAME_COUNT(stats) (*(uint64_t *)((char *)&(stats) + frame_off))
     quicly_conn_t *client, *server, *sender, *receiver;
     quicly_stats_t at_drop;
+    int64_t dropped_at = 0;
     int dropped = 0;
 
     test_setup_connected_peers(&client, &server);
@@ -1390,9 +1391,13 @@ static void do_test_retransmit(size_t frame_off, int from_server, void (*trigger
     trigger(client, server);
 
     for (size_t i = 0; i < 100; ++i) {
-        int64_t sender_at = quicly_get_first_timeout(sender), receiver_at = quicly_get_first_timeout(receiver);
-        if (quic_now < (sender_at < receiver_at ? sender_at : receiver_at))
-            quic_now = sender_at < receiver_at ? sender_at : receiver_at;
+        int64_t sender_at = quicly_get_first_timeout(sender), receiver_at = quicly_get_first_timeout(receiver),
+                next_at = sender_at < receiver_at ? sender_at : receiver_at;
+        /* if nothing other than the idle timeout is scheduled, the frame is never going to be resent */
+        if (dropped && next_at > dropped_at + 10000)
+            break;
+        if (quic_now < next_at)
+            quic_now = next_at;
         if (receiver_at < sender_at) {
             transmit(receiver, sender);
             continue;
@@ -1409,6 +1414,7 @@ static void do_test_retransmit(size_t frame_off, int from_server, void (*trigger
         if (!dropped) {
             if (FRAME_COUNT(after) != FRAME_COUNT(before)) {
                 at_drop = after;
+                dropped_at = quic_now;
                 dropped = 1;
                 continue;
             }
