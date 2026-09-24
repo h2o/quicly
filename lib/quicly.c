@@ -5697,6 +5697,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         goto Exit;
                     if (s->dst_end - s->dst >= required_space) {
                         s->dst = quicly_encode_datagram_frame(s->dst, *payload);
+                        ++conn->super.stats.num_frames_sent.datagram;
                         QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, payload->base, payload->len);
                         QUICLY_LOG_CONN(datagram_send, conn,
                                         { PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(payload, payload->base, payload->len); });
