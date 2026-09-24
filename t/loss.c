@@ -357,6 +357,32 @@ static void test_fractional_pto(void)
     quicly_loss_dispose(&loss);
 }
 
+static void test_fractional_loss_deadline(void)
+{
+    const int64_t millisec = INT64_C(1800000000000);
+    const double sent_at = millisec + 0.973;
+    const uint16_t max_ack_delay = 0;
+    const uint8_t ack_delay_exponent = 3;
+
+    for (int is_1rtt_only = 0; is_1rtt_only != 2; ++is_1rtt_only) {
+        quicly_loss_t loss;
+        quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &max_ack_delay, &ack_delay_exponent);
+        ok(quicly_sentmap_prepare(&loss.sentmap, 0, sent_at, QUICLY_EPOCH_1RTT) == 0);
+        quicly_sentmap_commit(&loss.sentmap, 10, 0, 0);
+        quicly_loss_on_ack_received(&loss, 1, UINT64_MAX, 2, QUICLY_EPOCH_1RTT, sent_at + 0.913, sent_at, 0,
+                                    QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
+
+        /* At epoch-scale timestamps, sent_at + loss_delay rounds to the +2ms tick, but subtracting loss_delay from that
+         * tick rounds below sent_at. Detection must agree with the scheduled deadline despite that rounding difference. */
+        num_packets_lost = 0;
+        ok(quicly_loss_detect_loss(&loss, millisec + 1, 0, is_1rtt_only, on_loss_detected) == 0);
+        ok(num_packets_lost == 0 && loss.loss_time == millisec + 2);
+        ok(quicly_loss_detect_loss(&loss, millisec + 2, 0, is_1rtt_only, on_loss_detected) == 0);
+        ok(num_packets_lost == 1 && loss.loss_time == INT64_MAX);
+        quicly_loss_dispose(&loss);
+    }
+}
+
 static void test_fractional_sentmap_timers(void)
 {
     quicly_loss_t loss;
@@ -401,6 +427,7 @@ void test_loss(void)
     subtest("rtt-sample-floor", test_rtt_sample_floor);
     subtest("submillisecond-timers", test_submillisecond_timers);
     subtest("fractional-pto", test_fractional_pto);
+    subtest("fractional-loss-deadline", test_fractional_loss_deadline);
     subtest("fractional-sentmap-timers", test_fractional_sentmap_timers);
     subtest("time-detection", test_time_detection);
     subtest("pn-detection", test_pn_detection);
