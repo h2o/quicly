@@ -1478,12 +1478,9 @@ void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
 /**
  * Marks the stream for a reliable reset, committing to the delivery of the first `reliable_size` bytes; see
  * draft-ietf-quic-reliable-stream-reset. Similarly to a shutdown, bytes remain to be emitted, hence the stream is to be scheduled
- * by the application calling `quicly_stream_sync_sendbuf`, rather than by this function. `reliable_size` has to be non-zero; use
- * `quicly_reset_stream` to reset a stream immediately.
- *
- * The function can be called once per stream, including after the stream has been shut down (section 5.1), in which case
- * `reliable_size` must not exceed the final size that the shutdown established. If every byte of the stream and the FIN have been
- * acknowledged by then, the call is a no-op.
+ * by the application calling `quicly_stream_sync_sendbuf`, rather than by this function. `reliable_size` must be non-zero; use
+ * `quicly_reset_stream` to reset a stream immediately. This function can be called up to once per stream, including after the
+ * stream has been shut down. If every byte of the stream and the FIN have been acknowledged by then, the call is a no-op.
  */
 quicly_error_t quicly_set_reset_stream_at(quicly_stream_t *stream, quicly_error_t err, uint64_t reliable_size);
 /**
