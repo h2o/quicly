@@ -1527,6 +1527,118 @@ static void test_retransmit_max_stream_data_lower_window(void)
     quic_ctx.transport_params.max_stream_data.bidi_remote = max_stream_data_orig;
 }
 
+static void test_stream_credit_growth(void)
+{
+    uint64_t orig = quic_ctx.transport_params.max_streams_uni;
+    quic_ctx.transport_params.max_streams_uni = 32;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *streams[32];
+    static const size_t updates[] = {1, 2, 4, 8, 16, 24};
+    size_t next_update = 0;
+    uint64_t limit = 32;
+
+    test_setup_connected_peers(&client, &server);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(streams); ++i) {
+        ok(quicly_open_stream(client, streams + i, 1) == 0);
+        ok(quicly_streambuf_egress_write(streams[i], "a", 1) == 0);
+    }
+    exchange_until_idle(client, server);
+    ok(server->super.remote.uni.num_streams == 32);
+    ok(server->super.stats.num_frames_sent.max_streams_uni == 0);
+
+    /* Keep the other streams open: credit must return without STREAMS_BLOCKED, first exponentially, then every 8 closures. */
+    for (size_t closed = 1; closed <= 24; ++closed) {
+        quicly_streambuf_egress_shutdown(streams[closed - 1]);
+        exchange_until_idle(client, server);
+        if (closed == updates[next_update]) {
+            limit = 32 + closed;
+            ++next_update;
+        }
+        ok(client->egress.max_streams.uni.count == limit);
+        ok(server->super.stats.num_frames_sent.max_streams_uni == next_update);
+    }
+    ok(client->super.stats.num_frames_sent.streams_blocked == 0);
+    quicly_free(client);
+    quicly_free(server);
+
+    /* Free room first, then consume the remaining advertised IDs. Opening streams must schedule the credit update too. */
+    quic_ctx.transport_params.max_streams_uni = 10;
+    test_setup_connected_peers(&client, &server);
+    for (size_t i = 0; i < 8; ++i) {
+        ok(quicly_open_stream(client, streams + i, 1) == 0);
+        ok(quicly_streambuf_egress_write(streams[i], "a", 1) == 0);
+    }
+    exchange_until_idle(client, server);
+    quicly_streambuf_egress_shutdown(streams[0]);
+    exchange_until_idle(client, server);
+    ok(client->egress.max_streams.uni.count == 10);
+    for (size_t i = 8; i < 10; ++i) {
+        ok(quicly_open_stream(client, streams + i, 1) == 0);
+        ok(quicly_streambuf_egress_write(streams[i], "a", 1) == 0);
+    }
+    exchange_until_idle(client, server);
+    ok(client->egress.max_streams.uni.count == 11);
+    ok(client->super.stats.num_frames_sent.streams_blocked == 0);
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_streams_uni = orig;
+}
+
+static void test_data_credit_growth(void)
+{
+    quicly_transport_parameters_t orig = quic_ctx.transport_params;
+    quic_ctx.transport_params.max_data = quic_ctx.transport_params.max_stream_data.bidi_remote = 4096;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *client_stream, *server_stream;
+    static const uint8_t data[4096] = {0};
+    static const size_t updates[] = {1, 2, 4, 8, 16};
+    size_t next_update = 1;
+    uint64_t limit = 4097;
+
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_open_stream(client, &client_stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(client_stream, data, sizeof(data) - 2) == 0);
+    exchange_until_idle(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    /* Free one byte while credit remains, then receive the last two bytes. Receiving must schedule both credit updates. */
+    quicly_streambuf_ingress_shift(server_stream, 1);
+    exchange_until_idle(client, server);
+    ok(client_stream->_send_aux.max_stream_data == 4096);
+    ok(client->egress.max_data.permitted == 4096);
+    /* Model a peer that omits the optional DATA_BLOCKED signal, so only observed consumption can trigger an update. */
+    client->egress.data_blocked = QUICLY_SENDER_STATE_ACKED;
+    ok(quicly_streambuf_egress_write(client_stream, data, 2) == 0);
+    exchange_until_idle(client, server);
+    ok(server->ingress.max_data.bytes_consumed == 4096);
+    ok(client_stream->_send_aux.max_stream_data == 4097);
+    ok(client->egress.max_data.permitted == 4097);
+    for (size_t released = 2; released <= 16; ++released) {
+        quicly_streambuf_ingress_shift(server_stream, 1);
+        exchange_until_idle(client, server);
+        if (released == updates[next_update]) {
+            limit = 4096 + released;
+            ++next_update;
+        }
+        ok(client_stream->_send_aux.max_stream_data == limit);
+        ok(client->egress.max_data.permitted == limit);
+    }
+
+    /* Exhaust the newly granted credit, then release one byte: both limits must advance immediately again. */
+    client->egress.data_blocked = QUICLY_SENDER_STATE_ACKED;
+    ok(quicly_streambuf_egress_write(client_stream, data, 16) == 0);
+    exchange_until_idle(client, server);
+    quicly_streambuf_ingress_shift(server_stream, 1);
+    exchange_until_idle(client, server);
+    ok(client_stream->_send_aux.max_stream_data == 4113);
+    ok(client->egress.max_data.permitted == 4113);
+    ok(client->super.stats.num_frames_sent.data_blocked == 0);
+    ok(client->super.stats.num_frames_sent.stream_data_blocked == 0);
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params = orig;
+}
+
 static void test_destroy_returns_credit_fin(void)
 {
     uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
@@ -1905,6 +2017,8 @@ int main(int argc, char **argv)
 
     subtest("retransmit", test_retransmit);
     subtest("retransmit-max-stream-data-lower-window", test_retransmit_max_stream_data_lower_window);
+    subtest("stream-credit-growth", test_stream_credit_growth);
+    subtest("data-credit-growth", test_data_credit_growth);
     subtest("destroy-returns-credit-fin", test_destroy_returns_credit_fin);
     subtest("destroy-returns-credit-reset", test_destroy_returns_credit_reset);
     subtest("stream-open-refused", test_stream_open_refused);

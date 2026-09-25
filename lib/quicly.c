@@ -1053,6 +1053,7 @@ static void resched_stream_data(quicly_stream_t *stream)
 static int should_send_max_data(quicly_conn_t *conn)
 {
     return quicly_maxsender_should_send_max(&conn->ingress.max_data.sender, conn->ingress.max_data.bytes_shifted,
+                                            conn->ingress.max_data.bytes_consumed,
                                             (uint32_t)conn->super.ctx->transport_params.max_data, 512);
 }
 
@@ -1061,6 +1062,7 @@ static int should_send_max_stream_data(quicly_stream_t *stream)
     if (stream->recvstate.eos != UINT64_MAX)
         return 0;
     return quicly_maxsender_should_send_max(&stream->_send_aux.max_stream_data_sender, stream->recvstate.data_off,
+                                            stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end,
                                             stream->_recv_aux.window, 512);
 }
 
@@ -1370,7 +1372,8 @@ static int should_send_max_streams(quicly_conn_t *conn, int uni)
         return 0;
 
     /* the value being advertised is the number of streams that have been closed plus the concurrency */
-    if (!quicly_maxsender_should_send_max(maxsender, group->next_stream_id / 4 - group->num_streams, (uint32_t)concurrency, 768))
+    if (!quicly_maxsender_should_send_max(maxsender, group->next_stream_id / 4 - group->num_streams, group->next_stream_id / 4,
+                                          (uint32_t)concurrency, 768))
         return 0;
 
     return 1;
@@ -6219,6 +6222,9 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
                     goto Exit;
                 }
             } while (stream_id != (*stream)->stream_id);
+            /* Opening streams can exhaust previously advertised credit after room has already become available. */
+            if (should_send_max_streams(conn, quicly_stream_is_unidirectional(stream_id)))
+                conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
         }
     }
 

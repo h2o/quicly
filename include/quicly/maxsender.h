@@ -60,10 +60,11 @@ static void quicly_maxsender_dispose(quicly_maxsender_t *m);
 static void quicly_maxsender_blocked(quicly_maxsender_t *m, uint64_t blocked_at);
 /**
  * Returns if a new value (`buffered_from + window_size`) should be sent. This is the case when the latest value has been lost, when
- * the remote peer is blocked and the new value is greater than the latest one, or when the latest value falls within
- * `update_ratio` of the window.
+ * the remote peer is blocked and the new value is greater than the latest one, when the latest value falls within
+ * `update_ratio` of the window, or when the available room doubles the unused credit. `consumed` is the amount of credit already
+ * used by the peer (received bytes or opened streams). With no unused credit, any increase is sent immediately.
  */
-static int quicly_maxsender_should_send_max(quicly_maxsender_t *m, int64_t buffered_from, uint32_t window_size,
+static int quicly_maxsender_should_send_max(quicly_maxsender_t *m, int64_t buffered_from, int64_t consumed, uint32_t window_size,
                                             uint32_t update_ratio);
 /**
  * Returns if a BLOCKED frame carrying `local_max` should be sent; i.e., if it has not been sent yet, or if it has been lost. The
@@ -97,14 +98,17 @@ inline void quicly_maxsender_blocked(quicly_maxsender_t *m, uint64_t blocked_at)
         m->remote_blocked = 1;
 }
 
-inline int quicly_maxsender_should_send_max(quicly_maxsender_t *m, int64_t buffered_from, uint32_t window_size,
+inline int quicly_maxsender_should_send_max(quicly_maxsender_t *m, int64_t buffered_from, int64_t consumed, uint32_t window_size,
                                             uint32_t update_ratio)
 {
     /* resend if the latest value has been lost */
     if (m->lost)
         return 1;
 
-    if (m->remote_blocked && buffered_from + window_size > m->max_committed)
+    /* Near exhaustion, advertise room at 1, 2, 4, ... instead of waiting for a fixed fraction of the window. Comparing the
+     * additional credit with the unused credit is equivalent to doubling the room, without multiplying offsets. */
+    int64_t new_value = buffered_from + window_size;
+    if (new_value > m->max_committed && (m->remote_blocked || new_value - m->max_committed >= m->max_committed - consumed))
         return 1;
 
     /* ratio is permil (1/1024) */
