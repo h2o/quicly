@@ -85,7 +85,7 @@ struct st_quicly_cc_rapid_start_t {
          * Records the RTT floor for most recent periods of 4, where the duration the period is defined as `floor(rtt.minimum / 4)`.
          * [0] holds the newest entry, [3] holds the oldest one.
          */
-        uint32_t rtt_samples[4];
+        float rtt_samples[4];
         /**
          * Values retained for the duration of the first recovery period.
          */
@@ -589,11 +589,11 @@ inline int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, c
     /* If the latest RTT is below max(min_rtt + 4ms, min_rtt * 1.1), adopt a higher increase rate (i.e., 3x per RTT) than the
      * ordinary Slow Start (2x per RTT). The thresholds are chosen so that they do not overlap with HyStart++, which reduces the
      * increase rate to 1.25x. */
-    uint32_t threshold = rtt->minimum + 4;
+    float threshold = rtt->minimum + 4;
     if (threshold < rtt->minimum * 35 / 32)
         threshold = rtt->minimum * 35 / 32;
 
-    uint32_t floor = UINT32_MAX;
+    float floor = UINT32_MAX;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(rs->rtt_samples); ++i)
         if (floor > rs->rtt_samples[i])
             floor = rs->rtt_samples[i];
