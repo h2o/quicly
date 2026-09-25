@@ -448,7 +448,7 @@ static void abba_on_acked(struct st_quicly_cc_abba_t *state, uint32_t cwnd, cons
     /* Beyond Wh * (2 - beta), adopt RTT proportional to CWND without lowering the RTT target already being pursued. Use the
      * recent RTT floor if it is higher, or if no model exists. Leave an already proportional model unchanged, so its predicted
      * RTT rises with CWND while RTT stays flat. Wh is the actual congestion window, not a Wmax adjusted by the policy. */
-    double beta = by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    double beta = QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
     if (state->b != 0 && cwnd > state->high.cwnd * (2 - beta)) {
         double rtt_target = quicly_rtt_get_floor(rtt);
         if (!isnan(state->b)) {
