@@ -52,7 +52,7 @@ typedef struct st_quicly_maxsender_t {
 } quicly_maxsender_t;
 
 typedef struct st_quicly_maxsender_sent_t {
-    uint64_t value;
+    int64_t value;
 } quicly_maxsender_sent_t;
 
 static void quicly_maxsender_init(quicly_maxsender_t *m, int64_t initial_value);
@@ -149,7 +149,7 @@ inline void quicly_maxsender_record(quicly_maxsender_t *m, int64_t value, quicly
 inline int quicly_maxsender_on_ack(quicly_maxsender_t *m, quicly_maxsender_sent_t *sent, int acked)
 {
     if (acked) {
-        if (m->acked < (int64_t)sent->value)
+        if (m->acked < sent->value)
             m->acked = sent->value;
         /* an ACK might be a late one, arriving after the frame has been deemed lost */
         if (m->acked == m->committed)
@@ -159,7 +159,7 @@ inline int quicly_maxsender_on_ack(quicly_maxsender_t *m, quicly_maxsender_sent_
 
     /* A frame carrying an older value needs no action, as a newer one carrying `committed` has been sent. Nor does the loss of a
      * frame carrying `committed` after `committed` has reached the peer, e.g., through a late ACK of an earlier copy. */
-    if ((int64_t)sent->value != m->committed || m->acked == m->committed)
+    if (sent->value != m->committed || m->acked == m->committed)
         return 0;
 
     m->lost = 1;
