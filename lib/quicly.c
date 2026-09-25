@@ -2416,7 +2416,7 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
     if (stream->stream_id >= 0) {
         /* STREAMs */
         uint64_t max_stream_data = frame->offset + frame->data.len;
-        if ((int64_t)max_stream_data > stream->_send_aux.max_stream_data_sender.max_committed)
+        if ((int64_t)max_stream_data > stream->_send_aux.max_stream_data_sender.committed)
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
         if (stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end < max_stream_data) {
             uint64_t newly_received =
@@ -6286,7 +6286,7 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
-    if ((int64_t)frame.final_size > stream->_send_aux.max_stream_data_sender.max_committed)
+    if ((int64_t)frame.final_size > stream->_send_aux.max_stream_data_sender.committed)
         return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
 
     if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
