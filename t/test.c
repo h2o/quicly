@@ -1511,7 +1511,7 @@ static void test_retransmit_max_stream_data_lower_window(void)
     ok(quicly_send(server, &dest, &src, datagrams, &num_datagrams, packetsbuf, sizeof(packetsbuf)) == 0);
     ok(num_datagrams > 0);
     ok(server->super.stats.num_frames_sent.max_stream_data == 1);
-    ok(server_stream->_send_aux.max_stream_data_sender.max_committed == 7168);
+    ok(server_stream->_send_aux.max_stream_data_sender.committed == 7168);
     ok(client_stream->_send_aux.max_stream_data == 4096);
 
     /* lower the window before PTO; retransmission must preserve the already advertised limit */
@@ -1519,7 +1519,7 @@ static void test_retransmit_max_stream_data_lower_window(void)
     quic_now = quicly_get_first_timeout(server);
     ok(transmit(server, client) > 0);
     ok(server->super.stats.num_frames_sent.max_stream_data == 2);
-    ok(server_stream->_send_aux.max_stream_data_sender.max_committed == 7168);
+    ok(server_stream->_send_aux.max_stream_data_sender.committed == 7168);
     ok(client_stream->_send_aux.max_stream_data == 7168);
 
     quicly_free(client);
