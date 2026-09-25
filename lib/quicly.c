@@ -3612,7 +3612,7 @@ static quicly_error_t on_ack_new_token(quicly_sentmap_t *map, const quicly_sent_
     }
 
     if (conn->egress.new_token.num_inflight == 0 && conn->egress.new_token.max_acked < conn->egress.new_token.generation)
-        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
 
     return 0;
 }
@@ -4429,7 +4429,7 @@ int quicly_is_blocked(quicly_conn_t *conn)
     /* schedule the transmission of DATA_BLOCKED frame, if it's new information */
     if (conn->egress.data_blocked == QUICLY_SENDER_STATE_NONE) {
         conn->egress.data_blocked = QUICLY_SENDER_STATE_SEND;
-        conn->egress.pending_flows = QUICLY_PENDING_FLOW_OTHERS_BIT;
+        conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
 
     return 1;
@@ -5687,6 +5687,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         goto Exit;
                     if (s->dst_end - s->dst >= required_space) {
                         s->dst = quicly_encode_datagram_frame(s->dst, *payload);
+                        ++conn->super.stats.num_frames_sent.datagram;
                         QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, payload->base, payload->len);
                         QUICLY_LOG_CONN(datagram_send, conn,
                                         { PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(payload, payload->base, payload->len); });
