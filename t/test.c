@@ -1445,6 +1445,508 @@ static void test_fractional_rtt_measurement(void)
     quic_now = saved_now;
 }
 
+static void retransmit_trigger_reset_stream(quicly_conn_t *client, quicly_conn_t *server)
+{
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 1) == 0);
+    quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1));
+}
+
+static void retransmit_trigger_stop_sending(quicly_conn_t *client, quicly_conn_t *server)
+{
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    quicly_request_stop(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1));
+}
+
+/* client sends 3/4 of the stream- and connection-level window; the server consumes it, which opens both windows */
+static void retransmit_trigger_max_data(quicly_conn_t *client, quicly_conn_t *server)
+{
+    static uint8_t buf[3072];
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    quicly_streambuf_egress_write(stream, buf, sizeof(buf));
+    transmit(client, server);
+    quicly_stream_t *server_stream = quicly_get_stream(server, stream->stream_id);
+    ok(server_stream != NULL);
+    quicly_streambuf_ingress_shift(server_stream, ((quicly_streambuf_t *)server_stream->data)->ingress.off);
+}
+
+/* client writes more than the windows permit */
+static void retransmit_trigger_data_blocked(quicly_conn_t *client, quicly_conn_t *server)
+{
+    static uint8_t buf[8192];
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    quicly_streambuf_egress_write(stream, buf, sizeof(buf));
+}
+
+/* client finishes a uni stream; once the server retires it, stream credit is returned */
+static void retransmit_trigger_max_streams_uni(quicly_conn_t *client, quicly_conn_t *server)
+{
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 1) == 0);
+    quicly_streambuf_egress_write(stream, "a", 1);
+    quicly_streambuf_egress_shutdown(stream);
+    transmit(client, server);
+    ok(quicly_get_stream(server, stream->stream_id) == NULL);
+}
+
+/* client and server finish both directions of a bidi stream; once the server retires it, stream credit is returned */
+static void retransmit_trigger_max_streams_bidi(quicly_conn_t *client, quicly_conn_t *server)
+{
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    quicly_streambuf_egress_write(stream, "a", 1);
+    quicly_streambuf_egress_shutdown(stream);
+    transmit(client, server);
+    quicly_stream_t *server_stream = quicly_get_stream(server, stream->stream_id);
+    ok(server_stream != NULL);
+    quicly_streambuf_egress_shutdown(server_stream);
+    transmit(server, client);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(client, server);
+    ok(quicly_get_stream(server, stream->stream_id) == NULL);
+}
+
+/* client opens one more uni stream than permitted */
+static void retransmit_trigger_streams_blocked(quicly_conn_t *client, quicly_conn_t *server)
+{
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 1) == 0);
+    ok(quicly_open_stream(client, &stream, 1) == 0);
+}
+
+/* same as above, but after a STREAMS_BLOCKED frame has been acked and the peer has raised the limit */
+static void retransmit_trigger_streams_blocked_raised(quicly_conn_t *client, quicly_conn_t *server)
+{
+    quicly_stream_t *stream, *blocked;
+    /* get blocked at the initial limit, and have the STREAMS_BLOCKED frame acked */
+    ok(quicly_open_stream(client, &stream, 1) == 0);
+    ok(quicly_open_stream(client, &blocked, 1) == 0);
+    transmit(client, server);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+    /* close the first stream so that the server raises the limit, which opens the blocked stream */
+    quicly_streambuf_egress_write(stream, "a", 1);
+    quicly_streambuf_egress_shutdown(stream);
+    transmit(client, server);
+    transmit(server, client);
+    /* get blocked again */
+    ok(quicly_open_stream(client, &stream, 1) == 0);
+}
+
+static void retransmit_trigger_new_token(quicly_conn_t *client, quicly_conn_t *server)
+{
+    ok(quicly_send_resumption_token(server) == 0);
+}
+
+static quicly_error_t retransmit_generate_resumption_token(quicly_generate_resumption_token_t *self, quicly_conn_t *conn,
+                                                           ptls_buffer_t *buf, quicly_address_token_plaintext_t *token)
+{
+    return ptls_buffer_reserve(buf, 16) == 0 ? (buf->off += 16, 0) : PTLS_ERROR_NO_MEMORY;
+}
+
+/**
+ * Tests that a frame is resent when the packet carrying it is lost. After `trigger` is run, the two endpoints exchange packets.
+ * The datagrams of the first flight carrying the frame are dropped, and the frame is expected to be sent again before the sender
+ * declares a packet lost, or at the latest by the second PTO.
+ */
+static void do_test_retransmit(size_t frame_off, int from_server, void (*trigger)(quicly_conn_t *client, quicly_conn_t *server))
+{
+#define FRAME_COUNT(stats) (*(uint64_t *)((char *)&(stats) + frame_off))
+    quicly_conn_t *client, *server, *sender, *receiver;
+    quicly_stats_t at_drop;
+    int64_t dropped_at = 0;
+    int dropped = 0;
+
+    test_setup_connected_peers(&client, &server);
+    sender = from_server ? server : client;
+    receiver = from_server ? client : server;
+    trigger(client, server);
+
+    for (size_t i = 0; i < 100; ++i) {
+        int64_t sender_at = quicly_get_first_timeout(sender), receiver_at = quicly_get_first_timeout(receiver),
+                next_at = sender_at < receiver_at ? sender_at : receiver_at;
+        /* if nothing other than the idle timeout is scheduled, the frame is never going to be resent */
+        if (dropped && next_at > dropped_at + 10000)
+            break;
+        if (quic_now < next_at)
+            quic_now = next_at;
+        if (receiver_at < sender_at) {
+            transmit(receiver, sender);
+            continue;
+        }
+        /* send datagrams, dropping them if they are the first to carry the frame */
+        quicly_address_t dest, src;
+        struct iovec datagrams[10];
+        uint8_t buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+        size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+        quicly_stats_t before, after;
+        quicly_get_stats(sender, &before);
+        ok(quicly_send(sender, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+        quicly_get_stats(sender, &after);
+        if (!dropped) {
+            if (FRAME_COUNT(after) != FRAME_COUNT(before)) {
+                at_drop = after;
+                dropped_at = quic_now;
+                dropped = 1;
+                continue;
+            }
+        } else {
+            if (FRAME_COUNT(after) != FRAME_COUNT(at_drop))
+                goto Exit;
+            if (after.num_packets.lost != at_drop.num_packets.lost || after.num_ptos > at_drop.num_ptos + 2)
+                break;
+        }
+        for (size_t j = 0; j != num_datagrams; ++j) {
+            quicly_decoded_packet_t decoded[4];
+            size_t num_decoded = decode_packets(decoded, datagrams + j, 1);
+            for (size_t k = 0; k != num_decoded; ++k) {
+                quicly_error_t ret = quicly_receive(receiver, NULL, &fake_address.sa, decoded + k);
+                ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+            }
+        }
+    }
+    ok(!"frame was not retransmitted");
+
+Exit:
+    quicly_free(client);
+    quicly_free(server);
+#undef FRAME_COUNT
+}
+
+static void test_retransmit(void)
+{
+    static quicly_generate_resumption_token_t generate_resumption_token = {retransmit_generate_resumption_token};
+    quicly_transport_parameters_t orig = quic_ctx.transport_params;
+    quic_ctx.generate_resumption_token = &generate_resumption_token;
+    quic_ctx.transport_params.max_streams_bidi = 1;
+    quic_ctx.transport_params.max_streams_uni = 1;
+    quic_ctx.transport_params.max_data = 4096;
+    quic_ctx.transport_params.max_stream_data.bidi_local = 4096;
+    quic_ctx.transport_params.max_stream_data.bidi_remote = 4096;
+    quic_ctx.transport_params.max_stream_data.uni = 4096;
+    
+#define TEST(frame, from_server, trigger)                                                                                          \
+    subtest(#frame, do_test_retransmit, offsetof(quicly_stats_t, num_frames_sent.frame), from_server, retransmit_trigger_##trigger)
+    TEST(reset_stream, 0, reset_stream);
+    TEST(stop_sending, 0, stop_sending);
+    TEST(max_stream_data, 1, max_data);
+    TEST(max_data, 1, max_data);
+    TEST(stream_data_blocked, 0, data_blocked);
+    TEST(data_blocked, 0, data_blocked);
+    TEST(max_streams_bidi, 1, max_streams_bidi);
+    TEST(max_streams_uni, 1, max_streams_uni);
+    TEST(streams_blocked, 0, streams_blocked);
+    TEST(streams_blocked, 0, streams_blocked_raised);
+    TEST(new_token, 1, new_token);
+#undef TEST
+    
+    quic_ctx.transport_params = orig;
+    quic_ctx.generate_resumption_token = NULL;
+}
+
+static void test_retransmit_max_stream_data_lower_window(void)
+{
+    uint64_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data.bidi_remote;
+    quic_ctx.transport_params.max_stream_data.bidi_remote = 4096;
+
+    quicly_conn_t *client, *server;
+    quicly_stream_t *client_stream, *server_stream;
+    static uint8_t data[3072];
+
+    test_setup_connected_peers(&client, &server);
+
+    /* consuming 3072 bytes raises the advertised limit from 4096 to 7168 */
+    ok(quicly_open_stream(client, &client_stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(client_stream, data, sizeof(data)) == 0);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    ok(((quicly_streambuf_t *)server_stream->data)->ingress.off == sizeof(data));
+    quicly_streambuf_ingress_shift(server_stream, sizeof(data));
+
+    /* send the MAX_STREAM_DATA update, dropping the datagrams */
+    quicly_address_t dest, src;
+    struct iovec datagrams[10];
+    uint8_t packetsbuf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(server, &dest, &src, datagrams, &num_datagrams, packetsbuf, sizeof(packetsbuf)) == 0);
+    ok(num_datagrams > 0);
+    ok(server->super.stats.num_frames_sent.max_stream_data == 1);
+    ok(server_stream->_send_aux.max_stream_data_sender.committed == 7168);
+    ok(client_stream->_send_aux.max_stream_data == 4096);
+
+    /* lower the window before PTO; retransmission must preserve the already advertised limit */
+    quicly_stream_set_receive_window(server_stream, 1024);
+    quic_now = quicly_get_first_timeout(server);
+    ok(transmit(server, client) > 0);
+    ok(server->super.stats.num_frames_sent.max_stream_data == 2);
+    ok(server_stream->_send_aux.max_stream_data_sender.committed == 7168);
+    ok(client_stream->_send_aux.max_stream_data == 7168);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_stream_data.bidi_remote = max_stream_data_orig;
+}
+
+static void test_stream_credit_growth(void)
+{
+    uint64_t orig = quic_ctx.transport_params.max_streams_uni;
+    quic_ctx.transport_params.max_streams_uni = 32;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *streams[32];
+    static const size_t updates[] = {1, 2, 4, 8, 16, 24};
+    size_t next_update = 0;
+    uint64_t limit = 32;
+
+    test_setup_connected_peers(&client, &server);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(streams); ++i) {
+        ok(quicly_open_stream(client, streams + i, 1) == 0);
+        ok(quicly_streambuf_egress_write(streams[i], "a", 1) == 0);
+    }
+    exchange_until_idle(client, server);
+    ok(server->super.remote.uni.num_streams == 32);
+    ok(server->super.stats.num_frames_sent.max_streams_uni == 0);
+
+    /* Keep the other streams open: credit must return without STREAMS_BLOCKED, first exponentially, then every 8 closures. */
+    for (size_t closed = 1; closed <= 24; ++closed) {
+        quicly_streambuf_egress_shutdown(streams[closed - 1]);
+        exchange_until_idle(client, server);
+        if (closed == updates[next_update]) {
+            limit = 32 + closed;
+            ++next_update;
+        }
+        ok(client->egress.max_streams.uni.count == limit);
+        ok(server->super.stats.num_frames_sent.max_streams_uni == next_update);
+    }
+    ok(client->super.stats.num_frames_sent.streams_blocked == 0);
+    quicly_free(client);
+    quicly_free(server);
+
+    /* Free room first, then consume the remaining advertised IDs. Opening streams must schedule the credit update too. */
+    quic_ctx.transport_params.max_streams_uni = 10;
+    test_setup_connected_peers(&client, &server);
+    for (size_t i = 0; i < 8; ++i) {
+        ok(quicly_open_stream(client, streams + i, 1) == 0);
+        ok(quicly_streambuf_egress_write(streams[i], "a", 1) == 0);
+    }
+    exchange_until_idle(client, server);
+    quicly_streambuf_egress_shutdown(streams[0]);
+    exchange_until_idle(client, server);
+    ok(client->egress.max_streams.uni.count == 10);
+    for (size_t i = 8; i < 10; ++i) {
+        ok(quicly_open_stream(client, streams + i, 1) == 0);
+        ok(quicly_streambuf_egress_write(streams[i], "a", 1) == 0);
+    }
+    exchange_until_idle(client, server);
+    ok(client->egress.max_streams.uni.count == 11);
+    ok(client->super.stats.num_frames_sent.streams_blocked == 0);
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_streams_uni = orig;
+}
+
+static void test_data_credit_growth(void)
+{
+    quicly_transport_parameters_t orig = quic_ctx.transport_params;
+    quic_ctx.transport_params.max_data = quic_ctx.transport_params.max_stream_data.bidi_remote = 4096;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *client_stream, *server_stream;
+    static const uint8_t data[4096] = {0};
+    static const size_t updates[] = {1, 2, 4, 8, 16};
+    size_t next_update = 1;
+    uint64_t limit = 4097;
+
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_open_stream(client, &client_stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(client_stream, data, sizeof(data) - 2) == 0);
+    exchange_until_idle(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    /* Free one byte while credit remains, then receive the last two bytes. Receiving must schedule both credit updates. */
+    quicly_streambuf_ingress_shift(server_stream, 1);
+    exchange_until_idle(client, server);
+    ok(client_stream->_send_aux.max_stream_data == 4096);
+    ok(client->egress.max_data.permitted == 4096);
+    /* Model a peer that omits the optional DATA_BLOCKED signal, so only observed consumption can trigger an update. */
+    client->egress.data_blocked = QUICLY_SENDER_STATE_ACKED;
+    ok(quicly_streambuf_egress_write(client_stream, data, 2) == 0);
+    exchange_until_idle(client, server);
+    ok(server->ingress.max_data.bytes_consumed == 4096);
+    ok(client_stream->_send_aux.max_stream_data == 4097);
+    ok(client->egress.max_data.permitted == 4097);
+    for (size_t released = 2; released <= 16; ++released) {
+        quicly_streambuf_ingress_shift(server_stream, 1);
+        exchange_until_idle(client, server);
+        if (released == updates[next_update]) {
+            limit = 4096 + released;
+            ++next_update;
+        }
+        ok(client_stream->_send_aux.max_stream_data == limit);
+        ok(client->egress.max_data.permitted == limit);
+    }
+
+    /* Exhaust the newly granted credit, then release one byte: both limits must advance immediately again. */
+    client->egress.data_blocked = QUICLY_SENDER_STATE_ACKED;
+    ok(quicly_streambuf_egress_write(client_stream, data, 16) == 0);
+    exchange_until_idle(client, server);
+    quicly_streambuf_ingress_shift(server_stream, 1);
+    exchange_until_idle(client, server);
+    ok(client_stream->_send_aux.max_stream_data == 4113);
+    ok(client->egress.max_data.permitted == 4113);
+    ok(client->super.stats.num_frames_sent.data_blocked == 0);
+    ok(client->super.stats.num_frames_sent.stream_data_blocked == 0);
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params = orig;
+}
+
+static void test_destroy_returns_credit_fin(void)
+{
+    uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint64_t consumed, shifted;
+    quicly_error_t ret;
+
+    quic_ctx.transport_params.max_streams_uni = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the client sends five bytes and closes the stream */
+    ret = quicly_open_stream(client, &stream, 1);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(stream, "hello", 5);
+    ok(quicly_streambuf_egress_shutdown(stream) == 0);
+    transmit(client, server);
+
+    /* being unidirectional, the stream is destroyed as soon as it is received in full, the application never having read it */
+    ok(quicly_get_stream(server, stream->stream_id) == NULL);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 5);
+    ok(shifted == 5);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
+}
+
+static void test_destroy_returns_credit_reset(void)
+{
+    uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint64_t consumed, shifted;
+    quicly_error_t ret;
+
+    quic_ctx.transport_params.max_streams_uni = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the client sends five bytes, then resets the stream */
+    ret = quicly_open_stream(client, &stream, 1);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(stream, "hello", 5);
+    transmit(client, server);
+    quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123));
+    transmit(client, server);
+
+    ok(quicly_get_stream(server, stream->stream_id) == NULL);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 5);
+    ok(shifted == 5);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
+}
+
+static quicly_error_t refuse_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
+{
+    return QUICLY_ERROR_STATE_EXHAUSTION;
+}
+
+static void test_stream_open_refused(void)
+{
+    uint64_t max_streams_uni_orig = quic_ctx.transport_params.max_streams_uni;
+    quicly_stream_open_t *stream_open_orig = quic_ctx.stream_open, refuse = {refuse_stream_open};
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[4];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 1500];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams), num_packets, i;
+    quicly_error_t ret, last_ret = 0;
+
+    quic_ctx.transport_params.max_streams_uni = 1;
+    test_setup_connected_peers(&client, &server);
+
+    /* the client opens a stream, which the server refuses */
+    ret = quicly_open_stream(client, &stream, 1);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(stream, "hello", 5);
+    quic_ctx.stream_open = &refuse;
+    ret = quicly_send(client, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf));
+    ok(ret == 0);
+    num_packets = decode_packets(decoded, datagrams, num_datagrams);
+    for (i = 0; i != num_packets; ++i) {
+        if ((ret = quicly_receive(server, NULL, &fake_address.sa, decoded + i)) != 0)
+            last_ret = ret;
+    }
+    ok(last_ret == QUICLY_ERROR_STATE_EXHAUSTION);
+    quic_ctx.stream_open = stream_open_orig;
+
+    /* the refusal being fatal, the server closes the connection; freeing it destroys the stream that was refused */
+    ok(quicly_close(server, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "") == 0);
+    quicly_free(server);
+    quicly_free(client);
+    quic_ctx.transport_params.max_streams_uni = max_streams_uni_orig;
+}
+
+/**
+ * This test checks that lowering the receive window does not cause the data within the limit already advertised to be rejected,
+ * while the data exceeding that limit is.
+ */
+static void test_lower_receive_window(void)
+{
+    uint64_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data.bidi_local;
+    quic_ctx.transport_params.max_stream_data.bidi_local = 4096;
+
+    quicly_conn_t *client, *server;
+    quicly_stream_t *client_stream, *server_stream;
+    static uint8_t buf[4096];
+
+    test_setup_connected_peers(&client, &server);
+
+    /* open a stream, advertising a limit of 4096 bytes to the server */
+    ok(quicly_open_stream(client, &client_stream, 0) == 0);
+    quicly_streambuf_egress_write(client_stream, "a", 1);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+
+    /* lower the receive window after the limit has been advertised */
+    quicly_stream_set_receive_window(client_stream, sizeof(buf) / 2);
+
+    /* the server sends up to the advertised limit, which is accepted */
+    quicly_streambuf_egress_write(server_stream, buf, sizeof(buf));
+    transmit(server, client);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(((quicly_streambuf_t *)client_stream->data)->ingress.off == sizeof(buf));
+
+    /* make the server send one more byte, which exceeds the advertised limit */
+    server_stream->_send_aux.max_stream_data = sizeof(buf) + 1;
+    quicly_streambuf_egress_write(server_stream, "a", 1);
+    transmit(server, client);
+    ok(quicly_get_state(client) >= QUICLY_STATE_CLOSING &&
+       quicly_get_close_reason(client, NULL, NULL, NULL) == QUICLY_TRANSPORT_ERROR_FLOW_CONTROL);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_stream_data.bidi_local = max_stream_data_orig;
+}
+
 /**
  * This test checks STATE_EXHAUSTION error is correctly returned to the application, and if the application supplies the error code
  * to quicly, quicly sends a PROTCOL_VIOLATION error with the special reason phrase.
@@ -1730,6 +2232,14 @@ int main(int argc, char **argv)
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
     subtest("fractional-close-timeout", test_fractional_close_timeout);
 
+    subtest("retransmit", test_retransmit);
+    subtest("retransmit-max-stream-data-lower-window", test_retransmit_max_stream_data_lower_window);
+    subtest("stream-credit-growth", test_stream_credit_growth);
+    subtest("data-credit-growth", test_data_credit_growth);
+    subtest("destroy-returns-credit-fin", test_destroy_returns_credit_fin);
+    subtest("destroy-returns-credit-reset", test_destroy_returns_credit_reset);
+    subtest("stream-open-refused", test_stream_open_refused);
+    subtest("lower-receive-window", test_lower_receive_window);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
 
