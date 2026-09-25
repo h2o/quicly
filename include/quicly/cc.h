@@ -71,35 +71,37 @@ extern "C" {
  */
 typedef const struct st_quicly_cc_type_t quicly_cc_type_t;
 
+enum en_quicly_cc_rapid_start_state_t {
+    /**
+     * Rapid Start does not affect congestion control.
+     */
+    QUICLY_CC_RAPID_START_STATE_INACTIVE,
+    /**
+     * Rapid Start is probing during startup, selecting either 2x or 3x growth based on the RTT floor.
+     */
+    QUICLY_CC_RAPID_START_STATE_PROBING,
+    /**
+     * Rapid Start is handling the first recovery period.
+     */
+    QUICLY_CC_RAPID_START_STATE_RECOVERY
+};
+
 /**
  * state used by rapid start
  */
 struct st_quicly_cc_rapid_start_t {
     /**
-     * Until when the newest sample (i.e., `rtt_samples[0]`) is to be updated. Once congestion is observed, this field is set to -1
-     * and `recovery` is used; upon exiting that recovery period, it is set to 0, indicating that rapid start is disabled.
+     * Current lifecycle phase.
      */
-    int64_t newest_rtt_sample_until;
-    union {
-        /**
-         * Records the RTT floor for most recent periods of 4, where the duration the period is defined as `floor(rtt.minimum / 4)`.
-         * [0] holds the newest entry, [3] holds the oldest one.
-         */
-        float rtt_samples[4];
-        /**
-         * Values retained for the duration of the first recovery period.
-         */
-        struct {
-            /**
-             * The cause of the recovery entry. Different factors are used based on the cause.
-             */
-            unsigned by_ecn : 1;
-            /**
-             * Retains the lower limit CWND can be reduced.
-             */
-            uint32_t cwnd_floor;
-        } recovery;
-    };
+    enum en_quicly_cc_rapid_start_state_t state;
+    /**
+     * Whether the first recovery was entered due to ECN rather than packet loss. Valid only in `RECOVERY`.
+     */
+    uint8_t by_ecn : 1;
+    /**
+     * Lower bound for CWND adjustments made during `RECOVERY`.
+     */
+    uint32_t cwnd_floor;
 };
 
 /**
@@ -125,6 +127,41 @@ struct st_quicly_cc_cuback_t {
      * Whether the reduction that began the current epoch used QUICLY_BETA_ECN (i.e., ABE).
      */
     unsigned by_ecn : 1;
+};
+
+/**
+ * ABBA augments CUBIC and Cuback to respond quickly to increases in available bandwidth, while retaining their ordinary window
+ * growth and congestion response.
+ *
+ * It models the relationship between CWND and RTT using the congestion watermark and the lowest RTT observed afterward. An RTT
+ * below the model's prediction signals room for faster window growth. Fitting requires enough RTT variation to estimate a useful
+ * slope, which is reduced to two thirds while keeping the low point fixed. Far beyond the congestion window, the model instead
+ * assumes RTT is proportional to CWND. Until CWND reaches the policy's cwnd_prior / beta, the model's growth multiplier is capped
+ * at beta^(-2/3) to yield under persistent congestion. On each ACK, it selects the larger of ordinary growth and model-based
+ * acceleration.
+ */
+struct st_quicly_cc_abba_t {
+    /**
+     * Retains the watermarks of one congestion-avoidance period. `high` pairs the pre-reduction window with the RTT upon
+     * congestion; if it was a packet loss, the minimum RTT observed through recovery is adopted, because senders continue pushing
+     * until loss feedback arrives after 1 RTT, keeping the queue full. If it was an ECN-CE event, minimum RTT observed within 1
+     * RTT before CE is adopted, since CE is an indication of *persistent* congestion (Section 5.1 of RFC 3168). `low` starts at
+     * recovery exit and tracks the point at the lowest RTT observed during congestion avoidance.
+     */
+    struct {
+        uint32_t cwnd;
+        float rtt;
+    } high, low;
+    /**
+     * RTT = a * CWND + b. An unfitted model has a == 0 and b set to NaN: zero slope disables inversion, while NaN indicates no
+     * prediction to preserve when establishing a proportional model. A horizontal fit has a == 0, b > 0; a proportional fit
+     * has a > 0, b == 0.
+     */
+    float a, b;
+    /**
+     * Fractional bytes retained when accelerated growth determines the window.
+     */
+    float increase_remainder;
 };
 
 /**
@@ -192,6 +229,10 @@ typedef struct st_quicly_cc_t {
      */
     unsigned normalize_mtu : 1;
     /**
+     * Enables ABBA accelerated bottleneck bandwidth adaptation for CUBIC and Cuback.
+     */
+    unsigned abba : 1;
+    /**
      * State information specific to the congestion controller implementation.
      */
     union {
@@ -216,6 +257,10 @@ typedef struct st_quicly_cc_t {
                 struct st_quicly_cc_cubic_t cubic;
             };
             /**
+             * Bandwidth adaptation state shared by CUBIC and Cuback.
+             */
+            struct st_quicly_cc_abba_t abba;
+            /**
              * State to undo a recovery episode when all packets deemed lost are later acknowledged. The packet number range being
              * tracked for undo is: start_pn <= pn < recovery_end. `num_packets_lost` counts packets in that range that were
              * declared lost and have not yet been late-ACKed. Other fields retain the values to be restored when
@@ -227,11 +272,14 @@ typedef struct st_quicly_cc_t {
                 uint32_t cwnd;
                 uint32_t ssthresh;
                 uint32_t bytes_to_mtu_increase;
+                struct st_quicly_cc_abba_t abba;
                 union {
                     uint32_t bytes_per_mtu_increase;
                     struct st_quicly_cc_cuback_t cuback;
                     struct st_quicly_cc_cubic_t cubic;
                 };
+                uint64_t cwnd_increase_ca;
+                uint64_t cwnd_increase_accel;
             } undo;
         } pico;
         /**
@@ -325,6 +373,19 @@ typedef struct st_quicly_cc_t {
      * Total number of loss episodes that was reported only by ECN (hence no packet loss).
      */
     uint32_t num_ecn_loss_episodes;
+    /**
+     * Total number of congestion-avoidance episodes for which ABBA's model became fit (i.e., obtained a usable, non-horizontal
+     * RTT/CWND slope), making acceleration possible. This does not imply that acceleration actually increased CWND.
+     */
+    uint32_t num_accel_eligible_episodes;
+    /**
+     * Total bytes added to CWND while in congestion avoidance.
+     */
+    uint64_t cwnd_increase_ca;
+    /**
+     * Total bytes added to CWND by ABBA's growth model; a subset of `cwnd_increase_ca`.
+     */
+    uint64_t cwnd_increase_accel;
 } quicly_cc_t;
 
 struct st_quicly_cc_type_t {
@@ -413,20 +474,15 @@ static void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn,
  */
 static void quicly_cc_init_rapid_start(struct st_quicly_cc_rapid_start_t *rs, int64_t now);
 /**
- * If rapid start is used on the connection.
+ * If Rapid Start is currently affecting congestion control.
  */
-static int quicly_cc_rapid_start_is_enabled(struct st_quicly_cc_rapid_start_t *rs);
+static int quicly_cc_rapid_start_is_active(struct st_quicly_cc_rapid_start_t *rs);
 /**
- * If rapid start is in recovery
+ * If Rapid Start is handling the first recovery period.
  */
-static int quicly_cc_rapid_start_is_in_recovery(struct st_quicly_cc_rapid_start_t *rs);
+static int quicly_cc_rapid_start_is_in_first_recovery(struct st_quicly_cc_rapid_start_t *rs);
 /**
- * Updates heuristics needed to determine if slow start needs to be acclerated (i.e., 3x). Must not be called once the connection
- * enters the recovery period.
- */
-static void quicly_cc_rapid_start_update_rtt(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt, int64_t now);
-/**
- * Reads RTT variables from `loss`, updates the heuristics (iff now != 0), and returns if the Slow Start should be accelerated.
+ * Reads RTT variables and returns if Slow Start should be accelerated.
  */
 static int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt);
 /**
@@ -533,58 +589,31 @@ inline void quicly_cc_jumpstart_on_first_loss(quicly_cc_t *cc, uint64_t lost_pn,
 
 inline void quicly_cc_init_rapid_start(struct st_quicly_cc_rapid_start_t *rs, int64_t now)
 {
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(rs->rtt_samples); ++i)
-        rs->rtt_samples[i] = UINT32_MAX;
-    rs->newest_rtt_sample_until = now + 1; /* 1 is added to guarantee that `newest_slot_until` will be zero (i.e., disabled) */
+    (void)now;
+    rs->state = QUICLY_CC_RAPID_START_STATE_PROBING;
 }
 
-inline int quicly_cc_rapid_start_is_enabled(struct st_quicly_cc_rapid_start_t *rs)
+inline int quicly_cc_rapid_start_is_active(struct st_quicly_cc_rapid_start_t *rs)
 {
-    return rs->newest_rtt_sample_until != 0;
+    return rs->state != QUICLY_CC_RAPID_START_STATE_INACTIVE;
 }
 
-inline int quicly_cc_rapid_start_is_in_recovery(struct st_quicly_cc_rapid_start_t *rs)
+inline int quicly_cc_rapid_start_is_in_first_recovery(struct st_quicly_cc_rapid_start_t *rs)
 {
-    return rs->newest_rtt_sample_until == -1;
-}
-
-inline void quicly_cc_rapid_start_update_rtt(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt, int64_t now)
-{
-    /* bail out unless enabled */
-    if (rs->newest_rtt_sample_until <= 0)
-        return;
-
-    /* when the delay is tiny (minrtt < 4ms) benefits are small, so disable rapid start to guard `sample_duration` becoming zero */
-    if (rtt->minimum < PTLS_ELEMENTSOF(rs->rtt_samples)) {
-        rs->newest_rtt_sample_until = 0;
-        return;
-    }
-
-    /* fast path: if the newest slot covers `now`, update the slot and return */
-    if (now < rs->newest_rtt_sample_until) {
-        if (rs->rtt_samples[0] > rtt->latest)
-            rs->rtt_samples[0] = rtt->latest;
-        return;
-    }
-
-    /* slow path: determine the distance to move in the unit of slots */
-    int64_t sample_duration = rtt->minimum / PTLS_ELEMENTSOF(rs->rtt_samples);
-    size_t distance = (now - rs->newest_rtt_sample_until) / sample_duration + 1;
-
-    /* move */
-    for (size_t dst = PTLS_ELEMENTSOF(rs->rtt_samples) - 1; dst != 0; --dst)
-        rs->rtt_samples[dst] = dst >= distance ? rs->rtt_samples[dst - distance] : UINT32_MAX;
-
-    /* fill the newest slot */
-    rs->rtt_samples[0] = rtt->latest;
-    rs->newest_rtt_sample_until += sample_duration * distance;
-    assert(rs->newest_rtt_sample_until - sample_duration <= now && now < rs->newest_rtt_sample_until);
+    return rs->state == QUICLY_CC_RAPID_START_STATE_RECOVERY;
 }
 
 inline int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, const quicly_rtt_t *rtt)
 {
-    if (rs->newest_rtt_sample_until <= 0)
+    if (rs->state != QUICLY_CC_RAPID_START_STATE_PROBING || rtt->latest == 0)
         return 0;
+
+    /* Disable Rapid Start below four milliseconds, where it provides little benefit and the one-millisecond clock cannot divide
+     * the minimum RTT into four floor-tracking slots. */
+    if (rtt->minimum < PTLS_ELEMENTSOF(rtt->floor.samples)) {
+        rs->state = QUICLY_CC_RAPID_START_STATE_INACTIVE;
+        return 0;
+    }
 
     /* If the latest RTT is below max(min_rtt + 4ms, min_rtt * 1.1), adopt a higher increase rate (i.e., 3x per RTT) than the
      * ordinary Slow Start (2x per RTT). The thresholds are chosen so that they do not overlap with HyStart++, which reduces the
@@ -593,43 +622,38 @@ inline int quicly_cc_rapid_start_use_3x(struct st_quicly_cc_rapid_start_t *rs, c
     if (threshold < rtt->minimum * 35 / 32)
         threshold = rtt->minimum * 35 / 32;
 
-    float floor = UINT32_MAX;
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(rs->rtt_samples); ++i)
-        if (floor > rs->rtt_samples[i])
-            floor = rs->rtt_samples[i];
-
-    return floor <= threshold;
+    return quicly_rtt_get_floor(rtt) <= threshold;
 }
 
 inline void quicly_cc_rapid_start_on_first_lost(struct st_quicly_cc_rapid_start_t *rs, uint32_t *cwnd, int by_ecn,
                                                 uint32_t cwnd_floor)
 {
-    if (rs->newest_rtt_sample_until == 0)
+    if (rs->state == QUICLY_CC_RAPID_START_STATE_INACTIVE)
         return;
 
-    assert(rs->newest_rtt_sample_until > 0);
-    rs->newest_rtt_sample_until = -1;
-    rs->recovery.by_ecn = by_ecn != 0;
+    assert(rs->state == QUICLY_CC_RAPID_START_STATE_PROBING);
+    rs->state = QUICLY_CC_RAPID_START_STATE_RECOVERY;
+    rs->by_ecn = by_ecn != 0;
 
-    double beta = QUICLY_USE_ABE && rs->recovery.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+    double beta = QUICLY_USE_ABE && rs->by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
 
-    rs->recovery.cwnd_floor = *cwnd * (1. / 3) * beta;
-    if (rs->recovery.cwnd_floor < cwnd_floor)
-        rs->recovery.cwnd_floor = cwnd_floor;
+    rs->cwnd_floor = *cwnd * (1. / 3) * beta;
+    if (rs->cwnd_floor < cwnd_floor)
+        rs->cwnd_floor = cwnd_floor;
 
     /* the silence factor is identical to the loss factor */
     *cwnd *= QUICLY_RAPID_START_LOSS_FACTOR(beta);
-    if (*cwnd < rs->recovery.cwnd_floor)
-        *cwnd = rs->recovery.cwnd_floor;
+    if (*cwnd < rs->cwnd_floor)
+        *cwnd = rs->cwnd_floor;
 }
 
 inline void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t *rs, uint32_t *cwnd, uint32_t bytes_acked,
                                               uint32_t bytes_lost)
 {
-    if (rs->newest_rtt_sample_until == 0)
+    if (rs->state == QUICLY_CC_RAPID_START_STATE_INACTIVE)
         return;
 
-    assert(rs->newest_rtt_sample_until == -1);
+    assert(rs->state == QUICLY_CC_RAPID_START_STATE_RECOVERY);
 
     static const struct {
         double ack, loss;
@@ -640,18 +664,18 @@ inline void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t 
 #undef ENTRY
     };
 
-    int use_ecn_factor = QUICLY_USE_ABE && rs->recovery.by_ecn;
+    int use_ecn_factor = QUICLY_USE_ABE && rs->by_ecn;
     uint32_t reduction = factors[use_ecn_factor].ack * bytes_acked + factors[use_ecn_factor].loss * bytes_lost;
     assert(reduction <= *cwnd && "CWND never underflows");
     *cwnd -= reduction;
-    if (*cwnd < rs->recovery.cwnd_floor)
-        *cwnd = rs->recovery.cwnd_floor;
+    if (*cwnd < rs->cwnd_floor)
+        *cwnd = rs->cwnd_floor;
 }
 
 inline void quicly_cc_rapid_start_exit_recovery(struct st_quicly_cc_rapid_start_t *rs)
 {
-    assert(rs->newest_rtt_sample_until == -1);
-    rs->newest_rtt_sample_until = 0;
+    assert(rs->state == QUICLY_CC_RAPID_START_STATE_RECOVERY);
+    rs->state = QUICLY_CC_RAPID_START_STATE_INACTIVE;
 }
 
 #ifdef __cplusplus

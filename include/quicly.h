@@ -156,7 +156,7 @@ QUICLY_CALLBACK_TYPE(quicly_error_t, generate_resumption_token, quicly_conn_t *c
  * called to initialize a congestion controller for a new connection.
  * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
  */
-QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int64_t now);
+QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int abba, int64_t now);
 /**
  * reference counting.
  * delta must be either 1 or -1.
@@ -379,6 +379,10 @@ struct st_quicly_context_t {
          * if CC should take app-limited into consideration
          */
         uint8_t respect_app_limited;
+        /**
+         * if ABBA accelerated bottleneck bandwidth adaptation should be used when using CUBIC or Cuback
+         */
+        uint8_t abba;
     } enable_ratio;
     /**
      * expand client hello so that it does not fit into one datagram
@@ -656,6 +660,10 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_paced;                                                                                                            \
     /**                                                                                                                            \
+     * Total number of connections for which ABBA was enabled.                                                                     \
+     */                                                                                                                            \
+    uint64_t num_abba;                                                                                                             \
+    /**                                                                                                                            \
      * Total number of connections where app-limited state was respected by CC.                                                    \
      */                                                                                                                            \
     uint64_t num_respected_app_limited
@@ -806,6 +814,7 @@ typedef struct st_quicly_stats_t {
     apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
     apply(num_rapid_start, "num-rapid-start")                                                                                      \
     apply(num_paced, "num-paced")                                                                                                  \
+    apply(num_abba, "num-abba")                                                                                                    \
     apply(num_respected_app_limited, "num-respected-app-limited")
 
 /**
@@ -848,6 +857,9 @@ typedef struct st_quicly_stats_t {
     apply(cc.num_loss_episodes_undone, "cc.num-loss-episodes-undone")                                                              \
     apply(cc.num_loss_episodes_undone_in_startup, "cc.num-loss-episodes-undone-in-startup")                                        \
     apply(cc.num_ecn_loss_episodes, "cc.num-ecn-loss-episodes")                                                                    \
+    apply(cc.num_accel_eligible_episodes, "cc.num-accel-eligible-episodes")                                                        \
+    apply(cc.cwnd_increase_ca, "cc.cwnd-increase-ca")                                                                              \
+    apply(cc.cwnd_increase_accel, "cc.cwnd-increase-accel")                                                                        \
     apply(delivery_rate.latest, "delivery-rate.latest")                                                                            \
     apply(delivery_rate.smoothed, "delivery-rate.smoothed")                                                                        \
     apply(delivery_rate.stdev, "delivery-rate.stdev")                                                                              \

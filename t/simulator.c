@@ -911,6 +911,7 @@ static void usage(const char *cmd)
            "                      fq_codel\n"
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
            "  -R                  turns on rapid start\n"
+           "  --abba              enables ABBA\n"
            "  -s <seconds>        delay until the sender is added to the simulation\n"
            "                      (default: 0)\n"
            "  -t                  emits trace as well\n"
@@ -969,10 +970,18 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                          double *ack_scheduler_probability, double *ack_scheduler_delay, FILE **trace_fp)
 {
     reset_getopt_state();
-    int ch;
-    while ((ch = getopt(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:Rs:th")) != -1) {
+    static const struct option longopts[] = {{"abba", no_argument, NULL, 0}, {NULL}};
+    int ch, opt_index;
+    while ((ch = getopt_long(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:Rs:th", longopts, &opt_index)) != -1) {
 
         switch (ch) {
+        case 0:
+            if (strcmp(longopts[opt_index].name, "abba") == 0) {
+                quicctx->enable_ratio.abba = 255;
+            } else {
+                assert(!"unexpected longname");
+            }
+            break;
         case 'a': {
             if (ack_scheduler_probability == NULL) {
                 fprintf(stderr, "-%c is not available here\n", ch);
