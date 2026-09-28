@@ -1214,6 +1214,38 @@ static void test_set_cc(void)
     ok(strcmp(stats.cc.type->name, "reno") == 0);
 }
 
+static void test_cc_accel_context(void)
+{
+    quicly_init_cc_t *const policies[] = {&quicly_cc_cubic_init, &quicly_cc_cuback_init};
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
+        quicly_context_t ctx = quic_ctx;
+        ctx.init_cc = policies[i];
+        ctx.enable_ratio.abba = 255;
+        quicly_conn_t *conn;
+        ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                          NULL) == 0);
+        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
+
+        /* Path promotion uses configured policy and discards the old path's measurements. */
+        conn->egress.cc.abba = 0;
+        conn->egress.cc.state.pico.abba.high.cwnd = 100000;
+        quicly_rtt_update(&conn->egress.loss.rtt, 20, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20);
+        ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
+        ok(promote_path(conn, 1) == 0);
+        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.type->cc_init == policies[i]);
+        ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
+        ok(conn->egress.loss.rtt.latest == 0);
+        ok(conn->egress.loss.rtt.floor.newest_sample_until == 0);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20); /* initial estimate inherited from the old path */
+        quicly_rtt_update(&conn->egress.loss.rtt, 80, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 80);
+        quicly_free(conn);
+    }
+}
+
 void test_ecn_index_from_bits(void)
 {
     ok(get_ecn_index_from_bits(1) == 1);
@@ -2070,6 +2102,12 @@ static void test_stats_foreach_field(size_t off, size_t size)
 {
     ok(test_stats_foreach_next_off == off);
 
+    /* The RTT floor's sampling state is internal, not a set of exported statistics. */
+    if (off == offsetof(quicly_stats_t, rtt.latest)) {
+        test_stats_foreach_next_off = offsetof(quicly_stats_t, loss_thresholds.use_packet_based);
+        return;
+    }
+
     /* Due to alignment, padding might exist between two fields when their types are different. The `gaps` list calls out the ones
      * that "might" have such padding on some architectures. */
     static const size_t gaps[] = {
@@ -2079,7 +2117,7 @@ static void test_stats_foreach_field(size_t off, size_t size)
         GAP(loss_thresholds.use_packet_based, loss_thresholds.time_based_percentile),
         GAP(loss_thresholds.time_based_percentile, cc.cwnd),
         GAP(cc.ssthresh, cc.cwnd_initial),
-        GAP(cc.num_ecn_loss_episodes, delivery_rate.latest),
+        GAP(cc.cwnd_exiting_slow_start, cc.exit_slow_start_at),
 #undef GAP
         SIZE_MAX};
     for (size_t i = 0; gaps[i] != SIZE_MAX; i += 2) {
@@ -2184,6 +2222,7 @@ int main(int argc, char **argv)
     subtest("lossy", test_lossy);
     subtest("test-nondecryptable-initial", test_nondecryptable_initial);
     subtest("set_cc", test_set_cc);
+    subtest("cc-accel-context", test_cc_accel_context);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
     subtest("resume-sendrate", test_resume_sendrate);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
