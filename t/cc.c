@@ -1705,7 +1705,7 @@ static void test_prague_growth(void)
     ok(cc.cwnd == 50 * mtu && cc.ssthresh == cc.cwnd);
     ok(cc.state.pico.prague.alpha == 1 && cc.state.pico.cuback.by_ecn);
     ok(cc.recovery_end == 100);
-    ok(cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1);
+    ok(cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1 && cc.num_prague_reductions == 0);
     ok(cc.cwnd_exiting_slow_start == 100 * mtu);
     l4s_acked(&cc, &loss, 25 * mtu, 99, 100, 1010, mtu, 25, 1);
     ok(cc.cwnd == 50 * mtu && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1);
@@ -1724,7 +1724,7 @@ static void test_prague_growth(void)
     uint32_t before = cc.cwnd, cwnd_prior = cc.state.pico.cuback.cwnd_prior;
     l4s_acked(&cc, &loss, 0, 150, 200, 1150, mtu, 10, 1);
     ok(cc.cwnd == (uint32_t)(before * (1 - cc.state.pico.prague.alpha / 2)));
-    ok(cc.recovery_end == 100 && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1);
+    ok(cc.recovery_end == 100 && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1 && cc.num_prague_reductions == 1);
     ok(cc.state.pico.cuback.cwnd_prior == cwnd_prior);
     ok(cc.state.pico.prague.increase_carry == carry);
 
@@ -1739,9 +1739,9 @@ static void test_prague_growth(void)
     ok(cc.cwnd == before + mtu);
     before = cc.cwnd;
     l4s_acked(&cc, &loss, 0, 201, 300, 1240, mtu, 1, 1);
-    ok(cc.cwnd == before && cc.num_loss_episodes == 1);
+    ok(cc.cwnd == before && cc.num_loss_episodes == 1 && cc.num_prague_reductions == 1);
     l4s_acked(&cc, &loss, 0, 202, 300, 1250, mtu, 1, 1);
-    ok(cc.cwnd < before && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1);
+    ok(cc.cwnd < before && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1 && cc.num_prague_reductions == 2);
 }
 
 static void test_prague_loss(void)

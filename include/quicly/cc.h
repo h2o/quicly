@@ -419,6 +419,10 @@ typedef struct st_quicly_cc_t {
      * Total bytes added to CWND by ABBA's growth model; a subset of `cwnd_increase_ca`.
      */
     uint64_t cwnd_increase_accel;
+    /**
+     * total number of CWND reductions caused by Prague
+     */
+    uint64_t num_prague_reductions;
 } quicly_cc_t;
 
 struct st_quicly_cc_type_t {

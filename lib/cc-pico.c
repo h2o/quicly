@@ -767,6 +767,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
             cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
         cc->state.pico.cuback.by_ecn = 1;
         cc->state.pico.undo.num_packets_lost = 0;
+        ++cc->num_prague_reductions;
         goto UpdateMetrics;
     }
 

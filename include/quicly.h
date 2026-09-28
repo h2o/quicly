@@ -866,6 +866,7 @@ typedef struct st_quicly_stats_t {
     apply(cc.num_accel_eligible_episodes, "cc.num-accel-eligible-episodes")                                                        \
     apply(cc.cwnd_increase_ca, "cc.cwnd-increase-ca")                                                                              \
     apply(cc.cwnd_increase_accel, "cc.cwnd-increase-accel")                                                                        \
+    apply(cc.num_prague_reductions, "cc.num-prague-reductions")                                                                    \
     apply(delivery_rate.latest, "delivery-rate.latest")                                                                            \
     apply(delivery_rate.smoothed, "delivery-rate.smoothed")                                                                        \
     apply(delivery_rate.stdev, "delivery-rate.stdev")                                                                              \
