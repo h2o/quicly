@@ -1719,31 +1719,29 @@ static void test_prague_growth(void)
     double carry = cc.state.pico.prague.increase_carry;
     ok(cc.cwnd == 51 * mtu && fabs(carry - 1. / 3) < 1e-9);
 
-    /* Once past startup, CE reduces by alpha / 2 and enters recovery; the carried fraction is retained. */
-    uint32_t before = cc.cwnd;
+    /* Once past startup, CE reduces by alpha / 2 without starting a loss episode or entering recovery; the carried fraction is
+     * retained. */
+    uint32_t before = cc.cwnd, cwnd_prior = cc.state.pico.cuback.cwnd_prior;
     l4s_acked(&cc, &loss, 0, 150, 200, 1150, mtu, 10, 1);
     ok(cc.cwnd == (uint32_t)(before * (1 - cc.state.pico.prague.alpha / 2)));
-    ok(cc.recovery_end == 200 && cc.num_loss_episodes == 2 && cc.num_ecn_loss_episodes == 2);
+    ok(cc.recovery_end == 100 && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1);
+    ok(cc.state.pico.cuback.cwnd_prior == cwnd_prior);
     ok(cc.state.pico.prague.increase_carry == carry);
 
-    /* Growth freezes and repeat CE is ignored during recovery. */
-    before = cc.cwnd;
-    l4s_acked(&cc, &loss, mtu, 190, 200, 1160, mtu, 1, 1);
-    ok(cc.cwnd == before && cc.num_loss_episodes == 2 && cc.state.pico.prague.increase_carry == carry);
-
-    /* After recovery, growth resumes driven only by unmarked bytes, while CE remains suppressed until the virtual RTT has
+    /* Growth continues in CWR state, driven only by unmarked bytes, while CE remains suppressed until the virtual RTT has
      * passed. */
-    l4s_acked(&cc, &loss, 2 * mtu, 200, 300, 1200, mtu, 2, 1);
-    ok(cc.cwnd == before && cc.num_loss_episodes == 2);
+    before = cc.cwnd;
+    l4s_acked(&cc, &loss, 2 * mtu, 190, 200, 1160, mtu, 2, 1);
+    ok(cc.cwnd == before && cc.num_loss_episodes == 1);
     ok(fabs(cc.state.pico.prague.increase_carry - (carry + (double)mtu / before)) < 1e-9);
     uint32_t bytes = (uint32_t)ceil((1 - cc.state.pico.prague.increase_carry) * before);
-    cc.type->cc_on_acked(&cc, &loss, bytes, 201, bytes, 1, 300, 1210, mtu, &no_ecn_counts);
+    cc.type->cc_on_acked(&cc, &loss, bytes, 191, bytes, 1, 200, 1170, mtu, &no_ecn_counts);
     ok(cc.cwnd == before + mtu);
     before = cc.cwnd;
     l4s_acked(&cc, &loss, 0, 201, 300, 1240, mtu, 1, 1);
-    ok(cc.cwnd == before && cc.num_loss_episodes == 2);
+    ok(cc.cwnd == before && cc.num_loss_episodes == 1);
     l4s_acked(&cc, &loss, 0, 202, 300, 1250, mtu, 1, 1);
-    ok(cc.cwnd < before && cc.num_loss_episodes == 3 && cc.num_ecn_loss_episodes == 3);
+    ok(cc.cwnd < before && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1);
 }
 
 static void test_prague_loss(void)
@@ -1790,7 +1788,7 @@ static void test_prague_loss(void)
     cc.type->cc_on_late_ack(&cc, 60, 331);
     ok(cc.cwnd == before); /* cannot undo intervening CE */
 
-    /* A loss during the recovery period started by the Prague reduction is acted on as a new episode, selecting CUBACK growth
+    /* A loss following the Prague reduction is acted on as a new episode, selecting CUBACK growth
      * and leaving alpha intact. */
     uint32_t num_loss_episodes = cc.num_loss_episodes, num_ecn_loss_episodes = cc.num_ecn_loss_episodes;
     cc.type->cc_on_lost(&cc, &loss, mtu, 72, 85, 332, mtu);

@@ -419,7 +419,7 @@ static uint32_t prague_grow(struct st_quicly_cc_prague_t *prague, uint32_t cwnd,
     return quicly_u32_add_saturating(cwnd, num_mtus * mtu);
 }
 
-static int in_prague_recovery(const quicly_cc_t *cc)
+static int in_prague_ca(const quicly_cc_t *cc)
 {
     if (isnan(cc->state.pico.prague.alpha))
         return 0;
@@ -637,7 +637,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
     /* ABBA: update state */
-    if (!in_prague_recovery(cc) && abba_enabled(cc) && cc->cwnd >= cc->ssthresh) {
+    if (!in_prague_ca(cc) && abba_enabled(cc) && cc->cwnd >= cc->ssthresh) {
         int was_fit = cc->state.pico.abba.a > 0;
         abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 0,
                       cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
@@ -688,7 +688,7 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         goto Cleanup;
 
     /* Prague: handle CWND increase in its own way. */
-    if (in_prague_recovery(cc)) {
+    if (in_prague_ca(cc)) {
         cc->cwnd =
             prague_grow(&cc->state.pico.prague, cc->cwnd, cc->normalize_mtu, loss->rtt.smoothed, bytes, max_udp_payload_size, l4s);
         goto Cleanup;
@@ -728,19 +728,14 @@ Cleanup:
 static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
                          int64_t now, uint32_t max_udp_payload_size)
 {
-    /* Prague */
-    if (!isnan(cc->state.pico.prague.alpha)) {
-        struct st_quicly_cc_prague_t *prague = &cc->state.pico.prague;
-        /* suppress repeated reductions until a virtual RTT has passed */
-        if (bytes == 0 && now < prague->reduce_at)
-            return;
-        /* A loss ends the recovery period that a Prague reduction started past startup and is acted on as a new episode, because
-         * the Prague reduction can be small. */
-        if (bytes != 0 && lost_pn < cc->recovery_end && in_prague_recovery(cc) && cc->num_loss_episodes > 1)
-            cc->recovery_end = lost_pn;
-    }
+#define PRAGUE_REDUCTION() (bytes == 0 && !isnan(cc->state.pico.prague.alpha) && cc->num_loss_episodes != 0)
 
-    quicly_cc__update_ecn_episodes(cc, bytes, lost_pn);
+    /* Prague: suppress repeated reductions until a virtual RTT has passed */
+    if (PRAGUE_REDUCTION() && now < cc->state.pico.prague.reduce_at)
+        return;
+
+    if (!PRAGUE_REDUCTION())
+        quicly_cc__update_ecn_episodes(cc, bytes, lost_pn);
 
     /* Nothing to do if loss is in recovery window (modulo when exiting rapid start, in which case CWND is further reduced relative
      * to the number of bytes lost. */
@@ -762,17 +757,21 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         pico_on_acked(cc, loss, 0, cc->recovery_end, (uint32_t)loss->sentmap.bytes_in_flight, 0, next_pn, now, max_udp_payload_size,
                       NULL);
 
-#define ENTERING_PRAGUE() (bytes == 0 && !isnan(cc->state.pico.prague.alpha))
-
-    double beta = QUICLY_BETA_LOSS;
-    if (ENTERING_PRAGUE()) {
-        beta = 1 - cc->state.pico.prague.alpha / 2;
+    /* Prague: past startup, reduce CWND without starting a loss episode or a recovery period. Additive increase does not stop
+     * (draft-briscoe-iccrg-prague-congestion-control-04, Section 2.4.3), and a loss that follows is acted on as a new episode,
+     * because the Prague reduction can be small. The reduction cannot be undone. */
+    if (PRAGUE_REDUCTION()) {
         cc->state.pico.prague.reduce_at = now + prague_rtt_virt(loss->rtt.smoothed);
-    } else if (cc->type == &quicly_cc_type_reno) {
-        beta = QUICLY_BETA_RENO;
-    } else if (QUICLY_USE_ABE && bytes == 0) {
-        beta = QUICLY_BETA_ECN;
+        cc->cwnd *= 1 - cc->state.pico.prague.alpha / 2;
+        if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
+            cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
+        cc->state.pico.cuback.by_ecn = 1;
+        cc->state.pico.undo.num_packets_lost = 0;
+        goto UpdateMetrics;
     }
+
+    double beta =
+        cc->type == &quicly_cc_type_reno ? QUICLY_BETA_RENO : (QUICLY_USE_ABE && bytes == 0 ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
 
     /* Zero-byte congestion reports are ECN signals, not lost packets. They still enter recovery below, but cannot be undone by
      * late ACKs because no packet was deemed lost. */
@@ -803,8 +802,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         cc->state.pico.undo.num_packets_lost = 0;
     }
 
-    /* ABBA: observe congestion to decide the growth mode that follows. */
-    if (!ENTERING_PRAGUE() && abba_enabled(cc))
+    if (abba_enabled(cc))
         abba_on_congestion(&cc->state.pico.abba, cc->cwnd, &loss->rtt, bytes == 0);
 
     cc->recovery_end = next_pn;
@@ -906,7 +904,7 @@ UpdateMetrics:
     if (cc->cwnd_minimum > cc->cwnd)
         cc->cwnd_minimum = cc->cwnd;
 
-#undef ENTERING_PRAGUE
+#undef PRAGUE_REDUCTION
 }
 
 static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
