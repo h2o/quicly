@@ -469,7 +469,7 @@ int buffer_is(ptls_buffer_t *buf, const char *s)
     return buf->off == strlen(s) && memcmp(buf->base, s, buf->off) == 0;
 }
 
-size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
+static size_t transmit_with_ecn(quicly_conn_t *src, quicly_conn_t *dst, uint8_t ecn)
 {
     quicly_address_t destaddr, srcaddr;
     struct iovec datagrams[32];
@@ -485,12 +485,18 @@ size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
     if (num_datagrams != 0) {
         size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
         for (i = 0; i != num_packets; ++i) {
+            decoded[i].ecn = ecn;
             ret = quicly_receive(dst, NULL, &fake_address.sa, decoded + i);
             ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
         }
     }
 
     return num_datagrams;
+}
+
+size_t transmit(quicly_conn_t *src, quicly_conn_t *dst)
+{
+    return transmit_with_ecn(src, dst, 0);
 }
 
 static void exchange_until_idle(quicly_conn_t *c1, quicly_conn_t *c2)
@@ -1251,6 +1257,140 @@ void test_ecn_index_from_bits(void)
     ok(get_ecn_index_from_bits(1) == 1);
     ok(get_ecn_index_from_bits(2) == 0);
     ok(get_ecn_index_from_bits(3) == 2);
+}
+
+static void test_l4s_context(void)
+{
+    /* mode 0: L4S off, 1: L4S requested without pacing, 2: L4S with pacing */
+    for (int mode = 0; mode != 3; ++mode) {
+        quicly_context_t ctx = quic_ctx;
+        ctx.init_cc = &quicly_cc_cuback_init;
+        ctx.enable_ratio.l4s = mode != 0 ? 255 : 0;
+        ctx.enable_ratio.pacing = mode == 2 ? 255 : 0;
+        ctx.enable_ratio.ecn = 255;
+        quicly_conn_t *conn;
+        ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                          NULL) == 0);
+        ok(conn->egress.ecn.l4s == (mode == 2));
+        ok(quicly_send_get_ecn_bits(conn) == (mode == 2 ? 1 : 2));
+        ok((conn->egress.pacer != NULL) == (mode == 2));
+        if (mode == 2) {
+            conn->egress.cc.state.pico.prague.alpha = 0.25;
+            ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
+            ok(promote_path(conn, 1) == 0);
+            ok(isnan(conn->egress.cc.state.pico.prague.alpha));
+            ok(quicly_send_get_ecn_bits(conn) == 1);
+        }
+        quicly_free(conn);
+    }
+}
+
+static void test_l4s_feedback(void)
+{
+    quicly_context_t ctx = quic_ctx;
+    ctx.init_cc = &quicly_cc_cuback_init;
+    ctx.enable_ratio.l4s = 255;
+    ctx.enable_ratio.pacing = 255;
+    quicly_conn_t *conn;
+    ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                      NULL) == 0);
+    conn->egress.packet_number = 100;
+    conn->egress.loss.rtt.smoothed = 100;
+    quicly_ack_frame_t frame = {.largest_acknowledged = 20, .ecn_counts = {0, 19, 1}};
+    quicly_cc_ecn_counts_t counts;
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, 20, &counts);
+    ok(counts.total == 20 && counts.ce == 1 && conn->egress.ecn.state == QUICLY_ECN_ON);
+    ok(conn->super.stats.num_packets.acked_ecn_counts[1] == 19);
+    ok(conn->super.stats.num_packets.acked_ecn_counts[2] == 1);
+    uint32_t before = conn->egress.cc.cwnd;
+    conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, 0, 20, 0, 1, 100, conn->stash.now,
+                                      conn->egress.max_udp_payload_size, &counts);
+    conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, 0, 20, 100, conn->stash.now,
+                                     conn->egress.max_udp_payload_size);
+    ok(conn->egress.cc.cwnd == before / 2);
+    ok(conn->egress.cc.state.pico.cuback.by_ecn);
+
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, UINT64_MAX, &counts);
+    ok(counts.total == 0 && counts.ce == 0); /* duplicate snapshot */
+    frame.largest_acknowledged = 19;
+    frame.ecn_counts[1] = 18;
+    frame.ecn_counts[2] = 0;
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, UINT64_MAX, &counts);
+    ok(counts.total == 0 && counts.ce == 0 && conn->egress.ecn.state == QUICLY_ECN_ON); /* old reordered snapshot */
+    frame.largest_acknowledged = 20;
+    frame.ecn_counts[1] = 19;
+    frame.ecn_counts[2] = 2;
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, UINT64_MAX, &counts);
+    ok(counts.total == 1 && counts.ce == 1); /* counters can advance without newly acknowledged bytes */
+
+    /* Counter regression in a newer ACK fails validation, unlike an old reordered snapshot. */
+    frame.largest_acknowledged = 21;
+    frame.ecn_counts[2] = 1;
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, 21, &counts);
+    ok(counts.total == 0 && counts.ce == 0 && conn->egress.ecn.state == QUICLY_ECN_OFF);
+    ok(quicly_send_get_ecn_bits(conn) == 0);
+    quicly_free(conn);
+
+    for (int has_ecn = 0; has_ecn != 2; ++has_ecn) {
+        ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                          NULL) == 0);
+        conn->egress.packet_number = 100;
+        frame = (quicly_ack_frame_t){.largest_acknowledged = 20, .ecn_counts = {20, 0, 0}};
+        handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, has_ecn, 20, &counts);
+        ok(counts.total == 0 && conn->egress.ecn.state == QUICLY_ECN_OFF); /* missing feedback or ECT(1) rewritten to ECT(0) */
+        quicly_free(conn);
+    }
+}
+
+static void test_l4s_transfer(void)
+{
+    quicly_context_t ctx = quic_ctx;
+    ctx.init_cc = &quicly_cc_cuback_init;
+    ctx.enable_ratio.l4s = 255;
+    ctx.enable_ratio.pacing = 255;
+    ctx.enable_ratio.ecn = 0;
+    quicly_conn_t *client, *server;
+    ok(quicly_connect(&client, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                      NULL) == 0);
+    quicly_address_t dest, src;
+    struct iovec datagrams[8];
+    uint8_t buf[8 * 1500];
+    size_t count = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(client, &dest, &src, datagrams, &count, buf, sizeof(buf)) == 0);
+    ok(count == 1);
+    quicly_decoded_packet_t decoded[8];
+    ok(decode_packets(decoded, datagrams, count) == 1);
+    decoded[0].ecn = quicly_send_get_ecn_bits(client);
+    ok(decoded[0].ecn == 1);
+    ok(quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL) == 0);
+    for (int i = 0; i != 10; ++i) {
+        quic_now += 20;
+        transmit(server, client);
+        transmit_with_ecn(client, server, 1);
+    }
+    ok(quicly_connection_is_ready(client));
+    ok(client->egress.ecn.state == QUICLY_ECN_ON && client->egress.ecn.l4s);
+    ok(client->super.stats.num_packets.acked_ecn_counts[1] != 0);
+
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    uint8_t data[50000] = {0};
+    ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
+    quic_now += 20;
+    uint32_t before = client->egress.cc.cwnd;
+    ok(transmit_with_ecn(client, server, 3) > 0);
+    quic_now += 20;
+    ok(transmit(server, client) > 0);
+    ok(client->egress.cc.state.pico.cuback.by_ecn);
+    ok(client->egress.cc.state.pico.prague.alpha == 1);
+    /* as is the case with classic CE, the ACK is applied to slow start, then CE exits startup and enters recovery */
+    ok(client->egress.cc.cwnd_exiting_slow_start > before);
+    ok(client->egress.cc.cwnd == client->egress.cc.cwnd_exiting_slow_start / 2);
+    ok(client->egress.cc.num_ecn_loss_episodes == 1 && client->egress.cc.recovery_end != 0);
+    ok(client->super.stats.num_packets.acked_ecn_counts[2] != 0);
+    ok(quicly_send_get_ecn_bits(client) == 1);
+    quicly_free(client);
+    quicly_free(server);
 }
 
 static void test_resume_sendrate(void)
@@ -2224,6 +2364,9 @@ int main(int argc, char **argv)
     subtest("set_cc", test_set_cc);
     subtest("cc-accel-context", test_cc_accel_context);
     subtest("ecn-index-from-bits", test_ecn_index_from_bits);
+    subtest("l4s-context", test_l4s_context);
+    subtest("l4s-feedback", test_l4s_feedback);
+    subtest("l4s-transfer", test_l4s_transfer);
     subtest("resume-sendrate", test_resume_sendrate);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);

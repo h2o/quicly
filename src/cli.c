@@ -1331,6 +1331,7 @@ static void usage(const char *cmd)
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  --abba                    enables ABBA bandwidth adaptation\n"
+           "  --l4s                     enables L4S with CUBACK (including pacing)\n"
            "  --rapid-start             turns on rapid start\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
@@ -1618,6 +1619,7 @@ int main(int argc, char **argv)
                                              {"no-normalize-cc-mtu", no_argument, NULL, 0},
                                              {"rapid-start", no_argument, NULL, 0},
                                              {"abba", no_argument, NULL, 0},
+                                             {"l4s", no_argument, NULL, 0},
                                              {"sockfd", required_argument, NULL, 0},
                                              {"exit-after-handshake", no_argument, NULL, 0},
                                              {"calc-initial-secret", required_argument, NULL, 0},
@@ -1634,6 +1636,9 @@ int main(int argc, char **argv)
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
                 ctx.enable_ratio.ecn = 0;
+            } else if (strcmp(longopts[opt_index].name, "l4s") == 0) {
+                ctx.enable_ratio.l4s = 255;
+                ctx.enable_ratio.pacing = 255;
             } else if (strcmp(longopts[opt_index].name, "delivery-stats") == 0) {
                 delivery_stats = suppress_output = 1;
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {

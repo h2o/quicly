@@ -372,6 +372,12 @@ struct st_quicly_context_t {
          */
         uint8_t ecn;
         /**
+         * whether to use L4S (off by default). Only connections that use pacing are selected; they use ECT(1) independently of
+         * `ecn`. CE marks are reported to the congestion controller as L4S signals, which requires a controller that supports them
+         * (i.e., CUBACK).
+         */
+        uint8_t l4s;
+        /**
          * if pacing should be used
          */
         uint8_t pacing;

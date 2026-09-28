@@ -398,6 +398,7 @@ struct st_quicly_conn_t {
         struct {
             enum en_quicly_ecn_state { QUICLY_ECN_OFF, QUICLY_ECN_ON, QUICLY_ECN_PROBING } state;
             uint64_t counts[QUICLY_NUM_EPOCHS][3];
+            unsigned l4s : 1;
         } ecn;
         /**
          * things to be sent at the stream-level, that are not governed by the stream scheduler
@@ -2878,6 +2879,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.send_probe_at = INT64_MAX;
     conn->super.ctx->init_cc->cb(conn->super.ctx->init_cc, &conn->egress.cc, initcwnd, conn->super.ctx->normalize_cc_mtu,
                                  conn->super.stats.num_abba != 0, conn->stash.now);
+    /* L4S depends on pacing */
+    conn->egress.ecn.l4s = pacer != NULL && enable_with_ratio255(ctx->enable_ratio.l4s, ctx->tls->random_bytes);
     if (conn->egress.cc.type->enable_rapid_start != NULL &&
         enable_with_ratio255(conn->super.ctx->enable_ratio.rapid_start, conn->super.ctx->tls->random_bytes)) {
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
@@ -2887,9 +2890,10 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         conn->egress.pacer = pacer;
         quicly_pacer_reset(conn->egress.pacer);
     }
-    conn->egress.ecn.state = enable_with_ratio255(conn->super.ctx->enable_ratio.ecn, conn->super.ctx->tls->random_bytes)
-                                 ? QUICLY_ECN_PROBING
-                                 : QUICLY_ECN_OFF;
+    conn->egress.ecn.state =
+        conn->egress.ecn.l4s || enable_with_ratio255(conn->super.ctx->enable_ratio.ecn, conn->super.ctx->tls->random_bytes)
+            ? QUICLY_ECN_PROBING
+            : QUICLY_ECN_OFF;
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
@@ -6018,7 +6022,7 @@ Exit:
 
 uint8_t quicly_send_get_ecn_bits(quicly_conn_t *conn)
 {
-    return conn->egress.ecn.state == QUICLY_ECN_OFF ? 0 : 2; /* NON-ECT or ECT(0) */
+    return conn->egress.ecn.state == QUICLY_ECN_OFF ? 0 : conn->egress.ecn.l4s ? 1 : 2; /* NON-ECT, ECT(1), or ECT(0) */
 }
 
 size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
@@ -6312,6 +6316,62 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
     return 0;
 }
 
+/**
+ * Validates the ECN counts carried by an ACK frame (RFC 9000, Section 13.4.2), and sets to `counts` the increase of the counters.
+ * Counter snapshots are accepted atomically, so that reordered ACKs cannot manufacture a different marking fraction by advancing
+ * only part of a snapshot.
+ */
+static void handle_ecn_feedback(quicly_conn_t *conn, uint8_t epoch, const quicly_ack_frame_t *frame, int has_ecn,
+                                uint64_t largest_newly_acked, quicly_cc_ecn_counts_t *counts)
+{
+    *counts = (quicly_cc_ecn_counts_t){0};
+
+    if (conn->egress.ecn.state == QUICLY_ECN_OFF || frame->largest_acknowledged < conn->egress.pn_path_start)
+        return;
+
+    uint64_t *previous = conn->egress.ecn.counts[epoch];
+    /* an ACK frame is newer than those processed so far iff its largest acknowledged is newly acknowledged */
+    int is_newer = largest_newly_acked == frame->largest_acknowledged;
+
+    if (!has_ecn) {
+        if (is_newer)
+            update_ecn_state(conn, QUICLY_ECN_OFF);
+        return;
+    }
+    /* `ecn_counts` are ECT(0), ECT(1), CE in that order; ECT(1) is used for L4S and ECT(0) otherwise, the other is never expected
+     */
+    if (frame->ecn_counts[!conn->egress.ecn.l4s] != 0) {
+        update_ecn_state(conn, QUICLY_ECN_OFF);
+        return;
+    }
+    if (frame->ecn_counts[conn->egress.ecn.l4s] < previous[conn->egress.ecn.l4s] || frame->ecn_counts[2] < previous[2]) {
+        if (is_newer)
+            update_ecn_state(conn, QUICLY_ECN_OFF);
+        return;
+    }
+    if (frame->ecn_counts[conn->egress.ecn.l4s] + frame->ecn_counts[2] > conn->egress.packet_number ||
+        (frame->ecn_counts[conn->egress.ecn.l4s] + frame->ecn_counts[2] == 0 && largest_newly_acked != UINT64_MAX)) {
+        update_ecn_state(conn, QUICLY_ECN_OFF);
+        return;
+    }
+
+    uint64_t ect = frame->ecn_counts[conn->egress.ecn.l4s] - previous[conn->egress.ecn.l4s],
+             ce = frame->ecn_counts[2] - previous[2];
+    conn->super.stats.num_packets.acked_ecn_counts[conn->egress.ecn.l4s] += ect;
+    conn->super.stats.num_packets.acked_ecn_counts[2] += ce;
+    previous[conn->egress.ecn.l4s] = frame->ecn_counts[conn->egress.ecn.l4s];
+    previous[2] = frame->ecn_counts[2];
+
+    if (conn->egress.ecn.state == QUICLY_ECN_PROBING && ect + ce != 0)
+        update_ecn_state(conn, QUICLY_ECN_ON);
+    if (ce != 0) {
+        QUICLY_PROBE(ECN_CONGESTION, conn, conn->stash.now, conn->super.stats.num_packets.acked_ecn_counts[2]);
+        QUICLY_LOG_CONN(ecn_congestion, conn,
+                        { PTLS_LOG_ELEMENT_UNSIGNED(ce_count, conn->super.stats.num_packets.acked_ecn_counts[2]); });
+    }
+    *counts = (quicly_cc_ecn_counts_t){.total = ect + ce, .ce = ce};
+}
+
 static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
     quicly_ack_frame_t frame;
@@ -6455,14 +6515,18 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
                                                                            : QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING
                                                        : QUICLY_LOSS_ACK_RECEIVED_KIND_NON_ACK_ELICITING);
 
+    /* ECN feedback is processed before OnPacketAckedCC, as L4S feeds it to the marking estimator. */
+    quicly_cc_ecn_counts_t ecn_counts;
+    handle_ecn_feedback(conn, state->epoch, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN, largest_newly_acked.pn,
+                        &ecn_counts);
+
     /* OnPacketAcked and OnPacketAckedCC */
-    if (bytes_acked > 0) {
-        conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame.largest_acknowledged,
-                                          (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked), cc_limited,
-                                          conn->egress.packet_number, conn->stash.now, conn->egress.max_udp_payload_size);
-        QUICLY_PROBE(QUICTRACE_CC_ACK, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
-                     conn->egress.loss.sentmap.bytes_in_flight);
-    }
+    conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame.largest_acknowledged,
+                                      (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked), cc_limited,
+                                      conn->egress.packet_number, conn->stash.now, conn->egress.max_udp_payload_size,
+                                      conn->egress.ecn.l4s ? &ecn_counts : NULL);
+    QUICLY_PROBE(QUICTRACE_CC_ACK, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
+                 conn->egress.loss.sentmap.bytes_in_flight);
 
     QUICLY_PROBE(CC_ACK_RECEIVED, conn, conn->stash.now, frame.largest_acknowledged, bytes_acked, conn->egress.cc.cwnd,
                  conn->egress.loss.sentmap.bytes_in_flight);
@@ -6478,37 +6542,9 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
                                        conn->initial == NULL && conn->handshake == NULL, on_loss_detected)) != 0)
         return ret;
 
-    /* ECN */
-    if (conn->egress.ecn.state != QUICLY_ECN_OFF && largest_newly_acked.pn != UINT64_MAX) {
-        /* if things look suspicious (ECT(1) count becoming non-zero), turn ECN off */
-        if (frame.ecn_counts[1] != 0)
-            update_ecn_state(conn, QUICLY_ECN_OFF);
-        /* TODO: maybe compare num_packets.acked vs. sum(ecn_counts) to see if any packet has been received as NON-ECT? */
-
-        /* ECN validation succeeds if at least one packet is acked using one of the expected marks during the probing period */
-        if (conn->egress.ecn.state == QUICLY_ECN_PROBING && frame.ecn_counts[0] + frame.ecn_counts[2] > 0)
-            update_ecn_state(conn, QUICLY_ECN_ON);
-
-        /* check if congestion should be reported */
-        int report_congestion =
-            conn->egress.ecn.state != QUICLY_ECN_OFF && frame.ecn_counts[2] > conn->egress.ecn.counts[state->epoch][2];
-
-        /* update counters */
-        for (size_t i = 0; i < PTLS_ELEMENTSOF(frame.ecn_counts); ++i) {
-            if (frame.ecn_counts[i] > conn->egress.ecn.counts[state->epoch][i]) {
-                conn->super.stats.num_packets.acked_ecn_counts[i] += frame.ecn_counts[i] - conn->egress.ecn.counts[state->epoch][i];
-                conn->egress.ecn.counts[state->epoch][i] = frame.ecn_counts[i];
-            }
-        }
-
-        /* report congestion */
-        if (report_congestion) {
-            QUICLY_PROBE(ECN_CONGESTION, conn, conn->stash.now, conn->super.stats.num_packets.acked_ecn_counts[2]);
-            QUICLY_LOG_CONN(ecn_congestion, conn,
-                            { PTLS_LOG_ELEMENT_UNSIGNED(ce_count, conn->super.stats.num_packets.acked_ecn_counts[2]); });
-            notify_congestion_to_cc(conn, 0, largest_newly_acked.pn);
-        }
-    }
+    /* ECN: report CE as congestion; for L4S, the counts have already been fed to the marking estimator through `cc_on_acked` */
+    if (ecn_counts.ce != 0)
+        notify_congestion_to_cc(conn, 0, frame.largest_acknowledged);
 
     setup_next_send(conn);
 
