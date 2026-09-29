@@ -1603,7 +1603,7 @@ static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int se
         /* Pacing or exhausting the output batch retains CC-limited state after the sender has filled CWND, but does not establish
          * that state by itself. This keeps Cubic's clock running while a bulk sender refills the window without letting small paced
          * bursts advance the clock. */
-        if (conn->super.stats.num_respected_app_limited == 0 || is_cwnd_limited) {
+        if (!get_cc_context(conn)->respect_app_limited || is_cwnd_limited) {
             conn->egress.cc.type->cc_update_cc_limited(&conn->egress.cc, 1, conn->stash.now);
         } else if (!is_ratemeter_limited) {
             conn->egress.cc.type->cc_update_cc_limited(&conn->egress.cc, 0, conn->stash.now);
@@ -2172,8 +2172,8 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     conn->egress.cc.type->cc_init->cb(
         conn->egress.cc.type->cc_init, &conn->egress.cc,
         quicly_cc_calc_initial_cwnd(get_cc_context(conn)->initcwnd_packets, conn->egress.max_udp_payload_size),
-        get_cc_context(conn)->normalize_mtu, conn->super.stats.num_abba != 0, conn->stash.now);
-    if (conn->super.stats.num_rapid_start != 0 && conn->egress.cc.type->enable_rapid_start != NULL)
+        get_cc_context(conn)->normalize_mtu, get_cc_context(conn)->abba, conn->stash.now);
+    if (get_cc_context(conn)->rapid_start && conn->egress.cc.type->enable_rapid_start != NULL)
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
 
     /* set jumpstart target */
@@ -2840,9 +2840,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     lock_now(conn, 0);
     conn->created_at = conn->stash.now;
     conn->super.stats.handshake_confirmed_msec = UINT64_MAX;
-    conn->super.stats.num_paced = pacer != NULL;
-    conn->super.stats.num_abba = get_cc_context(conn)->abba;
-    conn->super.stats.num_respected_app_limited = get_cc_context(conn)->respect_app_limited;
     conn->super.stats.num_alt_cc = conn->egress.alt_cc;
     conn->crypto.tls = tls;
     if (new_path(conn, 0, remote_addr, local_addr) != 0) {
@@ -2890,11 +2887,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     get_cc_context(conn)->init_->cb(
         get_cc_context(conn)->init_, &conn->egress.cc,
         quicly_cc_calc_initial_cwnd(get_cc_context(conn)->initcwnd_packets, ctx->transport_params.max_udp_payload_size),
-        get_cc_context(conn)->normalize_mtu, conn->super.stats.num_abba != 0, conn->stash.now);
-    if (conn->egress.cc.type->enable_rapid_start != NULL && get_cc_context(conn)->rapid_start) {
+        get_cc_context(conn)->normalize_mtu, get_cc_context(conn)->abba, conn->stash.now);
+    if (conn->egress.cc.type->enable_rapid_start != NULL && get_cc_context(conn)->rapid_start)
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
-        conn->super.stats.num_rapid_start = 1;
-    }
     if (pacer != NULL) {
         conn->egress.pacer = pacer;
         quicly_pacer_reset(conn->egress.pacer);
@@ -6339,7 +6334,7 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
      * CC-limited state for X round-trips then becomes idle again, all packets sent during that X round-trips will be considered as
      * CC-limited. */
     int cc_limited =
-        conn->super.stats.num_respected_app_limited == 0 || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd / 2;
+        !get_cc_context(conn)->respect_app_limited || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd / 2;
 
     if ((ret = quicly_decode_ack_frame(&state->src, state->end, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
         return ret;

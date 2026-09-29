@@ -655,22 +655,6 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_jumpstart_applicable;                                                                                             \
     /**                                                                                                                            \
-     * Number of connections that used rapid start.                                                                                \
-     */                                                                                                                            \
-    uint64_t num_rapid_start;                                                                                                      \
-    /**                                                                                                                            \
-     * Total number of connections that were paced.                                                                                \
-     */                                                                                                                            \
-    uint64_t num_paced;                                                                                                            \
-    /**                                                                                                                            \
-     * Total number of connections for which ABBA was enabled.                                                                     \
-     */                                                                                                                            \
-    uint64_t num_abba;                                                                                                             \
-    /**                                                                                                                            \
-     * Total number of connections where app-limited state was respected by CC.                                                    \
-     */                                                                                                                            \
-    uint64_t num_respected_app_limited;                                                                                            \
-    /**                                                                                                                            \
      * Total number of connections that used the alternative CC context (i.e., `cc[1]`).                                           \
      */                                                                                                                            \
     uint64_t num_alt_cc
@@ -819,10 +803,6 @@ typedef struct st_quicly_stats_t {
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
     apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
-    apply(num_rapid_start, "num-rapid-start")                                                                                      \
-    apply(num_paced, "num-paced")                                                                                                  \
-    apply(num_abba, "num-abba")                                                                                                    \
-    apply(num_respected_app_limited, "num-respected-app-limited")                                                                  \
     apply(num_alt_cc, "num-alt-cc")
 
 /**
