@@ -337,53 +337,6 @@ struct st_quicly_context_t {
      */
     uint64_t max_path_validation_failures;
     /**
-     * egress settings (i.e., loss recovery and congestion control); has two slots and one is chosen based on `alt_egress_ratio`
-     */
-    struct st_quicly_context_egress_t {
-        /**
-         * loss detection parameters
-         */
-        quicly_loss_conf_t loss;
-        /**
-         * congestion control parameters
-         */
-        quicly_cc_conf_t cc;
-        /**
-         * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
-         * possible only when the `pacing` flag is set.
-         */
-        uint32_t default_jumpstart_packets;
-        /**
-         * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections).
-         * If set to zero, slow start is used.
-         */
-        uint32_t max_jumpstart_packets;
-        /**
-         * prepares jumpstart but disengages before any action; provided for A/B testing between connections eligible for jumpstart
-         */
-        uint8_t disengage_jumpstart : 1;
-        /**
-         * whether to use ECN on the send side; ECN is always on on the receive side
-         */
-        uint8_t ecn : 1;
-        /**
-         * if pacing should be used
-         */
-        uint8_t pacing : 1;
-        /**
-         * if CC should take app-limited into consideration
-         */
-        uint8_t respect_app_limited : 1;
-    } egress[2];
-    /**
-     * probability of using egress[1], multiplied by 255. 0 (default) means never, 255 means always
-     */
-    uint8_t alt_egress_ratio;
-    /**
-     * expand client hello so that it does not fit into one datagram
-     */
-    unsigned expand_client_hello : 1;
-    /**
      *
      */
     quicly_cid_encryptor_t *cid_encryptor;
@@ -427,6 +380,53 @@ struct st_quicly_context_t {
      *
      */
     quicly_async_handshake_t *async_handshake;
+    /**
+     * expand client hello so that it does not fit into one datagram
+     */
+    unsigned expand_client_hello : 1;
+    /**
+     * probability of using egress[1], multiplied by 255. 0 (default) means never, 255 means always
+     */
+    uint8_t alt_egress_ratio;
+    /**
+     * egress settings (i.e., loss recovery and congestion control); has two slots and one is chosen based on `alt_egress_ratio`
+     */
+    struct st_quicly_context_egress_t {
+        /**
+         * loss detection parameters
+         */
+        quicly_loss_conf_t loss;
+        /**
+         * congestion control parameters
+         */
+        quicly_cc_conf_t cc;
+        /**
+         * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
+         * possible only when the `pacing` flag is set.
+         */
+        uint32_t default_jumpstart_packets;
+        /**
+         * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections).
+         * If set to zero, slow start is used.
+         */
+        uint32_t max_jumpstart_packets;
+        /**
+         * prepares jumpstart but disengages before any action; provided for A/B testing between connections eligible for jumpstart
+         */
+        uint8_t disengage_jumpstart : 1;
+        /**
+         * whether to use ECN on the send side; ECN is always on on the receive side
+         */
+        uint8_t ecn : 1;
+        /**
+         * if pacing should be used
+         */
+        uint8_t pacing : 1;
+        /**
+         * if CC should take app-limited into consideration
+         */
+        uint8_t respect_app_limited : 1;
+    } egress[2];
 };
 
 /**

@@ -55,6 +55,9 @@ const quicly_context_t quicly_spec_context = {
     .max_initial_handshake_packets = DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
     .max_probe_packets = DEFAULT_MAX_PROBE_PACKETS,
     .max_path_validation_failures = DEFAULT_MAX_PATH_VALIDATION_FAILURES,
+    .stream_scheduler = &quicly_default_stream_scheduler,
+    .now = &quicly_default_now,
+    .crypto_engine = &quicly_default_crypto_engine,
     .egress[0] =
         {
             .loss = QUICLY_LOSS_SPEC_CONF,
@@ -67,9 +70,6 @@ const quicly_context_t quicly_spec_context = {
             .ecn = 1,
             .respect_app_limited = 1,
         },
-    .stream_scheduler = &quicly_default_stream_scheduler,
-    .now = &quicly_default_now,
-    .crypto_engine = &quicly_default_crypto_engine,
 };
 
 /* profile with a focus on reducing latency for the HTTP use case */
@@ -94,6 +94,9 @@ const quicly_context_t quicly_performant_context = {
     .max_initial_handshake_packets = DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
     .max_probe_packets = DEFAULT_MAX_PROBE_PACKETS,
     .max_path_validation_failures = DEFAULT_MAX_PATH_VALIDATION_FAILURES,
+    .stream_scheduler = &quicly_default_stream_scheduler,
+    .now = &quicly_default_now,
+    .crypto_engine = &quicly_default_crypto_engine,
     .egress[0] =
         {
             .loss = QUICLY_LOSS_PERFORMANT_CONF,
@@ -106,9 +109,6 @@ const quicly_context_t quicly_performant_context = {
             .ecn = 1,
             .respect_app_limited = 1,
         },
-    .stream_scheduler = &quicly_default_stream_scheduler,
-    .now = &quicly_default_now,
-    .crypto_engine = &quicly_default_crypto_engine,
 };
 
 /**
