@@ -162,7 +162,7 @@ static void test_even(void)
     size_t num_sent, num_received;
     quicly_error_t ret;
 
-    quic_ctx.loss = lossconf;
+    quic_ctx.egress[0].loss = lossconf;
     init_cond_even(&cond_down);
     init_cond_even(&cond_up);
 
@@ -262,7 +262,7 @@ static void test_even(void)
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
     ok(quicly_connection_is_ready(server));
 
-    quic_ctx.loss = (quicly_loss_conf_t)QUICLY_LOSS_SPEC_CONF;
+    quic_ctx.egress[0].loss = (quicly_loss_conf_t)QUICLY_LOSS_SPEC_CONF;
 }
 
 struct loss_cond_t loss_cond_down, loss_cond_up;

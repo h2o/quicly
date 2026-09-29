@@ -1633,18 +1633,18 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
-                ctx.enable_ratio.ecn = 0;
+                ctx.egress[0].ecn = 0;
             } else if (strcmp(longopts[opt_index].name, "delivery-stats") == 0) {
                 delivery_stats = suppress_output = 1;
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
-                ctx.enable_ratio.respect_app_limited = 0;
+                ctx.egress[0].respect_app_limited = 0;
             } else if (strcmp(longopts[opt_index].name, "jumpstart-default") == 0) {
-                if (sscanf(optarg, "%" SCNu32, &ctx.default_jumpstart_cwnd_packets) != 1) {
+                if (sscanf(optarg, "%" SCNu32, &ctx.egress[0].default_jumpstart_packets) != 1) {
                     fprintf(stderr, "failed to parse default jumpstart size: %s\n", optarg);
                     exit(1);
                 }
             } else if (strcmp(longopts[opt_index].name, "jumpstart-max") == 0) {
-                if (sscanf(optarg, "%" SCNu32, &ctx.max_jumpstart_cwnd_packets) != 1) {
+                if (sscanf(optarg, "%" SCNu32, &ctx.egress[0].max_jumpstart_packets) != 1) {
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
@@ -1654,11 +1654,11 @@ int main(int argc, char **argv)
                     exit(1);
                 }
             } else if (strcmp(longopts[opt_index].name, "no-normalize-cc-mtu") == 0) {
-                ctx.normalize_cc_mtu = 0;
+                ctx.egress[0].cc.normalize_mtu = 0;
             } else if (strcmp(longopts[opt_index].name, "abba") == 0) {
-                ctx.enable_ratio.abba = 255;
+                ctx.egress[0].cc.abba = 1;
             } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
-                ctx.enable_ratio.rapid_start = 255;
+                ctx.egress[0].cc.rapid_start = 1;
             } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {
                 if (sscanf(optarg, "%d", &fd) != 1) {
                     fprintf(stderr, "invalid argument passed to --sockfd\n");
@@ -1702,14 +1702,14 @@ int main(int argc, char **argv)
                 if (strcmp((*cc)->name, token) == 0)
                     break;
             if (*cc != NULL) {
-                ctx.init_cc = (*cc)->cc_init;
+                ctx.egress[0].cc.init_cc = (*cc)->cc_init;
             } else {
                 fprintf(stderr, "unknown congestion controller: %s\n", token);
                 exit(1);
             }
             /* initcwnd */
             if ((token = strsep(&buf, ":")) != NULL) {
-                if (sscanf(token, "%" SCNu32, &ctx.initcwnd_packets) != 1) {
+                if (sscanf(token, "%" SCNu32, &ctx.egress[0].cc.initcwnd_packets) != 1) {
                     fprintf(stderr, "invalid initcwnd value: %s\n", token);
                     exit(1);
                 }
@@ -1717,7 +1717,7 @@ int main(int argc, char **argv)
             /* pacing */
             if ((token = strsep(&buf, ":")) != NULL) {
                 if (strcmp(token, "p") == 0) {
-                    ctx.enable_ratio.pacing = 255;
+                    ctx.egress[0].pacing = 1;
                 } else {
                     fprintf(stderr, "invalid pacing value: %s\n", token);
                     exit(1);
@@ -1823,13 +1823,13 @@ int main(int argc, char **argv)
             enforce_retry = 1;
             break;
         case 'r':
-            if (sscanf(optarg, "%" SCNu32, &ctx.loss.default_initial_rtt) != 1) {
+            if (sscanf(optarg, "%" SCNu32, &ctx.egress[0].loss.default_initial_rtt) != 1) {
                 fprintf(stderr, "invalid argument passed to `-r`\n");
                 exit(1);
             }
             break;
         case 'S':
-            if (sscanf(optarg, "%" SCNu8, &ctx.loss.num_speculative_ptos) != 1) {
+            if (sscanf(optarg, "%" SCNu8, &ctx.egress[0].loss.num_speculative_ptos) != 1) {
                 fprintf(stderr, "invalid argument passed to `-S`\n");
                 exit(1);
             }
