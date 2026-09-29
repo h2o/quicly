@@ -1263,19 +1263,17 @@ void test_ecn_index_from_bits(void)
 
 static void test_l4s_context(void)
 {
-    /* mode 0: L4S off, 1: L4S requested without pacing, 2: L4S with pacing */
-    for (int mode = 0; mode != 3; ++mode) {
+    static const uint8_t expected_bits[] = {[QUICLY_ECN_MODE_OFF] = 0, [QUICLY_ECN_MODE_CLASSIC] = 2, [QUICLY_ECN_MODE_L4S] = 1};
+    for (int mode = QUICLY_ECN_MODE_OFF; mode <= QUICLY_ECN_MODE_L4S; ++mode) {
         quicly_context_t ctx = quic_ctx;
         ctx.egress[0].cc.init_cc = &quicly_cc_cuback_init;
-        ctx.egress[0].l4s = mode != 0;
-        ctx.egress[0].pacing = mode == 2;
-        ctx.egress[0].ecn = 1;
+        ctx.egress[0].ecn = mode;
+        ctx.egress[0].pacing = 1;
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
-        ok(conn->egress.ecn.l4s == (mode == 2));
-        ok(quicly_send_get_ecn_bits(conn) == (mode == 2 ? 1 : 2));
-        ok((conn->egress.pacer != NULL) == (mode == 2));
+        ok(is_l4s(conn) == (mode == QUICLY_ECN_MODE_L4S));
+        ok(quicly_send_get_ecn_bits(conn) == expected_bits[mode]);
         quicly_free(conn);
     }
 }
@@ -1284,7 +1282,7 @@ static void test_l4s_feedback(void)
 {
     quicly_context_t ctx = quic_ctx;
     ctx.egress[0].cc.init_cc = &quicly_cc_cuback_init;
-    ctx.egress[0].l4s = 1;
+    ctx.egress[0].ecn = QUICLY_ECN_MODE_L4S;
     ctx.egress[0].pacing = 1;
     quicly_conn_t *conn;
     ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
@@ -1333,9 +1331,8 @@ static void test_l4s_transfer(void)
 {
     quicly_context_t ctx = quic_ctx;
     ctx.egress[0].cc.init_cc = &quicly_cc_cuback_init;
-    ctx.egress[0].l4s = 1;
+    ctx.egress[0].ecn = QUICLY_ECN_MODE_L4S;
     ctx.egress[0].pacing = 1;
-    ctx.egress[0].ecn = 0;
     quicly_conn_t *client, *server;
     ok(quicly_connect(&client, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                       NULL) == 0);
@@ -1356,7 +1353,7 @@ static void test_l4s_transfer(void)
         transmit_with_ecn(client, server, 1);
     }
     ok(quicly_connection_is_ready(client));
-    ok(client->egress.ecn.state == QUICLY_ECN_ON && client->egress.ecn.l4s);
+    ok(client->egress.ecn.state == QUICLY_ECN_ON && is_l4s(client));
     ok(client->super.stats.num_packets.acked_ecn_counts[1] != 0);
 
     quicly_stream_t *stream;
@@ -1757,7 +1754,7 @@ static void test_retransmit(void)
     TEST(streams_blocked, 0, streams_blocked_raised);
     TEST(new_token, 1, new_token);
 #undef TEST
-    
+
     quic_ctx.transport_params = orig;
     quic_ctx.generate_resumption_token = NULL;
 }

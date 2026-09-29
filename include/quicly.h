@@ -279,6 +279,13 @@ typedef struct st_quicly_salt_t {
     } retry;
 } quicly_salt_t;
 
+/**
+ * values of `quicly_context_t::egress[].ecn`
+ */
+#define QUICLY_ECN_MODE_OFF 0
+#define QUICLY_ECN_MODE_CLASSIC 1
+#define QUICLY_ECN_MODE_L4S 2
+
 struct st_quicly_context_t {
     /**
      * tls context to use
@@ -415,15 +422,11 @@ struct st_quicly_context_t {
          */
         uint8_t disengage_jumpstart : 1;
         /**
-         * whether to use ECN on the send side; ECN is always on on the receive side
+         * ECN mode on the send side; ECN is always on on the receive side. `QUICLY_ECN_MODE_L4S` sends ECT(1) and reports CE
+         * marks to the congestion controller as L4S signals; it requires `pacing` to be set and a congestion controller that
+         * supports L4S (i.e., CUBACK).
          */
-        uint8_t ecn : 1;
-        /**
-         * whether to use L4S (off by default). Only connections that use pacing are selected; they use ECT(1) independently of
-         * `ecn`. CE marks are reported to the congestion controller as L4S signals, which requires a controller that supports them
-         * (i.e., CUBACK).
-         */
-        uint8_t l4s : 1;
+        uint8_t ecn : 2;
         /**
          * if pacing should be used
          */

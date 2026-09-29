@@ -398,7 +398,6 @@ struct st_quicly_conn_t {
         struct {
             enum en_quicly_ecn_state { QUICLY_ECN_OFF, QUICLY_ECN_ON, QUICLY_ECN_PROBING } state;
             uint64_t counts[QUICLY_NUM_EPOCHS][3];
-            unsigned l4s : 1;
         } ecn;
         /**
          * things to be sent at the stream-level, that are not governed by the stream scheduler
@@ -792,6 +791,11 @@ static void update_ecn_state(quicly_conn_t *conn, enum en_quicly_ecn_state new_s
 static struct st_quicly_context_egress_t *get_egress_context(quicly_conn_t *conn)
 {
     return &conn->super.ctx->egress[conn->egress.alt_ctx];
+}
+
+static int is_l4s(quicly_conn_t *conn)
+{
+    return get_egress_context(conn)->ecn == QUICLY_ECN_MODE_L4S;
 }
 
 static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
@@ -2883,13 +2887,11 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.send_probe_at = INT64_MAX;
     get_egress_context(conn)->cc.init_cc->cb(get_egress_context(conn)->cc.init_cc, &conn->egress.cc, &get_egress_context(conn)->cc,
                                              ctx->transport_params.max_udp_payload_size, conn->stash.now);
-    /* L4S depends on pacing */
-    conn->egress.ecn.l4s = pacer != NULL && get_egress_context(conn)->l4s;
     if (pacer != NULL) {
         conn->egress.pacer = pacer;
         quicly_pacer_reset(conn->egress.pacer);
     }
-    conn->egress.ecn.state = conn->egress.ecn.l4s || get_egress_context(conn)->ecn ? QUICLY_ECN_PROBING : QUICLY_ECN_OFF;
+    conn->egress.ecn.state = get_egress_context(conn)->ecn != QUICLY_ECN_MODE_OFF ? QUICLY_ECN_PROBING : QUICLY_ECN_OFF;
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
@@ -6019,7 +6021,7 @@ Exit:
 
 uint8_t quicly_send_get_ecn_bits(quicly_conn_t *conn)
 {
-    return conn->egress.ecn.state == QUICLY_ECN_OFF ? 0 : conn->egress.ecn.l4s ? 1 : 2; /* NON-ECT, ECT(1), or ECT(0) */
+    return conn->egress.ecn.state == QUICLY_ECN_OFF ? 0 : is_l4s(conn) ? 1 : 2; /* NON-ECT, ECT(1), or ECT(0) */
 }
 
 size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_version, ptls_iovec_t dest_cid,
@@ -6327,6 +6329,9 @@ static void handle_ecn_feedback(quicly_conn_t *conn, uint8_t epoch, const quicly
         return;
 
     uint64_t *previous = conn->egress.ecn.counts[epoch];
+    /* `ecn_counts` are ECT(0), ECT(1), CE in that order; ECT(1) is used for L4S and ECT(0) otherwise, the other is never expected
+     */
+    size_t ect_index = is_l4s(conn);
     /* an ACK frame is newer than those processed so far iff its largest acknowledged is newly acknowledged */
     int is_newer = largest_newly_acked == frame->largest_acknowledged;
 
@@ -6335,28 +6340,25 @@ static void handle_ecn_feedback(quicly_conn_t *conn, uint8_t epoch, const quicly
             update_ecn_state(conn, QUICLY_ECN_OFF);
         return;
     }
-    /* `ecn_counts` are ECT(0), ECT(1), CE in that order; ECT(1) is used for L4S and ECT(0) otherwise, the other is never expected
-     */
-    if (frame->ecn_counts[!conn->egress.ecn.l4s] != 0) {
+    if (frame->ecn_counts[!ect_index] != 0) {
         update_ecn_state(conn, QUICLY_ECN_OFF);
         return;
     }
-    if (frame->ecn_counts[conn->egress.ecn.l4s] < previous[conn->egress.ecn.l4s] || frame->ecn_counts[2] < previous[2]) {
+    if (frame->ecn_counts[ect_index] < previous[ect_index] || frame->ecn_counts[2] < previous[2]) {
         if (is_newer)
             update_ecn_state(conn, QUICLY_ECN_OFF);
         return;
     }
-    if (frame->ecn_counts[conn->egress.ecn.l4s] + frame->ecn_counts[2] > conn->egress.packet_number ||
-        (frame->ecn_counts[conn->egress.ecn.l4s] + frame->ecn_counts[2] == 0 && largest_newly_acked != UINT64_MAX)) {
+    if (frame->ecn_counts[ect_index] + frame->ecn_counts[2] > conn->egress.packet_number ||
+        (frame->ecn_counts[ect_index] + frame->ecn_counts[2] == 0 && largest_newly_acked != UINT64_MAX)) {
         update_ecn_state(conn, QUICLY_ECN_OFF);
         return;
     }
 
-    uint64_t ect = frame->ecn_counts[conn->egress.ecn.l4s] - previous[conn->egress.ecn.l4s],
-             ce = frame->ecn_counts[2] - previous[2];
-    conn->super.stats.num_packets.acked_ecn_counts[conn->egress.ecn.l4s] += ect;
+    uint64_t ect = frame->ecn_counts[ect_index] - previous[ect_index], ce = frame->ecn_counts[2] - previous[2];
+    conn->super.stats.num_packets.acked_ecn_counts[ect_index] += ect;
     conn->super.stats.num_packets.acked_ecn_counts[2] += ce;
-    previous[conn->egress.ecn.l4s] = frame->ecn_counts[conn->egress.ecn.l4s];
+    previous[ect_index] = frame->ecn_counts[ect_index];
     previous[2] = frame->ecn_counts[2];
 
     if (conn->egress.ecn.state == QUICLY_ECN_PROBING && ect + ce != 0)
@@ -6521,7 +6523,7 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
     conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame.largest_acknowledged,
                                       (uint32_t)(conn->egress.loss.sentmap.bytes_in_flight + bytes_acked), cc_limited,
                                       conn->egress.packet_number, conn->stash.now, conn->egress.max_udp_payload_size,
-                                      conn->egress.ecn.l4s ? &ecn_counts : NULL);
+                                      is_l4s(conn) ? &ecn_counts : NULL);
     QUICLY_PROBE(QUICTRACE_CC_ACK, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                  conn->egress.loss.sentmap.bytes_in_flight);
 

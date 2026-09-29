@@ -1635,9 +1635,9 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
-                ctx.egress[0].ecn = 0;
+                ctx.egress[0].ecn = QUICLY_ECN_MODE_OFF;
             } else if (strcmp(longopts[opt_index].name, "l4s") == 0) {
-                ctx.egress[0].l4s = 1;
+                ctx.egress[0].ecn = QUICLY_ECN_MODE_L4S;
                 ctx.egress[0].pacing = 1;
             } else if (strcmp(longopts[opt_index].name, "delivery-stats") == 0) {
                 delivery_stats = suppress_output = 1;

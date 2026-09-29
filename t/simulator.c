@@ -980,7 +980,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             if (strcmp(longopts[opt_index].name, "abba") == 0) {
                 quicctx->egress[0].cc.abba = 1;
             } else if (strcmp(longopts[opt_index].name, "l4s") == 0) {
-                quicctx->egress[0].l4s = 1;
+                quicctx->egress[0].ecn = QUICLY_ECN_MODE_L4S;
                 quicctx->egress[0].pacing = 1;
             } else {
                 assert(!"unexpected longname");
@@ -1118,7 +1118,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             *isolate_flows = 1;
             break;
         case 'E':
-            quicctx->egress[0].ecn = 0;
+            quicctx->egress[0].ecn = QUICLY_ECN_MODE_OFF;
             break;
         case 'R':
             quicctx->egress[0].cc.rapid_start = 1;
