@@ -27,6 +27,7 @@ extern "C" {
 #endif
 
 #include <assert.h>
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -103,7 +104,7 @@ typedef struct quicly_rtt_t {
          */
         int64_t newest_sample_until;
         /**
-         * Per-slot minima, newest first. UINT32_MAX denotes a slot for which no sample was obtained.
+         * Per-slot minima, newest first. FLT_MAX denotes a slot for which no sample was obtained.
          */
         float samples[4];
     } floor;
@@ -236,13 +237,13 @@ static double quicly_loss_get_sentmap_expiration_time(quicly_loss_t *loss, uint3
 inline void quicly_rtt_init(quicly_rtt_t *rtt, const quicly_loss_conf_t *conf, float initial_rtt)
 {
     (void)conf;
-    rtt->minimum = UINT32_MAX;
+    rtt->minimum = FLT_MAX;
     rtt->latest = 0;
     rtt->smoothed = initial_rtt;
     rtt->variance = initial_rtt / 2.f;
     rtt->floor.newest_sample_until = 0;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(rtt->floor.samples); ++i)
-        rtt->floor.samples[i] = UINT32_MAX;
+        rtt->floor.samples[i] = FLT_MAX;
 }
 
 inline void quicly_rtt_update(quicly_rtt_t *rtt, float latest_rtt, float ack_delay, int64_t now)
@@ -289,7 +290,7 @@ inline void quicly_rtt_update(quicly_rtt_t *rtt, float latest_rtt, float ack_del
     }
     size_t distance = (now - rtt->floor.newest_sample_until) / sample_duration + 1;
     for (size_t dst = PTLS_ELEMENTSOF(rtt->floor.samples) - 1; dst != 0; --dst)
-        rtt->floor.samples[dst] = dst >= distance ? rtt->floor.samples[dst - distance] : UINT32_MAX;
+        rtt->floor.samples[dst] = dst >= distance ? rtt->floor.samples[dst - distance] : FLT_MAX;
     rtt->floor.samples[0] = rtt->latest;
     rtt->floor.newest_sample_until += sample_duration * distance;
     assert(rtt->floor.newest_sample_until - sample_duration <= now && now < rtt->floor.newest_sample_until);
@@ -303,7 +304,7 @@ inline double quicly_rtt_get_pto(quicly_rtt_t *rtt, uint32_t max_ack_delay, uint
 inline float quicly_rtt_get_floor(const quicly_rtt_t *rtt)
 {
     float value;
-    if ((value = rtt->floor.samples[0]) == UINT32_MAX)
+    if ((value = rtt->floor.samples[0]) == FLT_MAX)
         return rtt->smoothed;
 
     for (size_t i = 1; i < PTLS_ELEMENTSOF(rtt->floor.samples); ++i)
