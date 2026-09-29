@@ -1225,22 +1225,24 @@ static void test_cc_accel_context(void)
     quicly_init_cc_t *const policies[] = {&quicly_cc_cubic_init, &quicly_cc_cuback_init};
     for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
         quicly_context_t ctx = quic_ctx;
-        ctx.init_cc = policies[i];
-        ctx.enable_ratio.abba = 255;
+        ctx.egress[0].cc.init_cc = policies[i];
+        ctx.egress[0].cc.abba = 1;
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
-        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.conf == &ctx.egress[0].cc && conn->egress.cc.conf->abba);
         ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
 
         /* Path promotion uses configured policy and discards the old path's measurements. */
-        conn->egress.cc.abba = 0;
+        quicly_cc_conf_t stale_conf = ctx.egress[0].cc;
+        stale_conf.abba = 0;
+        conn->egress.cc.conf = &stale_conf;
         conn->egress.cc.state.pico.abba.high.cwnd = 100000;
         quicly_rtt_update(&conn->egress.loss.rtt, 20, 0, conn->stash.now);
         ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20);
         ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
         ok(promote_path(conn, 1) == 0);
-        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.conf == &ctx.egress[0].cc && conn->egress.cc.conf->abba);
         ok(conn->egress.cc.type->cc_init == policies[i]);
         ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
         ok(conn->egress.loss.rtt.latest == 0);
@@ -1264,10 +1266,10 @@ static void test_l4s_context(void)
     /* mode 0: L4S off, 1: L4S requested without pacing, 2: L4S with pacing */
     for (int mode = 0; mode != 3; ++mode) {
         quicly_context_t ctx = quic_ctx;
-        ctx.init_cc = &quicly_cc_cuback_init;
-        ctx.enable_ratio.l4s = mode != 0 ? 255 : 0;
-        ctx.enable_ratio.pacing = mode == 2 ? 255 : 0;
-        ctx.enable_ratio.ecn = 255;
+        ctx.egress[0].cc.init_cc = &quicly_cc_cuback_init;
+        ctx.egress[0].l4s = mode != 0;
+        ctx.egress[0].pacing = mode == 2;
+        ctx.egress[0].ecn = 1;
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
@@ -1281,9 +1283,9 @@ static void test_l4s_context(void)
 static void test_l4s_feedback(void)
 {
     quicly_context_t ctx = quic_ctx;
-    ctx.init_cc = &quicly_cc_cuback_init;
-    ctx.enable_ratio.l4s = 255;
-    ctx.enable_ratio.pacing = 255;
+    ctx.egress[0].cc.init_cc = &quicly_cc_cuback_init;
+    ctx.egress[0].l4s = 1;
+    ctx.egress[0].pacing = 1;
     quicly_conn_t *conn;
     ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                       NULL) == 0);
@@ -1330,10 +1332,10 @@ static void test_l4s_feedback(void)
 static void test_l4s_transfer(void)
 {
     quicly_context_t ctx = quic_ctx;
-    ctx.init_cc = &quicly_cc_cuback_init;
-    ctx.enable_ratio.l4s = 255;
-    ctx.enable_ratio.pacing = 255;
-    ctx.enable_ratio.ecn = 0;
+    ctx.egress[0].cc.init_cc = &quicly_cc_cuback_init;
+    ctx.egress[0].l4s = 1;
+    ctx.egress[0].pacing = 1;
+    ctx.egress[0].ecn = 0;
     quicly_conn_t *client, *server;
     ok(quicly_connect(&client, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                       NULL) == 0);
@@ -1401,21 +1403,13 @@ static void test_resume_sendrate(void)
 
 static void test_jumpstart_cwnd(void)
 {
-    quicly_context_t unbounded_max = {
-        .max_jumpstart_cwnd_packets = UINT32_MAX,
-        .transport_params.max_udp_payload_size = 1200,
-    };
-    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 250) == 250000);
-    ok(derive_jumpstart_cwnd(&unbounded_max, 0.25f, 1000000, 1) == 250);
-    ok(derive_jumpstart_cwnd(&unbounded_max, 1.25f, 1000000, 2) == 1250);
-    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 400) == 250000); /* if RTT increases, CWND stays same */
-    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 250, 1000000, 250) == 250000);
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 0.25f, 1000000, 1) == 250);
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 1.25f, 1000000, 2) == 1250);
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 250, 1000000, 400) == 250000); /* if RTT increases, CWND stays same */
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
 
-    quicly_context_t bounded_max = {
-        .max_jumpstart_cwnd_packets = 64,
-        .transport_params.max_udp_payload_size = 1250,
-    };
-    ok(derive_jumpstart_cwnd(&bounded_max, 250, 1000000, 250) == 80000);
+    ok(derive_jumpstart_cwnd(64, 1250, 250, 1000000, 250) == 80000);
 }
 
 static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **server)
@@ -1485,9 +1479,9 @@ static void test_fractional_close_timeout(void)
         quicly_conn_t *conn = draining ? server : client;
         quicly_stats_t stats;
         quicly_get_stats(conn, &stats);
-        int64_t expires_at = ceil(
-            quic_now + quic_now_submillisec +
-            4 * quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(conn)->max_ack_delay, quic_ctx.loss.min_pto));
+        int64_t expires_at = ceil(quic_now + quic_now_submillisec +
+                                  4 * quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(conn)->max_ack_delay,
+                                                         quic_ctx.egress[0].loss.min_pto));
         ok(quicly_get_first_timeout(conn) == expires_at);
 
         /* Closing and draining both retain state until the first whole-millisecond tick past the deadline. */
@@ -1527,8 +1521,8 @@ static void test_fractional_rtt_measurement(void)
     /* The outstanding packet's PTO is still an absolute millisecond deadline. */
     quicly_stats_t stats;
     quicly_get_stats(client, &stats);
-    double pto =
-        quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay, quic_ctx.loss.min_pto);
+    double pto = quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay,
+                                    quic_ctx.egress[0].loss.min_pto);
     ok(quicly_get_first_timeout(client) == ceil(quic_now + quic_now_submillisec + pto));
     ok(decode_packets(&decoded, &datagram, 1) == 1);
     quic_now_submillisec += 0.625;
@@ -1551,7 +1545,8 @@ static void test_fractional_rtt_measurement(void)
     ok(fabsf(stats.rtt.latest - 1.254f) < 0.000001f);
 
     /* Closing retains the fractional PTO derived from that measurement. */
-    pto = quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay, quic_ctx.loss.min_pto);
+    pto = quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay,
+                             quic_ctx.egress[0].loss.min_pto);
     ok(pto != floor(pto));
     ok(quicly_close(client, 0, "") == 0);
     num_datagrams = 1;

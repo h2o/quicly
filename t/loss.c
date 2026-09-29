@@ -56,7 +56,7 @@ static void test_time_detection(void)
     now = 0;
     num_packets_lost = 0;
 
-    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+    quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
                      &quicly_spec_context.transport_params.ack_delay_exponent);
     ok(loss.loss_time == INT64_MAX);
 
@@ -100,7 +100,7 @@ static void test_pn_detection(void)
     now = 0;
     num_packets_lost = 0;
 
-    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+    quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
                      &quicly_spec_context.transport_params.ack_delay_exponent);
     ok(loss.loss_time == INT64_MAX);
 
@@ -141,7 +141,7 @@ static void test_slow_cert_verify(void)
     now = 0;
     num_packets_lost = 0;
 
-    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+    quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
                      &quicly_spec_context.transport_params.ack_delay_exponent);
     ok(loss.loss_time == INT64_MAX);
 
@@ -192,7 +192,7 @@ static void test_late_ack_threshold_adjustment(void)
 
     now = 0;
 
-    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+    quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
                      &quicly_spec_context.transport_params.ack_delay_exponent);
 
     ok(loss.min_pn_to_relax_reorder_tolerance == 0);
@@ -230,9 +230,9 @@ static void test_rtt_floor(void)
 {
     quicly_rtt_t rtt;
 
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, quicly_spec_context.loss.default_initial_rtt);
-    ok(quicly_rtt_get_floor(&rtt) == quicly_spec_context.loss.default_initial_rtt);
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 40);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, quicly_spec_context.egress[0].loss.default_initial_rtt);
+    ok(quicly_rtt_get_floor(&rtt) == quicly_spec_context.egress[0].loss.default_initial_rtt);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 40);
     ok(quicly_rtt_get_floor(&rtt) == 40);
 
     quicly_rtt_update(&rtt, 16, 0, 1);
@@ -253,7 +253,7 @@ static void test_rtt_floor(void)
     ok(quicly_rtt_get_floor(&rtt) == 21);
 
     /* A three-slot jump retains only the previous slot 0, clearing the unsampled slots in between. */
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 40);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 40);
     quicly_rtt_update(&rtt, 16, 0, 1);
     quicly_rtt_update(&rtt, 20, 0, 5);
     quicly_rtt_update(&rtt, 24, 0, 9);
@@ -267,7 +267,7 @@ static void test_rtt_floor(void)
     ok(quicly_rtt_get_floor(&rtt) == 32);
 
     /* Reinitialization discards the old floor and uses the new initial estimate until the next sample. */
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 80);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 80);
     ok(quicly_rtt_get_floor(&rtt) == 80);
     quicly_rtt_update(&rtt, 100, 0, 34);
     ok(quicly_rtt_get_floor(&rtt) == 100);
@@ -277,13 +277,13 @@ static void test_rtt_floor(void)
     ok(quicly_rtt_get_floor(&rtt) == 110);
 
     /* Sub-four-millisecond RTTs use one-millisecond slots rather than dividing by zero. */
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 20);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 20);
     quicly_rtt_update(&rtt, 3, 0, 1);
     quicly_rtt_update(&rtt, 3, 0, 2);
     ok(quicly_rtt_get_floor(&rtt) == 3);
 
     /* Retain fractional floor values, including the fallback before the first sample. */
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 0.75f);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 0.75f);
     ok(quicly_rtt_get_floor(&rtt) == 0.75f);
     quicly_rtt_update(&rtt, 0.25f, 0, 1);
     ok(quicly_rtt_get_floor(&rtt) == 0.25f);
@@ -292,7 +292,7 @@ static void test_rtt_floor(void)
 
     /* Accepted RTT samples update the floor as part of loss-core ACK processing. */
     quicly_loss_t loss;
-    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+    quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
                      &quicly_spec_context.transport_params.ack_delay_exponent);
     quicly_loss_on_ack_received(&loss, 0, UINT64_MAX, 1, QUICLY_EPOCH_1RTT, 100, 84, 0,
                                 QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING);
@@ -312,7 +312,7 @@ static void test_fractional_rtt(void)
     const double sent_at = 1800000000000.125;
     const uint16_t max_ack_delay = 1;
     const uint8_t ack_delay_exponent = 3;
-    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &max_ack_delay, &ack_delay_exponent);
+    quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &max_ack_delay, &ack_delay_exponent);
 
     /* Fractional measurements are retained even with epoch-scale timestamps. */
     quicly_loss_on_ack_received(&loss, 0, UINT64_MAX, 1, QUICLY_EPOCH_1RTT, sent_at + 1.125, sent_at, 0,
@@ -350,7 +350,7 @@ static void test_fractional_rtt(void)
 static void test_rtt_sample_floor(void)
 {
     quicly_rtt_t rtt;
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 20);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 20);
     quicly_rtt_update(&rtt, 0, 0, 1);
     ok(rtt.latest == 0.001f && rtt.minimum == 0.001f && rtt.smoothed == 0.001f);
     ok(rtt.variance == 0.0005f);
@@ -374,7 +374,7 @@ static void test_submillisecond_timers(void)
     const double sent_at = millisec + 0.75;
     const uint16_t max_ack_delay = 0;
     const uint8_t ack_delay_exponent = 3;
-    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &max_ack_delay, &ack_delay_exponent);
+    quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &max_ack_delay, &ack_delay_exponent);
     ok(quicly_sentmap_prepare(&loss.sentmap, 0, sent_at, QUICLY_EPOCH_1RTT) == 0);
     quicly_sentmap_commit(&loss.sentmap, 10, 0, 0);
 
@@ -398,7 +398,7 @@ static void test_submillisecond_timers(void)
 static void test_fractional_pto(void)
 {
     quicly_loss_t loss;
-    quicly_loss_conf_t conf = quicly_spec_context.loss;
+    quicly_loss_conf_t conf = quicly_spec_context.egress[0].loss;
     conf.min_pto = 1;
     const uint16_t max_ack_delay = 1;
     const uint8_t ack_delay_exponent = 3;
@@ -446,7 +446,7 @@ static void test_fractional_loss_deadline(void)
 
     for (int is_1rtt_only = 0; is_1rtt_only != 2; ++is_1rtt_only) {
         quicly_loss_t loss;
-        quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &max_ack_delay, &ack_delay_exponent);
+        quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &max_ack_delay, &ack_delay_exponent);
         ok(quicly_sentmap_prepare(&loss.sentmap, 0, sent_at, QUICLY_EPOCH_1RTT) == 0);
         quicly_sentmap_commit(&loss.sentmap, 10, 0, 0);
         quicly_loss_on_ack_received(&loss, 1, UINT64_MAX, 2, QUICLY_EPOCH_1RTT, sent_at + 0.913, sent_at, 0,
@@ -468,7 +468,7 @@ static void test_fractional_sentmap_timers(void)
     quicly_loss_t loss;
     const int64_t millisec = INT64_C(1800000000000);
     const double sent_at = millisec + 0.125;
-    quicly_loss_init(&loss, &quicly_spec_context.loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
+    quicly_loss_init(&loss, &quicly_spec_context.egress[0].loss, 20, &quicly_spec_context.transport_params.max_ack_delay,
                      &quicly_spec_context.transport_params.ack_delay_exponent);
     for (uint64_t pn = 0; pn != 2; ++pn) {
         ok(quicly_sentmap_prepare(&loss.sentmap, pn, sent_at, QUICLY_EPOCH_1RTT) == 0);

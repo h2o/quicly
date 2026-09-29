@@ -71,6 +71,32 @@ extern "C" {
  */
 typedef const struct st_quicly_cc_type_t quicly_cc_type_t;
 
+/**
+ * Congestion control configuration. Congestion controllers retain a pointer to the configuration they have been initialized with.
+ */
+typedef struct st_quicly_cc_conf_t {
+    /**
+     * initializes a congestion controller for given connection
+     */
+    struct st_quicly_init_cc_t *init_cc;
+    /**
+     * initial CWND in terms of packet numbers
+     */
+    uint32_t initcwnd_packets;
+    /**
+     * if rapid start should be used
+     */
+    uint8_t rapid_start : 1;
+    /**
+     * if ABBA accelerated bottleneck bandwidth adaptation should be used when using CUBIC or Cuback
+     */
+    uint8_t abba : 1;
+    /**
+     * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size
+     */
+    uint8_t normalize_mtu : 1;
+} quicly_cc_conf_t;
+
 enum en_quicly_cc_rapid_start_state_t {
     /**
      * Rapid Start does not affect congestion control.
@@ -241,6 +267,10 @@ typedef struct st_quicly_cc_t {
      */
     quicly_cc_type_t *type;
     /**
+     * Configuration.
+     */
+    const quicly_cc_conf_t *conf;
+    /**
      * Current congestion window.
      */
     uint32_t cwnd;
@@ -256,14 +286,6 @@ typedef struct st_quicly_cc_t {
      * If the most recent loss episode was signalled by ECN only (i.e., no packet loss).
      */
     unsigned episode_by_ecn : 1;
-    /**
-     * Whether growth is normalized to QUICLY_CC_REFERENCE_MTU.
-     */
-    unsigned normalize_mtu : 1;
-    /**
-     * Enables ABBA accelerated bottleneck bandwidth adaptation for CUBIC and Cuback.
-     */
-    unsigned abba : 1;
     /**
      * State information specific to the congestion controller implementation.
      */
@@ -466,10 +488,6 @@ struct st_quicly_cc_type_t {
      * [optional] called by quicly to enter jumpstart.
      */
     void (*cc_jumpstart)(quicly_cc_t *cc, uint32_t cwnd, uint64_t next_pn);
-    /**
-     * [optional] turns on rapid start
-     */
-    void (*enable_rapid_start)(quicly_cc_t *cc, int64_t now);
     /**
      * [optional] updates whether the sender is CC-limited
      */

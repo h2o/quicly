@@ -153,10 +153,9 @@ QUICLY_CALLBACK_TYPE(quicly_error_t, save_resumption_token, quicly_conn_t *conn,
 QUICLY_CALLBACK_TYPE(quicly_error_t, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
                      quicly_address_token_plaintext_t *token);
 /**
- * called to initialize a congestion controller for a new connection.
- * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
+ * called to initialize a congestion controller for a new connection or path.
  */
-QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int abba, int64_t now);
+QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint16_t max_udp_payload_size, int64_t now);
 /**
  * reference counting.
  * delta must be either 1 or -1.
@@ -293,10 +292,6 @@ struct st_quicly_context_t {
      */
     uint16_t initial_egress_max_udp_payload_size;
     /**
-     * loss detection parameters
-     */
-    quicly_loss_conf_t loss;
-    /**
      * transport parameters
      */
     quicly_transport_parameters_t transport_params;
@@ -308,10 +303,6 @@ struct st_quicly_context_t {
      * maximum number of bytes that can be transmitted on a CRYPTO stream (per each epoch)
      */
     uint32_t max_crypto_bytes;
-    /**
-     * initial CWND in terms of packet numbers
-     */
-    uint32_t initcwnd_packets;
     /**
      * (client-only) Initial QUIC protocol version used by the client. Setting this to a greased version will enforce version
      * negotiation.
@@ -345,60 +336,6 @@ struct st_quicly_context_t {
      * value to zero effectively disables the endpoint responding to path migration attempts.
      */
     uint64_t max_path_validation_failures;
-    /**
-     * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
-     * possible only when the use_pacing flag is set.
-     */
-    uint32_t default_jumpstart_cwnd_packets;
-    /**
-     * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections). If
-     * set to zero, slow start is used.
-     */
-    uint32_t max_jumpstart_cwnd_packets;
-    /**
-     * Probabilities for enabling jumpstart when they are configured, multiplied by 255. 0 means never, 255 (default) means always.
-     */
-    struct {
-        struct {
-            uint8_t non_resume;
-            uint8_t resume;
-        } jumpstart;
-        /**
-         * if rapid cstart should be used
-         */
-        uint8_t rapid_start;
-        /**
-         * whether to use ECN on the send side; ECN is always on on the receive side
-         */
-        uint8_t ecn;
-        /**
-         * whether to use L4S (off by default). Only connections that use pacing are selected; they use ECT(1) independently of
-         * `ecn`. CE marks are reported to the congestion controller as L4S signals, which requires a controller that supports them
-         * (i.e., CUBACK).
-         */
-        uint8_t l4s;
-        /**
-         * if pacing should be used
-         */
-        uint8_t pacing;
-        /**
-         * if CC should take app-limited into consideration
-         */
-        uint8_t respect_app_limited;
-        /**
-         * if ABBA accelerated bottleneck bandwidth adaptation should be used when using CUBIC or Cuback
-         */
-        uint8_t abba;
-    } enable_ratio;
-    /**
-     * expand client hello so that it does not fit into one datagram
-     */
-    unsigned expand_client_hello : 1;
-    /**
-     * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size; enabled in
-     * the default contexts
-     */
-    unsigned normalize_cc_mtu : 1;
     /**
      *
      */
@@ -436,10 +373,6 @@ struct st_quicly_context_t {
      */
     quicly_crypto_engine_t *crypto_engine;
     /**
-     * initializes a congestion controller for given connection
-     */
-    quicly_init_cc_t *init_cc;
-    /**
      * optional refcount callback
      */
     quicly_update_open_count_t *update_open_count;
@@ -447,6 +380,59 @@ struct st_quicly_context_t {
      *
      */
     quicly_async_handshake_t *async_handshake;
+    /**
+     * expand client hello so that it does not fit into one datagram
+     */
+    unsigned expand_client_hello : 1;
+    /**
+     * probability of using egress[1], multiplied by 255. 0 (default) means never, 255 means always
+     */
+    uint8_t alt_egress_ratio;
+    /**
+     * egress settings (i.e., loss recovery and congestion control); has two slots and one is chosen based on `alt_egress_ratio`
+     */
+    struct st_quicly_context_egress_t {
+        /**
+         * loss detection parameters
+         */
+        quicly_loss_conf_t loss;
+        /**
+         * congestion control parameters
+         */
+        quicly_cc_conf_t cc;
+        /**
+         * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
+         * possible only when the `pacing` flag is set.
+         */
+        uint32_t default_jumpstart_packets;
+        /**
+         * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections).
+         * If set to zero, slow start is used.
+         */
+        uint32_t max_jumpstart_packets;
+        /**
+         * prepares jumpstart but disengages before any action; provided for A/B testing between connections eligible for jumpstart
+         */
+        uint8_t disengage_jumpstart : 1;
+        /**
+         * whether to use ECN on the send side; ECN is always on on the receive side
+         */
+        uint8_t ecn : 1;
+        /**
+         * whether to use L4S (off by default). Only connections that use pacing are selected; they use ECT(1) independently of
+         * `ecn`. CE marks are reported to the congestion controller as L4S signals, which requires a controller that supports them
+         * (i.e., CUBACK).
+         */
+        uint8_t l4s : 1;
+        /**
+         * if pacing should be used
+         */
+        uint8_t pacing : 1;
+        /**
+         * if CC should take app-limited into consideration
+         */
+        uint8_t respect_app_limited : 1;
+    } egress[2];
 };
 
 /**
@@ -658,21 +644,9 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_jumpstart_applicable;                                                                                             \
     /**                                                                                                                            \
-     * Number of connections that used rapid start.                                                                                \
+     * Total number of connections that used the alternative egress context (i.e., `egress[1]`).                                   \
      */                                                                                                                            \
-    uint64_t num_rapid_start;                                                                                                      \
-    /**                                                                                                                            \
-     * Total number of connections that were paced.                                                                                \
-     */                                                                                                                            \
-    uint64_t num_paced;                                                                                                            \
-    /**                                                                                                                            \
-     * Total number of connections for which ABBA was enabled.                                                                     \
-     */                                                                                                                            \
-    uint64_t num_abba;                                                                                                             \
-    /**                                                                                                                            \
-     * Total number of connections where app-limited state was respected by CC.                                                    \
-     */                                                                                                                            \
-    uint64_t num_respected_app_limited
+    uint64_t num_alt_egress
 
 /**
  * Stats that do not need to be gathered upon the invocation of `quicly_get_stats`. This macro is used to define the same fields in
@@ -818,10 +792,7 @@ typedef struct st_quicly_stats_t {
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
     apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
-    apply(num_rapid_start, "num-rapid-start")                                                                                      \
-    apply(num_paced, "num-paced")                                                                                                  \
-    apply(num_abba, "num-abba")                                                                                                    \
-    apply(num_respected_app_limited, "num-respected-app-limited")
+    apply(num_alt_egress, "num-alt-egress")
 
 /**
  * Macro for iterating QUICLY_STATS_PREBUILT_COUNTERS.
