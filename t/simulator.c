@@ -917,7 +917,7 @@ static void usage(const char *cmd)
            "  -t                  emits trace as well\n"
            "  -h                  print this help\n"
            "\n",
-           cmd, quicly_spec_context.egress[0].initcwnd_packets);
+           cmd, quicly_spec_context.egress[0].cc.initcwnd_packets);
 }
 
 static void reset_getopt_state(void)
@@ -977,7 +977,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
         switch (ch) {
         case 0:
             if (strcmp(longopts[opt_index].name, "abba") == 0) {
-                quicctx->egress[0].abba = 1;
+                quicctx->egress[0].cc.abba = 1;
             } else {
                 assert(!"unexpected longname");
             }
@@ -1013,7 +1013,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                 fprintf(stderr, "unknown congestion controller: %s\n", optarg);
                 return 0;
             }
-            quicctx->egress[0].init_cc = (*cc)->cc_init;
+            quicctx->egress[0].cc.init_cc = (*cc)->cc_init;
         } break;
         case 'A':
             if (aqm == NULL) {
@@ -1049,7 +1049,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             }
             break;
         case 'i':
-            if (sscanf(optarg, "%" PRIu32, &quicctx->egress[0].initcwnd_packets) != 1) {
+            if (sscanf(optarg, "%" PRIu32, &quicctx->egress[0].cc.initcwnd_packets) != 1) {
                 fprintf(stderr, "invalid INITCWND size: %s\n", optarg);
                 return 0;
             }
@@ -1081,7 +1081,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             quicctx->transport_params.max_udp_payload_size = max_udp_payload_size;
         } break;
         case 'M':
-            quicctx->egress[0].normalize_mtu = 0;
+            quicctx->egress[0].cc.normalize_mtu = 0;
             break;
         case 'p':
             quicctx->egress[0].pacing = 1;
@@ -1117,7 +1117,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             quicctx->egress[0].ecn = 0;
             break;
         case 'R':
-            quicctx->egress[0].rapid_start = 1;
+            quicctx->egress[0].cc.rapid_start = 1;
             break;
         case 's':
             if (sscanf(optarg, "%lf", start) != 1) {

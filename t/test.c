@@ -1219,22 +1219,24 @@ static void test_cc_accel_context(void)
     quicly_init_cc_t *const policies[] = {&quicly_cc_cubic_init, &quicly_cc_cuback_init};
     for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
         quicly_context_t ctx = quic_ctx;
-        ctx.egress[0].init_cc = policies[i];
-        ctx.egress[0].abba = 1;
+        ctx.egress[0].cc.init_cc = policies[i];
+        ctx.egress[0].cc.abba = 1;
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
-        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.conf == &ctx.egress[0].cc && conn->egress.cc.conf->abba);
         ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
 
         /* Path promotion uses configured policy and discards the old path's measurements. */
-        conn->egress.cc.abba = 0;
+        quicly_cc_conf_t stale_conf = ctx.egress[0].cc;
+        stale_conf.abba = 0;
+        conn->egress.cc.conf = &stale_conf;
         conn->egress.cc.state.pico.abba.high.cwnd = 100000;
         quicly_rtt_update(&conn->egress.loss.rtt, 20, 0, conn->stash.now);
         ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20);
         ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
         ok(promote_path(conn, 1) == 0);
-        ok(conn->egress.cc.abba);
+        ok(conn->egress.cc.conf == &ctx.egress[0].cc && conn->egress.cc.conf->abba);
         ok(conn->egress.cc.type->cc_init == policies[i]);
         ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
         ok(conn->egress.loss.rtt.latest == 0);

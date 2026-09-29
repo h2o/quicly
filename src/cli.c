@@ -1654,11 +1654,11 @@ int main(int argc, char **argv)
                     exit(1);
                 }
             } else if (strcmp(longopts[opt_index].name, "no-normalize-cc-mtu") == 0) {
-                ctx.egress[0].normalize_mtu = 0;
+                ctx.egress[0].cc.normalize_mtu = 0;
             } else if (strcmp(longopts[opt_index].name, "abba") == 0) {
-                ctx.egress[0].abba = 1;
+                ctx.egress[0].cc.abba = 1;
             } else if (strcmp(longopts[opt_index].name, "rapid-start") == 0) {
-                ctx.egress[0].rapid_start = 1;
+                ctx.egress[0].cc.rapid_start = 1;
             } else if (strcmp(longopts[opt_index].name, "sockfd") == 0) {
                 if (sscanf(optarg, "%d", &fd) != 1) {
                     fprintf(stderr, "invalid argument passed to --sockfd\n");
@@ -1702,14 +1702,14 @@ int main(int argc, char **argv)
                 if (strcmp((*cc)->name, token) == 0)
                     break;
             if (*cc != NULL) {
-                ctx.egress[0].init_cc = (*cc)->cc_init;
+                ctx.egress[0].cc.init_cc = (*cc)->cc_init;
             } else {
                 fprintf(stderr, "unknown congestion controller: %s\n", token);
                 exit(1);
             }
             /* initcwnd */
             if ((token = strsep(&buf, ":")) != NULL) {
-                if (sscanf(token, "%" SCNu32, &ctx.egress[0].initcwnd_packets) != 1) {
+                if (sscanf(token, "%" SCNu32, &ctx.egress[0].cc.initcwnd_packets) != 1) {
                     fprintf(stderr, "invalid initcwnd value: %s\n", token);
                     exit(1);
                 }

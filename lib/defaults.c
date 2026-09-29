@@ -58,11 +58,14 @@ const quicly_context_t quicly_spec_context = {
     .egress[0] =
         {
             .loss = QUICLY_LOSS_SPEC_CONF,
-            .init_cc = &quicly_default_init_cc,
-            .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
+            .cc =
+                {
+                    .init_cc = &quicly_default_init_cc,
+                    .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
+                    .normalize_mtu = 1,
+                },
             .ecn = 1,
             .respect_app_limited = 1,
-            .normalize_mtu = 1,
         },
     .stream_scheduler = &quicly_default_stream_scheduler,
     .now = &quicly_default_now,
@@ -94,11 +97,14 @@ const quicly_context_t quicly_performant_context = {
     .egress[0] =
         {
             .loss = QUICLY_LOSS_PERFORMANT_CONF,
-            .init_cc = &quicly_default_init_cc,
-            .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
+            .cc =
+                {
+                    .init_cc = &quicly_default_init_cc,
+                    .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
+                    .normalize_mtu = 1,
+                },
             .ecn = 1,
             .respect_app_limited = 1,
-            .normalize_mtu = 1,
         },
     .stream_scheduler = &quicly_default_stream_scheduler,
     .now = &quicly_default_now,

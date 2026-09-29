@@ -2169,12 +2169,8 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     }
 
     /* reset CC (FIXME flush sentmap and reset loss recovery) */
-    conn->egress.cc.type->cc_init->cb(
-        conn->egress.cc.type->cc_init, &conn->egress.cc,
-        quicly_cc_calc_initial_cwnd(get_egress_context(conn)->initcwnd_packets, conn->egress.max_udp_payload_size),
-        get_egress_context(conn)->normalize_mtu, get_egress_context(conn)->abba, conn->stash.now);
-    if (get_egress_context(conn)->rapid_start && conn->egress.cc.type->enable_rapid_start != NULL)
-        conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
+    conn->egress.cc.type->cc_init->cb(conn->egress.cc.type->cc_init, &conn->egress.cc, &get_egress_context(conn)->cc,
+                                      conn->egress.max_udp_payload_size, conn->stash.now);
 
     /* set jumpstart target */
     calc_resume_sendrate(conn, &conn->super.stats.jumpstart.prev_rate, &conn->super.stats.jumpstart.prev_rtt);
@@ -2884,12 +2880,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.ack_frequency.update_at = INT64_MAX;
     conn->egress.send_ack_at = INT64_MAX;
     conn->egress.send_probe_at = INT64_MAX;
-    get_egress_context(conn)->init_cc->cb(
-        get_egress_context(conn)->init_cc, &conn->egress.cc,
-        quicly_cc_calc_initial_cwnd(get_egress_context(conn)->initcwnd_packets, ctx->transport_params.max_udp_payload_size),
-        get_egress_context(conn)->normalize_mtu, get_egress_context(conn)->abba, conn->stash.now);
-    if (conn->egress.cc.type->enable_rapid_start != NULL && get_egress_context(conn)->rapid_start)
-        conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
+    get_egress_context(conn)->cc.init_cc->cb(get_egress_context(conn)->cc.init_cc, &conn->egress.cc, &get_egress_context(conn)->cc,
+                                             ctx->transport_params.max_udp_payload_size, conn->stash.now);
     if (pacer != NULL) {
         conn->egress.pacer = pacer;
         quicly_pacer_reset(conn->egress.pacer);

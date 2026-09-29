@@ -153,10 +153,9 @@ QUICLY_CALLBACK_TYPE(quicly_error_t, save_resumption_token, quicly_conn_t *conn,
 QUICLY_CALLBACK_TYPE(quicly_error_t, generate_resumption_token, quicly_conn_t *conn, ptls_buffer_t *buf,
                      quicly_address_token_plaintext_t *token);
 /**
- * called to initialize a congestion controller for a new connection.
- * should in turn call one of the quicly_cc_*_init functions from cc.h with customized parameters.
+ * called to initialize a congestion controller for a new connection or path.
  */
-QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, uint32_t initcwnd, int normalize_mtu, int abba, int64_t now);
+QUICLY_CALLBACK_TYPE(void, init_cc, quicly_cc_t *cc, const quicly_cc_conf_t *conf, uint16_t max_udp_payload_size, int64_t now);
 /**
  * reference counting.
  * delta must be either 1 or -1.
@@ -346,13 +345,9 @@ struct st_quicly_context_t {
          */
         quicly_loss_conf_t loss;
         /**
-         * initializes a congestion controller for given connection
+         * congestion control parameters
          */
-        quicly_init_cc_t *init_cc;
-        /**
-         * initial CWND in terms of packet numbers
-         */
-        uint32_t initcwnd_packets;
+        quicly_cc_conf_t cc;
         /**
          * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
          * possible only when the `pacing` flag is set.
@@ -368,14 +363,6 @@ struct st_quicly_context_t {
          */
         uint8_t disengage_jumpstart : 1;
         /**
-         * if rapid start should be used
-         */
-        uint8_t rapid_start : 1;
-        /**
-         * if ABBA accelerated bottleneck bandwidth adaptation should be used when using CUBIC or Cuback
-         */
-        uint8_t abba : 1;
-        /**
          * whether to use ECN on the send side; ECN is always on on the receive side
          */
         uint8_t ecn : 1;
@@ -387,10 +374,6 @@ struct st_quicly_context_t {
          * if CC should take app-limited into consideration
          */
         uint8_t respect_app_limited : 1;
-        /**
-         * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size
-         */
-        uint8_t normalize_mtu : 1;
     } egress[2];
     /**
      * probability of using egress[1], multiplied by 255. 0 (default) means never, 255 means always
