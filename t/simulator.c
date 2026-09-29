@@ -917,7 +917,7 @@ static void usage(const char *cmd)
            "  -t                  emits trace as well\n"
            "  -h                  print this help\n"
            "\n",
-           cmd, quicly_spec_context.initcwnd_packets);
+           cmd, quicly_spec_context.cc[0].initcwnd_packets);
 }
 
 static void reset_getopt_state(void)
@@ -977,7 +977,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
         switch (ch) {
         case 0:
             if (strcmp(longopts[opt_index].name, "abba") == 0) {
-                quicctx->enable_ratio.abba = 255;
+                quicctx->cc[0].abba = 1;
             } else {
                 assert(!"unexpected longname");
             }
@@ -1013,7 +1013,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                 fprintf(stderr, "unknown congestion controller: %s\n", optarg);
                 return 0;
             }
-            quicctx->init_cc = (*cc)->cc_init;
+            quicctx->cc[0].init_ = (*cc)->cc_init;
         } break;
         case 'A':
             if (aqm == NULL) {
@@ -1049,13 +1049,13 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             }
             break;
         case 'i':
-            if (sscanf(optarg, "%" PRIu32, &quicctx->initcwnd_packets) != 1) {
+            if (sscanf(optarg, "%" PRIu32, &quicctx->cc[0].initcwnd_packets) != 1) {
                 fprintf(stderr, "invalid INITCWND size: %s\n", optarg);
                 return 0;
             }
             break;
         case 'j':
-            if (sscanf(optarg, "%" PRIu32, &quicctx->default_jumpstart_cwnd_packets) != 1) {
+            if (sscanf(optarg, "%" PRIu32, &quicctx->cc[0].default_jumpstart_packets) != 1) {
                 fprintf(stderr, "invalid jumpstart window size: %s\n", optarg);
                 return 0;
             }
@@ -1081,10 +1081,10 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             quicctx->transport_params.max_udp_payload_size = max_udp_payload_size;
         } break;
         case 'M':
-            quicctx->normalize_cc_mtu = 0;
+            quicctx->cc[0].normalize_mtu = 0;
             break;
         case 'p':
-            quicctx->enable_ratio.pacing = 255;
+            quicctx->cc[0].pacing = 1;
             break;
         case 'q':
             if (depth == NULL) {
@@ -1114,10 +1114,10 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             *isolate_flows = 1;
             break;
         case 'E':
-            quicctx->enable_ratio.ecn = 0;
+            quicctx->cc[0].ecn = 0;
             break;
         case 'R':
-            quicctx->enable_ratio.rapid_start = 255;
+            quicctx->cc[0].rapid_start = 1;
             break;
         case 's':
             if (sscanf(optarg, "%lf", start) != 1) {

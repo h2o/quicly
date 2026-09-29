@@ -1219,8 +1219,8 @@ static void test_cc_accel_context(void)
     quicly_init_cc_t *const policies[] = {&quicly_cc_cubic_init, &quicly_cc_cuback_init};
     for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
         quicly_context_t ctx = quic_ctx;
-        ctx.init_cc = policies[i];
-        ctx.enable_ratio.abba = 255;
+        ctx.cc[0].init_ = policies[i];
+        ctx.cc[0].abba = 1;
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
@@ -1281,21 +1281,13 @@ static void test_resume_sendrate(void)
 
 static void test_jumpstart_cwnd(void)
 {
-    quicly_context_t unbounded_max = {
-        .max_jumpstart_cwnd_packets = UINT32_MAX,
-        .transport_params.max_udp_payload_size = 1200,
-    };
-    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 250) == 250000);
-    ok(derive_jumpstart_cwnd(&unbounded_max, 0.25f, 1000000, 1) == 250);
-    ok(derive_jumpstart_cwnd(&unbounded_max, 1.25f, 1000000, 2) == 1250);
-    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 400) == 250000); /* if RTT increases, CWND stays same */
-    ok(derive_jumpstart_cwnd(&unbounded_max, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 250, 1000000, 250) == 250000);
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 0.25f, 1000000, 1) == 250);
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 1.25f, 1000000, 2) == 1250);
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 250, 1000000, 400) == 250000); /* if RTT increases, CWND stays same */
+    ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
 
-    quicly_context_t bounded_max = {
-        .max_jumpstart_cwnd_packets = 64,
-        .transport_params.max_udp_payload_size = 1250,
-    };
-    ok(derive_jumpstart_cwnd(&bounded_max, 250, 1000000, 250) == 80000);
+    ok(derive_jumpstart_cwnd(64, 1250, 250, 1000000, 250) == 80000);
 }
 
 static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **server)

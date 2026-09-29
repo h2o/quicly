@@ -309,10 +309,6 @@ struct st_quicly_context_t {
      */
     uint32_t max_crypto_bytes;
     /**
-     * initial CWND in terms of packet numbers
-     */
-    uint32_t initcwnd_packets;
-    /**
      * (client-only) Initial QUIC protocol version used by the client. Setting this to a greased version will enforce version
      * negotiation.
      */
@@ -346,53 +342,64 @@ struct st_quicly_context_t {
      */
     uint64_t max_path_validation_failures;
     /**
-     * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
-     * possible only when the use_pacing flag is set.
+     * congestion controller settings; has two slots and one is chosen based on `alt_cc_ratio`
      */
-    uint32_t default_jumpstart_cwnd_packets;
-    /**
-     * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections). If
-     * set to zero, slow start is used.
-     */
-    uint32_t max_jumpstart_cwnd_packets;
-    /**
-     * Probabilities for enabling jumpstart when they are configured, multiplied by 255. 0 means never, 255 (default) means always.
-     */
-    struct {
-        struct {
-            uint8_t non_resume;
-            uint8_t resume;
-        } jumpstart;
+    struct st_quicly_context_cc_t {
         /**
-         * if rapid cstart should be used
+         * initializes a congestion controller for given connection
          */
-        uint8_t rapid_start;
+        quicly_init_cc_t *init_;
         /**
-         * whether to use ECN on the send side; ECN is always on on the receive side
+         * initial CWND in terms of packet numbers
          */
-        uint8_t ecn;
+        uint32_t initcwnd_packets;
         /**
-         * if pacing should be used
+         * Jumpstart CWND to be used when there is no previous information. If set to zero, slow start is used. Note jumpstart is
+         * possible only when the `pacing` flag is set.
          */
-        uint8_t pacing;
+        uint32_t default_jumpstart_packets;
         /**
-         * if CC should take app-limited into consideration
+         * Maximum jumpstart CWND to be used for connections with previous delivery rate information (i.e., resuming connections).
+         * If set to zero, slow start is used.
          */
-        uint8_t respect_app_limited;
+        uint32_t max_jumpstart_packets;
+        /**
+         * prepares jumpstart but disengages before any action; provided for A/B testing between connections eligible for jumpstart
+         */
+        uint8_t disengage_jumpstart : 1;
+        /**
+         * if rapid start should be used
+         */
+        uint8_t rapid_start : 1;
         /**
          * if ABBA accelerated bottleneck bandwidth adaptation should be used when using CUBIC or Cuback
          */
-        uint8_t abba;
-    } enable_ratio;
+        uint8_t abba : 1;
+        /**
+         * whether to use ECN on the send side; ECN is always on on the receive side
+         */
+        uint8_t ecn : 1;
+        /**
+         * if pacing should be used
+         */
+        uint8_t pacing : 1;
+        /**
+         * if CC should take app-limited into consideration
+         */
+        uint8_t respect_app_limited : 1;
+        /**
+         * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size
+         */
+        uint8_t normalize_mtu : 1;
+    } cc[2];
+    /**
+     * probability of using cc[1], multiplied by 255. 0 (default) means never, 255 means always
+     */
+    uint8_t alt_cc_ratio;
     /**
      * expand client hello so that it does not fit into one datagram
      */
     unsigned expand_client_hello : 1;
-    /**
-     * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size; enabled in
-     * the default contexts
-     */
-    unsigned normalize_cc_mtu : 1;
     /**
      *
      */
@@ -429,10 +436,6 @@ struct st_quicly_context_t {
      * crypto engine (offload API)
      */
     quicly_crypto_engine_t *crypto_engine;
-    /**
-     * initializes a congestion controller for given connection
-     */
-    quicly_init_cc_t *init_cc;
     /**
      * optional refcount callback
      */
@@ -666,7 +669,11 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of connections where app-limited state was respected by CC.                                                    \
      */                                                                                                                            \
-    uint64_t num_respected_app_limited
+    uint64_t num_respected_app_limited;                                                                                            \
+    /**                                                                                                                            \
+     * Total number of connections that used the alternative CC context (i.e., `cc[1]`).                                           \
+     */                                                                                                                            \
+    uint64_t num_alt_cc
 
 /**
  * Stats that do not need to be gathered upon the invocation of `quicly_get_stats`. This macro is used to define the same fields in
@@ -815,7 +822,8 @@ typedef struct st_quicly_stats_t {
     apply(num_rapid_start, "num-rapid-start")                                                                                      \
     apply(num_paced, "num-paced")                                                                                                  \
     apply(num_abba, "num-abba")                                                                                                    \
-    apply(num_respected_app_limited, "num-respected-app-limited")
+    apply(num_respected_app_limited, "num-respected-app-limited")                                                                  \
+    apply(num_alt_cc, "num-alt-cc")
 
 /**
  * Macro for iterating QUICLY_STATS_PREBUILT_COUNTERS.

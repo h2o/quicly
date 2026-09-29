@@ -36,7 +36,6 @@
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {
     .initial_egress_max_udp_payload_size = DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE,
-    .normalize_cc_mtu = 1,
     .loss = QUICLY_LOSS_SPEC_CONF,
     .transport_params =
         {
@@ -51,32 +50,28 @@ const quicly_context_t quicly_spec_context = {
         },
     .max_packets_per_key = DEFAULT_MAX_PACKETS_PER_KEY,
     .max_crypto_bytes = DEFAULT_MAX_CRYPTO_BYTES,
-    .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
     .initial_version = QUICLY_PROTOCOL_VERSION_1,
     .pre_validation_amplification_limit = DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
     .handshake_timeout_rtt_multiplier = DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
     .max_initial_handshake_packets = DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
     .max_probe_packets = DEFAULT_MAX_PROBE_PACKETS,
     .max_path_validation_failures = DEFAULT_MAX_PATH_VALIDATION_FAILURES,
-    .enable_ratio =
+    .cc[0] =
         {
-            .jumpstart.non_resume = 255,
-            .jumpstart.resume = 255,
-            .rapid_start = 0, /* off by default */
-            .ecn = 255,
-            .pacing = 0, /* off by default */
-            .respect_app_limited = 255,
+            .init_ = &quicly_default_init_cc,
+            .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
+            .ecn = 1,
+            .respect_app_limited = 1,
+            .normalize_mtu = 1,
         },
     .stream_scheduler = &quicly_default_stream_scheduler,
     .now = &quicly_default_now,
     .crypto_engine = &quicly_default_crypto_engine,
-    .init_cc = &quicly_default_init_cc,
 };
 
 /* profile with a focus on reducing latency for the HTTP use case */
 const quicly_context_t quicly_performant_context = {
     .initial_egress_max_udp_payload_size = DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE,
-    .normalize_cc_mtu = 1,
     .loss = QUICLY_LOSS_PERFORMANT_CONF,
     .transport_params =
         {
@@ -91,26 +86,23 @@ const quicly_context_t quicly_performant_context = {
         },
     .max_packets_per_key = DEFAULT_MAX_PACKETS_PER_KEY,
     .max_crypto_bytes = DEFAULT_MAX_CRYPTO_BYTES,
-    .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
     .initial_version = QUICLY_PROTOCOL_VERSION_1,
     .pre_validation_amplification_limit = DEFAULT_PRE_VALIDATION_AMPLIFICATION_LIMIT,
     .handshake_timeout_rtt_multiplier = DEFAULT_HANDSHAKE_TIMEOUT_RTT_MULTIPLIER,
     .max_initial_handshake_packets = DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
     .max_probe_packets = DEFAULT_MAX_PROBE_PACKETS,
     .max_path_validation_failures = DEFAULT_MAX_PATH_VALIDATION_FAILURES,
-    .enable_ratio =
+    .cc[0] =
         {
-            .jumpstart.non_resume = 255,
-            .jumpstart.resume = 255,
-            .rapid_start = 0, /* off by default */
-            .ecn = 255,
-            .pacing = 0, /* off by default */
-            .respect_app_limited = 255,
+            .init_ = &quicly_default_init_cc,
+            .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
+            .ecn = 1,
+            .respect_app_limited = 1,
+            .normalize_mtu = 1,
         },
     .stream_scheduler = &quicly_default_stream_scheduler,
     .now = &quicly_default_now,
     .crypto_engine = &quicly_default_crypto_engine,
-    .init_cc = &quicly_default_init_cc,
 };
 
 /**
