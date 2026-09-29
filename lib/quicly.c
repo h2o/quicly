@@ -431,9 +431,9 @@ struct st_quicly_conn_t {
  * this bit is to consolidate information as an optimization. */
 #define QUICLY_PENDING_FLOW_OTHERS_BIT (1 << 6)
         /**
-         * the chosen CC of `quicly_context_t::cc[]`
+         * the chosen entry of `quicly_context_t::egress[]`
          */
-        uint8_t alt_cc : 1;
+        uint8_t alt_ctx : 1;
         /**
          *
          */
@@ -788,9 +788,9 @@ static void update_ecn_state(quicly_conn_t *conn, enum en_quicly_ecn_state new_s
     QUICLY_LOG_CONN(ecn_validation, conn, { PTLS_LOG_ELEMENT_SIGNED(state, (int)new_state); });
 }
 
-static struct st_quicly_context_cc_t *get_cc_context(quicly_conn_t *conn)
+static struct st_quicly_context_egress_t *get_egress_context(quicly_conn_t *conn)
 {
-    return &conn->super.ctx->cc[conn->egress.alt_cc];
+    return &conn->super.ctx->egress[conn->egress.alt_ctx];
 }
 
 static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
@@ -1603,7 +1603,7 @@ static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int se
         /* Pacing or exhausting the output batch retains CC-limited state after the sender has filled CWND, but does not establish
          * that state by itself. This keeps Cubic's clock running while a bulk sender refills the window without letting small paced
          * bursts advance the clock. */
-        if (!get_cc_context(conn)->respect_app_limited || is_cwnd_limited) {
+        if (!get_egress_context(conn)->respect_app_limited || is_cwnd_limited) {
             conn->egress.cc.type->cc_update_cc_limited(&conn->egress.cc, 1, conn->stash.now);
         } else if (!is_ratemeter_limited) {
             conn->egress.cc.type->cc_update_cc_limited(&conn->egress.cc, 0, conn->stash.now);
@@ -2171,19 +2171,19 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     /* reset CC (FIXME flush sentmap and reset loss recovery) */
     conn->egress.cc.type->cc_init->cb(
         conn->egress.cc.type->cc_init, &conn->egress.cc,
-        quicly_cc_calc_initial_cwnd(get_cc_context(conn)->initcwnd_packets, conn->egress.max_udp_payload_size),
-        get_cc_context(conn)->normalize_mtu, get_cc_context(conn)->abba, conn->stash.now);
-    if (get_cc_context(conn)->rapid_start && conn->egress.cc.type->enable_rapid_start != NULL)
+        quicly_cc_calc_initial_cwnd(get_egress_context(conn)->initcwnd_packets, conn->egress.max_udp_payload_size),
+        get_egress_context(conn)->normalize_mtu, get_egress_context(conn)->abba, conn->stash.now);
+    if (get_egress_context(conn)->rapid_start && conn->egress.cc.type->enable_rapid_start != NULL)
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
 
     /* set jumpstart target */
     calc_resume_sendrate(conn, &conn->super.stats.jumpstart.prev_rate, &conn->super.stats.jumpstart.prev_rtt);
 
     /* reset RTT estimate, adopting SRTT of the original path as initial RTT (TODO calculate RTT based on path challenge RT) */
-    quicly_rtt_init(&conn->egress.loss.rtt, &conn->super.ctx->loss,
-                    conn->egress.loss.rtt.smoothed < conn->super.ctx->loss.default_initial_rtt
+    quicly_rtt_init(&conn->egress.loss.rtt, &get_egress_context(conn)->loss,
+                    conn->egress.loss.rtt.smoothed < get_egress_context(conn)->loss.default_initial_rtt
                         ? conn->egress.loss.rtt.smoothed
-                        : conn->super.ctx->loss.default_initial_rtt);
+                        : get_egress_context(conn)->loss.default_initial_rtt);
 
     /* reset ratemeter */
     quicly_ratemeter_init(&conn->egress.ratemeter);
@@ -2830,9 +2830,9 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
     conn->super.data = appdata;
-    if (enable_with_ratio255(ctx->alt_cc_ratio, ctx->tls->random_bytes))
-        conn->egress.alt_cc = 1;
-    if (get_cc_context(conn)->pacing && (pacer = malloc(sizeof(*pacer))) == NULL) {
+    if (enable_with_ratio255(ctx->alt_egress_ratio, ctx->tls->random_bytes))
+        conn->egress.alt_ctx = 1;
+    if (get_egress_context(conn)->pacing && (pacer = malloc(sizeof(*pacer))) == NULL) {
         ptls_free(tls);
         free(conn);
         return NULL;
@@ -2840,7 +2840,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     lock_now(conn, 0);
     conn->created_at = conn->stash.now;
     conn->super.stats.handshake_confirmed_msec = UINT64_MAX;
-    conn->super.stats.num_alt_cc = conn->egress.alt_cc;
+    conn->super.stats.num_alt_egress = conn->egress.alt_ctx;
     conn->crypto.tls = tls;
     if (new_path(conn, 0, remote_addr, local_addr) != 0) {
         unlock_now(conn);
@@ -2875,8 +2875,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->transport_params.max_data);
     quicly_maxsender_init(&conn->ingress.max_streams.uni, conn->super.ctx->transport_params.max_streams_uni);
     quicly_maxsender_init(&conn->ingress.max_streams.bidi, conn->super.ctx->transport_params.max_streams_bidi);
-    quicly_loss_init(&conn->egress.loss, &conn->super.ctx->loss,
-                     conn->super.ctx->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
+    quicly_loss_init(&conn->egress.loss, &get_egress_context(conn)->loss,
+                     get_egress_context(conn)->loss.default_initial_rtt /* FIXME remember initial_rtt in session ticket */,
                      &conn->super.remote.transport_params.max_ack_delay, &conn->super.remote.transport_params.ack_delay_exponent);
     conn->egress.max_udp_payload_size = conn->super.ctx->initial_egress_max_udp_payload_size;
     init_max_streams(&conn->egress.max_streams.uni);
@@ -2884,17 +2884,17 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.ack_frequency.update_at = INT64_MAX;
     conn->egress.send_ack_at = INT64_MAX;
     conn->egress.send_probe_at = INT64_MAX;
-    get_cc_context(conn)->init_->cb(
-        get_cc_context(conn)->init_, &conn->egress.cc,
-        quicly_cc_calc_initial_cwnd(get_cc_context(conn)->initcwnd_packets, ctx->transport_params.max_udp_payload_size),
-        get_cc_context(conn)->normalize_mtu, get_cc_context(conn)->abba, conn->stash.now);
-    if (conn->egress.cc.type->enable_rapid_start != NULL && get_cc_context(conn)->rapid_start)
+    get_egress_context(conn)->init_cc->cb(
+        get_egress_context(conn)->init_cc, &conn->egress.cc,
+        quicly_cc_calc_initial_cwnd(get_egress_context(conn)->initcwnd_packets, ctx->transport_params.max_udp_payload_size),
+        get_egress_context(conn)->normalize_mtu, get_egress_context(conn)->abba, conn->stash.now);
+    if (conn->egress.cc.type->enable_rapid_start != NULL && get_egress_context(conn)->rapid_start)
         conn->egress.cc.type->enable_rapid_start(&conn->egress.cc, conn->stash.now);
     if (pacer != NULL) {
         conn->egress.pacer = pacer;
         quicly_pacer_reset(conn->egress.pacer);
     }
-    conn->egress.ecn.state = get_cc_context(conn)->ecn ? QUICLY_ECN_PROBING : QUICLY_ECN_OFF;
+    conn->egress.ecn.state = get_egress_context(conn)->ecn ? QUICLY_ECN_PROBING : QUICLY_ECN_OFF;
     quicly_linklist_init(&conn->egress.pending_streams.blocked.uni);
     quicly_linklist_init(&conn->egress.pending_streams.blocked.bidi);
     quicly_linklist_init(&conn->egress.pending_streams.control);
@@ -3039,10 +3039,10 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
     server_cid = quicly_get_remote_cid(conn);
     conn->super.original_dcid = *server_cid;
 
-    QUICLY_PROBE(CONNECT, conn, conn->stash.now, conn->super.version, conn->egress.alt_cc);
+    QUICLY_PROBE(CONNECT, conn, conn->stash.now, conn->super.version, conn->egress.alt_ctx);
     QUICLY_LOG_CONN(connect, conn, {
         PTLS_LOG_ELEMENT_UNSIGNED(version, conn->super.version);
-        PTLS_LOG_ELEMENT_BOOL(alt_cc, conn->egress.alt_cc);
+        PTLS_LOG_ELEMENT_BOOL(alt_egress, conn->egress.alt_ctx);
     });
 
     if ((ret = setup_handshake_space_and_flow(conn, QUICLY_EPOCH_INITIAL)) != 0)
@@ -5673,8 +5673,8 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if ((ret = send_path_challenge(conn, s, 0, path->path_challenge.data)) != 0)
                     goto Exit;
                 path->path_challenge.num_sent += 1;
-                path->path_challenge.send_at =
-                    conn->stash.now + ((3 * conn->super.ctx->loss.default_initial_rtt) << (path->path_challenge.num_sent - 1));
+                path->path_challenge.send_at = conn->stash.now + ((3 * get_egress_context(conn)->loss.default_initial_rtt)
+                                                                  << (path->path_challenge.num_sent - 1));
                 s->recalc_send_probe_at = 1;
             }
             if (path->path_response.send_) {
@@ -5793,19 +5793,21 @@ Exit:
             conn->super.stats.jumpstart.new_rtt = 0;
             conn->super.stats.jumpstart.cwnd = 0;
             if (conn->egress.pacer != NULL && conn->egress.cc.type->cc_jumpstart != NULL &&
-                (get_cc_context(conn)->default_jumpstart_packets != 0 || get_cc_context(conn)->max_jumpstart_packets != 0) &&
+                (get_egress_context(conn)->default_jumpstart_packets != 0 ||
+                 get_egress_context(conn)->max_jumpstart_packets != 0) &&
                 conn->egress.cc.num_loss_episodes == 0) {
                 conn->super.stats.jumpstart.new_rtt = conn->egress.loss.rtt.minimum;
-                if (get_cc_context(conn)->max_jumpstart_packets != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
+                if (get_egress_context(conn)->max_jumpstart_packets != 0 && conn->super.stats.jumpstart.prev_rate != 0 &&
                     conn->super.stats.jumpstart.prev_rtt != 0) {
                     /* Careful Resume */
                     conn->super.stats.jumpstart.cwnd = derive_jumpstart_cwnd(
-                        get_cc_context(conn)->max_jumpstart_packets, conn->super.ctx->transport_params.max_udp_payload_size,
+                        get_egress_context(conn)->max_jumpstart_packets, conn->super.ctx->transport_params.max_udp_payload_size,
                         conn->egress.loss.rtt.minimum, conn->super.stats.jumpstart.prev_rate, conn->super.stats.jumpstart.prev_rtt);
-                } else if (get_cc_context(conn)->default_jumpstart_packets != 0) {
+                } else if (get_egress_context(conn)->default_jumpstart_packets != 0) {
                     /* jumpstart without previous information */
-                    conn->super.stats.jumpstart.cwnd = quicly_cc_calc_initial_cwnd(
-                        get_cc_context(conn)->default_jumpstart_packets, conn->super.ctx->transport_params.max_udp_payload_size);
+                    conn->super.stats.jumpstart.cwnd =
+                        quicly_cc_calc_initial_cwnd(get_egress_context(conn)->default_jumpstart_packets,
+                                                    conn->super.ctx->transport_params.max_udp_payload_size);
                 }
                 /* Jumpstart only if the amount that can be sent in 1 RTT would be higher than without. Comparison target is CWND +
                  * inflight, as that is the amount that can be sent at most. Note the flow rate can become smaller due to packets
@@ -5816,7 +5818,7 @@ Exit:
             /* disengage jumpstart if configured to do so; observable from the probes as `jumpstart.cwnd == 0` */
             if (conn->super.stats.jumpstart.cwnd > 0) {
                 conn->super.stats.num_jumpstart_applicable = 1;
-                if (get_cc_context(conn)->disengage_jumpstart)
+                if (get_egress_context(conn)->disengage_jumpstart)
                     conn->super.stats.jumpstart.cwnd = 0;
                 QUICLY_PROBE(ENTER_JUMPSTART, conn, conn->stash.now, conn->egress.packet_number,
                              conn->super.stats.jumpstart.new_rtt, conn->egress.cc.cwnd, conn->super.stats.jumpstart.cwnd);
@@ -6334,7 +6336,7 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
      * CC-limited state for X round-trips then becomes idle again, all packets sent during that X round-trips will be considered as
      * CC-limited. */
     int cc_limited =
-        !get_cc_context(conn)->respect_app_limited || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd / 2;
+        !get_egress_context(conn)->respect_app_limited || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd / 2;
 
     if ((ret = quicly_decode_ack_frame(&state->src, state->end, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
         return ret;
@@ -7375,7 +7377,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
 
     QUICLY_PROBE(ACCEPT, *conn, (*conn)->stash.now,
                  QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), address_token,
-                 (*conn)->egress.alt_cc);
+                 (*conn)->egress.alt_ctx);
     QUICLY_LOG_CONN(accept, *conn, {
         PTLS_LOG_ELEMENT_HEXDUMP(dcid, packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len);
         if (address_token != NULL) {
@@ -7395,7 +7397,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
                 break;
             }
         }
-        PTLS_LOG_ELEMENT_BOOL(alt_cc, (*conn)->egress.alt_cc);
+        PTLS_LOG_ELEMENT_BOOL(alt_egress, (*conn)->egress.alt_ctx);
     });
     QUICLY_PROBE(PACKET_RECEIVED, *conn, (*conn)->stash.now, pn, payload.base, payload.len, get_epoch(packet->octets.base[0]));
     QUICLY_LOG_CONN(packet_received, *conn, {

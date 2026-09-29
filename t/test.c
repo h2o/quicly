@@ -1219,8 +1219,8 @@ static void test_cc_accel_context(void)
     quicly_init_cc_t *const policies[] = {&quicly_cc_cubic_init, &quicly_cc_cuback_init};
     for (size_t i = 0; i != PTLS_ELEMENTSOF(policies); ++i) {
         quicly_context_t ctx = quic_ctx;
-        ctx.cc[0].init_ = policies[i];
-        ctx.cc[0].abba = 1;
+        ctx.egress[0].init_cc = policies[i];
+        ctx.egress[0].abba = 1;
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
@@ -1357,9 +1357,9 @@ static void test_fractional_close_timeout(void)
         quicly_conn_t *conn = draining ? server : client;
         quicly_stats_t stats;
         quicly_get_stats(conn, &stats);
-        int64_t expires_at = ceil(
-            quic_now + quic_now_submillisec +
-            4 * quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(conn)->max_ack_delay, quic_ctx.loss.min_pto));
+        int64_t expires_at = ceil(quic_now + quic_now_submillisec +
+                                  4 * quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(conn)->max_ack_delay,
+                                                         quic_ctx.egress[0].loss.min_pto));
         ok(quicly_get_first_timeout(conn) == expires_at);
 
         /* Closing and draining both retain state until the first whole-millisecond tick past the deadline. */
@@ -1399,8 +1399,8 @@ static void test_fractional_rtt_measurement(void)
     /* The outstanding packet's PTO is still an absolute millisecond deadline. */
     quicly_stats_t stats;
     quicly_get_stats(client, &stats);
-    double pto =
-        quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay, quic_ctx.loss.min_pto);
+    double pto = quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay,
+                                    quic_ctx.egress[0].loss.min_pto);
     ok(quicly_get_first_timeout(client) == ceil(quic_now + quic_now_submillisec + pto));
     ok(decode_packets(&decoded, &datagram, 1) == 1);
     quic_now_submillisec += 0.625;
@@ -1423,7 +1423,8 @@ static void test_fractional_rtt_measurement(void)
     ok(fabsf(stats.rtt.latest - 1.254f) < 0.000001f);
 
     /* Closing retains the fractional PTO derived from that measurement. */
-    pto = quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay, quic_ctx.loss.min_pto);
+    pto = quicly_rtt_get_pto(&stats.rtt, quicly_get_remote_transport_parameters(client)->max_ack_delay,
+                             quic_ctx.egress[0].loss.min_pto);
     ok(pto != floor(pto));
     ok(quicly_close(client, 0, "") == 0);
     num_datagrams = 1;

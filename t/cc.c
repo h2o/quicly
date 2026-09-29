@@ -792,7 +792,7 @@ static void test_rapid_start(void)
     quicly_rtt_t rtt;
 
     quicly_cc_init_rapid_start(&rs, 1);
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 16);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 16);
 
     ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* no sample => 2x */
     ok(quicly_cc_rapid_start_is_active(&rs));
@@ -820,7 +820,7 @@ static void test_rapid_start(void)
 
     /* Rapid Start remains disabled on paths shorter than four milliseconds even though the core floor tracker supports them. */
     quicly_cc_init_rapid_start(&rs, 22);
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 16);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 16);
     quicly_rtt_update(&rtt, 3, 0, 22);
     ok(!quicly_cc_rapid_start_use_3x(&rs, &rtt));
     ok(!quicly_cc_rapid_start_is_active(&rs));
@@ -908,7 +908,7 @@ static void test_abba_model(void)
     ok(state.a == 0 && state.b == 160);
 
     /* Without a sample at congestion, SRTT supplies the initial estimate; recovery samples can lower it. */
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 120);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 120);
     abba_on_congestion(&state, 100000, &rtt, 0);
     ok(state.high.rtt == 120 && state.low.cwnd == 0);
     abba_on_acked(&state, 70000, &rtt, 1, 0);
@@ -926,7 +926,7 @@ static void test_abba_model(void)
     ok(state.a == 0 && state.b == 100);
 
     /* If there are no recovery samples, the SRTT fallback remains the high watermark at recovery exit. */
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 120);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 120);
     abba_on_congestion(&state, 100000, &rtt, 0);
     quicly_rtt_update(&rtt, 150, 0, 3);
     abba_on_acked(&state, 70000, &rtt, 0, 0);
@@ -975,7 +975,7 @@ static void test_abba_min_rtt_span(void)
         for (int beyond_threshold = 0; beyond_threshold != 2; ++beyond_threshold) {
             state = (struct st_quicly_cc_abba_t){.high = {100000, 100}, .low = {0, 100}, .a = 0, .b = NAN};
             quicly_rtt_t rtt;
-            quicly_rtt_init(&rtt, &quicly_spec_context.loss, 96);
+            quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 96);
             quicly_rtt_update(&rtt, 96, 0, 0);
             uint32_t cwnd = beyond_threshold ? 140000 : 70000;
             abba_on_acked(&state, cwnd, &rtt, 0, by_ecn);
@@ -1009,7 +1009,7 @@ static void test_abba_proportional_switch(void)
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
         struct st_quicly_cc_abba_t state = {.high = {100000, 120}, .low = {70000, 100}, .a = 0, .b = NAN};
         quicly_rtt_t rtt;
-        quicly_rtt_init(&rtt, &quicly_spec_context.loss, 105);
+        quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 105);
         quicly_rtt_update(&rtt, 20, 0, 0);
         quicly_rtt_update(&rtt, 110, 0, 1000);
         uint32_t threshold = by_ecn ? 115000 : 130000;
@@ -1045,7 +1045,7 @@ static void test_abba_proportional_switch(void)
 
         /* Preserve the affine prediction of 128ms rather than lowering it to the 80ms floor or SRTT. */
         state = (struct st_quicly_cc_abba_t){.high = {40000, 120}, .low = {30000, 60}, .a = 1.f / 1024, .b = 64};
-        quicly_rtt_init(&rtt, &quicly_spec_context.loss, 80);
+        quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 80);
         quicly_rtt_update(&rtt, 80, 0, 0);
         quicly_rtt_update(&rtt, 96, 0, 1);
         abba_on_acked(&state, 65536, &rtt, 0, by_ecn);
@@ -1340,7 +1340,7 @@ static void test_abba_lifecycle(quicly_init_cc_t *init)
 
     /* A rapid bandwidth increase after the proportional switch lowers RTT and accelerates growth. */
     cc.cwnd = 2 * peak;
-    quicly_rtt_init(&loss.rtt, &quicly_spec_context.loss, 100);
+    quicly_rtt_init(&loss.rtt, &quicly_spec_context.egress[0].loss, 100);
     quicly_rtt_update(&loss.rtt, 100, 0, 1150);
     cc.type->cc_on_acked(&cc, &loss, 0, 21, 0, 1, 22, 1150, mtu);
     quicly_rtt_update(&loss.rtt, 50, 0, 1200);
@@ -1383,7 +1383,7 @@ static void test_abba_lifecycle(quicly_init_cc_t *init)
     ok(memcmp(&cc.state.pico.abba, &saved, sizeof(saved)) == 0);
 
     /* ECN uses its own beta and cannot be undone by a late ACK. */
-    quicly_rtt_init(&loss.rtt, &quicly_spec_context.loss, 115);
+    quicly_rtt_init(&loss.rtt, &quicly_spec_context.egress[0].loss, 115);
     quicly_rtt_update(&loss.rtt, 80, 0, 1500);
     cc.type->cc_on_lost(&cc, &loss, 0, 30, 40, 1500, mtu);
     ok(cc.cwnd == (uint32_t)(before * QUICLY_BETA_ECN));
@@ -1405,7 +1405,7 @@ static void test_abba_ecn_floor(quicly_init_cc_t *init)
             quicly_cc_t cc, control;
             quicly_loss_t loss = {};
             init->cb(init, &cc, initcwnd, 0, 1, 0);
-            quicly_rtt_init(&loss.rtt, &quicly_spec_context.loss, 80);
+            quicly_rtt_init(&loss.rtt, &quicly_spec_context.egress[0].loss, 80);
             if (!no_sample) {
                 quicly_rtt_update(&loss.rtt, 80, 0, 900);
                 quicly_rtt_update(&loss.rtt, 120, 0, 901);
@@ -1616,7 +1616,7 @@ static void test_rapid_start_fractional_rtt(void)
 {
     struct st_quicly_cc_rapid_start_t rs;
     quicly_rtt_t rtt;
-    quicly_rtt_init(&rtt, &quicly_spec_context.loss, 16.25f);
+    quicly_rtt_init(&rtt, &quicly_spec_context.egress[0].loss, 16.25f);
     quicly_rtt_update(&rtt, 16.25f, 0, 1);
     quicly_cc_init_rapid_start(&rs, 21);
     quicly_rtt_update(&rtt, 20.5f, 0, 21);

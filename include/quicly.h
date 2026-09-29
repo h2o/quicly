@@ -293,10 +293,6 @@ struct st_quicly_context_t {
      */
     uint16_t initial_egress_max_udp_payload_size;
     /**
-     * loss detection parameters
-     */
-    quicly_loss_conf_t loss;
-    /**
      * transport parameters
      */
     quicly_transport_parameters_t transport_params;
@@ -342,13 +338,17 @@ struct st_quicly_context_t {
      */
     uint64_t max_path_validation_failures;
     /**
-     * congestion controller settings; has two slots and one is chosen based on `alt_cc_ratio`
+     * egress settings (i.e., loss recovery and congestion control); has two slots and one is chosen based on `alt_egress_ratio`
      */
-    struct st_quicly_context_cc_t {
+    struct st_quicly_context_egress_t {
+        /**
+         * loss detection parameters
+         */
+        quicly_loss_conf_t loss;
         /**
          * initializes a congestion controller for given connection
          */
-        quicly_init_cc_t *init_;
+        quicly_init_cc_t *init_cc;
         /**
          * initial CWND in terms of packet numbers
          */
@@ -391,11 +391,11 @@ struct st_quicly_context_t {
          * if CC growth should be normalized to the reference packet size rather than the path's maximum UDP payload size
          */
         uint8_t normalize_mtu : 1;
-    } cc[2];
+    } egress[2];
     /**
-     * probability of using cc[1], multiplied by 255. 0 (default) means never, 255 means always
+     * probability of using egress[1], multiplied by 255. 0 (default) means never, 255 means always
      */
-    uint8_t alt_cc_ratio;
+    uint8_t alt_egress_ratio;
     /**
      * expand client hello so that it does not fit into one datagram
      */
@@ -655,9 +655,9 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_jumpstart_applicable;                                                                                             \
     /**                                                                                                                            \
-     * Total number of connections that used the alternative CC context (i.e., `cc[1]`).                                           \
+     * Total number of connections that used the alternative egress context (i.e., `egress[1]`).                                   \
      */                                                                                                                            \
-    uint64_t num_alt_cc
+    uint64_t num_alt_egress
 
 /**
  * Stats that do not need to be gathered upon the invocation of `quicly_get_stats`. This macro is used to define the same fields in
@@ -803,7 +803,7 @@ typedef struct st_quicly_stats_t {
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
     apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
-    apply(num_alt_cc, "num-alt-cc")
+    apply(num_alt_egress, "num-alt-egress")
 
 /**
  * Macro for iterating QUICLY_STATS_PREBUILT_COUNTERS.

@@ -36,7 +36,6 @@
 /* profile that employs IETF specified values */
 const quicly_context_t quicly_spec_context = {
     .initial_egress_max_udp_payload_size = DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE,
-    .loss = QUICLY_LOSS_SPEC_CONF,
     .transport_params =
         {
             .max_stream_data.bidi_local = 1 * 1024 * 1024,
@@ -56,9 +55,10 @@ const quicly_context_t quicly_spec_context = {
     .max_initial_handshake_packets = DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
     .max_probe_packets = DEFAULT_MAX_PROBE_PACKETS,
     .max_path_validation_failures = DEFAULT_MAX_PATH_VALIDATION_FAILURES,
-    .cc[0] =
+    .egress[0] =
         {
-            .init_ = &quicly_default_init_cc,
+            .loss = QUICLY_LOSS_SPEC_CONF,
+            .init_cc = &quicly_default_init_cc,
             .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
             .ecn = 1,
             .respect_app_limited = 1,
@@ -72,7 +72,6 @@ const quicly_context_t quicly_spec_context = {
 /* profile with a focus on reducing latency for the HTTP use case */
 const quicly_context_t quicly_performant_context = {
     .initial_egress_max_udp_payload_size = DEFAULT_INITIAL_EGRESS_MAX_UDP_PAYLOAD_SIZE,
-    .loss = QUICLY_LOSS_PERFORMANT_CONF,
     .transport_params =
         {
             .max_stream_data.bidi_local = 1 * 1024 * 1024,
@@ -92,9 +91,10 @@ const quicly_context_t quicly_performant_context = {
     .max_initial_handshake_packets = DEFAULT_MAX_INITIAL_HANDSHAKE_PACKETS,
     .max_probe_packets = DEFAULT_MAX_PROBE_PACKETS,
     .max_path_validation_failures = DEFAULT_MAX_PATH_VALIDATION_FAILURES,
-    .cc[0] =
+    .egress[0] =
         {
-            .init_ = &quicly_default_init_cc,
+            .loss = QUICLY_LOSS_PERFORMANT_CONF,
+            .init_cc = &quicly_default_init_cc,
             .initcwnd_packets = DEFAULT_INITCWND_PACKETS,
             .ecn = 1,
             .respect_app_limited = 1,
