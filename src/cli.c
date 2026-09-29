@@ -161,11 +161,11 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             ", packets-lost: %" PRIu64 ", ack-received: %" PRIu64 ", ack-ecn-ect0: %" PRIu64 ", ack-ecn-ect1: %" PRIu64
             ", ack-ecn-ce: %" PRIu64 ", late-acked: %" PRIu64 ", bytes-received: %" PRIu64 ", bytes-sent: %" PRIu64
             ", paths-created %" PRIu64 ", paths-validated %" PRIu64 ", paths-promoted: %" PRIu64 ", srtt: %g"
-            ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 ", delivery-rate: %" PRIu64 ", cwnd: %" PRIu32
-            ", cwnd-exiting-slow-start: %" PRIu32 ", slow-start-exit-at: %" PRId64 ", jumpstart-cwnd: %" PRIu32
-            ", jumpstart-exit: %" PRIu32 ", jumpstart-prev-rate: %" PRIu64 ", jumpstart-prev-rtt: %" PRIu32
-            ", token-sent-rate: %" PRIu64 ", token-sent-rtt: %" PRIu32 ", ack-frequency-frames-sent: %" PRIu64
-            ", ack-frequency-frames-received: %" PRIu64 "\n",
+            ", num-loss-episodes: %" PRIu32 ", num-ecn-loss-episodes: %" PRIu32 ", num-prague-reductions: %" PRIu64
+            ", delivery-rate: %" PRIu64 ", cwnd: %" PRIu32 ", cwnd-exiting-slow-start: %" PRIu32 ", slow-start-exit-at: %" PRId64
+            ", jumpstart-cwnd: %" PRIu32 ", jumpstart-exit: %" PRIu32 ", jumpstart-prev-rate: %" PRIu64
+            ", jumpstart-prev-rtt: %" PRIu32 ", token-sent-rate: %" PRIu64 ", token-sent-rtt: %" PRIu32
+            ", ack-frequency-frames-sent: %" PRIu64 ", ack-frequency-frames-received: %" PRIu64 "\n",
             stats.num_packets.received, stats.num_packets.initial_received, stats.num_packets.zero_rtt_received,
             stats.num_packets.handshake_received, stats.num_packets.received_ecn_counts[0],
             stats.num_packets.received_ecn_counts[1], stats.num_packets.received_ecn_counts[2], stats.num_packets.decryption_failed,
@@ -174,10 +174,10 @@ static void dump_stats(FILE *fp, quicly_conn_t *conn)
             stats.num_packets.acked_ecn_counts[0], stats.num_packets.acked_ecn_counts[1], stats.num_packets.acked_ecn_counts[2],
             stats.num_packets.late_acked, stats.num_bytes.received, stats.num_bytes.sent, stats.num_paths.created,
             stats.num_paths.validated, stats.num_paths.promoted, stats.rtt.smoothed, stats.cc.num_loss_episodes,
-            stats.cc.num_ecn_loss_episodes, stats.delivery_rate.smoothed, stats.cc.cwnd, stats.cc.cwnd_exiting_slow_start,
-            stats.cc.exit_slow_start_at, stats.jumpstart.cwnd, stats.cc.cwnd_exiting_jumpstart, stats.jumpstart.prev_rate,
-            stats.jumpstart.prev_rtt, stats.token_sent.rate, stats.token_sent.rtt, stats.num_frames_sent.ack_frequency,
-            stats.num_frames_received.ack_frequency);
+            stats.cc.num_ecn_loss_episodes, stats.cc.num_prague_reductions, stats.delivery_rate.smoothed, stats.cc.cwnd,
+            stats.cc.cwnd_exiting_slow_start, stats.cc.exit_slow_start_at, stats.jumpstart.cwnd, stats.cc.cwnd_exiting_jumpstart,
+            stats.jumpstart.prev_rate, stats.jumpstart.prev_rtt, stats.token_sent.rate, stats.token_sent.rtt,
+            stats.num_frames_sent.ack_frequency, stats.num_frames_received.ack_frequency);
 }
 
 static int validate_path(const char *path)
@@ -1331,6 +1331,7 @@ static void usage(const char *cmd)
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  --abba                    enables ABBA bandwidth adaptation\n"
+           "  --l4s                     enables L4S with CUBACK (including pacing)\n"
            "  --rapid-start             turns on rapid start\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
@@ -1618,6 +1619,7 @@ int main(int argc, char **argv)
                                              {"no-normalize-cc-mtu", no_argument, NULL, 0},
                                              {"rapid-start", no_argument, NULL, 0},
                                              {"abba", no_argument, NULL, 0},
+                                             {"l4s", no_argument, NULL, 0},
                                              {"sockfd", required_argument, NULL, 0},
                                              {"exit-after-handshake", no_argument, NULL, 0},
                                              {"calc-initial-secret", required_argument, NULL, 0},
@@ -1633,7 +1635,10 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "ech-configs") == 0) {
                 ech_setup_configs(optarg);
             } else if (strcmp(longopts[opt_index].name, "disable-ecn") == 0) {
-                ctx.egress[0].ecn = 0;
+                ctx.egress[0].ecn = QUICLY_ECN_MODE_OFF;
+            } else if (strcmp(longopts[opt_index].name, "l4s") == 0) {
+                ctx.egress[0].ecn = QUICLY_ECN_MODE_L4S;
+                ctx.egress[0].pacing = 1;
             } else if (strcmp(longopts[opt_index].name, "delivery-stats") == 0) {
                 delivery_stats = suppress_output = 1;
             } else if (strcmp(longopts[opt_index].name, "disregard-app-limited") == 0) {
