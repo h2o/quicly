@@ -803,13 +803,13 @@ static void test_rapid_start(void)
     quicly_rtt_update(&rtt, 16, 0, 5);
     ok(rtt.floor.samples[0] == 16);
     ok(rtt.floor.samples[1] == 16);
-    ok(rtt.floor.samples[2] == UINT32_MAX);
+    ok(rtt.floor.samples[2] == FLT_MAX);
     ok(quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* floor == min => 3x */
 
     /* after another 1/2 min_rtt, rtt increases to min + 5 */
     quicly_rtt_update(&rtt, 21, 0, 13);
     ok(rtt.floor.samples[0] == 21);
-    ok(rtt.floor.samples[1] == UINT32_MAX);
+    ok(rtt.floor.samples[1] == FLT_MAX);
     ok(rtt.floor.samples[2] == 16);
     ok(rtt.floor.samples[3] == 16);
     ok(quicly_cc_rapid_start_use_3x(&rs, &rtt)); /* floor == min => 3x */
