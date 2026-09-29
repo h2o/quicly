@@ -3031,7 +3031,7 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
     server_cid = quicly_get_remote_cid(conn);
     conn->super.original_dcid = *server_cid;
 
-    QUICLY_PROBE(CONNECT, conn, conn->stash.now, conn->super.version, conn->egress.alt_ctx);
+    QUICLY_PROBE(CONNECT, conn, conn->stash.now, conn->super.version, (int)conn->egress.alt_ctx);
     QUICLY_LOG_CONN(connect, conn, {
         PTLS_LOG_ELEMENT_UNSIGNED(version, conn->super.version);
         PTLS_LOG_ELEMENT_BOOL(alt_egress, conn->egress.alt_ctx);
@@ -7369,7 +7369,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
 
     QUICLY_PROBE(ACCEPT, *conn, (*conn)->stash.now,
                  QUICLY_PROBE_HEXDUMP(packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len), address_token,
-                 (*conn)->egress.alt_ctx);
+                 (int)(*conn)->egress.alt_ctx);
     QUICLY_LOG_CONN(accept, *conn, {
         PTLS_LOG_ELEMENT_HEXDUMP(dcid, packet->cid.dest.encrypted.base, packet->cid.dest.encrypted.len);
         if (address_token != NULL) {
