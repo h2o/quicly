@@ -1614,10 +1614,10 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
             break;                                                                                                                 \
         PTLS_LOG__DO_LOG(quicly, _name, conn_state, ptls_log_getsni_ptls(_tls), _c->stash.now == 0, {                              \
             if (_c->stash.now != 0)                                                                                                \
-                PTLS_LOG_ELEMENT_SIGNED(time, _c->stash.now);                                                                      \
+                PTLS_LOG_ELEMENT_NUMBER(time, _c->stash.now);                                                                      \
             PTLS_LOG_ELEMENT_PTR(conn, _c);                                                                                        \
             if (conn_state->conn_id != 0) {                                                                                        \
-                PTLS_LOG_ELEMENT_UNSIGNED(conn_id, conn_state->conn_id);                                                           \
+                PTLS_LOG_ELEMENT_NUMBER(conn_id, conn_state->conn_id);                                                             \
             }                                                                                                                      \
             do {                                                                                                                   \
                 _block                                                                                                             \
