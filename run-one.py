@@ -149,7 +149,7 @@ try:
     start("server")
     time.sleep(0.05)
     start("tunulator")
-    time.sleep(0.1)
+    time.sleep(5)
     assert all(proc.poll() is None for proc in processes), "See server/tunulator.log"
     start("client")
     affinities = {name: sorted(os.sched_getaffinity(proc.pid))
