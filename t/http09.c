@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 #include <openssl/pem.h>
@@ -80,6 +81,12 @@ static void configure_socket(int fd, const char *cc, unsigned long pacing)
         fail("TCP_CONGESTION %s: %s", cc, strerror(errno));
     if (pacing != 0 && setsockopt(fd, SOL_SOCKET, SO_MAX_PACING_RATE, &pacing, sizeof(pacing)) != 0)
         fail("SO_MAX_PACING_RATE: %s", strerror(errno));
+    /* The benchmark harness always ends a capture by killing this process; force close() (including the implicit one at
+     * process exit) to send an immediate RST instead of lingering through a graceful FIN/retransmit teardown, so a killed
+     * connection doesn't keep emitting packets that the next capture's tunulator could pick up on the same TUN. */
+    struct linger lin = {.l_onoff = 1, .l_linger = 0};
+    if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &lin, sizeof(lin)) != 0)
+        fail("SO_LINGER: %s", strerror(errno));
 }
 
 static void send_plaintext(ptls_t *tls, ptls_buffer_t *out, const void *bytes, size_t len)
