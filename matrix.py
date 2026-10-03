@@ -87,8 +87,8 @@ def main():
                     assert m['kernel'] == signature['kernel'], f'Kernel changed: {out}'
                     assert m['trace_sha256'] == trace_info[trace][1]
                     assert (m['protocol'], m['cc'], m['abba'], m['condition'], m['queue'], m['rapid_start']) == (protocol, cc, abba, condition, queue, False)
-                    assert m['start_ms'] == 1000
-                    assert m['end_ms'] == (3000 if a.smoke else trace_info[trace][0] - 1000)
+                    assert m['start_ms'] == 5000
+                    assert m['end_ms'] == (7000 if a.smoke else trace_info[trace][0] - 5000)
                     if cpu is not None:
                         assert m['worker'] == worker(cpu)
                     else:
@@ -108,7 +108,7 @@ def main():
                 if abba:
                     command += ['--abba']
                 if a.smoke:
-                    command += ['--end', '3000']
+                    command += ['--end', '7000']
                 if a.dry_run:
                     command += ['--dry-run']
                 jobs[cpu].append((command, out))

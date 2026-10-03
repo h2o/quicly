@@ -56,7 +56,7 @@ def assert_gone(pid):
     raise AssertionError(f'Child process survived cleanup: {pid}')
 
 
-def capture(cpu, out, end='6000'):
+def capture(cpu, out, end='10000'):
     return [sys.executable, str(kit / 'run-one.py'), 'quic' if cpu % 2 else 'tcp',
             '--cc', 'cubic', '--trace', str(a.traces / 'trace-2768760-taxi3'),
             '--condition', 'codel', '--queue', 'codel:5:100', '--build', str(a.build),

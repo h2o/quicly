@@ -25,8 +25,8 @@ p.add_argument("--dry-run", action="store_true", help="Write commands and metada
 p.add_argument("--trace", type=Path, required=True)
 p.add_argument("--queue", default="fifo")
 p.add_argument("--codel", default="5:100", help="CoDel target:interval in ms for codel/codel_noabe/codel_noecn conditions")
-p.add_argument("--offset", type=int, default=1000)
-p.add_argument("--end", type=int, help="Exclusive trace end in ms; defaults to last timestamp minus 1000")
+p.add_argument("--offset", type=int, default=5000, help="Trace offset in ms at which playback starts, with the first packet")
+p.add_argument("--end", type=int, help="Exclusive trace end in ms; defaults to last timestamp minus 5000")
 p.add_argument("--build", type=Path, default=Path("build/ccbench"))
 p.add_argument("--output", type=Path, required=True)
 p.add_argument("--cpu", type=int, help="Pin all three processes to this CPU; use tunN, peer 192.0.2.(N+1), port 20000+N")
@@ -49,7 +49,7 @@ if args.queue != expected_queue[args.condition]:
 trace = args.trace.resolve()
 entries = [int(line) for line in trace.read_text().splitlines()]
 assert entries and entries == sorted(entries) and entries[0] >= 0
-end_ms = args.end if args.end is not None else entries[-1] - 1000
+end_ms = args.end if args.end is not None else entries[-1] - 5000
 assert 0 <= args.offset < end_ms <= entries[-1] + 1
 duration_ms = end_ms - args.offset
 peak_bytes_per_second = max(Counter(ms // 1000 for ms in entries).values()) * 1500
@@ -160,7 +160,7 @@ try:
         name: dict(pid=proc.pid, affinity=affinities[name])
         for name, proc in zip(('server', 'tunulator', 'client'), processes)
     }, indent=2) + '\n')
-    deadline = time.monotonic() + duration_ms / 1000 + 1.05
+    deadline = time.monotonic() + duration_ms / 1000
     next_stats = time.monotonic() + 30
     while time.monotonic() < deadline:
         assert all(proc.poll() is None for proc in processes), "See the run's .log files"
@@ -174,6 +174,22 @@ try:
             next_stats += 30
         time.sleep(min(1, max(0, deadline - time.monotonic())))
 finally:
+    if len(processes) == 3:
+        # Stop the endpoints at the end of the window. Tunulator's statistics start at the first packet, slightly after the
+        # client starts; a second later, stop tunulator, letting it write its statistics up to then.
+        server, tunulator, client = processes
+        for proc in (client, server):
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+        time.sleep(1)
+        try:
+            os.killpg(tunulator.pid, signal.SIGTERM)
+            tunulator.wait(timeout=60)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            pass
     for proc in reversed(processes):
         try:
             os.killpg(proc.pid, signal.SIGKILL)
@@ -184,7 +200,6 @@ finally:
         f.close()
 
 application = [int(line) for line in (out / "client.jsonl").read_text().splitlines()]
-assert len(application) >= duration_ms
 first_up = None
 app = forwarded = received = seen = 0
 with (out / "tunulator.jsonl").open() as raw, (out / "curves.csv").open("w") as dst:
@@ -197,7 +212,8 @@ with (out / "tunulator.jsonl").open() as raw, (out / "curves.csv").open("w") as 
         flows = json.loads(line)
         if first_up is None and any(v[0] for v in flows.values()):
             first_up = ms
-        if first_up is not None:
+        # the client is stopped at the end of the window, possibly before emitting the last millisecond
+        if first_up is not None and ms - first_up < len(application):
             app += application[ms - first_up]
         forwarded += sum(v[3] for v in flows.values())
         received += sum(v[2] for v in flows.values())
