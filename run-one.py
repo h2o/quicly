@@ -199,7 +199,8 @@ finally:
     for f in files:
         f.close()
 
-application = [int(line) for line in (out / "client.jsonl").read_text().splitlines()]
+client_events = [json.loads(line) for line in (out / "client.jsonl").read_text().splitlines()]
+application = [e["bytes"] for e in client_events if e["type"] == "delivered"]
 first_up = None
 app = forwarded = received = seen = 0
 with (out / "tunulator.jsonl").open() as raw, (out / "curves.csv").open("w") as dst:
