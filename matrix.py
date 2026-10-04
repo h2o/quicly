@@ -19,7 +19,8 @@ def main():
     p.add_argument('--traces', type=Path, required=True)
     p.add_argument('--build', type=Path, required=True)
     p.add_argument('--noabe-build', type=Path)
-    p.add_argument('--codel', default='5:100', help='CoDel target:interval in ms for codel/codel_noabe conditions (default: 5:100)')
+    p.add_argument('--codel', action='append',
+                   help='CoDel target:interval in ms for codel/codel_noabe conditions; repeat for several (default: 5:100)')
     p.add_argument('--quic-cc', choices=['cubic', 'cuback'], default='cubic',
                    help='QUIC controller (default: cubic); startup and IW30 remain unchanged')
     p.add_argument('--output', type=Path, required=True)
@@ -42,9 +43,13 @@ def main():
     if not traces:
         p.error('No traces selected')
     cpus = a.cpus if a.cpus is not None else [None]
-    conditions = [('tail', 'fifo', a.build), ('codel', f'codel:{a.codel}', a.build)]
-    if a.noabe_build:
-        conditions.append(('codel_noabe', f'codel:{a.codel}', a.noabe_build))
+    codels = a.codel or ['5:100']
+    # (directory, condition, CoDel setting, build); runs of each CoDel setting are in directories named after it
+    conditions = [('tail', 'tail', None, a.build)]
+    for codel in codels:
+        conditions.append((f"codel-{codel.replace(':', '-')}", 'codel', codel, a.build))
+        if a.noabe_build:
+            conditions.append((f"codel_noabe-{codel.replace(':', '-')}", 'codel_noabe', codel, a.noabe_build))
     a.output.mkdir(parents=True, exist_ok=True)
     output_lock = (a.output / 'matrix.lock').open('a')
     fcntl.flock(output_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -52,12 +57,19 @@ def main():
     controller_cpus = sorted(os.sched_getaffinity(0) - set(a.cpus or []))
     signature = dict(cpus=cpus, traces=[t.name for t in traces], smoke=a.smoke,
                      dry_run=a.dry_run, noabe=bool(a.noabe_build),
-                     controller_cpus=controller_cpus, kernel=platform.release(), quic_cc=a.quic_cc, codel=a.codel)
+                     controller_cpus=controller_cpus, kernel=platform.release(), quic_cc=a.quic_cc, codel=codels)
     manifest = a.output / 'matrix-settings.json'
+    write_manifest = not manifest.exists()
     if manifest.exists():
         previous = json.loads(manifest.read_text())
         previous.setdefault('quic_cc', 'cubic')  # Older matrices used CUBIC exclusively.
         previous.setdefault('codel', '5:100')  # Older matrices used the fixed CoDel setting.
+        if isinstance(previous['codel'], str):  # Older matrices had one CoDel setting.
+            previous['codel'] = [previous['codel']]
+        # CoDel settings can be added to an existing root
+        assert previous['codel'] == codels[:len(previous['codel'])], 'Matrix settings changed; use a fresh output root'
+        write_manifest = previous['codel'] != codels
+        previous['codel'] = codels
         assert previous == signature, 'Matrix settings changed; use a fresh output root'
     (a.output / 'matrix.pid').write_text(str(os.getpid()) + '\n')
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
@@ -68,56 +80,61 @@ def main():
         raw = trace.read_bytes()
         trace_info[trace] = (int(raw.splitlines()[-1]), hashlib.sha256(raw).hexdigest())
     job_index = 0
-    for trace in sorted(traces, key=lambda t: trace_info[t][0]):
-        for condition, queue, build in conditions:
-            policies = [('tcp', 'cubic', False), ('tcp', 'bbr', False),
-                        ('quic', a.quic_cc, False), ('quic', a.quic_cc, True)]
-            if condition == 'codel_noabe':
-                policies = policies[2:]
-            for protocol, cc, abba in policies:
-                cpu = cpus[job_index % len(cpus)]
-                job_index += 1
-                policy = protocol + '_' + cc + ('_abba' if abba else '')
-                out = a.output / trace.name.removeprefix('trace-') / condition / policy
-                if (out / 'result.json').exists():
-                    m = json.loads((out / 'metadata.json').read_text())
-                    json.loads((out / 'result.json').read_text())
-                    assert (out / 'curves.csv').is_file(), f'Missing curves: {out}'
-                    assert not m['dry_run'] and not a.dry_run
-                    assert m['kernel'] == signature['kernel'], f'Kernel changed: {out}'
-                    assert m['trace_sha256'] == trace_info[trace][1]
-                    assert (m['protocol'], m['cc'], m['abba'], m['condition'], m['queue'], m['rapid_start']) == (protocol, cc, abba, condition, queue, False)
-                    assert m['start_ms'] == 5000
-                    assert m['end_ms'] == (7000 if a.smoke else trace_info[trace][0] - 5000)
+    # Jobs of the first CoDel setting come first, so that adding a setting does not change the CPUs assigned to existing runs.
+    groups = [[c for c in conditions if c[2] in (None, codels[0])]]
+    groups += [[c for c in conditions if c[2] == codel] for codel in codels[1:]]
+    for group in groups:
+        for trace in sorted(traces, key=lambda t: trace_info[t][0]):
+            for directory, condition, codel, build in group:
+                queue = 'fifo' if codel is None else f'codel:{codel}'
+                policies = [('tcp', 'cubic', False), ('tcp', 'bbr', False),
+                            ('quic', a.quic_cc, False), ('quic', a.quic_cc, True)]
+                if condition == 'codel_noabe':
+                    policies = policies[2:]
+                for protocol, cc, abba in policies:
+                    cpu = cpus[job_index % len(cpus)]
+                    job_index += 1
+                    policy = protocol + '_' + cc + ('_abba' if abba else '')
+                    out = a.output / trace.name.removeprefix('trace-') / directory / policy
+                    if (out / 'result.json').exists():
+                        m = json.loads((out / 'metadata.json').read_text())
+                        json.loads((out / 'result.json').read_text())
+                        assert (out / 'curves.csv').is_file(), f'Missing curves: {out}'
+                        assert not m['dry_run'] and not a.dry_run
+                        assert m['kernel'] == signature['kernel'], f'Kernel changed: {out}'
+                        assert m['trace_sha256'] == trace_info[trace][1]
+                        assert (m['protocol'], m['cc'], m['abba'], m['condition'], m['queue'], m['rapid_start']) == (protocol, cc, abba, condition, queue, False)
+                        assert m['start_ms'] == 5000
+                        assert m['end_ms'] == (7000 if a.smoke else trace_info[trace][0] - 5000)
+                        if cpu is not None:
+                            assert m['worker'] == worker(cpu)
+                        else:
+                            assert m['worker']['cpu'] is None
+                        for binary, digest in m['binary_sha256'].items():
+                            assert hashlib.sha256((build / Path(binary).name).read_bytes()).hexdigest() == digest
+                        print('Already complete:', out, flush=True)
+                        continue
+                    assert not out.exists(), f'Preserve incomplete directory outside result root before resuming: {out}'
+                    command = [sys.executable, str(kit / 'run-one.py'), protocol, '--cc', cc,
+                               '--trace', str(trace), '--queue', queue, '--condition', condition,
+                               '--build', str(build), '--output', str(out), '--latency']
+                    if codel is not None:
+                        command += ['--codel', codel]
                     if cpu is not None:
-                        assert m['worker'] == worker(cpu)
-                    else:
-                        assert m['worker']['cpu'] is None
-                    for binary, digest in m['binary_sha256'].items():
-                        assert hashlib.sha256((build / Path(binary).name).read_bytes()).hexdigest() == digest
-                    print('Already complete:', out, flush=True)
-                    continue
-                assert not out.exists(), f'Preserve incomplete directory outside result root before resuming: {out}'
-                command = [sys.executable, str(kit / 'run-one.py'), protocol, '--cc', cc,
-                           '--trace', str(trace), '--queue', queue, '--condition', condition,
-                           '--build', str(build), '--output', str(out), '--latency']
-                if condition in ('codel', 'codel_noabe'):
-                    command += ['--codel', a.codel]
-                if cpu is not None:
-                    command += ['--cpu', str(cpu)]
-                if abba:
-                    command += ['--abba']
-                if a.smoke:
-                    command += ['--end', '7000']
-                if a.dry_run:
-                    command += ['--dry-run']
-                jobs[cpu].append((command, out))
+                        command += ['--cpu', str(cpu)]
+                    if abba:
+                        command += ['--abba']
+                    if a.smoke:
+                        command += ['--end', '7000']
+                    if a.dry_run:
+                        command += ['--dry-run']
+                    jobs[cpu].append((command, out))
     # Copied completed variants are valid inputs. Record settings only after
     # validating them all, so a rejected import does not bind the output root.
-    if not manifest.exists():
+    if write_manifest:
         manifest.write_text(json.dumps(signature, indent=2) + '\n')
     # Finish shared provenance preparation before any capture workers can read it.
-    for build in dict.fromkeys(build.resolve() for _, _, build in conditions):
+    for build in dict.fromkeys(build.resolve() for _, _, _, build in conditions):
         subprocess.run([sys.executable, str(kit / 'record-build.py'), '--build', str(build)], check=True)
     original_affinity = os.sched_getaffinity(0)
     active = {}

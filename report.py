@@ -21,7 +21,7 @@ a = p.parse_args()
 root = a.output.resolve()
 result_paths = sorted(root.glob('*/*/*/result.json'))
 quic_ccs = set()
-codel_queues = set()
+codel_settings = set()
 @functools.cache
 def tree_of(commit, diff):
     """The git tree a build was made from, i.e., the recorded commit with the recorded diff applied."""
@@ -59,16 +59,15 @@ for path in result_paths:
     if m['condition'] in ('codel', 'codel_noabe'):
         if not m['queue'].startswith('codel:'):
             p.error(f"Expected ECN-capable CoDel queue: {path.parent}")
-        codel_queues.add(m['queue'])
+        codel_settings.add(m['queue'].removeprefix('codel:'))
 settings_path = root / 'matrix-settings.json'
 settings = json.loads(settings_path.read_text()) if settings_path.exists() else None
 if settings is not None:
     quic_ccs.add(settings.get('quic_cc', 'cubic'))
-    codel_queues.add('codel:' + settings.get('codel', '5:100'))
-if len(codel_queues) > 1:
-    p.error('Use separate result roots for different CoDel settings (including matrix-settings.json)')
-codel = next(iter(codel_queues), None)
-codel_label = 'CoDel' + (' ' + html.escape(codel.removeprefix('codel:')) if codel else '')
+    codel_settings.update([settings['codel']] if isinstance(settings.get('codel'), str) else settings.get('codel', ['5:100']))
+codel_settings = sorted(codel_settings, key=lambda c: tuple(map(int, c.split(':'))))
+# (key, label) of each queue condition; the key names the plot directory
+conditions = [('tail', 'Tail drop')] + [(f"codel-{c.replace(':', '-')}", f'CoDel {c} ECN') for c in codel_settings]
 assert len(quic_ccs) <= 1, 'Use separate result roots for different QUIC controllers'
 quic_cc = next(iter(quic_ccs), 'cubic')
 assert quic_cc in ('cubic', 'cuback'), 'Unsupported QUIC controller'
@@ -103,8 +102,8 @@ for path in result_paths:
     r = json.loads(path.read_text())
     policy = m['protocol'] + '_' + m['cc'] + ('_abba' if m['abba'] else '')
     assert not m['rapid_start'] and policy in policies, 'This matrix report requires ordinary startup and the selected QUIC controller'
-    condition = 'codel' if m['condition'] == 'codel_noabe' else m['condition']
-    assert condition in ['tail', 'codel'], 'Use a separate report for drops-only CoDel'
+    assert m['condition'] in ['tail', 'codel', 'codel_noabe'], 'Use a separate report for drops-only CoDel'
+    condition = 'tail' if m['condition'] == 'tail' else f"codel-{m['queue'].removeprefix('codel:').replace(':', '-')}"
     if m['condition'] == 'codel_noabe':
         policy += '_off'
     tid = m['trace_id']
@@ -129,7 +128,7 @@ for path in result_paths:
     if not saved_trace.exists():
         saved_trace.parent.mkdir(exist_ok=True)
         shutil.copy2(m['trace_path'], saved_trace)
-    csv_rows.append([tid, m['condition'], policies[policy][0], r['application_bytes'], r['goodput_Mbps'],
+    csv_rows.append([tid, path.parent.parent.name, policies[policy][0], r['application_bytes'], r['goodput_Mbps'],
                      r['IP_utilization'], r['IP_not_delivered'], rows[policy]['run']])
 
 def delay_stats(weighted):
@@ -170,8 +169,8 @@ with (root / 'summary.csv').open('w') as f:
 page = ['<!doctype html><meta charset="utf-8"><title>Fresh-host CC benchmark</title>',
     '<style>body{font:16px system-ui;margin:2em}table{border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:right}td:first-child,th:first-child{text-align:left}.panel{overflow:auto}img{width:100%;max-width:1000px}</style>',
     f'<h1>Congestion-control trace benchmark</h1><p>{len(csv_rows)} measurements. <a href="summary.csv">CSV and run-directory links</a>.</p>',
-    f'<h2>Policies</h2><ul><li>TCP CUBIC, TCP BBR: the host kernel\'s implementations, over TLS, with pacing and an initial window of 30.</li><li>QUIC {quic_label}, QUIC {quic_label} + ABBA: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start), and a 1472-byte UDP payload.</li><li>QUIC with ABE off: the same QUIC policies built with QUICLY_USE_ABE=0, measured under CoDel only. ABE only affects QUIC, so the TCP rows of the CoDel table serve both settings.</li></ul>',
-    f'<h2>Scenarios</h2><ul><li>Traces: NYC cellular traces set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: tail drop, and {codel_label} with ECN.</li></ul>',
+    f'<h2>Policies</h2><ul><li>TCP CUBIC, TCP BBR: the host kernel\'s implementations, over TLS, with pacing and an initial window of 30.</li><li>QUIC {quic_label}, QUIC {quic_label} + ABBA: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start), and a 1472-byte UDP payload.</li><li>QUIC with ABE off: the same QUIC policies built with QUICLY_USE_ABE=0, measured under CoDel only. ABE only affects QUIC, so the TCP rows of the CoDel tables serve both settings.</li></ul>',
+    f'<h2>Scenarios</h2><ul><li>Traces: NYC cellular traces set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: tail drop, and CoDel {html.escape(' and '.join(codel_settings))} (target:interval in ms) with ECN.</li></ul>',
     '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by tunulator but not forwarded; it includes packets remaining in tunulator at cutoff, while CE-marked packets are forwarded.</p>',
     '<p>Delay is measured for every 15000th byte of the stream: from when tunulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking.</p>',
     '<hr><h2>Aggregate comparison</h2><p>Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally.</p>']
@@ -182,11 +181,11 @@ for name, values in environment.items():
     text = ', '.join(v + (f' ({n} runs)' if len(values) > 1 else '') for v, n in values.most_common())
     items.append(f'<li>{html.escape(name)}: {html.escape(text)}</li>')
 page.insert(5, '<h2>Environment</h2><ul>' + ''.join(items) + '</ul>')
-noabe = any(any(k.endswith('_off') for k in rows) for rows in data.values())
-for condition in ['tail', 'codel']:
-    expected = list(policies) if condition == 'codel' and noabe else list(policies)[:4]
+for condition, label in conditions:
+    noabe = any(k.endswith('_off') for (tid, c), rows in data.items() if c == condition for k in rows)
+    expected = list(policies) if noabe else list(policies)[:4]
     matched = [tid for tid in traces if all(k in data.get((tid, condition), {}) for k in expected)]
-    page.append(f'<h3>{"Tail drop" if condition == "tail" else "CoDel ECN"}: {len(matched)} matched traces</h3>')
+    page.append(f'<h3>{label}: {len(matched)} matched traces</h3>')
     if matched:
         # each trace is weighted equally: metrics are averaged across traces, and each trace's delay samples carry a total
         # weight of one
@@ -208,9 +207,9 @@ for tid, trace in traces.items():
     capacity.append((trace['end_ms'], total))
     assert total == trace['IP_capacity_bytes']
     page.append('<hr><h2>' + html.escape(tid) + '</h2><div class="pair">')
-    for condition in ['tail', 'codel']:
+    for condition, label in conditions:
         rows = data.get((tid, condition), {})
-        page.append('<section class="panel"><h3>' + ('Tail drop' if condition == 'tail' else 'CoDel ECN') + '</h3>')
+        page.append('<section class="panel"><h3>' + label + '</h3>')
         if rows:
             selected = {k: v for k, v in policies.items() if k in rows}
             folder = root / 'plots' / tid / condition
