@@ -129,10 +129,11 @@ with (root / 'summary.csv').open('w') as f:
     writer.writerows(csv_rows)
 page = ['<!doctype html><meta charset="utf-8"><title>Fresh-host CC benchmark</title>',
     '<style>body{font:16px system-ui;margin:2em}table{border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:right}td:first-child,th:first-child{text-align:left}.panel{overflow:auto}img{width:100%;max-width:1000px}</style>',
-    f'<h1>Congestion-control trace benchmark</h1><p>{len(csv_rows)} fresh measurements. TCP references were measured on this host and appear once per queue condition; both QUIC ABE settings share those TCP measurements. <a href="summary.csv">CSV and run-directory links</a>. Each run retains commands, build hashes and provenance.</p>',
-    f'<h2>Scenarios</h2><p>NYC cellular traces; TCP CUBIC and BBR, QUIC {quic_label} and {quic_label} + ABBA. Tail drop and {codel_label} with ECN, optionally including QUIC ABE off. Ordinary QUIC startup, IW30, pacing, 60ms base RTT, 1472-byte QUIC UDP payload, zero random loss, and a queue of 60ms at the peak one-second-bin rate.</p>',
-    '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by the emulator but not forwarded; it includes packets remaining in the emulator at cutoff, while CE-marked packets are forwarded. Single runs have no confidence intervals. Aggregate rows use the same complete trace set; partial runs are shown per trace.</p>',
-    '<p>Delay is measured for every 15000th byte of the stream: from when the emulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking. Aggregate delay columns pool the samples of all matched traces.</p>',
+    f'<h1>Congestion-control trace benchmark</h1><p>{len(csv_rows)} measurements. <a href="summary.csv">CSV and run-directory links</a>.</p>',
+    f'<h2>Policies</h2><ul><li>TCP CUBIC, TCP BBR: the host kernel\'s implementations, over TLS, with pacing and an initial window of 30.</li><li>QUIC {quic_label}, QUIC {quic_label} + ABBA: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start), and a 1472-byte UDP payload.</li><li>QUIC with ABE off: the same QUIC policies built with QUICLY_USE_ABE=0, measured under CoDel only. ABE only affects QUIC, so the TCP rows of the CoDel table serve both settings.</li></ul>',
+    f'<h2>Scenarios</h2><ul><li>Traces: NYC cellular traces set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: tail drop, and {codel_label} with ECN.</li></ul>',
+    '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by tunulator but not forwarded; it includes packets remaining in tunulator at cutoff, while CE-marked packets are forwarded.</p>',
+    '<p>Delay is measured for every 15000th byte of the stream: from when tunulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking. Aggregate delay columns pool the samples of all matched traces.</p>',
     '<h2>Aggregate comparison</h2>']
 if settings is not None:
     cpus = settings['cpus']
@@ -140,7 +141,7 @@ if settings is not None:
             f'CPU-pinned execution: up to {len(cpus)} concurrent workers on logical CPUs ' + ', '.join(map(str, cpus)))
     if settings['smoke']:
         mode += '; two-second smoke captures (not full-trace measurements)'
-    page.insert(4, '<p>' + html.escape(mode) + '.</p>')
+    page.insert(5, '<p>' + html.escape(mode) + '.</p>')
 noabe = any(any(k.endswith('_off') for k in rows) for rows in data.values())
 for condition in ['tail', 'codel']:
     expected = list(policies) if condition == 'codel' and noabe else list(policies)[:4]
