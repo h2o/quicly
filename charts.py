@@ -2,6 +2,7 @@
 import csv
 import html
 import json
+import math
 import os
 import tempfile
 import time
@@ -60,3 +61,53 @@ def chart(folder, trace, results, policies, column, capacity, styles=None):
         line(points, color, styles.get(name,False))
     parts.append('</g></svg>')
     write(folder / filename, ''.join(parts))
+
+def delay_density(folder, results, policies, styles=None):
+    """Probability density of per-sample delays, one line per policy, on a logarithmic delay axis that spans from the smallest
+    delay to 2000 ms; density is per log10(ms), so that equal areas mean equal probability."""
+    styles = styles or {}
+    legend_extra = max(0, ((len(policies) + 1) // 2 - 4) * 23)
+    width, height = 1000, 470 + legend_extra
+    left, top, plotw, ploth = 85, 155 + legend_extra, 880, 250
+    latencies = {name: results[name]['latency'] for name in policies if results[name].get('latency')}
+    ticks = [m * 10 ** e for e in range(0, 6) for m in (1, 2, 5)]
+    lo = max(t for t in ticks if t <= min(l[0] for l in latencies.values()))
+    hi = 2000
+    llo, lhi, bins = math.log10(lo), math.log10(hi), 60
+    bin_width = (lhi - llo) / bins
+    densities = {}
+    for name, l in latencies.items():
+        counts = [0] * bins
+        for v in l:
+            b = int((math.log10(v) - llo) / bin_width)
+            if 0 <= b < bins:
+                counts[b] += 1
+        densities[name] = [c / (len(l) * bin_width) for c in counts]
+    peak = max(max(d) for d in densities.values())
+    ystep = next(m * 10 ** e for e in range(-3, 3) for m in (1, 2, 5) if m * 10 ** e * 6 >= peak)
+    ysteps = math.ceil(peak / ystep)
+    ymax = ystep * ysteps
+    x = lambda log_ms: left + (log_ms - llo) / (lhi - llo) * plotw
+    y = lambda density: top + ploth * (1 - density / ymax)
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}"><rect width="100%" height="100%" fill="white"/><g font-family="sans-serif" font-size="14">',
+             '<text x="85" y="25" font-size="20">Delay distribution (probability density per log10 ms)</text>']
+    for i in range(ysteps + 1):
+        yy = top + ploth * i / ysteps
+        parts += [f'<path d="M{left} {yy}h{plotw}" stroke="#ddd"/>',
+                  f'<text x="75" y="{yy+5}" text-anchor="end">{ystep*(ysteps-i):g}</text>']
+    for t in ticks:
+        if lo <= t <= hi:
+            xx = x(math.log10(t))
+            parts += [f'<path d="M{xx:.2f} {top}v{ploth}" stroke="#eee"/>',
+                      f'<text x="{xx:.2f}" y="{430+legend_extra}" text-anchor="middle">{t}</text>']
+    parts.append(f'<text x="500" y="{458+legend_extra}" text-anchor="middle">Delay (ms, log scale)</text>')
+    for i, (name, (label, color)) in enumerate(policies.items()):
+        if name not in densities: continue
+        xx, yy = 85 + (i % 2) * 450, 55 + (i // 2) * 23
+        dash = f' stroke-dasharray="{styles[name]}"' if styles.get(name) else ''
+        parts.append(f'<path d="M{xx} {yy-4}h24" stroke="{color}" stroke-width="2"{dash}/><text x="{xx+32}" y="{yy}" fill="{color}">{html.escape(label)}</text>')
+        path = ' '.join(('M' if b == 0 else 'L') + f'{x(llo + (b + 0.5) * bin_width):.2f},{y(d):.2f}'
+                        for b, d in enumerate(densities[name]))
+        parts.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="2"{dash}/>')
+    parts.append('</g></svg>')
+    write(folder / 'delay.svg', ''.join(parts))

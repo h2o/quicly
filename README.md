@@ -36,7 +36,7 @@ With 23 traces this is **230 distinct transfers**: 92 TCP and 138 QUIC. The reco
 - `latency.py`: compute the per-offset delay of a transfer captured with `--latency` (see §9).
 - `record-build.py`: prepare build provenance (source diff, dependency versions, compiler/CMake configuration, executable hashes) before captures start.
 - `matrix.py`: sequential or CPU-pinned parallel matrix, completed-run resume checks, optional two-second smoke matrix, and HTML reporting after captures finish.
-- `report.py`, `charts.py`: aggregate tables and per-trace tail/CoDel tables and SVGs; uses only measurements in the supplied result root.
+- `report.py`, `charts.py`: aggregate tables and per-trace tail/CoDel tables and SVGs, including delay distributions; runs `latency.py` on transfers not yet processed; uses only measurements in the supplied result root.
 - `workers.py`: CPU-to-TUN mapping, CPU selection validation, and per-user resource locks.
 - `validate-parallel.py`: concurrent capture, affinity, lock contention, cleanup, resume, and report checks.
 - `trace-inventory.json`: all 23 original trace hashes, windows, capacities and queue sizes. Contains no performance results.
@@ -241,7 +241,7 @@ The matrix generates the report after all captures finish, keeping report work o
 python3 tmp/tunulator-new-host/report.py tmp/ccbench-fresh
 ```
 
-Open `tmp/ccbench-fresh/index.html`. The report has two aggregate tables and side-by-side tail/CoDel panels per trace, each with application-delivery and IP-forwarding curves. TCP rows/legends come first; QUIC ABE-off rows come last. TCP CUBIC is green, TCP BBR purple, QUIC CUBIC blue, QUIC CUBIC + ABBA red. ABE-off curves use the same QUIC colors with dashed lines. There are no top-level summary charts. `summary.csv` contains the measured values and run-directory paths.
+Open `tmp/ccbench-fresh/index.html`. The report has two aggregate tables and, per trace, tail and CoDel panels listed vertically, each with a table, application-delivery and IP-forwarding curves, and the probability density of delays on a logarithmic delay axis from the smallest delay to 2000 ms. Before rendering, the report runs `latency.py` on each transfer that has a packet log but no `latency.csv` yet; aggregate delay columns pool the samples of all matched traces. TCP rows/legends come first; QUIC ABE-off rows come last. TCP CUBIC is green, TCP BBR purple, QUIC CUBIC blue, QUIC CUBIC + ABBA red. ABE-off curves use the same QUIC colors with dashed lines. There are no top-level summary charts. `summary.csv` contains the measured values and run-directory paths.
 
 For incomplete matrices, aggregate comparisons include only traces with every displayed policy present. Once no-ABE results exist, the CoDel aggregate requires both QUIC ABE settings. The report displays the recorded CoDel target and interval and rejects mixed CoDel settings, including disagreements with `matrix-settings.json`. Older matrix settings without a `codel` field imply `5:100`. A repetition belongs in a separate result root; this renderer does not average repetitions.
 
@@ -256,16 +256,18 @@ The capture sums flows because there is one transfer. Client stdout contains app
 
 | Metric | Definition |
 |---|---|
-| Application MB | Application bytes / 1,000,000 |
-| Goodput Mbps | Application bytes × 8 / duration_seconds / 1,000,000 |
-| IP utilization | IP forwarded / sum of trace opportunities in the selected window |
-| IP not delivered | IP received − IP forwarded |
+| Goodput Mbps / utilization | Application bytes × 8 / duration_seconds / 1,000,000; application bytes / sum of trace opportunities in the selected window |
+| IP forwarded Mbps / utilization | Same, using IP bytes forwarded |
+| Not delivered | (IP received − IP forwarded) / IP received |
+| Delay avg, p50, p90, p99 | Of the per-offset delays (see below), in ms |
+
+Goodput utilization is a few percent below IP utilization, as both divide by the IP capacity, which counts headers and TLS or QUIC overhead.
 
 ### Delay
 
 `latency.py` measures the delay of every 15000th byte of the stream: from when tunulator first received a downstream packet carrying it, to when the client received it (`recv-offset`). It thus includes propagation, queueing, loss recovery and head-of-line blocking, but not time spent in the sender's buffer. Offsets are TCP stream offsets (sequence number minus server ISN + 1), which include TLS overhead, and QUIC stream offsets. Both timestamps are `CLOCK_MONOTONIC` on the same host. QUIC packets are decrypted from the recorded 64 bytes using `cli --decrypt-packet-batch` and the server's key log; truncated packets are given up to where the tag starts, followed by a dummy tag. `latency.py` writes `latency.csv` (one row per sample) and `latency.json` (percentiles and decoding counts) into the run directory.
 
-**IP not delivered is not an exact drop counter**: it includes bytes still in the emulator at cutoff, including the propagation-delay stage. Forwarded CE-marked packets do not count. Drops before the emulator receives a packet are not counted by tunulator. Retain kernel/interface counters when investigating unexplained loss. Aggregate rates use summed bytes divided by summed durations; compare the same trace set for every policy.
+**Not delivered is not an exact drop ratio**: it includes bytes still in the emulator at cutoff, including the propagation-delay stage. Forwarded CE-marked packets do not count. Drops before the emulator receives a packet are not counted by tunulator. Retain kernel/interface counters when investigating unexplained loss. Aggregate rates use summed bytes divided by summed durations; compare the same trace set for every policy.
 
 ## 10. Repeatability and prospective parallelism
 
