@@ -101,25 +101,34 @@ for path in result_paths:
     csv_rows.append([tid, m['condition'], policies[policy][0], r['application_bytes'], r['goodput_Mbps'],
                      r['IP_utilization'], r['IP_not_delivered'], rows[policy]['run']])
 
-def percentile(latency, q):
-    return latency[min(len(latency) - 1, int(q / 100 * len(latency)))]
+def delay_stats(weighted):
+    """Average, p50, p90 and p99 of delays given as (delay, weight) pairs sorted by delay."""
+    total = sum(w for _, w in weighted)
+    stats, acc, quantiles = [sum(d * w for d, w in weighted) / total], 0, [.5, .9, .99]
+    for d, w in weighted:
+        acc += w
+        while quantiles and acc >= quantiles[0] * total:
+            stats.append(d)
+            quantiles.pop(0)
+    return stats
 
-def table(rows, duration, capacity):
+def metrics(r, duration, capacity):
+    app, fwd, rcv = r['plaintext_delivered'], r['downstream_IP_forwarded'], r['downstream_IP_received']
+    return dict(goodput_mbps=app * .008 / duration, goodput_util=app / capacity, ip_mbps=fwd * .008 / duration,
+                ip_util=fwd / capacity, not_delivered=(rcv - fwd) / rcv,
+                delay=delay_stats([(d, 1) for d in r['latency']]) if r['latency'] else None)
+
+def table(stats):
     headings = ['Policy', 'Goodput (Mbps / utilization)', 'IP forwarded (Mbps / utilization)', 'Not delivered',
                 'Delay avg (ms)', 'Delay p50 (ms)', 'Delay p90 (ms)', 'Delay p99 (ms)']
     result = '<table><tr>' + ''.join('<th>' + h + '</th>' for h in headings) + '</tr>'
     for policy, (label, _) in policies.items():
-        if policy not in rows:
+        if policy not in stats:
             continue
-        r = rows[policy]
-        app, fwd, rcv = r['plaintext_delivered'], r['downstream_IP_forwarded'], r['downstream_IP_received']
-        values = [label, f"{app * .008 / duration:.2f} / {app / capacity:.1%}",
-                  f"{fwd * .008 / duration:.2f} / {fwd / capacity:.1%}", f"{(rcv - fwd) / rcv:.2%}"]
-        latency = r['latency']
-        if latency:
-            values += [f"{sum(latency) / len(latency):.1f}"] + [f"{percentile(latency, q):.1f}" for q in (50, 90, 99)]
-        else:
-            values += ['—'] * 4
+        m = stats[policy]
+        values = [label, f"{m['goodput_mbps']:.2f} / {m['goodput_util']:.1%}", f"{m['ip_mbps']:.2f} / {m['ip_util']:.1%}",
+                  f"{m['not_delivered']:.2%}"]
+        values += [f"{v:.1f}" for v in m['delay']] if m['delay'] else ['—'] * 4
         result += '<tr>' + ''.join('<td>' + html.escape(v) + '</td>' for v in values) + '</tr>'
     return result + '</table>'
 
@@ -133,8 +142,8 @@ page = ['<!doctype html><meta charset="utf-8"><title>Fresh-host CC benchmark</ti
     f'<h2>Policies</h2><ul><li>TCP CUBIC, TCP BBR: the host kernel\'s implementations, over TLS, with pacing and an initial window of 30.</li><li>QUIC {quic_label}, QUIC {quic_label} + ABBA: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start), and a 1472-byte UDP payload.</li><li>QUIC with ABE off: the same QUIC policies built with QUICLY_USE_ABE=0, measured under CoDel only. ABE only affects QUIC, so the TCP rows of the CoDel table serve both settings.</li></ul>',
     f'<h2>Scenarios</h2><ul><li>Traces: NYC cellular traces set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: tail drop, and {codel_label} with ECN.</li></ul>',
     '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by tunulator but not forwarded; it includes packets remaining in tunulator at cutoff, while CE-marked packets are forwarded.</p>',
-    '<p>Delay is measured for every 15000th byte of the stream: from when tunulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking. Aggregate delay columns pool the samples of all matched traces.</p>',
-    '<h2>Aggregate comparison</h2>']
+    '<p>Delay is measured for every 15000th byte of the stream: from when tunulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking.</p>',
+    '<h2>Aggregate comparison</h2><p>Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally.</p>']
 if settings is not None:
     cpus = settings['cpus']
     mode = ('Unpinned sequential execution' if cpus == [None] else
@@ -148,13 +157,16 @@ for condition in ['tail', 'codel']:
     matched = [tid for tid in traces if all(k in data.get((tid, condition), {}) for k in expected)]
     page.append(f'<h3>{"Tail drop" if condition == "tail" else "CoDel ECN"}: {len(matched)} matched traces</h3>')
     if matched:
-        sums = {k: {field: sum(data[(tid, condition)][k][field] for tid in matched)
-                    for field in ['plaintext_delivered', 'downstream_IP_forwarded', 'downstream_IP_received']} for k in expected}
-        # pool the samples of all matched traces; each sample stands for the same number of bytes delivered
+        # each trace is weighted equally: metrics are averaged across traces, and each trace's delay samples carry a total
+        # weight of one
+        stats = {}
         for k in expected:
+            per_trace = [metrics(data[(tid, condition)][k], traces[tid]['duration_ms'], traces[tid]['IP_capacity_bytes'])
+                         for tid in matched]
+            stats[k] = {f: sum(m[f] for m in per_trace) / len(matched) for f in per_trace[0] if f != 'delay'}
             latencies = [data[(tid, condition)][k]['latency'] for tid in matched]
-            sums[k]['latency'] = array('d', sorted(x for l in latencies for x in l)) if all(latencies) else None
-        page.append(table(sums, sum(traces[tid]['duration_ms'] for tid in matched), sum(traces[tid]['IP_capacity_bytes'] for tid in matched)))
+            stats[k]['delay'] = delay_stats(sorted((d, 1 / len(l)) for l in latencies for d in l)) if all(latencies) else None
+        page.append(table(stats))
 for tid, trace in traces.items():
     entries = map(int, (root / 'traces' / tid).read_text().splitlines())
     capacity, total = [(trace['start_ms'], 0)], 0
@@ -178,7 +190,7 @@ for tid, trace in traces.items():
             if any(rows[k]['latency'] for k in selected):
                 charts.delay_density(folder, rows, selected, styles)
                 names.append('delay')
-            page.append(table(rows, trace['duration_ms'], trace['IP_capacity_bytes']))
+            page.append(table({k: metrics(rows[k], trace['duration_ms'], trace['IP_capacity_bytes']) for k in rows}))
             for name in names:
                 page.append(f'<img src="plots/{html.escape(tid)}/{condition}/{name}.svg" alt="{name}">')
         page.append('</section>')
