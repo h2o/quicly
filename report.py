@@ -94,7 +94,7 @@ def read_latency(run):
     with (run / 'latency.csv').open() as f:
         return array('d', sorted(float(row['latency_ms']) for row in csv.DictReader(f)))
 
-data, traces, csv_rows = {}, {}, []
+data, traces = {}, {}
 for path in result_paths:
     m = json.loads((path.parent / 'metadata.json').read_text())
     if m.get('dry_run'):
@@ -128,8 +128,6 @@ for path in result_paths:
     if not saved_trace.exists():
         saved_trace.parent.mkdir(exist_ok=True)
         shutil.copy2(m['trace_path'], saved_trace)
-    csv_rows.append([tid, path.parent.parent.name, policies[policy][0], r['application_bytes'], r['goodput_Mbps'],
-                     r['IP_utilization'], r['IP_not_delivered'], rows[policy]['run']])
 
 def delay_stats(weighted):
     """Average, p50, p90 and p99 of delays given as (delay, weight) pairs sorted by delay."""
@@ -162,13 +160,9 @@ def table(stats):
         result += '<tr>' + ''.join('<td>' + html.escape(v) + '</td>' for v in values) + '</tr>'
     return result + '</table>'
 
-with (root / 'summary.csv').open('w') as f:
-    writer = csv.writer(f)
-    writer.writerow(['Trace', 'Condition', 'Policy', 'Application bytes', 'Goodput Mbps', 'IP utilization', 'IP not delivered bytes', 'Run directory'])
-    writer.writerows(csv_rows)
 page = ['<!doctype html><meta charset="utf-8"><title>Fresh-host CC benchmark</title>',
     '<style>body{font:16px system-ui;margin:2em}table{border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:right}td:first-child,th:first-child{text-align:left}.panel{overflow:auto}img{width:100%;max-width:1000px}</style>',
-    f'<h1>Congestion-control trace benchmark</h1><p>{len(csv_rows)} measurements. <a href="summary.csv">CSV and run-directory links</a>.</p>',
+    '<h1>Congestion-control trace benchmark</h1>',
     f'<h2>Policies</h2><ul><li>TCP CUBIC, TCP BBR: the host kernel\'s implementations, over TLS, with pacing and an initial window of 30.</li><li>QUIC {quic_label}, QUIC {quic_label} + ABBA: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start), and a 1472-byte UDP payload.</li><li>QUIC with ABE off: the same QUIC policies built with QUICLY_USE_ABE=0, measured under CoDel only. ABE only affects QUIC, so the TCP rows of the CoDel tables serve both settings.</li></ul>',
     f'<h2>Scenarios</h2><ul><li>Traces: NYC cellular traces set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: tail drop, and CoDel {html.escape(' and '.join(codel_settings))} (target:interval in ms) with ECN.</li></ul>',
     '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by tunulator but not forwarded; it includes packets remaining in tunulator at cutoff, while CE-marked packets are forwarded.</p>',
