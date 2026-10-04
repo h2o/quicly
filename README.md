@@ -316,7 +316,7 @@ To reuse TCP measurements with a different QUIC controller, copy the complete `<
 
 For one capture, add `--cpu 3` to `run-one.py` to use CPU 3, tun3, peer 192.0.2.4 and port 20003. `metadata.json` records this mapping and `processes.json` records each child PID and verified affinity. `matrix-settings.json` records worker CPUs and trace selection; resume rejects changed settings. Use fresh roots for different concurrency levels. A failed capture stops the matrix and terminates/reaps the other active captures; retain and move incomplete directories before resuming. Send SIGTERM to `matrix.pid` for the same cleanup. Do not SIGKILL the controller or runners.
 
-Reports are generated once after all workers finish to avoid competing for CPU and I/O during measurement. The controller and final report use non-worker CPUs when available. Reports can also be regenerated manually from completed runs. The HTML displays the execution mode so pinned/concurrent results can be distinguished from sequential results.
+Reports are generated once after all workers finish to avoid competing for CPU and I/O during measurement. The controller and final report use non-worker CPUs when available. Reports can also be regenerated manually from completed runs. The execution mode is recorded in `matrix-settings.json`.
 
 Parallel plumbing is testable with short captures, but measurement equivalence is **not established**. Compare repeated isolated and concurrent runs before relying on throughput comparisons; include bursty profiles and check delivery, RTT, emulator deadline lateness, and unintended kernel/TUN drops. Deadline instrumentation still needs adding. Keep original sequential results separate.
 

@@ -1,8 +1,10 @@
 """Generate aggregate tables and paired per-trace SVGs from fresh-host runs."""
 import argparse
 from array import array
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 import csv
+import functools
 import html
 import json
 import os
@@ -10,6 +12,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import charts
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -19,10 +22,38 @@ root = a.output.resolve()
 result_paths = sorted(root.glob('*/*/*/result.json'))
 quic_ccs = set()
 codel_queues = set()
+@functools.cache
+def tree_of(commit, diff):
+    """The git tree a build was made from, i.e., the recorded commit with the recorded diff applied."""
+    if not diff:
+        return subprocess.check_output(['git', 'rev-parse', commit + '^{tree}'], text=True).strip()
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, 'index'))
+        subprocess.run(['git', 'read-tree', commit], env=env, check=True)
+        subprocess.run(['git', 'apply', '--cached'], input=diff, text=True, env=env, check=True)
+        return subprocess.check_output(['git', 'write-tree'], env=env, text=True).strip()
+
+def source_label(b, run):
+    """The commit whose tree a build was made from; if none, the base commit and where its diff is recorded."""
+    tree = tree_of(b['commit'], b['source_diff'])
+    if tree not in commits_by_tree:
+        return f"{b['commit'][:8]} with the changes recorded in {run.relative_to(root)}/metadata.json (tree {tree[:8]})"
+    return commits_by_tree[tree][:8]
+
+commits_by_tree = {}
+for line in subprocess.check_output(['git', 'log', '--all', '--reverse', '--format=%H %T'], text=True).splitlines():
+    commit, tree = line.split()
+    commits_by_tree.setdefault(tree, commit)
+
+# environment of the runs: for each item, the number of runs with each value
+environment = {'quicly': Counter(), 'Kernel': Counter()}
 for path in result_paths:
     m = json.loads((path.parent / 'metadata.json').read_text())
     if m.get('dry_run'):
         continue
+    b = m['build_metadata']
+    environment['quicly'][source_label(b, path.parent)] += 1
+    environment['Kernel'][m['kernel']] += 1
     if m['protocol'] == 'quic':
         quic_ccs.add(m['cc'])
     if m['condition'] in ('codel', 'codel_noabe'):
@@ -143,14 +174,14 @@ page = ['<!doctype html><meta charset="utf-8"><title>Fresh-host CC benchmark</ti
     f'<h2>Scenarios</h2><ul><li>Traces: NYC cellular traces set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: tail drop, and {codel_label} with ECN.</li></ul>',
     '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by tunulator but not forwarded; it includes packets remaining in tunulator at cutoff, while CE-marked packets are forwarded.</p>',
     '<p>Delay is measured for every 15000th byte of the stream: from when tunulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking.</p>',
-    '<h2>Aggregate comparison</h2><p>Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally.</p>']
-if settings is not None:
-    cpus = settings['cpus']
-    mode = ('Unpinned sequential execution' if cpus == [None] else
-            f'CPU-pinned execution: up to {len(cpus)} concurrent workers on logical CPUs ' + ', '.join(map(str, cpus)))
-    if settings['smoke']:
-        mode += '; two-second smoke captures (not full-trace measurements)'
-    page.insert(5, '<p>' + html.escape(mode) + '.</p>')
+    '<hr><h2>Aggregate comparison</h2><p>Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally.</p>']
+if settings is not None and settings['smoke']:
+    page.insert(5, '<p>These are two-second smoke captures, not full-trace measurements.</p>')
+items = []
+for name, values in environment.items():
+    text = ', '.join(v + (f' ({n} runs)' if len(values) > 1 else '') for v, n in values.most_common())
+    items.append(f'<li>{html.escape(name)}: {html.escape(text)}</li>')
+page.insert(5, '<h2>Environment</h2><ul>' + ''.join(items) + '</ul>')
 noabe = any(any(k.endswith('_off') for k in rows) for rows in data.values())
 for condition in ['tail', 'codel']:
     expected = list(policies) if condition == 'codel' and noabe else list(policies)[:4]
