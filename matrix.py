@@ -100,7 +100,7 @@ def main():
                 assert not out.exists(), f'Preserve incomplete directory outside result root before resuming: {out}'
                 command = [sys.executable, str(kit / 'run-one.py'), protocol, '--cc', cc,
                            '--trace', str(trace), '--queue', queue, '--condition', condition,
-                           '--build', str(build), '--output', str(out)]
+                           '--build', str(build), '--output', str(out), '--latency']
                 if condition in ('codel', 'codel_noabe'):
                     command += ['--codel', a.codel]
                 if cpu is not None:

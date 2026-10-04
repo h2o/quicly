@@ -30,6 +30,8 @@ p.add_argument("--end", type=int, help="Exclusive trace end in ms; defaults to l
 p.add_argument("--build", type=Path, default=Path("build/ccbench"))
 p.add_argument("--output", type=Path, required=True)
 p.add_argument("--cpu", type=int, help="Pin all three processes to this CPU; use tunN, peer 192.0.2.(N+1), port 20000+N")
+p.add_argument("--latency", action="store_true",
+               help="Also record tunulator's downstream packet log and the QUIC server's key log")
 args = p.parse_args()
 if args.cpu is not None:
     try:
@@ -102,12 +104,17 @@ else:
         del options[options.index("--jumpstart-max"):options.index("--jumpstart-max") + 2]
         options += ["--rapid-start"]
     request = ["--delivery-stats", "-p", "/10000000000"]
+server_extra, tunulator_extra = [], []
+if args.latency:
+    tunulator_extra = ["-L", str(out / "tunulator.pktlog")]
+    if args.protocol == "quic":
+        server_extra = ["-l", str(out / "keylog")]
 commands = {
-    "server": [str(binary), *credentials, *options, "127.0.0.1", port],
+    "server": [str(binary), *credentials, *options, *server_extra, "127.0.0.1", port],
     "tunulator": [str(build / "tunulator"), "-t", "/dev/net/tun", "-n", lane['tun'],
                   "-F", str(trace), str(args.offset), "-p", "0", "-P", "60000",
                   "-B", str(buffer_bytes), "-r", "0", "-R", "0",
-                  "-Q", args.queue, lane['peer'], port],
+                  "-Q", args.queue, *tunulator_extra, lane['peer'], port],
     "client": [str(binary), *options, *request, lane['peer'], port],
 }
 route = "dry run: not inspected"
@@ -127,6 +134,7 @@ metadata = dict(protocol=args.protocol, cc=args.cc, abba=args.abba, rapid_start=
     trace_sha256=hashlib.sha256(trace.read_bytes()).hexdigest(),
     binary_sha256={str(b): hashlib.sha256(b.read_bytes()).hexdigest()
                    for b in [binary, build / "tunulator"]},
+    latency=args.latency,
     start_ms=args.offset, end_ms=end_ms, duration_ms=duration_ms,
     buffer_bytes=buffer_bytes, capacity_bytes=capacity_bytes)
 out.mkdir(parents=True, exist_ok=False)  # never overwrite a previous run
@@ -176,7 +184,7 @@ try:
 finally:
     if len(processes) == 3:
         # Stop the endpoints at the end of the window. Tunulator's statistics start at the first packet, slightly after the
-        # client starts; a second later, stop tunulator, letting it write its statistics up to then.
+        # client starts; a second later, stop tunulator, letting it write its statistics up to then and its packet log.
         server, tunulator, client = processes
         for proc in (client, server):
             try:

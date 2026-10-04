@@ -8,7 +8,7 @@ git worktree add tmp/tunulator-new-host experiment/tunulator-ccbench
 
 Run the commands below from that quicly source checkout, not from the suite worktree. Scripts use paths supplied on the command line and need no old experiment directories or old executables.
 
-Written against quicly **`5fc6c084cabd014ba082529ec78ea4c94fea9134`** on 2026-09-20. At this revision ABBA uses slope `2/3`, model gain `3/5`, the 1 ms low-point guard, and the gain cap below `cwnd_prior / beta`. This revision includes `QUICLY_USE_ABE`, a compile-time switch for disabling ABE (see §4). Use this commit for an exact source baseline, or pin and record a newer commit deliberately.
+Written against quicly **`054e9e387fa8efb0852eb24b2120021fbed71f11`** on 2026-10-04. This revision includes `QUICLY_USE_ABE`, a compile-time switch for disabling ABE (see §4), and the instrumentation the latency measurement needs (tunulator `-L`, `recv-offset` events in the clients' output, `cli --decrypt-packet-batch`). Use this commit for an exact source baseline, or pin and record a newer commit deliberately.
 
 ## 1. What is being measured
 
@@ -32,7 +32,8 @@ With 23 traces this is **230 distinct transfers**: 92 TCP and 138 QUIC. The reco
 
 ## 2. Contents of this directory
 
-- `run-one.py`: launch one transfer; reads prepared build provenance, saves commands/provenance, collects millisecond counters and cumulative CSV, and cleans up child process groups.
+- `run-one.py`: launch one transfer; reads prepared build provenance, saves commands/provenance, collects millisecond counters and cumulative CSV, and cleans up child process groups. With `--latency`, also records what `latency.py` needs.
+- `latency.py`: compute the per-offset delay of a transfer captured with `--latency` (see §9).
 - `record-build.py`: prepare build provenance (source diff, dependency versions, compiler/CMake configuration, executable hashes) before captures start.
 - `matrix.py`: sequential or CPU-pinned parallel matrix, completed-run resume checks, optional two-second smoke matrix, and HTML reporting after captures finish.
 - `report.py`, `charts.py`: aggregate tables and per-trace tail/CoDel tables and SVGs; uses only measurements in the supplied result root.
@@ -56,8 +57,8 @@ sudo apt-get install build-essential cmake git perl libssl-dev python3 iproute2 
 For a new checkout, clone `https://github.com/h2o/quicly.git` and enter it. Fetch the experiment branch if needed, then pin the desired commit and initialize its submodules:
 
 ```sh
-git fetch origin kazuho/abba2
-git switch --detach 5fc6c084cabd014ba082529ec78ea4c94fea9134
+git fetch origin kazuho/tunulator-latency
+git switch --detach 054e9e387fa8efb0852eb24b2120021fbed71f11
 git submodule update --init --recursive
 mkdir -p tmp
 git clone https://github.com/Soheil-ab/Cellular-Traces-NYC.git tmp/Cellular-Traces-NYC
@@ -154,9 +155,9 @@ Keep this host information in the result archive; TCP BBR is the host kernel's i
 
 | Setting | Value |
 |---|---|
-| Measurement window | `[1000, final_timestamp - 1000)` ms; end excluded |
+| Measurement window | `[5000, final_timestamp - 5000)` ms; end excluded |
 | Base RTT | 60 ms, via upstream `-p 0`, downstream `-P 60000` (microseconds) |
-| Downstream bandwidth | `-F TRACE 1000`; trace playback starts with the emulator |
+| Downstream bandwidth | `-F TRACE 5000`; trace playback starts with the first packet the emulator receives |
 | Upstream bandwidth | Tunulator default, effectively unconstrained for these profiles |
 | Queue | `ceil(peak_bytes_per_second × 0.060)`, minimum 1500 bytes; peak uses whole-trace one-second bins |
 | Random loss | `-r 0 -R 0` |
@@ -170,7 +171,7 @@ Keep this host information in the result archive; TCP BBR is the host kernel's i
 
 Tunulator grants 1500 bytes per trace entry, expires unused opportunities, and can wrap. These windows avoid wrapping. The buffer uses the peak rate of the **entire trace**, not just the selected window. The helper computes these values from raw files and includes startup within the window.
 
-For `2768760-taxi3`: `[1000,103814)` ms, duration **102.814 seconds**, peak **20.376 Mbps**, queue **152820 bytes**, IP capacity **123511500 bytes**.
+For `2768760-taxi3`: `[5000,99814)` ms, duration **94.814 seconds**, peak **20.376 Mbps**, queue **152820 bytes**, IP capacity **113946000 bytes**.
 
 | Queue option | Meaning |
 |---|---|
@@ -225,7 +226,8 @@ A fresh TCP CoDel measurement is displayed alongside both QUIC ABE settings beca
 Each transfer saves:
 
 - `metadata.json`: exact commands, trace hash/window, kernel, route, TCP ECN setting, executable hashes and build metadata.
-- `client.jsonl`, `server.jsonl`, `tunulator.jsonl` and corresponding `.log` files: raw counters and diagnostics. The portable runner leaves raw files uncompressed.
+- `client.jsonl`, `server.jsonl`, `tunulator.jsonl` and corresponding `.log` files: raw counters and diagnostics. The portable runner leaves raw files uncompressed. `client.jsonl` holds JSON lines: `{"type":"delivered","bytes":N}` per millisecond, and `{"type":"recv-offset","offset":N,"at":T}` when the byte at each multiple of 15000 is received.
+- `tunulator.pktlog` and, for QUIC, `keylog` (with `--latency`, which the matrix always passes): the receive time, segment length and first 64 bytes after the IP header of each downstream packet, and the QUIC server's TLS secrets.
 - `curves.csv`: cumulative application bytes, IP forwarded, and IP received every 10 ms and at the final cutoff.
 - `result.json`: totals and ratios for the selected window.
 
@@ -250,7 +252,7 @@ Tunulator emits one JSON object per millisecond with per-flow arrays:
  downstream IP received, downstream IP forwarded]
 ```
 
-The capture sums flows because there is one transfer. Client stdout contains application bytes per millisecond. Client and emulator clocks start separately; the accounting aligns the client's first sample to the emulator's first upstream packet. This is a millisecond approximation, including startup, not exact per-packet clock synchronization. The capture waits an extra 1.05 seconds, then accounts **only the selected trace duration**.
+The capture sums flows because there is one transfer. Client stdout contains application bytes per millisecond. Tunulator starts trace playback and its statistics when it receives the first packet, so the measurement does not depend on how long it took to load the trace and attach the TUN (the client is started 5 seconds after tunulator). The client runs for exactly the selected trace duration; tunulator is stopped a second later, writing its statistics up to then. The window ends 5 seconds before the end of the trace, so the trace never wraps. Client and emulator clocks start separately; the accounting aligns the client's first sample to the emulator's first upstream packet. This is a millisecond approximation, including startup, not exact per-packet clock synchronization. The accounting covers **only the selected trace duration**.
 
 | Metric | Definition |
 |---|---|
@@ -258,6 +260,10 @@ The capture sums flows because there is one transfer. Client stdout contains app
 | Goodput Mbps | Application bytes × 8 / duration_seconds / 1,000,000 |
 | IP utilization | IP forwarded / sum of trace opportunities in the selected window |
 | IP not delivered | IP received − IP forwarded |
+
+### Delay
+
+`latency.py` measures the delay of every 15000th byte of the stream: from when tunulator first received a downstream packet carrying it, to when the client received it (`recv-offset`). It thus includes propagation, queueing, loss recovery and head-of-line blocking, but not time spent in the sender's buffer. Offsets are TCP stream offsets (sequence number minus server ISN + 1), which include TLS overhead, and QUIC stream offsets. Both timestamps are `CLOCK_MONOTONIC` on the same host. QUIC packets are decrypted from the recorded 64 bytes using `cli --decrypt-packet-batch` and the server's key log; truncated packets are given up to where the tag starts, followed by a dummy tag. `latency.py` writes `latency.csv` (one row per sample) and `latency.json` (percentiles and decoding counts) into the run directory.
 
 **IP not delivered is not an exact drop counter**: it includes bytes still in the emulator at cutoff, including the propagation-delay stage. Forwarded CE-marked packets do not count. Drops before the emulator receives a packet are not counted by tunulator. Retain kernel/interface counters when investigating unexplained loss. Aggregate rates use summed bytes divided by summed durations; compare the same trace set for every policy.
 
