@@ -5633,7 +5633,10 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     }
 
     /* disable ECN if zero packets where acked in the first 3 PTO of the connection during which all sent packets are ECT(0) */
-    if (conn->egress.ecn.state == QUICLY_ECN_PROBING && conn->created_at + 3. * conn->egress.loss.rtt.smoothed < conn->stash.now) {
+    if (conn->egress.ecn.state == QUICLY_ECN_PROBING &&
+        conn->created_at + 3 * quicly_rtt_get_pto(&conn->egress.loss.rtt, conn->super.remote.transport_params.max_ack_delay,
+                                                  conn->egress.loss.conf->min_pto) <
+            conn->stash.now) {
         update_ecn_state(conn, QUICLY_ECN_OFF);
         /* TODO reset CC? */
     }
