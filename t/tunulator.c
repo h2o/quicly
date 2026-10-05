@@ -24,7 +24,14 @@
  *   due events between bounded read batches so continuous arrivals cannot starve timers. Retry interrupted I/O. Use
  *   nonblocking TUN writes and drop on EAGAIN, without queueing for retry or monitoring write readiness.
  *
+ * Packet log (-L):
+ *   Record the receive time, transport-segment length, and first bytes after the IPv4 header of every downstream packet into
+ *   fixed-size memory chunks, so that recording costs one copy and no I/O while emulating. Write the file only on SIGTERM.
+ *   Parsing (TCP sequence numbers, QUIC decryption) is left to offline tools.
+ *
  * Statistics:
+ *   Start trace playback and statistics when the first packet is received, so that they do not depend on how long the setup
+ *   (e.g., loading the trace) took.
  *   Use the current monotonic time when reading or writing each packet.
  *   In the select() loop, emit an object for each completed millisecond, including empty milliseconds after a late wakeup.
  *   Wake once per second to flush statistics when there is no I/O.
@@ -60,6 +67,7 @@
 #include <linux/if_tun.h>
 #include <math.h>
 #include <net/if.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -78,6 +86,8 @@
 #define READ_BATCH 32
 #define EVENT_BATCH 64
 #define TRACE_BYTES 1500
+#define PACKET_LOG_PREFIX 64
+#define PACKET_LOG_CHUNK_RECORDS 16384
 
 struct packet {
     struct packet *next;
@@ -122,6 +132,23 @@ struct statistics {
     FILE *out;
 };
 
+struct packet_log_record {
+    uint64_t at;
+    uint16_t len;
+    uint8_t bytes[PACKET_LOG_PREFIX];
+} __attribute__((packed));
+
+struct packet_log_chunk {
+    struct packet_log_chunk *next; /* first member, so that `packet_log::tail` also points to the last chunk */
+    size_t count;
+    struct packet_log_record records[PACKET_LOG_CHUNK_RECORDS];
+};
+
+struct packet_log {
+    const char *path;
+    struct packet_log_chunk *head, **tail;
+};
+
 struct tunulator {
     int fd;
     size_t mtu;
@@ -129,7 +156,19 @@ struct tunulator {
     uint8_t server_ports[65536];
     struct direction dirs[2];
     struct statistics stats;
+    struct packet_log packet_log;
+    /**
+     * if the first packet has been received, i.e., if playback and statistics have started
+     */
+    int started;
 };
+
+static volatile sig_atomic_t got_sigterm;
+
+static void on_sigterm(int signo)
+{
+    got_sigterm = 1;
+}
 
 static void fail(const char *fmt, ...)
 {
@@ -323,6 +362,36 @@ static void count_bytes(struct statistics *s, uint64_t now, unsigned flow, unsig
     b[counter] += len;
 }
 
+static void record_packet(struct packet_log *log, const uint8_t *bytes, size_t len, uint64_t now)
+{
+    struct packet_log_chunk *chunk = (struct packet_log_chunk *)log->tail;
+    if (log->tail == &log->head || chunk->count == PACKET_LOG_CHUNK_RECORDS) {
+        if ((chunk = malloc(sizeof(*chunk))) == NULL)
+            fail("allocating packet log: %s", strerror(errno));
+        chunk->next = NULL;
+        chunk->count = 0;
+        *log->tail = chunk;
+        log->tail = &chunk->next;
+    }
+    struct packet_log_record *r = chunk->records + chunk->count++;
+    r->at = now;
+    r->len = len;
+    size_t copy = len < PACKET_LOG_PREFIX ? len : PACKET_LOG_PREFIX;
+    memcpy(r->bytes, bytes, copy);
+    memset(r->bytes + copy, 0, PACKET_LOG_PREFIX - copy);
+}
+
+static void write_packet_log(struct packet_log *log)
+{
+    FILE *fp = fopen(log->path, "wb");
+    if (fp == NULL)
+        fail("opening packet log %s: %s", log->path, strerror(errno));
+    for (struct packet_log_chunk *c = log->head; c != NULL; c = c->next)
+        fwrite(c->records, sizeof(c->records[0]), c->count, fp);
+    if (fclose(fp) != 0)
+        fail("writing packet log %s: %s", log->path, strerror(errno));
+}
+
 static void receive_packet(struct tunulator *t, uint8_t *bytes, size_t len, uint64_t now)
 {
     if (len < 20 || bytes[0] >> 4 != 4 || len > t->mtu || read16(bytes + 2) != len)
@@ -359,7 +428,14 @@ static void receive_packet(struct tunulator *t, uint8_t *bytes, size_t len, uint
         return;
     }
     unsigned flow = (proto == IPPROTO_TCP ? 65536 : 0) | port;
+    if (!t->started) {
+        t->started = 1;
+        t->stats.next_at = now + NS_PER_MS;
+        t->dirs[1].trace.epoch = now;
+    }
     count_bytes(&t->stats, now, flow, dir * 2, len);
+    if (dir == 1 && t->packet_log.path != NULL)
+        record_packet(&t->packet_log, bytes + iplen, len - iplen, now);
     if (bytes[8] <= 1)
         return;
 
@@ -497,7 +573,7 @@ static void run_events(struct tunulator *t, uint64_t now)
 static void run_loop(struct tunulator *t)
 {
     uint8_t bytes[65536];
-    while (1) {
+    while (!got_sigterm) {
         run_events(t, get_now());
         for (unsigned i = 0; i < READ_BATCH; ++i) {
             ssize_t len = read(t->fd, bytes, sizeof(bytes));
@@ -513,7 +589,7 @@ static void run_loop(struct tunulator *t)
         }
         uint64_t now = get_now();
         advance_statistics(&t->stats, now);
-        uint64_t at = t->stats.next_at + NS_PER_SEC - NS_PER_MS;
+        uint64_t at = t->started ? t->stats.next_at + NS_PER_SEC - NS_PER_MS : now + NS_PER_SEC;
         for (unsigned i = 0; i < 2; ++i) {
             uint64_t event = next_event(&t->dirs[i]);
             if (event < at)
@@ -667,6 +743,8 @@ static void usage(const char *cmd)
            "  -P <microseconds>   downstream propagation delay (default: 0)\n"
            "  -r <probability>    upstream random packet loss (0..1; default: 0)\n"
            "  -R <probability>    downstream random packet loss (0..1; default: 0)\n"
+           "  -L <file>           record every downstream packet in memory and write them to\n"
+           "                      the file on SIGTERM (see Packet log below)\n"
            "  -h                  print this help and exit\n"
            "\n"
            "peer-ip is the virtual IPv4 peer, followed by one or more local TCP/UDP server ports.\n"
@@ -683,15 +761,23 @@ static void usage(const char *cmd)
            "Trace files list millisecond timestamps, one per line, each allowing 1500 IP bytes.\n"
            "Repeated timestamps add capacity; unused capacity expires at that timestamp.\n"
            "Packets spanning entries are sent when their full length has been accounted for.\n"
-           "Playback starts with forwarding and repeats after the last timestamp plus 1 ms.\n"
+           "Playback starts when the first packet is received and repeats after the last\n"
+           "timestamp plus 1 ms.\n"
            "\n"
-           "Statistics: emit a JSON object containing only active flows each millisecond\n"
-           "on stdout, followed by a newline:\n"
+           "Statistics: emit a JSON object containing only active flows each millisecond,\n"
+           "starting when the first packet is received, on stdout, followed by a newline:\n"
            "  {\"u12345\":[2400,1200,80,80],\"t12347\":[1200,1200,0,0]}\n"
            "Keys are u (UDP) or t (TCP) followed by the client port. Arrays contain\n"
            "[up_received, up_sent, down_received, down_sent]\n"
            "IP bytes for that millisecond. Received is before drops; sent is a\n"
            "successful TUN write.\n"
+           "\n"
+           "Packet log: one record per downstream packet received: u64 receive time\n"
+           "(CLOCK_MONOTONIC ns), u16 transport segment length (IP length minus IP header),\n"
+           "and the first 64 bytes after the IPv4 header, zero-padded; integers are in host\n"
+           "byte order.\n"
+           "On SIGTERM, emit statistics up to that moment, write the packet log if -L is\n"
+           "given, and exit.\n"
            "\n"
            "Setup: route peer-ip through TUN with source 127.0.0.1, enable Linux\n"
            "route_localnet, and configure a fixed MTU. Do not assign peer-ip locally.\n"
@@ -714,9 +800,10 @@ int main(int argc, char **argv)
         t->dirs[i].rate = UINT32_MAX;
         t->dirs[i].capacity = 100000;
     }
+    t->packet_log.tail = &t->packet_log.head;
     const char *path = NULL, *name = "tun0";
     int ch;
-    while ((ch = getopt(argc, argv, "t:n:b:B:q:Q:w:W:F:p:P:r:R:h")) != -1) {
+    while ((ch = getopt(argc, argv, "t:n:b:B:q:Q:w:W:F:p:P:r:R:L:h")) != -1) {
         switch (ch) {
         case 't':
             path = optarg;
@@ -755,6 +842,9 @@ int main(int argc, char **argv)
                 fail("invalid random loss probability: %s", optarg);
             t->dirs[ch == 'R'].loss_probability = probability;
         } break;
+        case 'L':
+            t->packet_log.path = optarg;
+            break;
         case 'h':
             usage(argv[0]);
             free(t);
@@ -777,10 +867,16 @@ int main(int argc, char **argv)
         if (t->dirs[i].capacity < t->mtu)
             fail("%s buffer must hold at least one MTU (%zu bytes)", i == 0 ? "upstream" : "downstream", t->mtu);
 
+    struct sigaction sa = {.sa_handler = on_sigterm};
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGTERM, &sa, NULL) != 0)
+        fail("sigaction: %s", strerror(errno));
+
     t->stats.out = stdout;
-    uint64_t now = get_now();
-    t->stats.next_at = now + NS_PER_MS;
-    t->dirs[1].trace.epoch = now;
+    t->stats.next_at = UINT64_MAX; /* until the first packet is received */
     run_loop(t);
+    advance_statistics(&t->stats, get_now());
+    if (t->packet_log.path != NULL)
+        write_packet_log(&t->packet_log);
     return EXIT_SUCCESS;
 }
