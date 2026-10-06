@@ -1830,17 +1830,17 @@ static void test_prague_recovery_exit(void)
     uint32_t mtu = 1200;
     init_prague(&cc, mtu);
 
-    /* Exit startup by CE; CE remains suppressed during recovery. */
+    /* Exit startup by CE; Prague does not run during the recovery, in which CE is suppressed as usual. */
     l4s_acked(&cc, &loss, 0, 9, 10, 0, mtu, 1, 1);
-    ok(cc.recovery_end == 10 && cc.state.pico.prague.ignore_ce_until == INFINITY);
+    ok(cc.recovery_end == 10 && !prague_is_running(&cc.state.pico.prague));
     uint32_t cwnd = cc.cwnd;
     l4s_acked(&cc, &loss, 0, 9, 10, 50, mtu, 1, 1);
-    ok(cc.cwnd == cwnd && cc.state.pico.prague.ignore_ce_until == INFINITY);
+    ok(cc.cwnd == cwnd && !prague_is_running(&cc.state.pico.prague));
 
-    /* The ACK frame observing recovery exit may also cover packets sent before recovery entry; its CE is ignored, as is CE within
-     * the same millisecond. */
+    /* The ACK frame observing recovery exit starts Prague; its CE, which may be stale, is ignored as alpha is yet to be sampled, as
+     * is CE within the same millisecond. */
     l4s_acked(&cc, &loss, 0, 12, 20, 100, mtu, 2, 1);
-    ok(cc.state.pico.prague.ignore_ce_until == 100);
+    ok(prague_is_running(&cc.state.pico.prague) && isnan(cc.state.pico.prague.alpha));
     ok(cc.cwnd == cwnd && cc.num_prague_reductions == 0);
     l4s_acked(&cc, &loss, 0, 13, 20, 100, mtu, 1, 1);
     ok(cc.cwnd == cwnd && cc.num_prague_reductions == 0);

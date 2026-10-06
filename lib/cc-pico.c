@@ -653,13 +653,15 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         return;
     }
 
-    /* Prague: first ACK past recovery; stop ignoring CE after this ACK */
-    if (cc->state.pico.prague.ignore_ce_until == INFINITY)
-        cc->state.pico.prague.ignore_ce_until = now;
-    /* Prague: start the estimator past the recovery that ended startup, so that it does not sample the overshoot of startup */
-    if (cc->type == &quicly_cc_type_cuback && l4s != NULL && cc->num_loss_episodes != 0 &&
-        !prague_is_running(&cc->state.pico.prague))
+    if (prague_is_running(&cc->state.pico.prague)) {
+        /* Prague: if this is the first ACK past recovery, stop ignoring CE after this ACK */
+        if (cc->state.pico.prague.ignore_ce_until == INFINITY)
+            cc->state.pico.prague.ignore_ce_until = now;
+    } else if (cc->type == &quicly_cc_type_cuback && l4s != NULL && cc->num_loss_episodes != 0) {
+        /* Prague: start the estimator once past the recovery that ended startup, so that it does not sample the overshoot of
+         * startup */
         prague_start(&cc->state.pico.prague, loss->rtt.smoothed, now);
+    }
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
@@ -834,7 +836,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         abba_on_congestion(&cc->state.pico.abba, cc->cwnd, &loss->rtt, bytes == 0);
 
     cc->recovery_end = next_pn;
-    cc->state.pico.prague.ignore_ce_until = INFINITY; /* Prague: no reduction until recovery exit */
+    if (prague_is_running(&cc->state.pico.prague))
+        cc->state.pico.prague.ignore_ce_until = INFINITY; /* Prague: no reduction until recovery exit */
     ++cc->num_loss_episodes;
 
     /* end of slow start */
