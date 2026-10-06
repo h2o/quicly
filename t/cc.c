@@ -1806,12 +1806,42 @@ static void test_prague_loss(void)
     ok(!cc.state.pico.cuback.by_ecn); /* feedback from before loss does not override loss recovery */
 }
 
+static void test_prague_ecn_disabled(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100}};
+    uint32_t mtu = 1200;
+    init_prague(&cc, mtu);
+    /* Exit startup by CE, then reduce by Prague. */
+    l4s_acked(&cc, &loss, 0, 9, 10, 0, mtu, 1, 1);
+    l4s_acked(&cc, &loss, 0, 20, 30, 200, mtu, 1, 1);
+    ok(cc.num_prague_reductions == 1 && in_prague_ca(&cc));
+
+    /* Once ECN is disabled, the estimator returns to dormant and CUBACK growth resumes. */
+    uint32_t before = cc.cwnd;
+    cc.type->cc_on_acked(&cc, &loss, 0, 21, before, 1, 30, 210, mtu, NULL);
+    ok(isnan(cc.state.pico.prague.alpha) && !cc.state.pico.cuback.by_ecn && !in_prague_ca(&cc));
+    ok(cc.cwnd == before);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 22, before, 1, 30, 220, mtu, NULL);
+    ok(cc.state.pico.prague.increase_carry == 0);
+    ok(calc_bytes_per_mtu_increase(&cc, &loss, mtu) ==
+       cuback_bytes_per_mtu_increase(&cc.state.pico.cuback, cc.cwnd, cc.ssthresh, mtu, mtu));
+
+    /* Subsequent congestion signals receive the classic response. */
+    before = cc.cwnd;
+    uint32_t num_loss_episodes = cc.num_loss_episodes;
+    cc.type->cc_on_lost(&cc, &loss, 0, 25, 40, 230, mtu);
+    ok(cc.num_loss_episodes == num_loss_episodes + 1 && cc.num_prague_reductions == 1);
+    ok(cc.cwnd == (uint32_t)(before * (QUICLY_USE_ABE ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS)));
+}
+
 void test_cc(void)
 {
     subtest("prague-estimator", test_prague_estimator);
     subtest("prague-grow", test_prague_grow);
     subtest("prague-growth", test_prague_growth);
     subtest("prague-loss", test_prague_loss);
+    subtest("prague-ecn-disabled", test_prague_ecn_disabled);
     subtest("fast-cbrt", test_fast_cbrt);
     subtest("rapid-start", test_rapid_start);
     subtest("abba", test_abba);

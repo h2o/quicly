@@ -615,8 +615,15 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     assert(inflight >= bytes);
 
     /* Prague: the marking estimator runs regardless of loss recovery; CE itself is reported through `pico_on_lost`. */
-    if (cc->type == &quicly_cc_type_cuback && l4s != NULL)
-        prague_on_acked(&cc->state.pico.prague, loss->rtt.smoothed, now, l4s);
+    if (cc->type == &quicly_cc_type_cuback) {
+        if (l4s != NULL) {
+            prague_on_acked(&cc->state.pico.prague, loss->rtt.smoothed, now, l4s);
+        } else if (!isnan(cc->state.pico.prague.alpha)) {
+            /* ECN validation failed: disable Prague */
+            cc->state.pico.prague = (struct st_quicly_cc_prague_t){.alpha = NAN};
+            cc->state.pico.cuback.by_ecn = 0;
+        }
+    }
 
     /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
@@ -755,7 +762,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
      * exit to Rapid Start and related states, before entering the next recovery period in the following blocks. */
     if (quicly_cc_rapid_start_is_in_first_recovery(&cc->rapid_start))
         pico_on_acked(cc, loss, 0, cc->recovery_end, (uint32_t)loss->sentmap.bytes_in_flight, 0, next_pn, now, max_udp_payload_size,
-                      NULL);
+                      isnan(cc->state.pico.prague.alpha) ? NULL : &(quicly_cc_ecn_counts_t){0} /* keep Prague as is */);
 
     /* Prague: past startup, reduce CWND without starting a loss episode or a recovery period. Additive increase does not stop
      * (draft-briscoe-iccrg-prague-congestion-control-04, Section 2.4.3), and a loss that follows is acted on as a new episode,

@@ -460,7 +460,7 @@ struct st_quicly_cc_type_t {
      * Called for each ACK frame being received.
      * @param bytes  bytes newly acknowledged; can be zero
      * @param l4s    increase of the ECN counters (can be zero) if L4S is used, otherwise NULL. A CC that supports L4S adopts the
-     *               scalable response once CE is reported.
+     *               scalable response once CE is reported, and abandons it once NULL is passed (i.e., ECN has been disabled).
      */
     void (*cc_on_acked)(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t largest_acked, uint32_t inflight,
                         int cc_limited, uint64_t next_pn, int64_t now, uint32_t max_udp_payload_size,
