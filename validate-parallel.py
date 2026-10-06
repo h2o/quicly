@@ -91,6 +91,7 @@ try:
 
     matrix_base = [sys.executable, str(kit / 'matrix.py'), '--traces', str(a.traces),
                    '--build', str(a.build), '--noabe-build', str(a.noabe_build),
+                   '--quic-cc', 'cubic+abe', '--quic-cc', 'cubic+abe+abba', '--quic-cc', 'cubic', '--quic-cc', 'cubic+abba',
                    '--cpus', ','.join(map(str, a.cpus[:2]))]
     interrupted = a.output / 'interrupted'
     proc = start(matrix_base + ['--trace-id', '2768760-taxi3', '--output', str(interrupted)], 'interrupt')

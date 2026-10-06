@@ -24,11 +24,12 @@ The primary matrix uses **ordinary CUBIC startup**, with Rapid Start and Jump St
 
 | Scenario | TCP, freshly measured | QUIC, freshly measured |
 |---|---|---|
-| Tail drop | CUBIC, BBR | CUBIC, CUBIC + ABBA |
-| CoDel ECN | CUBIC, BBR | CUBIC, CUBIC + ABBA |
-| CoDel ECN, QUIC ABE off | Same CoDel TCP measurements | CUBIC, CUBIC + ABBA, using the no-ABE build |
+| Tail drop | CUBIC, BBR | CUBIC, CUBIC+ABBA |
+| CoDel ECN | CUBIC, BBR | CUBIC+ABE, CUBIC+ABE+ABBA, and with the no-ABE build CUBIC, CUBIC+ABBA |
 
-With 23 traces this is **230 distinct transfers**: 92 TCP and 138 QUIC. The recorded durations total about **30 hours of sequential playback**, plus build, reporting, and capture overhead. Without the optional no-ABE build it is 184 transfers, about 24 hours. Repeat the complete matrix in a new result root for additional samples. Measure all compared policies on the same host with consistent settings.
+QUIC policies are named `CC[+abe][+abba]` (see §8). ABE only affects the response to ECN marks, so under tail drop `+abe` is omitted and policies differing only in ABE are measured once, with the ordinary build.
+
+With 23 traces and the four QUIC policies above (`--quic-cc cubic+abe --quic-cc cubic+abe+abba --quic-cc cubic --quic-cc cubic+abba`), this is **230 distinct transfers**: 92 TCP and 138 QUIC. The recorded durations total about **30 hours of sequential playback**, plus build, reporting, and capture overhead. With the default QUIC policies (`cubic+abe` and `cubic+abe+abba`) it is 184 transfers, about 24 hours. Repeat the complete matrix in a new result root for additional samples. Measure all compared policies on the same host with consistent settings.
 
 ## 2. Contents of this directory
 
@@ -105,7 +106,7 @@ python3 tmp/tunulator-new-host/record-build.py --build build/ccbench
 
 For concurrent standalone captures sharing a build, run this preparation command to completion first. Do not rebuild or regenerate shared provenance while captures are running. Git information comes from the current source checkout, compiler information from `cc --version`, and CMake configuration from the supplied build directory.
 
-ABE detection supports the `CMAKE_C_FLAGS=-DQUICLY_USE_ABE=0` convention shown below. It reads the last `-DQUICLY_USE_ABE=...` token in `CMAKE_C_FLAGS`, assumes the header default of 1 when absent, and rejects a mismatch with `--condition` (`codel_noabe` requires ABE off; other conditions require it on). This checks recorded configuration, not the compiled binary; definitions supplied through other flags or source changes are not detected.
+ABE detection supports the `CMAKE_C_FLAGS=-DQUICLY_USE_ABE=0` convention shown below. It reads the last `-DQUICLY_USE_ABE=...` token in `CMAKE_C_FLAGS`, assumes the header default of 1 when absent, and, for QUIC under `--condition codel`, rejects a build whose ABE setting differs from `--abe`. This checks recorded configuration, not the compiled binary; definitions supplied through other flags or source changes are not detected.
 
 ### Optional no-ABE build
 
@@ -181,7 +182,7 @@ For `2768760-taxi3`: `[5000,99814)` ms, duration **94.814 seconds**, peak **20.3
 
 Keep ECN enabled at endpoints even when testing `codel/noecn`. QUIC enables ECN by default; omit `--disable-ecn`. Verify actual negotiation/CE feedback in socket or endpoint statistics during smoke testing; configuration alone is not evidence that marks were received. CoDel queueing time excludes configured propagation delay, and ECN mode can still overflow its finite buffer.
 
-The `5:100` target:interval is the default, not fixed: `run-one.py --codel TARGET:INTERVAL` (and matching `--queue codel:TARGET:INTERVAL`) and `matrix.py --codel TARGET:INTERVAL` override it for the `codel`/`codel_noabe` conditions. `matrix.py --codel` can be repeated to measure several settings in one output root, e.g. `--codel 5:100 --codel 10:100`; runs of each setting are in directories named after it (`codel-5-100`, `codel_noabe-5-100`, ...). `run-one.py` still rejects a `--queue` that does not match `--condition`/`--codel`, so both must be changed together. A `matrix.py` run records its `--codel` values in `matrix-settings.json`; resuming an output root with additional `--codel` values appended runs only the new settings, while removing or reordering values fails with "Matrix settings changed", same as changing `--quic-cc`.
+The `5:100` target:interval is the default, not fixed: `run-one.py --codel TARGET:INTERVAL` (and matching `--queue codel:TARGET:INTERVAL`) and `matrix.py --codel TARGET:INTERVAL` override it for the `codel` condition. `matrix.py --codel` can be repeated to measure several settings in one output root, e.g. `--codel 5:100 --codel 10:100`; runs of each setting are in directories named after it (`codel-5-100`, ...). `run-one.py` still rejects a `--queue` that does not match `--condition`/`--codel`, so both must be changed together. A `matrix.py` run records its `--codel` values in `matrix-settings.json`; resuming an output root with additional `--codel` values appended runs only the new settings, while removing or reordering values fails with "Matrix settings changed", same as changing `--quic-cc`.
 
 ## 7. Smoke and individual taxi3 runs
 
@@ -190,10 +191,11 @@ The test credentials in `t/assets/server.crt` and `server.key` are appropriate f
 ```sh
 python3 tmp/tunulator-new-host/matrix.py --traces tmp/Cellular-Traces-NYC \
   --build build/ccbench --noabe-build build/ccbench-noabe \
+  --quic-cc cubic+abe --quic-cc cubic+abe+abba --quic-cc cubic --quic-cc cubic+abba \
   --output tmp/ccbench-smoke --smoke
 ```
 
-This runs ten two-second taxi3 captures, separately from headline measurements. Omit `--noabe-build` for eight captures. Confirm nonzero delivery, the intended CC/startup flags in each `metadata.json`, successful controller selection, and no TUN I/O errors. Two seconds checks plumbing; use a full trace to check CoDel CE behavior.
+This runs ten two-second taxi3 captures, separately from headline measurements. Omit `--noabe-build` and the `--quic-cc` options for eight captures. Confirm nonzero delivery, the intended CC/startup flags in each `metadata.json`, successful controller selection, and no TUN I/O errors. Two seconds checks plumbing; use a full trace to check CoDel CE behavior.
 
 Examples for full taxi3 captures:
 
@@ -201,12 +203,12 @@ Examples for full taxi3 captures:
 python3 tmp/tunulator-new-host/run-one.py tcp --cc bbr \
   --trace tmp/Cellular-Traces-NYC/trace-2768760-taxi3 --condition codel --queue codel:5:100 \
   --build build/ccbench --output tmp/taxi3-fresh/tcp-bbr
-python3 tmp/tunulator-new-host/run-one.py quic --cc cubic --abba \
+python3 tmp/tunulator-new-host/run-one.py quic --cc cubic --abe --abba \
   --trace tmp/Cellular-Traces-NYC/trace-2768760-taxi3 --condition codel --queue codel:5:100 \
   --build build/ccbench --output tmp/taxi3-fresh/cubic-abba
 ```
 
-Plain QUIC CUBIC omits `--abba`; TCP CUBIC uses `tcp --cc cubic`. For no-ABE QUIC use `--condition codel_noabe --queue codel:5:100 --build build/ccbench-noabe`. For a separate drops-only study use `--condition codel_noecn --queue codel/noecn:5:100`; it is not included by the primary matrix/report. For a non-standard target/interval, e.g. 26 ms, add `--codel 26:100` and change `--queue` to match: `--queue codel:26:100` (or `codel/noecn:26:100` for `codel_noecn`).
+QUIC CUBIC+ABE omits `--abba`; TCP CUBIC uses `tcp --cc cubic`. For no-ABE QUIC under CoDel, omit `--abe` and use `--build build/ccbench-noabe`; under tail drop, omit `--abe` and use the ordinary build. `--abe` is rejected for TCP. For a separate drops-only study use `--condition codel_noecn --queue codel/noecn:5:100`; it is not included by the primary matrix/report. For a non-standard target/interval, e.g. 26 ms, add `--codel 26:100` and change `--queue` to match: `--queue codel:26:100` (or `codel/noecn:26:100` for `codel_noecn`).
 
 The single-run helper also supports `--cc cuback --abba --rapid-start` (Jump Start default 60), but keep those results separate from the ordinary-CUBIC matrix. `--dry-run` writes metadata/commands and computes window/queue values without opening sockets or TUN; it is not a performance measurement. Each output directory must be new.
 
@@ -214,14 +216,15 @@ The single-run helper also supports `--cc cuback --abba --rapid-start` (Jump Sta
 
 ```sh
 python3 tmp/tunulator-new-host/matrix.py --traces tmp/Cellular-Traces-NYC \
-  --build build/ccbench --noabe-build build/ccbench-noabe --output tmp/ccbench-fresh
+  --build build/ccbench --noabe-build build/ccbench-noabe \
+  --quic-cc cubic+abe --quic-cc cubic+abe+abba --quic-cc cubic --quic-cc cubic+abba --output tmp/ccbench-fresh
 ```
 
 Run in a persistent terminal such as tmux, or use `nohup` and redirect to a log outside the result root. Matrix output lists started/completed captures; `runner-logs/` contains per-capture output and errors. Captures lock each TUN and assigned CPU under `/tmp/quicly-ccbench-UID/`, shared across checkouts for this user. The tun0 runner also takes the legacy repository `tmp/taxi3-runner.lock`. Do not use harnesses that bypass those locks concurrently.
 
 `matrix.pid` records the matrix process. SIGTERM to that exact live process terminates the active capture and cleans up its endpoint/emulator process groups. Completed captures have `result.json` written last. Resume with the same command and CPU list: completed entries are checked against the trace hash, window, settings and executable hashes before being skipped. An interrupted directory has no `result.json`; **move that incomplete directory outside the result root** before resuming, preserving its logs. The single-run helper deliberately refuses to overwrite it. Use a fresh output root after changing source, binaries, kernel, or experimental settings.
 
-A fresh TCP CoDel measurement is displayed alongside both QUIC ABE settings because ABE-off modifies only QUIC. Total distinct transfers remain 230, not 276.
+A TCP CoDel measurement is displayed alongside both QUIC ABE settings because ABE modifies only QUIC, and a tail-drop measurement of a QUIC policy is shared by its ABE and no-ABE specs. Total distinct transfers remain 230, not 276.
 
 Each transfer saves:
 
@@ -241,9 +244,9 @@ The matrix generates the report after all captures finish, keeping report work o
 python3 tmp/tunulator-new-host/report.py tmp/ccbench-fresh
 ```
 
-Open `tmp/ccbench-fresh/index.html`. The report has an aggregate table per queue condition and, per trace, a panel per queue condition listed vertically, each with a table, application-delivery and IP-forwarding curves, and the probability density of delays on a logarithmic delay axis from the smallest delay to 2000 ms. Before rendering, the report runs `latency.py` on each transfer that has a packet log but no `latency.csv` yet. Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally. TCP rows/legends come first; QUIC ABE-off rows come last. TCP CUBIC is green, TCP BBR purple, QUIC CUBIC blue, QUIC CUBIC + ABBA red. ABE-off curves use the same QUIC colors with dashed lines. There are no top-level summary charts.
+Open `tmp/ccbench-fresh/index.html`. The report has an aggregate table per queue condition and, per trace, a panel per queue condition listed vertically, each with a table, application-delivery and IP-forwarding curves, and the probability density of delays on a logarithmic delay axis from the smallest delay to 2000 ms. Before rendering, the report runs `latency.py` on each transfer that has a packet log but no `latency.csv` yet. Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally. TCP rows/legends come first, then the QUIC policies of the `--quic-cc` list recorded in `matrix-settings.json`, in that order (under tail drop, each with `+abe` removed). Runs of other QUIC policies in the root, e.g. copied from another root, are not shown. Roots predating that list show all their QUIC runs, ordered by controller, ABBA and ABE. TCP CUBIC is green, TCP BBR purple; QUIC CUBIC is blue, CUBIC+ABBA red, CUBACK orange, CUBACK+ABBA brown, PICO pink. Under CoDel, QUIC policies without ABE use the same colors with dashed lines. There are no top-level summary charts.
 
-For incomplete matrices, aggregate comparisons include only traces with every displayed policy present. Once no-ABE results exist, the CoDel aggregate requires both QUIC ABE settings. The report has a table and a panel per trace for each recorded CoDel setting, after tail drop. Older matrix settings without a `codel` field imply `5:100`. A repetition belongs in a separate result root; this renderer does not average repetitions.
+For incomplete matrices, aggregate comparisons include only traces with every policy measured under that queue condition present. Result roots predating `--abe` (with `codel_noabe` directories) are rendered with the same names: `codel` runs as `+abe`, `codel_noabe` runs without. The report has a table and a panel per trace for each recorded CoDel setting, after tail drop. Older matrix settings without a `codel` field imply `5:100`. A repetition belongs in a separate result root; this renderer does not average repetitions.
 
 Tunulator emits one JSON object per millisecond with per-flow arrays:
 
@@ -305,14 +308,15 @@ Taxi3 alone, full duration, all ten policies/conditions, followed by HTML:
 ```sh
 python3 tmp/tunulator-new-host/matrix.py --traces tmp/Cellular-Traces-NYC \
   --build build/ccbench --noabe-build build/ccbench-noabe \
+  --quic-cc cubic+abe --quic-cc cubic+abe+abba --quic-cc cubic --quic-cc cubic+abba \
   --cpus 1-15 --trace-id 2768760-taxi3 --output tmp/taxi3-parallel
 ```
 
-This has ten jobs, so only ten workers are used. Repeat `--trace-id` to select multiple traces. Omit it to run all 23 traces (230 transfers) with up to 15 concurrent captures. This scheduler assigns jobs round-robin to CPU queues before checking completed runs, keeping CPU/network assignment stable on resume. A worker immediately takes its next assigned job when free. `--dry-run` creates planned metadata without acquiring TUNs or producing measurements/HTML; use a separate root from real captures.
+This has ten jobs, so only ten workers are used. Repeat `--trace-id` to select multiple traces. Omit it to run all 23 traces (230 transfers) with up to 15 concurrent captures. This scheduler assigns jobs round-robin to CPU queues. A completed run is reused on resume whichever CPU it was measured on; its `metadata.json` records the CPU. A worker immediately takes its next assigned job when free. `--dry-run` creates planned metadata without acquiring TUNs or producing measurements/HTML; use a separate root from real captures.
 
-Add `--quic-cc cuback` to use QUIC CUBACK and CUBACK + ABBA, including the no-ABE variants. The default is `--quic-cc cubic`. This changes only the QUIC controller: IW stays 30, pacing stays enabled, and Rapid Start and Jump Start stay disabled. TCP remains CUBIC/BBR. Output directory names and HTML/CSV labels reflect the selected controller. Use a new result root when changing controllers; resume rejects a different selection. Older matrix settings without this option are treated as CUBIC.
+`--quic-cc CC[+abe][+abba]` selects a QUIC policy; repeat it for several, e.g. `--quic-cc cubic --quic-cc cuback+abe+abba --quic-cc pico+abe`. CC is `cubic`, `cuback` or `pico`; `+abe` uses the ordinary build under CoDel, while its absence uses `--noabe-build` (required then); `+abba` enables ABBA on both endpoints (cubic and cuback only). The default is `--quic-cc cubic+abe --quic-cc cubic+abe+abba`. Under tail drop `+abe` is dropped, and specs that then coincide run once. Runs are in directories named `quic_` followed by the spec (`quic_cubic+abe+abba`, ...), and the report labels them `QUIC ` followed by the spec in capitals (`QUIC CUBIC+ABE+ABBA`). This changes only the QUIC controller: IW stays 30, pacing stays enabled, and Rapid Start and Jump Start stay disabled. TCP remains CUBIC/BBR. Resume rejects a different selection; result roots made before this option was repeatable can only be re-rendered.
 
-To reuse TCP measurements with a different QUIC controller, copy the complete `<trace-id>/tail/tcp_cubic`, `tail/tcp_bbr`, `codel-5-100/tcp_cubic`, and `codel-5-100/tcp_bbr` directories (and those of any other CoDel setting) into the same relative paths in a new output root. Do not copy the old `matrix-settings.json` or QUIC directories. Existing completed variants are validated and skipped; only missing variants run. Trace/window, controller/startup, kernel, assigned CPU/network worker, and binary hashes must match. Use the same CPU list and trace selection to preserve worker assignment. Directories without `result.json` are incomplete and must be moved aside, not silently skipped. The new matrix settings are saved after validation succeeds.
+To reuse TCP measurements with different QUIC policies, copy the complete `<trace-id>/tail/tcp_cubic`, `tail/tcp_bbr`, `codel-5-100/tcp_cubic`, and `codel-5-100/tcp_bbr` directories (and those of any other CoDel setting) into the same relative paths in a new output root. Do not copy the old `matrix-settings.json` or QUIC directories. Existing completed variants are validated and skipped; only missing variants run. Trace/window, controller/startup, kernel, and binary hashes must match. Directories without `result.json` are incomplete and must be moved aside, not silently skipped. The new matrix settings are saved after validation succeeds.
 
 For one capture, add `--cpu 3` to `run-one.py` to use CPU 3, tun3, peer 192.0.2.4 and port 20003. `metadata.json` records this mapping and `processes.json` records each child PID and verified affinity. `matrix-settings.json` records worker CPUs and trace selection; resume rejects changed settings. Use fresh roots for different concurrency levels. A failed capture stops the matrix and terminates/reaps the other active captures; retain and move incomplete directories before resuming. Send SIGTERM to `matrix.pid` for the same cleanup. Do not SIGKILL the controller or runners.
 

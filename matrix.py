@@ -11,7 +11,21 @@ import signal
 import subprocess
 import sys
 import time
-from workers import parse_cpus, worker
+from workers import parse_cpus
+
+
+def parse_quic_cc(value):
+    """Parses CC[+abe][+abba] into (CC, abe, abba)."""
+    cc, *features = value.split('+')
+    if cc not in ('cubic', 'cuback', 'pico') or not set(features) <= {'abe', 'abba'} or len(set(features)) != len(features):
+        raise argparse.ArgumentTypeError(f'invalid QUIC policy: {value}')
+    if 'abba' in features and cc == 'pico':
+        raise argparse.ArgumentTypeError('ABBA applies only to cubic and cuback')
+    return cc, 'abe' in features, 'abba' in features
+
+
+def quic_cc_name(cc, abe, abba):
+    return cc + ('+abe' if abe else '') + ('+abba' if abba else '')
 
 
 def main():
@@ -20,9 +34,10 @@ def main():
     p.add_argument('--build', type=Path, required=True)
     p.add_argument('--noabe-build', type=Path)
     p.add_argument('--codel', action='append',
-                   help='CoDel target:interval in ms for codel/codel_noabe conditions; repeat for several (default: 5:100)')
-    p.add_argument('--quic-cc', choices=['cubic', 'cuback'], default='cubic',
-                   help='QUIC controller (default: cubic); startup and IW30 remain unchanged')
+                   help='CoDel target:interval in ms for the CoDel conditions; repeat for several (default: 5:100)')
+    p.add_argument('--quic-cc', action='append', type=parse_quic_cc,
+                   help='QUIC policy CC[+abe][+abba], CC being cubic, cuback or pico; repeat for several '
+                        '(default: cubic+abe and cubic+abe+abba)')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--smoke', action='store_true', help='Two-second taxi3 runs')
     p.add_argument('--trace-id', action='append', help='Only this trace ID; repeat to select several')
@@ -44,12 +59,11 @@ def main():
         p.error('No traces selected')
     cpus = a.cpus if a.cpus is not None else [None]
     codels = a.codel or ['5:100']
-    # (directory, condition, CoDel setting, build); runs of each CoDel setting are in directories named after it
-    conditions = [('tail', 'tail', None, a.build)]
-    for codel in codels:
-        conditions.append((f"codel-{codel.replace(':', '-')}", 'codel', codel, a.build))
-        if a.noabe_build:
-            conditions.append((f"codel_noabe-{codel.replace(':', '-')}", 'codel_noabe', codel, a.noabe_build))
+    quic_ccs = a.quic_cc or [parse_quic_cc('cubic+abe'), parse_quic_cc('cubic+abe+abba')]
+    if any(not abe for _, abe, _ in quic_ccs) and a.noabe_build is None:
+        p.error('QUIC policies without +abe require --noabe-build')
+    # (directory, condition, CoDel setting); runs of each CoDel setting are in directories named after it
+    conditions = [('tail', 'tail', None)] + [(f"codel-{codel.replace(':', '-')}", 'codel', codel) for codel in codels]
     a.output.mkdir(parents=True, exist_ok=True)
     output_lock = (a.output / 'matrix.lock').open('a')
     fcntl.flock(output_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -57,7 +71,8 @@ def main():
     controller_cpus = sorted(os.sched_getaffinity(0) - set(a.cpus or []))
     signature = dict(cpus=cpus, traces=[t.name for t in traces], smoke=a.smoke,
                      dry_run=a.dry_run, noabe=bool(a.noabe_build),
-                     controller_cpus=controller_cpus, kernel=platform.release(), quic_cc=a.quic_cc, codel=codels)
+                     controller_cpus=controller_cpus, kernel=platform.release(),
+                     quic_cc=[quic_cc_name(*c) for c in quic_ccs], codel=codels)
     manifest = a.output / 'matrix-settings.json'
     write_manifest = not manifest.exists()
     if manifest.exists():
@@ -80,61 +95,60 @@ def main():
         raw = trace.read_bytes()
         trace_info[trace] = (int(raw.splitlines()[-1]), hashlib.sha256(raw).hexdigest())
     job_index = 0
-    # Jobs of the first CoDel setting come first, so that adding a setting does not change the CPUs assigned to existing runs.
-    groups = [[c for c in conditions if c[2] in (None, codels[0])]]
-    groups += [[c for c in conditions if c[2] == codel] for codel in codels[1:]]
-    for group in groups:
-        for trace in sorted(traces, key=lambda t: trace_info[t][0]):
-            for directory, condition, codel, build in group:
-                queue = 'fifo' if codel is None else f'codel:{codel}'
-                policies = [('tcp', 'cubic', False), ('tcp', 'bbr', False),
-                            ('quic', a.quic_cc, False), ('quic', a.quic_cc, True)]
-                if condition == 'codel_noabe':
-                    policies = policies[2:]
-                for protocol, cc, abba in policies:
-                    cpu = cpus[job_index % len(cpus)]
-                    job_index += 1
-                    policy = protocol + '_' + cc + ('_abba' if abba else '')
-                    out = a.output / trace.name.removeprefix('trace-') / directory / policy
-                    if (out / 'result.json').exists():
-                        m = json.loads((out / 'metadata.json').read_text())
-                        json.loads((out / 'result.json').read_text())
-                        assert (out / 'curves.csv').is_file(), f'Missing curves: {out}'
-                        assert not m['dry_run'] and not a.dry_run
-                        assert m['kernel'] == signature['kernel'], f'Kernel changed: {out}'
-                        assert m['trace_sha256'] == trace_info[trace][1]
-                        assert (m['protocol'], m['cc'], m['abba'], m['condition'], m['queue'], m['rapid_start']) == (protocol, cc, abba, condition, queue, False)
-                        assert m['start_ms'] == 5000
-                        assert m['end_ms'] == (7000 if a.smoke else trace_info[trace][0] - 5000)
-                        if cpu is not None:
-                            assert m['worker'] == worker(cpu)
-                        else:
-                            assert m['worker']['cpu'] is None
-                        for binary, digest in m['binary_sha256'].items():
-                            assert hashlib.sha256((build / Path(binary).name).read_bytes()).hexdigest() == digest
-                        print('Already complete:', out, flush=True)
-                        continue
-                    assert not out.exists(), f'Preserve incomplete directory outside result root before resuming: {out}'
-                    command = [sys.executable, str(kit / 'run-one.py'), protocol, '--cc', cc,
-                               '--trace', str(trace), '--queue', queue, '--condition', condition,
-                               '--build', str(build), '--output', str(out), '--latency']
-                    if codel is not None:
-                        command += ['--codel', codel]
-                    if cpu is not None:
-                        command += ['--cpu', str(cpu)]
-                    if abba:
-                        command += ['--abba']
-                    if a.smoke:
-                        command += ['--end', '7000']
-                    if a.dry_run:
-                        command += ['--dry-run']
-                    jobs[cpu].append((command, out))
+    for trace in sorted(traces, key=lambda t: trace_info[t][0]):
+        for directory, condition, codel in conditions:
+            queue = 'fifo' if codel is None else f'codel:{codel}'
+            # ABE only changes the response to ECN marks, so it is omitted under tail drop
+            quic = [(cc, abe and condition != 'tail', abba) for cc, abe, abba in quic_ccs]
+            policies = [('tcp', 'cubic', False, False), ('tcp', 'bbr', False, False)]
+            policies += [('quic', *c) for c in dict.fromkeys(quic)]
+            for protocol, cc, abe, abba in policies:
+                cpu = cpus[job_index % len(cpus)]
+                job_index += 1
+                policy = protocol + '_' + (quic_cc_name(cc, abe, abba) if protocol == 'quic' else cc)
+                build = a.noabe_build if protocol == 'quic' and condition == 'codel' and not abe else a.build
+                out = a.output / trace.name.removeprefix('trace-') / directory / policy
+                if (out / 'result.json').exists():
+                    m = json.loads((out / 'metadata.json').read_text())
+                    json.loads((out / 'result.json').read_text())
+                    assert (out / 'curves.csv').is_file(), f'Missing curves: {out}'
+                    assert not m['dry_run'] and not a.dry_run
+                    assert m['kernel'] == signature['kernel'], f'Kernel changed: {out}'
+                    assert m['trace_sha256'] == trace_info[trace][1]
+                    # runs predating --abe used the codel_noabe condition for ABE off, and had ABE on under codel otherwise
+                    recorded_abe = m.get('abe', m['protocol'] == 'quic' and m['condition'] == 'codel')
+                    recorded_condition = 'codel' if m['condition'] == 'codel_noabe' else m['condition']
+                    assert (m['protocol'], m['cc'], m['abba'], recorded_abe, recorded_condition, m['queue'], m['rapid_start']) == \
+                        (protocol, cc, abba, abe, condition, queue, False)
+                    assert m['start_ms'] == 5000
+                    assert m['end_ms'] == (7000 if a.smoke else trace_info[trace][0] - 5000)
+                    for binary, digest in m['binary_sha256'].items():
+                        assert hashlib.sha256((build / Path(binary).name).read_bytes()).hexdigest() == digest
+                    print('Already complete:', out, flush=True)
+                    continue
+                assert not out.exists(), f'Preserve incomplete directory outside result root before resuming: {out}'
+                command = [sys.executable, str(kit / 'run-one.py'), protocol, '--cc', cc,
+                           '--trace', str(trace), '--queue', queue, '--condition', condition,
+                           '--build', str(build), '--output', str(out), '--latency']
+                if codel is not None:
+                    command += ['--codel', codel]
+                if cpu is not None:
+                    command += ['--cpu', str(cpu)]
+                if abba:
+                    command += ['--abba']
+                if abe:
+                    command += ['--abe']
+                if a.smoke:
+                    command += ['--end', '7000']
+                if a.dry_run:
+                    command += ['--dry-run']
+                jobs[cpu].append((command, out))
     # Copied completed variants are valid inputs. Record settings only after
     # validating them all, so a rejected import does not bind the output root.
     if write_manifest:
         manifest.write_text(json.dumps(signature, indent=2) + '\n')
     # Finish shared provenance preparation before any capture workers can read it.
-    for build in dict.fromkeys(build.resolve() for _, _, _, build in conditions):
+    for build in dict.fromkeys(b.resolve() for b in (a.build, a.noabe_build) if b is not None):
         subprocess.run([sys.executable, str(kit / 'record-build.py'), '--build', str(build)], check=True)
     original_affinity = os.sched_getaffinity(0)
     active = {}
