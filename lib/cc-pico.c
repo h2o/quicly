@@ -379,22 +379,34 @@ static double prague_rtt_virt(double srtt)
     return srtt > 25 ? srtt : 25;
 }
 
+static int prague_is_running(const struct st_quicly_cc_prague_t *prague)
+{
+    return !isnan(prague->update_at);
+}
+
+static void prague_start(struct st_quicly_cc_prague_t *prague, double srtt, int64_t now)
+{
+    prague->update_at = now + prague_rtt_virt(srtt);
+    prague->acked = prague->marked = 0;
+}
+
+static void prague_stop(struct st_quicly_cc_prague_t *prague)
+{
+    *prague = (struct st_quicly_cc_prague_t){.alpha = NAN, .update_at = NAN};
+}
+
 static void prague_on_acked(struct st_quicly_cc_prague_t *prague, double srtt, int64_t now, const quicly_cc_ecn_counts_t *counts)
 {
+    assert(prague_is_running(prague));
     assert(counts->ce <= counts->total);
 
-    if (isnan(prague->alpha) && counts->ce != 0) {
-        prague->alpha = 1;
+    prague->acked += counts->total;
+    prague->marked += counts->ce;
+    if (now >= prague->update_at && prague->acked != 0) {
+        double frac = (double)prague->marked / prague->acked;
+        prague->alpha = isnan(prague->alpha) ? frac : prague->alpha + (frac - prague->alpha) / 16;
+        prague->acked = prague->marked = 0;
         prague->update_at = now + prague_rtt_virt(srtt);
-    }
-    if (!isnan(prague->alpha)) {
-        prague->acked += counts->total;
-        prague->marked += counts->ce;
-        if (now >= prague->update_at && prague->acked != 0) {
-            prague->alpha += ((double)prague->marked / prague->acked - prague->alpha) / 16;
-            prague->acked = prague->marked = 0;
-            prague->update_at = now + prague_rtt_virt(srtt);
-        }
     }
 }
 
@@ -421,7 +433,7 @@ static uint32_t prague_grow(struct st_quicly_cc_prague_t *prague, uint32_t cwnd,
 
 static int in_prague_ca(const quicly_cc_t *cc)
 {
-    if (isnan(cc->state.pico.prague.alpha))
+    if (!prague_is_running(&cc->state.pico.prague))
         return 0;
     assert(cc->type == &quicly_cc_type_cuback);
     return cc->state.pico.cuback.by_ecn;
@@ -615,12 +627,12 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     assert(inflight >= bytes);
 
     /* Prague: the marking estimator runs regardless of loss recovery; CE itself is reported through `pico_on_lost`. */
-    if (cc->type == &quicly_cc_type_cuback) {
+    if (prague_is_running(&cc->state.pico.prague)) {
         if (l4s != NULL) {
             prague_on_acked(&cc->state.pico.prague, loss->rtt.smoothed, now, l4s);
-        } else if (!isnan(cc->state.pico.prague.alpha)) {
+        } else {
             /* ECN validation failed: disable Prague */
-            cc->state.pico.prague = (struct st_quicly_cc_prague_t){.alpha = NAN};
+            prague_stop(&cc->state.pico.prague);
             cc->state.pico.cuback.by_ecn = 0;
         }
     }
@@ -644,6 +656,10 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     /* Prague: first ACK past recovery; stop ignoring CE after this ACK */
     if (cc->state.pico.prague.ignore_ce_until == INFINITY)
         cc->state.pico.prague.ignore_ce_until = now;
+    /* Prague: start the estimator past the recovery that ended startup, so that it does not sample the overshoot of startup */
+    if (cc->type == &quicly_cc_type_cuback && l4s != NULL && cc->num_loss_episodes != 0 &&
+        !prague_is_running(&cc->state.pico.prague))
+        prague_start(&cc->state.pico.prague, loss->rtt.smoothed, now);
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
@@ -739,10 +755,10 @@ Cleanup:
 static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t bytes, uint64_t lost_pn, uint64_t next_pn,
                          int64_t now, uint32_t max_udp_payload_size)
 {
-#define PRAGUE_REDUCTION() (bytes == 0 && !isnan(cc->state.pico.prague.alpha) && cc->num_loss_episodes != 0)
+#define PRAGUE_REDUCTION() (bytes == 0 && prague_is_running(&cc->state.pico.prague))
 
-    /* Prague: ignore CE for a virtual RTT after a reduction, and until past recovery exit */
-    if (PRAGUE_REDUCTION() && now <= cc->state.pico.prague.ignore_ce_until)
+    /* Prague: ignore CE until the first sample completes, for a virtual RTT after a reduction, and until past recovery exit */
+    if (PRAGUE_REDUCTION() && (isnan(cc->state.pico.prague.alpha) || now <= cc->state.pico.prague.ignore_ce_until))
         return;
 
     if (!PRAGUE_REDUCTION())
@@ -766,7 +782,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
      * exit to Rapid Start and related states, before entering the next recovery period in the following blocks. */
     if (quicly_cc_rapid_start_is_in_first_recovery(&cc->rapid_start))
         pico_on_acked(cc, loss, 0, cc->recovery_end, (uint32_t)loss->sentmap.bytes_in_flight, 0, next_pn, now, max_udp_payload_size,
-                      isnan(cc->state.pico.prague.alpha) ? NULL : &(quicly_cc_ecn_counts_t){0} /* keep Prague as is */);
+                      prague_is_running(&cc->state.pico.prague) ? &(quicly_cc_ecn_counts_t){0} : NULL /* keep Prague as is */);
 
     /* Prague: past startup, reduce CWND without starting a loss episode or a recovery period. Additive increase does not stop
      * (draft-briscoe-iccrg-prague-congestion-control-04, Section 2.4.3), and a loss that follows is acted on as a new episode,
@@ -970,7 +986,7 @@ static void pico_on_sent(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 static void pico_init_pico_state(quicly_cc_t *cc)
 {
     /* Initialize the state overlaid by each policy implemented in this file. */
-    cc->state.pico.prague = (struct st_quicly_cc_prague_t){.alpha = NAN};
+    prague_stop(&cc->state.pico.prague);
     cc->state.pico.abba = (struct st_quicly_cc_abba_t){.a = 0, .b = NAN};
     cc->state.pico.bytes_to_mtu_increase = 0;
     if (cc->type == &quicly_cc_type_cuback) {

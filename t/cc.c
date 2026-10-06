@@ -1645,27 +1645,35 @@ static void l4s_acked(quicly_cc_t *cc, quicly_loss_t *loss, uint32_t bytes, uint
 
 static void test_prague_estimator(void)
 {
-    struct st_quicly_cc_prague_t prague = {.alpha = NAN};
+    struct st_quicly_cc_prague_t prague;
 
-    /* Dormant until the first CE. */
-    prague_on_acked(&prague, 100, 0, &(quicly_cc_ecn_counts_t){10, 0});
-    ok(isnan(prague.alpha) && prague.acked == 0);
+    prague_stop(&prague);
+    ok(!prague_is_running(&prague) && isnan(prague.alpha));
 
-    /* The first CE initializes alpha to one; samples are then applied once per virtual RTT, with gain 1/16. */
-    prague_on_acked(&prague, 100, 0, &(quicly_cc_ecn_counts_t){1, 1});
-    ok(prague.alpha == 1 && prague.update_at == 100);
-    prague_on_acked(&prague, 100, 50, &(quicly_cc_ecn_counts_t){15, 0});
-    ok(prague.alpha == 1);
-    prague_on_acked(&prague, 100, 100, &no_ecn_counts);
-    ok(prague.alpha == 241. / 256 && prague.update_at == 200);
+    /* Once started, the first sample spans a virtual RTT and initializes alpha directly. */
+    prague_start(&prague, 100, 0);
+    ok(prague_is_running(&prague) && prague.update_at == 100 && isnan(prague.alpha));
+    prague_on_acked(&prague, 100, 50, &(quicly_cc_ecn_counts_t){12, 3});
+    ok(isnan(prague.alpha));
+    prague_on_acked(&prague, 100, 100, &(quicly_cc_ecn_counts_t){4, 1});
+    ok(prague.alpha == 0.25 && prague.update_at == 200);
+
+    /* Subsequent samples are applied once per virtual RTT, with gain 1/16. */
+    prague_on_acked(&prague, 100, 200, &(quicly_cc_ecn_counts_t){16, 0});
+    double alpha = 0.25 * 15 / 16;
+    ok(prague.alpha == alpha && prague.update_at == 300);
 
     /* The virtual RTT is at least 25ms. */
-    prague_on_acked(&prague, 5, 200, &(quicly_cc_ecn_counts_t){16, 0});
-    ok(prague.alpha == 241. / 256 * 15 / 16 && prague.update_at == 225);
+    prague_on_acked(&prague, 5, 300, &(quicly_cc_ecn_counts_t){16, 16});
+    alpha += (1 - alpha) / 16;
+    ok(prague.alpha == alpha && prague.update_at == 325);
 
     /* Silence is not an unmarked sample. */
     prague_on_acked(&prague, 5, 1000, &no_ecn_counts);
-    ok(prague.alpha == 241. / 256 * 15 / 16);
+    ok(prague.alpha == alpha);
+
+    prague_stop(&prague);
+    ok(!prague_is_running(&prague) && isnan(prague.alpha));
 }
 
 static void test_prague_grow(void)
@@ -1701,18 +1709,20 @@ static void test_prague_growth(void)
     uint32_t mtu = 1200;
     init_prague(&cc, mtu);
 
-    /* The first CE exits startup like classic CE does, then selects Prague growth. */
+    /* The first CE exits startup like classic CE does; the estimator does not run until the recovery ends. */
     l4s_acked(&cc, &loss, 0, 90, 100, 1000, mtu, 10, 1);
     ok(cc.cwnd == 50 * mtu && cc.ssthresh == cc.cwnd);
-    ok(cc.state.pico.prague.alpha == 1 && cc.state.pico.cuback.by_ecn);
+    ok(!prague_is_running(&cc.state.pico.prague) && cc.state.pico.cuback.by_ecn);
     ok(cc.recovery_end == 100);
     ok(cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1 && cc.num_prague_reductions == 0);
     ok(cc.cwnd_exiting_slow_start == 100 * mtu);
     l4s_acked(&cc, &loss, 25 * mtu, 99, 100, 1010, mtu, 25, 1);
     ok(cc.cwnd == 50 * mtu && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1);
 
-    /* Past recovery, Prague adds one MTU per CWND acknowledged (as SRTT is above the virtual RTT), carrying the fraction. */
+    /* Past recovery, the estimator starts, and Prague adds one MTU per CWND acknowledged (as SRTT is above the virtual RTT),
+     * carrying the fraction. */
     cc.type->cc_on_acked(&cc, &loss, 25 * mtu, 100, 50 * mtu, 1, 200, 1100, mtu, &no_ecn_counts);
+    ok(prague_is_running(&cc.state.pico.prague) && cc.state.pico.prague.update_at == 1200);
     ok(cc.cwnd == 50 * mtu && cc.state.pico.prague.increase_carry == 0.5);
     cc.type->cc_on_acked(&cc, &loss, 25 * mtu, 101, 50 * mtu, 1, 200, 1110, mtu, &no_ecn_counts);
     ok(cc.cwnd == 51 * mtu && cc.state.pico.prague.increase_carry == 0);
@@ -1720,11 +1730,15 @@ static void test_prague_growth(void)
     double carry = cc.state.pico.prague.increase_carry;
     ok(cc.cwnd == 51 * mtu && fabs(carry - 1. / 3) < 1e-9);
 
-    /* Once past startup, CE reduces by alpha / 2 without starting a loss episode or entering recovery; the carried fraction is
-     * retained. */
+    /* CE is ignored until the first sample completes. */
     uint32_t before = cc.cwnd, cwnd_prior = cc.state.pico.cuback.cwnd_prior;
     l4s_acked(&cc, &loss, 0, 150, 200, 1150, mtu, 10, 1);
-    ok(cc.cwnd == (uint32_t)(before * (1 - cc.state.pico.prague.alpha / 2)));
+    ok(cc.cwnd == before && cc.num_prague_reductions == 0);
+
+    /* Then, CE reduces by alpha / 2 without starting a loss episode or entering recovery; the carried fraction is retained. */
+    l4s_acked(&cc, &loss, 0, 160, 200, 1200, mtu, 10, 1);
+    ok(cc.state.pico.prague.alpha == 0.1);
+    ok(cc.cwnd == (uint32_t)(before * (1 - 0.1 / 2)));
     ok(cc.recovery_end == 100 && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1 && cc.num_prague_reductions == 1);
     ok(cc.state.pico.cuback.cwnd_prior == cwnd_prior);
     ok(cc.state.pico.prague.increase_carry == carry);
@@ -1732,18 +1746,18 @@ static void test_prague_growth(void)
     /* Growth continues in CWR state, driven only by unmarked bytes, while CE remains suppressed until the virtual RTT has
      * passed. */
     before = cc.cwnd;
-    l4s_acked(&cc, &loss, 2 * mtu, 190, 200, 1160, mtu, 2, 1);
+    l4s_acked(&cc, &loss, 2 * mtu, 190, 200, 1210, mtu, 2, 1);
     ok(cc.cwnd == before && cc.num_loss_episodes == 1);
     ok(fabs(cc.state.pico.prague.increase_carry - (carry + (double)mtu / before)) < 1e-9);
     uint32_t bytes = (uint32_t)ceil((1 - cc.state.pico.prague.increase_carry) * before);
-    cc.type->cc_on_acked(&cc, &loss, bytes, 191, bytes, 1, 200, 1170, mtu, &no_ecn_counts);
+    cc.type->cc_on_acked(&cc, &loss, bytes, 191, bytes, 1, 200, 1220, mtu, &no_ecn_counts);
     ok(cc.cwnd == before + mtu);
     before = cc.cwnd;
-    l4s_acked(&cc, &loss, 0, 201, 300, 1240, mtu, 1, 1);
+    l4s_acked(&cc, &loss, 0, 201, 300, 1290, mtu, 1, 1);
     ok(cc.cwnd == before && cc.num_loss_episodes == 1 && cc.num_prague_reductions == 1);
-    l4s_acked(&cc, &loss, 0, 202, 300, 1250, mtu, 1, 1);
+    l4s_acked(&cc, &loss, 0, 202, 300, 1300, mtu, 1, 1);
     ok(cc.cwnd == before && cc.num_prague_reductions == 1); /* suppression is inclusive of `ignore_ce_until` */
-    l4s_acked(&cc, &loss, 0, 203, 300, 1251, mtu, 1, 1);
+    l4s_acked(&cc, &loss, 0, 203, 300, 1301, mtu, 1, 1);
     ok(cc.cwnd < before && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1 && cc.num_prague_reductions == 2);
 }
 
@@ -1753,12 +1767,13 @@ static void test_prague_loss(void)
     quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100}};
     uint32_t mtu = 1200;
     init_prague(&cc, mtu);
-    /* Exit startup by CE, and bring alpha below one. */
+    /* Exit startup by CE, then take the first sample past its recovery, during which CE is ignored. */
     l4s_acked(&cc, &loss, 0, 9, 10, 0, mtu, 1, 1);
     l4s_acked(&cc, &loss, 0, 20, 30, 100, mtu, 15, 0);
-    l4s_acked(&cc, &loss, 0, 40, 50, 200, mtu, 16, 0);
+    l4s_acked(&cc, &loss, 0, 30, 50, 150, mtu, 8, 4);
+    l4s_acked(&cc, &loss, 0, 40, 50, 200, mtu, 8, 0);
     double alpha = cc.state.pico.prague.alpha;
-    ok(alpha < 1);
+    ok(alpha == 0.25 && cc.num_prague_reductions == 0);
 
     /* Loss selects CUBACK growth, leaving alpha intact; the estimator keeps running during loss recovery. */
     uint32_t before = cc.cwnd;
@@ -1830,12 +1845,15 @@ static void test_prague_recovery_exit(void)
     l4s_acked(&cc, &loss, 0, 13, 20, 100, mtu, 1, 1);
     ok(cc.cwnd == cwnd && cc.num_prague_reductions == 0);
 
-    /* CE on a later ACK frame is acted upon. */
+    /* Past the recovery that ended startup, CE is also ignored until the first sample completes. */
     l4s_acked(&cc, &loss, 0, 14, 20, 101, mtu, 1, 1);
+    ok(cc.cwnd == cwnd && cc.num_prague_reductions == 0);
+    l4s_acked(&cc, &loss, 0, 15, 20, 200, mtu, 1, 1);
+    ok(cc.state.pico.prague.alpha == 1);
     ok(cc.cwnd < cwnd && cc.num_prague_reductions == 1);
 
-    /* Loss recovery suppresses CE likewise, until its exit is observed. */
-    cc.type->cc_on_lost(&cc, &loss, mtu, 15, 30, 400, mtu);
+    /* Loss recovery suppresses CE likewise, until its exit is observed; the estimator keeps running. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 16, 30, 400, mtu);
     ok(cc.recovery_end == 30 && cc.state.pico.prague.ignore_ce_until == INFINITY);
     cwnd = cc.cwnd;
     l4s_acked(&cc, &loss, 0, 25, 30, 1000, mtu, 1, 1);
@@ -1853,18 +1871,20 @@ static void test_prague_ecn_disabled(void)
     quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100}};
     uint32_t mtu = 1200;
     init_prague(&cc, mtu);
-    /* Exit startup by CE, then reduce by Prague once recovery exit has been observed. */
+    /* Exit startup by CE, then reduce by Prague once the first sample past its recovery completes. */
     l4s_acked(&cc, &loss, 0, 9, 10, 0, mtu, 1, 1);
     l4s_acked(&cc, &loss, 0, 19, 30, 190, mtu, 1, 0);
     l4s_acked(&cc, &loss, 0, 20, 30, 200, mtu, 1, 1);
+    l4s_acked(&cc, &loss, 0, 21, 30, 290, mtu, 1, 1);
     ok(cc.num_prague_reductions == 1 && in_prague_ca(&cc));
 
-    /* Once ECN is disabled, the estimator returns to dormant and CUBACK growth resumes. */
+    /* Once ECN is disabled, the estimator stops and CUBACK growth resumes. */
     uint32_t before = cc.cwnd;
-    cc.type->cc_on_acked(&cc, &loss, 0, 21, before, 1, 30, 210, mtu, NULL);
-    ok(isnan(cc.state.pico.prague.alpha) && !cc.state.pico.cuback.by_ecn && !in_prague_ca(&cc));
+    cc.type->cc_on_acked(&cc, &loss, 0, 22, before, 1, 30, 300, mtu, NULL);
+    ok(!prague_is_running(&cc.state.pico.prague) && isnan(cc.state.pico.prague.alpha));
+    ok(!cc.state.pico.cuback.by_ecn && !in_prague_ca(&cc));
     ok(cc.cwnd == before);
-    cc.type->cc_on_acked(&cc, &loss, mtu, 22, before, 1, 30, 220, mtu, NULL);
+    cc.type->cc_on_acked(&cc, &loss, mtu, 23, before, 1, 30, 310, mtu, NULL);
     ok(cc.state.pico.prague.increase_carry == 0);
     ok(calc_bytes_per_mtu_increase(&cc, &loss, mtu) ==
        cuback_bytes_per_mtu_increase(&cc.state.pico.cuback, cc.cwnd, cc.ssthresh, mtu, mtu));
@@ -1872,7 +1892,7 @@ static void test_prague_ecn_disabled(void)
     /* Subsequent congestion signals receive the classic response. */
     before = cc.cwnd;
     uint32_t num_loss_episodes = cc.num_loss_episodes;
-    cc.type->cc_on_lost(&cc, &loss, 0, 25, 40, 230, mtu);
+    cc.type->cc_on_lost(&cc, &loss, 0, 25, 40, 320, mtu);
     ok(cc.num_loss_episodes == num_loss_episodes + 1 && cc.num_prague_reductions == 1);
     ok(cc.cwnd == (uint32_t)(before * (QUICLY_USE_ABE ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS)));
 }

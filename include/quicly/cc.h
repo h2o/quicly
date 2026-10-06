@@ -235,9 +235,12 @@ struct st_quicly_cc_cubic_t {
  */
 struct st_quicly_cc_prague_t {
     /**
-     * NAN until the first L4S CE report initializes it; the estimator stays dormant until then.
+     * NAN until the first sample completes.
      */
     double alpha;
+    /**
+     * NAN while the estimator is not running; it starts past the recovery that ended startup, and stops if ECN is disabled.
+     */
     double update_at;
     uint64_t acked, marked;
     double ignore_ce_until;
