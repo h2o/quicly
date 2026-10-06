@@ -1742,6 +1742,8 @@ static void test_prague_growth(void)
     l4s_acked(&cc, &loss, 0, 201, 300, 1240, mtu, 1, 1);
     ok(cc.cwnd == before && cc.num_loss_episodes == 1 && cc.num_prague_reductions == 1);
     l4s_acked(&cc, &loss, 0, 202, 300, 1250, mtu, 1, 1);
+    ok(cc.cwnd == before && cc.num_prague_reductions == 1); /* suppression is inclusive of `ignore_ce_until` */
+    l4s_acked(&cc, &loss, 0, 203, 300, 1251, mtu, 1, 1);
     ok(cc.cwnd < before && cc.num_loss_episodes == 1 && cc.num_ecn_loss_episodes == 1 && cc.num_prague_reductions == 2);
 }
 
@@ -1806,14 +1808,54 @@ static void test_prague_loss(void)
     ok(!cc.state.pico.cuback.by_ecn); /* feedback from before loss does not override loss recovery */
 }
 
+static void test_prague_recovery_exit(void)
+{
+    quicly_cc_t cc;
+    quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100}};
+    uint32_t mtu = 1200;
+    init_prague(&cc, mtu);
+
+    /* Exit startup by CE; CE remains suppressed during recovery. */
+    l4s_acked(&cc, &loss, 0, 9, 10, 0, mtu, 1, 1);
+    ok(cc.recovery_end == 10 && cc.state.pico.prague.ignore_ce_until == INFINITY);
+    uint32_t cwnd = cc.cwnd;
+    l4s_acked(&cc, &loss, 0, 9, 10, 50, mtu, 1, 1);
+    ok(cc.cwnd == cwnd && cc.state.pico.prague.ignore_ce_until == INFINITY);
+
+    /* The ACK frame observing recovery exit may also cover packets sent before recovery entry; its CE is ignored, as is CE within
+     * the same millisecond. */
+    l4s_acked(&cc, &loss, 0, 12, 20, 100, mtu, 2, 1);
+    ok(cc.state.pico.prague.ignore_ce_until == 100);
+    ok(cc.cwnd == cwnd && cc.num_prague_reductions == 0);
+    l4s_acked(&cc, &loss, 0, 13, 20, 100, mtu, 1, 1);
+    ok(cc.cwnd == cwnd && cc.num_prague_reductions == 0);
+
+    /* CE on a later ACK frame is acted upon. */
+    l4s_acked(&cc, &loss, 0, 14, 20, 101, mtu, 1, 1);
+    ok(cc.cwnd < cwnd && cc.num_prague_reductions == 1);
+
+    /* Loss recovery suppresses CE likewise, until its exit is observed. */
+    cc.type->cc_on_lost(&cc, &loss, mtu, 15, 30, 400, mtu);
+    ok(cc.recovery_end == 30 && cc.state.pico.prague.ignore_ce_until == INFINITY);
+    cwnd = cc.cwnd;
+    l4s_acked(&cc, &loss, 0, 25, 30, 1000, mtu, 1, 1);
+    ok(cc.cwnd == cwnd && cc.num_prague_reductions == 1);
+    l4s_acked(&cc, &loss, 0, 31, 40, 1100, mtu, 2, 1);
+    ok(cc.state.pico.prague.ignore_ce_until == 1100);
+    ok(cc.cwnd == cwnd && cc.num_prague_reductions == 1);
+    l4s_acked(&cc, &loss, 0, 32, 40, 1101, mtu, 1, 1);
+    ok(cc.cwnd < cwnd && cc.num_prague_reductions == 2);
+}
+
 static void test_prague_ecn_disabled(void)
 {
     quicly_cc_t cc;
     quicly_loss_t loss = {.rtt = {.latest = 100, .smoothed = 100}};
     uint32_t mtu = 1200;
     init_prague(&cc, mtu);
-    /* Exit startup by CE, then reduce by Prague. */
+    /* Exit startup by CE, then reduce by Prague once recovery exit has been observed. */
     l4s_acked(&cc, &loss, 0, 9, 10, 0, mtu, 1, 1);
+    l4s_acked(&cc, &loss, 0, 19, 30, 190, mtu, 1, 0);
     l4s_acked(&cc, &loss, 0, 20, 30, 200, mtu, 1, 1);
     ok(cc.num_prague_reductions == 1 && in_prague_ca(&cc));
 
@@ -1841,6 +1883,7 @@ void test_cc(void)
     subtest("prague-grow", test_prague_grow);
     subtest("prague-growth", test_prague_growth);
     subtest("prague-loss", test_prague_loss);
+    subtest("prague-recovery-exit", test_prague_recovery_exit);
     subtest("prague-ecn-disabled", test_prague_ecn_disabled);
     subtest("fast-cbrt", test_fast_cbrt);
     subtest("rapid-start", test_rapid_start);

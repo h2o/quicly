@@ -641,6 +641,10 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
         return;
     }
 
+    /* Prague: first ACK past recovery; stop ignoring CE after this ACK */
+    if (cc->state.pico.prague.ignore_ce_until == INFINITY)
+        cc->state.pico.prague.ignore_ce_until = now;
+
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
     /* ABBA: update state */
@@ -737,8 +741,8 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
 {
 #define PRAGUE_REDUCTION() (bytes == 0 && !isnan(cc->state.pico.prague.alpha) && cc->num_loss_episodes != 0)
 
-    /* Prague: suppress repeated reductions until a virtual RTT has passed */
-    if (PRAGUE_REDUCTION() && now < cc->state.pico.prague.reduce_at)
+    /* Prague: ignore CE for a virtual RTT after a reduction, and until past recovery exit */
+    if (PRAGUE_REDUCTION() && now <= cc->state.pico.prague.ignore_ce_until)
         return;
 
     if (!PRAGUE_REDUCTION())
@@ -768,7 +772,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
      * (draft-briscoe-iccrg-prague-congestion-control-04, Section 2.4.3), and a loss that follows is acted on as a new episode,
      * because the Prague reduction can be small. The reduction cannot be undone. */
     if (PRAGUE_REDUCTION()) {
-        cc->state.pico.prague.reduce_at = now + prague_rtt_virt(loss->rtt.smoothed);
+        cc->state.pico.prague.ignore_ce_until = now + prague_rtt_virt(loss->rtt.smoothed);
         cc->cwnd *= 1 - cc->state.pico.prague.alpha / 2;
         if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
             cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
@@ -814,6 +818,7 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
         abba_on_congestion(&cc->state.pico.abba, cc->cwnd, &loss->rtt, bytes == 0);
 
     cc->recovery_end = next_pn;
+    cc->state.pico.prague.ignore_ce_until = INFINITY; /* Prague: no reduction until recovery exit */
     ++cc->num_loss_episodes;
 
     /* end of slow start */

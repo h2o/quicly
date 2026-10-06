@@ -240,7 +240,7 @@ struct st_quicly_cc_prague_t {
     double alpha;
     double update_at;
     uint64_t acked, marked;
-    double reduce_at;
+    double ignore_ce_until;
     /**
      * fraction of an MTU accumulated toward the next increase of Prague growth
      */
