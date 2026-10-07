@@ -384,15 +384,16 @@ static int prague_is_running(const struct st_quicly_cc_prague_t *prague)
     return !isnan(prague->update_at);
 }
 
-static void prague_start(struct st_quicly_cc_prague_t *prague, double srtt, int64_t now)
+static void prague_start(struct st_quicly_cc_prague_t *prague, double srtt, int64_t now, double beta)
 {
     prague->update_at = now + prague_rtt_virt(srtt);
     prague->acked = prague->marked = 0;
+    prague->beta = beta;
 }
 
 static void prague_stop(struct st_quicly_cc_prague_t *prague)
 {
-    *prague = (struct st_quicly_cc_prague_t){.alpha = NAN, .update_at = NAN};
+    *prague = (struct st_quicly_cc_prague_t){.alpha = NAN, .update_at = NAN, .beta = NAN};
 }
 
 static void prague_on_acked(struct st_quicly_cc_prague_t *prague, double srtt, int64_t now, const quicly_cc_ecn_counts_t *counts)
@@ -481,7 +482,8 @@ static void abba_on_congestion(struct st_quicly_cc_abba_t *state, uint32_t cwnd,
     };
 }
 
-static void abba_on_acked(struct st_quicly_cc_abba_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int in_recovery, int by_ecn)
+static void abba_on_acked(struct st_quicly_cc_abba_t *state, uint32_t cwnd, const quicly_rtt_t *rtt, int in_recovery, int by_ecn,
+                          double beta)
 {
     if (state->high.cwnd == 0 || rtt->latest == 0)
         return;
@@ -512,8 +514,8 @@ static void abba_on_acked(struct st_quicly_cc_abba_t *state, uint32_t cwnd, cons
 
     /* Beyond Wh * (2 - beta), adopt RTT proportional to CWND without lowering the RTT target already being pursued. Use the
      * recent RTT floor if it is higher, or if no model exists. Leave an already proportional model unchanged, so its predicted
-     * RTT rises with CWND while RTT stays flat. Wh is the actual congestion window, not a Wmax adjusted by the policy. */
-    double beta = QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+     * RTT rises with CWND while RTT stays flat. Wh is the actual congestion window, not a Wmax adjusted by the policy. beta is the
+     * factor of the reduction that started the current period. */
     if (state->b != 0 && cwnd > state->high.cwnd * (2 - beta)) {
         double rtt_target = quicly_rtt_get_floor(rtt);
         if (!isnan(state->b)) {
@@ -526,8 +528,11 @@ static void abba_on_acked(struct st_quicly_cc_abba_t *state, uint32_t cwnd, cons
     }
 }
 
+/**
+ * @param by_ecn  whether the current period was started by ECN-CE, or NULL under L4S
+ */
 static uint32_t abba_on_growth(struct st_quicly_cc_abba_t *state, uint32_t cwnd, uint32_t cubic_cwnd, uint32_t acked,
-                               const quicly_rtt_t *rtt, uint32_t cwnd_prior, int by_ecn)
+                               const quicly_rtt_t *rtt, uint32_t cwnd_prior, const int *by_ecn)
 {
     if (acked == 0)
         goto Exit;
@@ -545,11 +550,16 @@ static uint32_t abba_on_growth(struct st_quicly_cc_abba_t *state, uint32_t cwnd,
      * If congestion occurs below cwnd_prior, allow for another RTT of growth before its feedback arrives. Since beta^(-2/3)
      * is less than 1 / beta, ABBA's growth keeps CWND below cwnd_prior / beta at feedback, so reducing by beta yields a window
      * below cwnd_prior. Ordinary CUBIC/Cuback growth is still allowed to win and remains the policy's responsibility.
-     * These precomputed additive gains are pow(beta, -2. / 3) - 1 for loss and ECN, respectively. */
-    static const double max_gain[2] = {0.2684342882037154, 0.11443322021871727};
-    double beta = QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
-    if (cwnd < cwnd_prior / beta && gain > max_gain[QUICLY_USE_ABE && by_ecn])
-        gain = max_gain[QUICLY_USE_ABE && by_ecn];
+     * These precomputed additive gains are pow(beta, -2. / 3) - 1 for loss and ECN, respectively. Under L4S, the gain is not
+     * limited, assuming that the queue is kept short enough for the model to remain flat, so that acceleration happens only beyond
+     * high * (2 - beta). */
+    if (by_ecn != NULL) {
+        static const double max_gain[2] = {0.2684342882037154, 0.11443322021871727};
+        int use_ecn_beta = QUICLY_USE_ABE && *by_ecn;
+        double beta = use_ecn_beta ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+        if (cwnd < cwnd_prior / beta && gain > max_gain[use_ecn_beta])
+            gain = max_gain[use_ecn_beta];
+    }
 
     /* Compete with ordinary growth from the same pre-ACK CWND. */
     double increase = acked * gain + state->increase_remainder;
@@ -639,9 +649,11 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     /* In recovery period: CWND remains the same (but either jumpstart or rapid start may handle it differently). */
     if (largest_acked < cc->recovery_end) {
-        if (abba_enabled(cc))
-            abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 1,
-                          cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
+        if (abba_enabled(cc)) {
+            int by_ecn = cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn;
+            double beta = QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+            abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 1, by_ecn, beta);
+        }
         if (quicly_cc_rapid_start_is_active(&cc->rapid_start)) {
             if (cc->num_loss_episodes == 1) {
                 quicly_cc_rapid_start_on_recovery(&cc->rapid_start, &cc->cwnd, bytes, 0);
@@ -660,16 +672,19 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     } else if (cc->type == &quicly_cc_type_cuback && l4s != NULL && cc->num_loss_episodes != 0) {
         /* Prague: start the estimator once past the recovery that ended startup, so that it does not sample the overshoot of
          * startup */
-        prague_start(&cc->state.pico.prague, loss->rtt.smoothed, now);
+        prague_start(&cc->state.pico.prague, loss->rtt.smoothed, now,
+                     QUICLY_USE_ABE && cc->state.pico.cuback.by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS);
     }
 
     quicly_cc_jumpstart_on_acked(cc, 0, bytes, largest_acked, inflight, next_pn);
 
     /* ABBA: update state */
-    if (!in_prague_ca(cc) && abba_enabled(cc) && cc->cwnd >= cc->ssthresh) {
+    if (abba_enabled(cc) && cc->cwnd >= cc->ssthresh) {
         int was_fit = cc->state.pico.abba.a > 0;
-        abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 0,
-                      cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn);
+        int by_ecn = cc->type == &quicly_cc_type_cubic ? cc->state.pico.cubic.by_ecn : cc->state.pico.cuback.by_ecn;
+        double beta =
+            in_prague_ca(cc) ? cc->state.pico.prague.beta : QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS;
+        abba_on_acked(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 0, by_ecn, beta);
         if (!was_fit && cc->state.pico.abba.a > 0)
             ++cc->num_accel_eligible_episodes;
     }
@@ -697,7 +712,8 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
                 cc->cwnd = pre_cwnd;
             if (cc_limited && state->cc_limited) {
                 uint32_t accel_cwnd =
-                    abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt, state->cwnd_prior, state->by_ecn);
+                    abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt, state->cwnd_prior,
+                                   &(int){state->by_ecn});
                 if (cc->cwnd < accel_cwnd) {
                     cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
                     cc->cwnd = accel_cwnd;
@@ -720,6 +736,14 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
     if (in_prague_ca(cc)) {
         cc->cwnd =
             prague_grow(&cc->state.pico.prague, cc->cwnd, cc->conf->normalize_mtu, loss->rtt.smoothed, bytes, max_udp_payload_size, l4s);
+        if (abba_enabled(cc)) {
+            uint32_t accel_cwnd = abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
+                                                 cc->state.pico.cuback.cwnd_prior, NULL);
+            if (cc->cwnd < accel_cwnd) {
+                cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
+                cc->cwnd = accel_cwnd;
+            }
+        }
         goto Cleanup;
     }
 
@@ -737,8 +761,9 @@ static void pico_on_acked(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t b
 
     if (abba_enabled(cc) && pre_cwnd >= cc->ssthresh) {
         /* Keep the partially consumed Cuback interval even when acceleration supplies the larger window. */
-        uint32_t accel_cwnd = abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt,
-                                             cc->state.pico.cuback.cwnd_prior, cc->state.pico.cuback.by_ecn);
+        uint32_t accel_cwnd =
+            abba_on_growth(&cc->state.pico.abba, pre_cwnd, cc->cwnd, bytes, &loss->rtt, cc->state.pico.cuback.cwnd_prior,
+                           &(int){cc->state.pico.cuback.by_ecn});
         if (cc->cwnd < accel_cwnd) {
             cc->cwnd_increase_accel += accel_cwnd - cc->cwnd;
             cc->cwnd = accel_cwnd;
@@ -790,8 +815,11 @@ static void pico_on_lost(quicly_cc_t *cc, const quicly_loss_t *loss, uint32_t by
      * (draft-briscoe-iccrg-prague-congestion-control-04, Section 2.4.3), and a loss that follows is acted on as a new episode,
      * because the Prague reduction can be small. The reduction cannot be undone. */
     if (PRAGUE_REDUCTION()) {
+        if (abba_enabled(cc))
+            abba_on_congestion(&cc->state.pico.abba, cc->cwnd, &loss->rtt, 1);
         cc->state.pico.prague.ignore_ce_until = now + prague_rtt_virt(loss->rtt.smoothed);
-        cc->cwnd *= 1 - cc->state.pico.prague.alpha / 2;
+        cc->state.pico.prague.beta = 1 - cc->state.pico.prague.alpha / 2;
+        cc->cwnd = (uint32_t)(cc->cwnd * (double)cc->state.pico.prague.beta);
         if (cc->cwnd < QUICLY_MIN_CWND * max_udp_payload_size)
             cc->cwnd = QUICLY_MIN_CWND * max_udp_payload_size;
         cc->state.pico.cuback.by_ecn = 1;

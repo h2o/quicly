@@ -237,7 +237,12 @@ struct st_quicly_cc_prague_t {
     /**
      * NAN until the first sample completes.
      */
-    double alpha;
+    float alpha;
+    /**
+     * NAN while the estimator is not running; otherwise the beta that ABBA uses during Prague growth: `1 - alpha / 2` of the latest
+     * Prague reduction, or until then, the beta that CUBACK uses for the congestion signal that ended startup.
+     */
+    float beta;
     /**
      * NAN while the estimator is not running; it starts past the recovery that ended startup, and stops if ECN is disabled.
      */
