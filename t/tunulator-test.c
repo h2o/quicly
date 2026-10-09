@@ -150,7 +150,7 @@ static void test_fixed_rate(void)
 {
     struct tunulator *t = new_tunulator();
     struct direction *d = &t->dirs[1];
-    d->use_codel = 1;
+    d->discipline = DISCIPLINE_CODEL;
     /* These timestamps represent arrival after a one-second propagation delay. */
     add_packets(&d->delay, NS_PER_SEC, 1500, 20);
     for (unsigned i = 0; i < 20; ++i)
@@ -181,7 +181,7 @@ static void test_trace(void)
     d->trace.at = slots;
     d->trace.count = sizeof(slots) / sizeof(slots[0]);
     d->trace.period = 400 * NS_PER_MS;
-    d->use_codel = 1;
+    d->discipline = DISCIPLINE_CODEL;
     t->mtu = 2000;
     add_packets(&d->bottleneck, 0, 2000, 20);
     struct packet *first = d->bottleneck.head;
@@ -270,7 +270,7 @@ static void test_configuration(void)
     struct direction d = {0};
     init_queue(&d.bottleneck);
     ok(parse_queue_discipline(&d, "codel"));
-    ok(d.use_codel && d.codel.target == 5 * NS_PER_MS && d.codel.interval == 100 * NS_PER_MS && d.codel.ecn);
+    ok(d.discipline == DISCIPLINE_CODEL && d.codel.target == 5 * NS_PER_MS && d.codel.interval == 100 * NS_PER_MS && d.codel.ecn);
     ok(parse_queue_discipline(&d, "codel/noecn") && !d.codel.ecn);
     ok(d.codel.target == 5 * NS_PER_MS && d.codel.interval == 100 * NS_PER_MS);
     ok(parse_queue_discipline(&d, "codel/noecn:5:100") && !d.codel.ecn);
@@ -284,7 +284,8 @@ static void test_configuration(void)
     codel_prepare(&d.codel, &d.bottleneck, 1500, 210 * NS_PER_MS);
     ok(d.bottleneck.bytes == 28500 && d.codel.drop_next == 410 * NS_PER_MS);
     clear_queue(&d.bottleneck);
-    ok(parse_queue_discipline(&d, "fifo") && !d.use_codel);
+    ok(parse_queue_discipline(&d, "fifo") && d.discipline == DISCIPLINE_FIFO);
+    ok(parse_queue_discipline(&d, "dualpi2") && d.discipline == DISCIPLINE_DUALPI2);
     ok(parse_queue_discipline(&d, "codel") && d.codel.ecn);
     ok(d.codel.target == 5 * NS_PER_MS && d.codel.interval == 100 * NS_PER_MS && !d.codel.dropping);
     const char *invalid[] = {"",
@@ -308,7 +309,8 @@ static void test_configuration(void)
                              "codel:5:4294967296",
                              "codel:5:99999999999999999999999999",
                              "codel:5: 100",
-                             "codel:5.5:100"};
+                             "codel:5.5:100",
+                             "dualpi2:1"};
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i)
         ok(!parse_queue_discipline(&d, invalid[i]));
 }
@@ -338,6 +340,74 @@ static void test_ecn_bandwidth(void)
     }
 }
 
+static void test_dualpi2_step(void)
+{
+    struct dualpi2 s = {0};
+    struct queue q;
+    init_queue(&q);
+    add_packets(&q, 0, 1500, 2);
+    set_ecn(q.head, 1);
+    set_ecn(q.head->next, 2);
+    /* An L4S packet is marked once its sojourn time exceeds 1 ms. */
+    dualpi2_prepare(&s, &q, 1500, NS_PER_MS);
+    ok((q.head->bytes[1] & 3) == 1);
+    dualpi2_prepare(&s, &q, 1500, NS_PER_MS + 1);
+    ok((q.head->bytes[1] & 3) == 3 && ip_checksum(q.head->bytes) == 0);
+    /* A classic packet is not. */
+    free(dequeue(&q));
+    dualpi2_prepare(&s, &q, 1500, 100 * NS_PER_MS);
+    ok((q.head->bytes[1] & 3) == 2);
+    clear_queue(&q);
+}
+
+static void test_dualpi2_pi(void)
+{
+    struct dualpi2 s = {0};
+    struct queue q;
+    init_queue(&q);
+
+    /* Every 16 ms, the probability changes by alpha * (qdelay - target) + beta * (qdelay - last_qdelay), bounded below by 0. */
+    dualpi2_update(&s, &q, 0);
+    add_packets(&q, 0, 1500, 5);
+    dualpi2_update(&s, &q, 16 * NS_PER_MS);
+    ok(fabs(s.prob - (41. / 256 * 0.001 + 819. / 256 * 0.016)) < 1e-12);
+    clear_queue(&q);
+    dualpi2_update(&s, &q, 32 * NS_PER_MS);
+    ok(s.prob == 0 && s.last_qdelay == 0);
+
+    /* With at least 2 MTUs behind the head, L4S packets are marked at twice the probability. */
+    add_packets(&q, 0, 1500, 3);
+    for (struct packet *p = q.head; p != NULL; p = p->next)
+        set_ecn(p, 1);
+    s.prob = 0.5;
+    dualpi2_prepare(&s, &q, 1500, 0);
+    ok((q.head->bytes[1] & 3) == 3);
+    free(dequeue(&q));
+    dualpi2_prepare(&s, &q, 1500, 0);
+    ok((q.head->bytes[1] & 3) == 1);
+    clear_queue(&q);
+
+    /* When twice the probability exceeds 1 (i.e., overload), they are dropped at the squared probability, while at least 2 MTUs
+     * remain behind the head. */
+    add_packets(&q, 0, 1500, 5);
+    for (struct packet *p = q.head; p != NULL; p = p->next)
+        set_ecn(p, 1);
+    s.prob = 1;
+    dualpi2_prepare(&s, &q, 1500, 0);
+    ok(q.bytes == 3000);
+    clear_queue(&q);
+
+    /* The probability is updated at the events of the direction. */
+    struct tunulator *t = new_tunulator();
+    struct direction *d = &t->dirs[1];
+    d->discipline = DISCIPLINE_DUALPI2;
+    add_packets(&d->bottleneck, 0, 1500, 5);
+    run_event(t, 1, next_event(d));
+    run_event(t, 1, next_event(d));
+    ok(d->dualpi2.prob > 0);
+    free_tunulator(t);
+}
+
 int main(void)
 {
     subtest("codel-controller", test_controller);
@@ -347,5 +417,7 @@ int main(void)
     subtest("ecn", test_ecn);
     subtest("configuration", test_configuration);
     subtest("ecn-bandwidth", test_ecn_bandwidth);
+    subtest("dualpi2-step", test_dualpi2_step);
+    subtest("dualpi2-pi", test_dualpi2_pi);
     return done_testing();
 }
