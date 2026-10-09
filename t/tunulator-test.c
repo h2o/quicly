@@ -129,6 +129,7 @@ static struct tunulator *new_tunulator(void)
     for (unsigned i = 0; i < 2; ++i) {
         init_queue(&t->dirs[i].delay);
         init_queue(&t->dirs[i].bottleneck);
+        init_queue(&t->dirs[i].device);
         t->dirs[i].capacity = 100000;
         t->dirs[i].rate = 15000;
         t->dirs[i].codel = codel_defaults;
@@ -141,6 +142,7 @@ static void free_tunulator(struct tunulator *t)
     for (unsigned i = 0; i < 2; ++i) {
         clear_queue(&t->dirs[i].delay);
         clear_queue(&t->dirs[i].bottleneck);
+        clear_queue(&t->dirs[i].device);
     }
     close(t->fd);
     free(t);
@@ -285,7 +287,8 @@ static void test_configuration(void)
     ok(d.bottleneck.bytes == 28500 && d.codel.drop_next == 410 * NS_PER_MS);
     clear_queue(&d.bottleneck);
     ok(parse_queue_discipline(&d, "fifo") && d.discipline == DISCIPLINE_FIFO);
-    ok(parse_queue_discipline(&d, "dualpi2") && d.discipline == DISCIPLINE_DUALPI2);
+    ok(parse_queue_discipline(&d, "dualpi2") && d.discipline == DISCIPLINE_DUALPI2 && d.device_limit == 0);
+    ok(parse_queue_discipline(&d, "dualpi2:10") && d.discipline == DISCIPLINE_DUALPI2 && d.device_limit == 10);
     ok(parse_queue_discipline(&d, "codel") && d.codel.ecn);
     ok(d.codel.target == 5 * NS_PER_MS && d.codel.interval == 100 * NS_PER_MS && !d.codel.dropping);
     const char *invalid[] = {"",
@@ -310,7 +313,11 @@ static void test_configuration(void)
                              "codel:5:99999999999999999999999999",
                              "codel:5: 100",
                              "codel:5.5:100",
-                             "dualpi2:1"};
+                             "dualpi2:",
+                             "dualpi2:0",
+                             "dualpi2:1001",
+                             "dualpi2:1x",
+                             "dualpi2x"};
     for (size_t i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i)
         ok(!parse_queue_discipline(&d, invalid[i]));
 }
@@ -408,6 +415,31 @@ static void test_dualpi2_pi(void)
     free_tunulator(t);
 }
 
+static void test_dualpi2_device(void)
+{
+    struct tunulator *t = new_tunulator();
+    struct direction *d = &t->dirs[1];
+    uint64_t slots[] = {0, 21 * NS_PER_MS};
+    d->trace.at = slots;
+    d->trace.count = 2;
+    d->trace.period = 100 * NS_PER_MS;
+    ok(parse_queue_discipline(d, "dualpi2:1"));
+    add_packets(&d->delay, NS_PER_MS, 1500, 2);
+    for (struct packet *p = d->delay.head; p != NULL; p = p->next)
+        set_ecn(p, 1);
+
+    /* An L4S packet arriving while the device buffer has room moves there unmarked; the next one waits in DualPI2. */
+    run_event(t, 1, next_event(d));
+    run_event(t, 1, next_event(d));
+    ok(d->device_packets == 1 && (d->device.head->bytes[1] & 3) == 1 && d->bottleneck.head != NULL);
+
+    /* Once the link sends the first one at 21ms, the second moves to the device buffer, marked as it waited 20ms in DualPI2. */
+    run_event(t, 1, next_event(d));
+    ok(t->stats.bytes[0][3] == 1500 && d->device_packets == 1 && d->bottleneck.head == NULL);
+    ok((d->device.head->bytes[1] & 3) == 3);
+    free_tunulator(t);
+}
+
 int main(void)
 {
     subtest("codel-controller", test_controller);
@@ -419,5 +451,6 @@ int main(void)
     subtest("ecn-bandwidth", test_ecn_bandwidth);
     subtest("dualpi2-step", test_dualpi2_step);
     subtest("dualpi2-pi", test_dualpi2_pi);
+    subtest("dualpi2-device", test_dualpi2_device);
     return done_testing();
 }

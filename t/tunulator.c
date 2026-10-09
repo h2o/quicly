@@ -20,6 +20,9 @@
  *   Optional DualPI2 follows Linux sch_dualpi2 with its default parameters, for traffic that uses only one of its queues (i.e.,
  *   without competing traffic). The FIFO then serves as that queue, so neither the scheduler between the queues nor C-queue
  *   protection is modelled. The PI controller is updated lazily at each event, using the queue state between events.
+ *   DualPI2 can be given a device buffer of N packets between it and the link, as a driver pulls packets from a qdisc whenever
+ *   the device has room. Packets are then marked or dropped when moving to the device buffer, and the link sends from the device
+ *   buffer.
  *
  * Event loop:
  *   Use one thread, nonblocking TUN I/O, CLOCK_MONOTONIC, and select() with a timeout to the earliest absolute deadline.
@@ -141,6 +144,11 @@ struct direction {
     enum discipline discipline;
     struct codel codel;
     struct dualpi2 dualpi2;
+    /**
+     * device buffer between the bottleneck queue and the link; `device_limit` is its size in packets, or zero if not used
+     */
+    struct queue device;
+    size_t device_limit, device_packets;
     struct {
         uint64_t *at, period, epoch;
         size_t count, index, remaining;
@@ -419,6 +427,26 @@ static void prepare_head(struct direction *d, size_t mtu, uint64_t now)
     }
 }
 
+/**
+ * The queue that the link sends from.
+ */
+static struct queue *link_queue(struct direction *d)
+{
+    return d->device_limit != 0 ? &d->device : &d->bottleneck;
+}
+
+/**
+ * Moves packets from the bottleneck queue to the device buffer while the latter has room, applying the queue discipline to each.
+ */
+static void fill_device(struct direction *d, size_t mtu, uint64_t now)
+{
+    while (d->device_packets < d->device_limit && d->bottleneck.head != NULL) {
+        prepare_head(d, mtu, now);
+        enqueue(&d->device, dequeue(&d->bottleneck));
+        ++d->device_packets;
+    }
+}
+
 static void emit_statistics(struct statistics *s)
 {
     fputc('{', s->out);
@@ -558,10 +586,11 @@ static void receive_packet(struct tunulator *t, uint8_t *bytes, size_t len, uint
 
 static uint64_t send_at(struct direction *d)
 {
-    if (d->bottleneck.head == NULL)
+    struct queue *q = link_queue(d);
+    if (q->head == NULL)
         return UINT64_MAX;
     if (d->trace.at != NULL) {
-        uint64_t earliest = d->bottleneck.head->at;
+        uint64_t earliest = q->head->at;
         if (earliest >= d->trace.epoch + d->trace.period) {
             d->trace.epoch += (earliest - d->trace.epoch) / d->trace.period * d->trace.period;
             d->trace.index = 0;
@@ -574,7 +603,7 @@ static uint64_t send_at(struct direction *d)
         }
         return d->trace.epoch + d->trace.at[d->trace.index];
     }
-    return d->next_send > d->bottleneck.head->at ? d->next_send : d->bottleneck.head->at;
+    return d->next_send > q->head->at ? d->next_send : q->head->at;
 }
 
 static uint64_t next_event(struct direction *d)
@@ -617,36 +646,50 @@ static void run_event(struct tunulator *t, unsigned dir, uint64_t at)
         dualpi2_update(&d->dualpi2, &d->bottleneck, at);
     if (d->delay.head != NULL && d->delay.head->at <= at) {
         struct packet *p = dequeue(&d->delay);
-        if (d->capacity - d->bottleneck.bytes < t->mtu)
+        if (d->capacity - d->bottleneck.bytes < t->mtu) {
             free(p);
-        else
+        } else {
             enqueue(&d->bottleneck, p);
+            fill_device(d, t->mtu, at);
+        }
         return;
     }
 
+    struct queue *q = link_queue(d);
     if (d->trace.at != NULL) {
         size_t budget = TRACE_BYTES;
-        while (budget != 0 && d->bottleneck.head != NULL) {
+        while (budget != 0 && q->head != NULL) {
             if (d->trace.remaining == 0) {
-                prepare_head(d, t->mtu, at);
-                d->trace.remaining = d->bottleneck.head->len;
+                if (q == &d->bottleneck)
+                    prepare_head(d, t->mtu, at);
+                d->trace.remaining = q->head->len;
             }
             size_t bytes = d->trace.remaining < budget ? d->trace.remaining : budget;
             d->trace.remaining -= bytes;
             budget -= bytes;
-            if (d->trace.remaining == 0)
-                send_packet(t, dir, dequeue(&d->bottleneck));
+            if (d->trace.remaining == 0) {
+                send_packet(t, dir, dequeue(q));
+                if (q == &d->device) {
+                    --d->device_packets;
+                    fill_device(d, t->mtu, at);
+                }
+            }
         }
         if (++d->trace.index == d->trace.count) {
             d->trace.index = 0;
             d->trace.epoch += d->trace.period;
         }
     } else {
-        prepare_head(d, t->mtu, at);
-        struct packet *p = dequeue(&d->bottleneck);
+        if (q == &d->bottleneck)
+            prepare_head(d, t->mtu, at);
+        struct packet *p = dequeue(q);
         uint64_t duration = p->len * NS_PER_SEC;
         d->next_send = at + duration / d->rate + (duration % d->rate != 0);
         send_packet(t, dir, p);
+        if (q == &d->device) {
+            --d->device_packets;
+            fill_device(d, t->mtu, at);
+        }
     }
 }
 
@@ -710,9 +753,23 @@ static uint64_t parse_number(const char *value, uint64_t min, uint64_t max, cons
 static int parse_queue_discipline(struct direction *d, const char *value)
 {
     struct codel c = codel_defaults;
-    enum discipline discipline = strcmp(value, "fifo") == 0      ? DISCIPLINE_FIFO
-                                 : strcmp(value, "dualpi2") == 0 ? DISCIPLINE_DUALPI2
-                                                                 : DISCIPLINE_CODEL;
+    size_t device_limit = 0;
+    enum discipline discipline = DISCIPLINE_CODEL;
+    if (strcmp(value, "fifo") == 0) {
+        discipline = DISCIPLINE_FIFO;
+    } else if (strncmp(value, "dualpi2", 7) == 0 && (value[7] == '\0' || value[7] == ':')) {
+        discipline = DISCIPLINE_DUALPI2;
+    }
+    if (discipline == DISCIPLINE_DUALPI2 && value[7] == ':') {
+        if (value[8] < '0' || value[8] > '9')
+            return 0;
+        char *end;
+        errno = 0;
+        unsigned long long n = strtoull(value + 8, &end, 10);
+        if (errno != 0 || n == 0 || n > 1000 || *end != '\0')
+            return 0;
+        device_limit = n;
+    }
     if (discipline == DISCIPLINE_CODEL) {
         if (strncmp(value, "codel", 5) != 0)
             return 0;
@@ -742,6 +799,7 @@ static int parse_queue_discipline(struct direction *d, const char *value)
     }
     d->discipline = discipline;
     d->codel = c;
+    d->device_limit = device_limit;
     return 1;
 }
 
@@ -845,12 +903,15 @@ static void usage(const char *cmd)
            "Upstream means client-to-server; downstream means server-to-client.\n"
            "Directions have independent queues/rates; added base RTT is -p plus -P.\n"
            "All server ports share the same queue and rate in each direction.\n"
-           "Disciplines: fifo, codel[:target_ms:interval_ms], codel/noecn[:target_ms:interval_ms], or dualpi2.\n"
+           "Disciplines: fifo, codel[:target_ms:interval_ms], codel/noecn[:target_ms:interval_ms], or\n"
+           "dualpi2[:device_packets].\n"
            "CoDel defaults to a 5 ms target and 100 ms interval; times are positive integer milliseconds\n"
            "(up to 4294967295), with target below interval. Example: -Q codel:10:200.\n"
            "CoDel marks ECN-capable packets CE, otherwise drops; codel/noecn always drops.\n"
            "dualpi2 follows Linux's DualPI2 with its default parameters, for traffic of only one\n"
-           "kind (L4S, i.e., ECT(1) or CE, or not), as there is only one queue.\n"
+           "kind (L4S, i.e., ECT(1) or CE, or not), as there is only one queue. With device_packets\n"
+           "(1 to 1000), a device buffer of that many packets sits between DualPI2 and the link;\n"
+           "packets move to it whenever it has room, as a driver pulls packets from a qdisc.\n"
            "Marked packets consume bandwidth; dropped packets do not. Full buffers tail-drop.\n"
            "Its queue delay excludes propagation delay; buffer capacity still limits arrivals.\n"
            "Random losses occur after the bottleneck, consuming bandwidth.\n"
@@ -893,6 +954,7 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < 2; ++i) {
         init_queue(&t->dirs[i].delay);
         init_queue(&t->dirs[i].bottleneck);
+        init_queue(&t->dirs[i].device);
         t->dirs[i].rate = UINT32_MAX;
         t->dirs[i].capacity = 100000;
     }
