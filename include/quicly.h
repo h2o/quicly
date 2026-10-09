@@ -425,7 +425,7 @@ struct st_quicly_context_t {
          */
         uint32_t max_jumpstart_packets;
         /**
-         * Pacing multiplier used in congestion avoidance, unless L4S is used.
+         * Pacing multiplier used in congestion avoidance, unless L4S is used. The value is scaled by 1024; i.e., 2048 means 2x.
          */
         uint16_t pacing_multiplier;
         /**

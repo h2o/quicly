@@ -67,7 +67,7 @@ extern "C" {
 #define QUICLY_DEFAULT_PACING_MULTIPLIER 2048
 /**
  * 3 * ln(1.5) scaled by 1024; under a fluid model, minimum multiplier that stasifies per-CWND growth of x is
- * `K(x) = x / (x - 1) * ln(x)`, where Cubic and ABBA both use x = 1.25.
+ * `K(x) = x / (x - 1) * ln(x)`, where Cubic and ABBA both use x = 1.5.
  */
 #define QUICLY_DEFAULT_PACING_MULTIPLIER_L4S 1246
 
