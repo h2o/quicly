@@ -15,17 +15,24 @@ from workers import parse_cpus
 
 
 def parse_quic_cc(value):
-    """Parses CC[+abe][+abba] into (CC, abe, abba)."""
+    """Parses CC[+abe][+abba][+l4s][+txtime][+rapid] into (CC, abe, abba, l4s, txtime, rapid)."""
     cc, *features = value.split('+')
-    if cc not in ('cubic', 'cuback', 'pico') or not set(features) <= {'abe', 'abba'} or len(set(features)) != len(features):
+    if cc not in ('cubic', 'cuback', 'pico') or not set(features) <= {'abe', 'abba', 'l4s', 'txtime', 'rapid'} or \
+            len(set(features)) != len(features):
         raise argparse.ArgumentTypeError(f'invalid QUIC policy: {value}')
     if 'abba' in features and cc == 'pico':
         raise argparse.ArgumentTypeError('ABBA applies only to cubic and cuback')
-    return cc, 'abe' in features, 'abba' in features
+    if 'l4s' in features and cc != 'cuback':
+        raise argparse.ArgumentTypeError('L4S applies only to cuback')
+    return cc, 'abe' in features, 'abba' in features, 'l4s' in features, 'txtime' in features, 'rapid' in features
 
 
-def quic_cc_name(cc, abe, abba):
-    return cc + ('+abe' if abe else '') + ('+abba' if abba else '')
+def quic_cc_name(cc, abe, abba, l4s, txtime, rapid):
+    return cc + ('+abe' if abe else '') + ('+abba' if abba else '') + ('+l4s' if l4s else '') + ('+txtime' if txtime else '') + \
+        ('+rapid' if rapid else '')
+
+
+CONDITIONS = ('tail', 'codel', 'dualpi2')
 
 
 def main():
@@ -36,8 +43,15 @@ def main():
     p.add_argument('--codel', action='append',
                    help='CoDel target:interval in ms for the CoDel conditions; repeat for several (default: 5:100)')
     p.add_argument('--quic-cc', action='append', type=parse_quic_cc,
-                   help='QUIC policy CC[+abe][+abba], CC being cubic, cuback or pico; repeat for several '
+                   help='QUIC policy CC[+abe][+abba][+l4s][+txtime][+rapid], CC being cubic, cuback or pico; +txtime requires '
+                        '--cpus; +rapid uses Jump Start and Rapid Start; '
+                        'repeat for several '
                         '(default: cubic+abe and cubic+abe+abba)')
+    p.add_argument('--no-tcp', action='store_true', help='Run the QUIC policies only, without TCP CUBIC and BBR')
+    p.add_argument('--dualpi2-device', type=int, default=0,
+                   help='Device buffer between DualPI2 and the link, in packets, for the dualpi2 condition (default: none)')
+    p.add_argument('--condition', action='append', choices=CONDITIONS,
+                   help='Queue condition; repeat for several (default: tail and codel)')
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--smoke', action='store_true', help='Two-second taxi3 runs')
     p.add_argument('--trace-id', action='append', help='Only this trace ID; repeat to select several')
@@ -60,10 +74,19 @@ def main():
     cpus = a.cpus if a.cpus is not None else [None]
     codels = a.codel or ['5:100']
     quic_ccs = a.quic_cc or [parse_quic_cc('cubic+abe'), parse_quic_cc('cubic+abe+abba')]
-    if any(not abe for _, abe, _ in quic_ccs) and a.noabe_build is None:
+    if any(txtime for *_, txtime, _ in quic_ccs) and a.cpus is None:
+        p.error('QUIC policies with +txtime require --cpus')
+    if any(not abe for _, abe, *_ in quic_ccs) and a.noabe_build is None:
         p.error('QUIC policies without +abe require --noabe-build')
-    # (directory, condition, CoDel setting); runs of each CoDel setting are in directories named after it
-    conditions = [('tail', 'tail', None)] + [(f"codel-{codel.replace(':', '-')}", 'codel', codel) for codel in codels]
+    selected = sorted(set(a.condition or ['tail', 'codel']), key=CONDITIONS.index)
+    # (directory, condition, setting); runs of each CoDel setting and of each DualPI2 device buffer size are in directories named
+    # after it
+    conditions = [('tail', 'tail', None)] if 'tail' in selected else []
+    if 'codel' in selected:
+        conditions += [(f"codel-{codel.replace(':', '-')}", 'codel', codel) for codel in codels]
+    if 'dualpi2' in selected:
+        device = a.dualpi2_device
+        conditions += [(f'dualpi2-dev{device}' if device else 'dualpi2', 'dualpi2', device or None)]
     a.output.mkdir(parents=True, exist_ok=True)
     output_lock = (a.output / 'matrix.lock').open('a')
     fcntl.flock(output_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -72,13 +95,17 @@ def main():
     signature = dict(cpus=cpus, traces=[t.name for t in traces], smoke=a.smoke,
                      dry_run=a.dry_run, noabe=bool(a.noabe_build),
                      controller_cpus=controller_cpus, kernel=platform.release(),
-                     quic_cc=[quic_cc_name(*c) for c in quic_ccs], codel=codels)
+                     quic_cc=[quic_cc_name(*c) for c in quic_ccs], codel=codels, conditions=selected, tcp=not a.no_tcp,
+                     dualpi2_device=a.dualpi2_device)
     manifest = a.output / 'matrix-settings.json'
     write_manifest = not manifest.exists()
     if manifest.exists():
         previous = json.loads(manifest.read_text())
         previous.setdefault('quic_cc', 'cubic')  # Older matrices used CUBIC exclusively.
         previous.setdefault('codel', '5:100')  # Older matrices used the fixed CoDel setting.
+        previous.setdefault('conditions', ['tail', 'codel'])  # Older matrices had tail drop and CoDel only.
+        previous.setdefault('tcp', True)  # Older matrices always ran TCP.
+        previous.setdefault('dualpi2_device', 0)  # Older matrices had no device buffer.
         if isinstance(previous['codel'], str):  # Older matrices had one CoDel setting.
             previous['codel'] = [previous['codel']]
         # CoDel settings can be added to an existing root
@@ -96,17 +123,20 @@ def main():
         trace_info[trace] = (int(raw.splitlines()[-1]), hashlib.sha256(raw).hexdigest())
     job_index = 0
     for trace in sorted(traces, key=lambda t: trace_info[t][0]):
-        for directory, condition, codel in conditions:
-            queue = 'fifo' if codel is None else f'codel:{codel}'
+        for directory, condition, setting in conditions:
+            codel = setting if condition == 'codel' else None
+            device = setting if condition == 'dualpi2' else None
+            queue = {'tail': 'fifo', 'codel': f'codel:{codel}', 'dualpi2': f'dualpi2:{device}' if device else 'dualpi2'}[condition]
             # ABE only changes the response to ECN marks, so it is omitted under tail drop
-            quic = [(cc, abe and condition != 'tail', abba) for cc, abe, abba in quic_ccs]
-            policies = [('tcp', 'cubic', False, False), ('tcp', 'bbr', False, False)]
+            quic = [(cc, abe and condition != 'tail', abba, l4s, txtime, rapid) for cc, abe, abba, l4s, txtime, rapid in quic_ccs]
+            policies = [] if a.no_tcp else [('tcp', 'cubic', False, False, False, False, False),
+                                            ('tcp', 'bbr', False, False, False, False, False)]
             policies += [('quic', *c) for c in dict.fromkeys(quic)]
-            for protocol, cc, abe, abba in policies:
+            for protocol, cc, abe, abba, l4s, txtime, rapid in policies:
                 cpu = cpus[job_index % len(cpus)]
                 job_index += 1
-                policy = protocol + '_' + (quic_cc_name(cc, abe, abba) if protocol == 'quic' else cc)
-                build = a.noabe_build if protocol == 'quic' and condition == 'codel' and not abe else a.build
+                policy = protocol + '_' + (quic_cc_name(cc, abe, abba, l4s, txtime, rapid) if protocol == 'quic' else cc)
+                build = a.noabe_build if protocol == 'quic' and condition != 'tail' and not abe else a.build
                 out = a.output / trace.name.removeprefix('trace-') / directory / policy
                 if (out / 'result.json').exists():
                     m = json.loads((out / 'metadata.json').read_text())
@@ -118,8 +148,9 @@ def main():
                     # runs predating --abe used the codel_noabe condition for ABE off, and had ABE on under codel otherwise
                     recorded_abe = m.get('abe', m['protocol'] == 'quic' and m['condition'] == 'codel')
                     recorded_condition = 'codel' if m['condition'] == 'codel_noabe' else m['condition']
-                    assert (m['protocol'], m['cc'], m['abba'], recorded_abe, recorded_condition, m['queue'], m['rapid_start']) == \
-                        (protocol, cc, abba, abe, condition, queue, False)
+                    assert (m['protocol'], m['cc'], m['abba'], recorded_abe, m.get('l4s', False), m.get('txtime', m.get('fq', False)),
+                            recorded_condition, m['queue'], m['rapid_start']) == \
+                        (protocol, cc, abba, abe, l4s, txtime, condition, queue, rapid)
                     assert m['start_ms'] == 5000
                     assert m['end_ms'] == (7000 if a.smoke else trace_info[trace][0] - 5000)
                     for binary, digest in m['binary_sha256'].items():
@@ -132,12 +163,20 @@ def main():
                            '--build', str(build), '--output', str(out), '--latency']
                 if codel is not None:
                     command += ['--codel', codel]
+                if device is not None:
+                    command += ['--dualpi2-device', str(device)]
                 if cpu is not None:
                     command += ['--cpu', str(cpu)]
                 if abba:
                     command += ['--abba']
                 if abe:
                     command += ['--abe']
+                if l4s:
+                    command += ['--l4s']
+                if txtime:
+                    command += ['--txtime']
+                if rapid:
+                    command += ['--rapid-start']
                 if a.smoke:
                     command += ['--end', '7000']
                 if a.dry_run:

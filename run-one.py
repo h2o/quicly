@@ -19,13 +19,20 @@ p = argparse.ArgumentParser()
 p.add_argument("protocol", choices=["tcp", "quic"])
 p.add_argument("--cc", default="cubic")
 p.add_argument("--abba", action="store_true")
-p.add_argument("--abe", action="store_true", help="QUIC with ABE; under CoDel ECN, --build must have ABE enabled (disabled without --abe)")
+p.add_argument("--l4s", action="store_true", help="QUIC with L4S (ECT(1) and Prague); requires --cc cuback")
+p.add_argument("--txtime", action="store_true",
+               help="QUIC server gives each packet a departure time (SCM_TXTIME) for the fq qdisc to pace; requires --cpu, "
+                    "using tunfqN")
+p.add_argument("--abe", action="store_true",
+               help="QUIC with ABE; under CoDel ECN or DualPI2, --build must have ABE enabled (disabled without --abe)")
 p.add_argument("--rapid-start", action="store_true")
-p.add_argument("--condition", choices=["tail", "codel", "codel_noecn"], required=True)
+p.add_argument("--condition", choices=["tail", "codel", "codel_noecn", "dualpi2"], required=True)
 p.add_argument("--dry-run", action="store_true", help="Write commands and metadata only; no sockets or TUN access")
 p.add_argument("--trace", type=Path, required=True)
 p.add_argument("--queue", default="fifo")
 p.add_argument("--codel", default="5:100", help="CoDel target:interval in ms for codel/codel_noecn conditions")
+p.add_argument("--dualpi2-device", type=int, default=0,
+               help="Device buffer between DualPI2 and the link, in packets, for the dualpi2 condition (default: none)")
 p.add_argument("--offset", type=int, default=5000, help="Trace offset in ms at which playback starts, with the first packet")
 p.add_argument("--end", type=int, help="Exclusive trace end in ms; defaults to last timestamp minus 5000")
 p.add_argument("--build", type=Path, default=Path("build/ccbench"))
@@ -39,13 +46,18 @@ if args.cpu is not None:
         parse_cpus(str(args.cpu))
     except argparse.ArgumentTypeError as e:
         p.error(str(e))
-lane = worker(args.cpu) if args.cpu is not None else dict(cpu=None, tun='tun0', peer='192.0.2.1', port=None)
+if args.txtime and (args.protocol != "quic" or args.cpu is None):
+    p.error("--txtime applies only to QUIC, with --cpu")
+lane = worker(args.cpu, args.txtime) if args.cpu is not None else dict(cpu=None, tun='tun0', peer='192.0.2.1', port=None)
 if args.cpu is not None:
     # Pin preparation too; children inherit affinity before exec and thread creation.
     os.sched_setaffinity(0, {args.cpu})
-if args.protocol == "tcp" and (args.abba or args.rapid_start or args.abe):
-    p.error("ABBA, Rapid Start, and ABE apply only to QUIC")
-expected_queue = {"tail": "fifo", "codel": f"codel:{args.codel}", "codel_noecn": f"codel/noecn:{args.codel}"}
+if args.protocol == "tcp" and (args.abba or args.rapid_start or args.abe or args.l4s or args.txtime):
+    p.error("ABBA, Rapid Start, ABE, and L4S apply only to QUIC")
+if args.l4s and args.cc != "cuback":
+    p.error("L4S requires --cc cuback")
+expected_queue = {"tail": "fifo", "codel": f"codel:{args.codel}", "codel_noecn": f"codel/noecn:{args.codel}",
+                  "dualpi2": f"dualpi2:{args.dualpi2_device}" if args.dualpi2_device else "dualpi2"}
 if args.queue != expected_queue[args.condition]:
     p.error("queue does not match the named condition")
 trace = args.trace.resolve()
@@ -67,8 +79,8 @@ current_hashes = {name: hashlib.sha256((build / name).read_bytes()).hexdigest()
                   for name in ('cli', 'http09', 'tunulator')}
 if build_info.get('binary_sha256') != current_hashes:
     p.error('Build provenance is stale; run record-build.py --build with this build directory before capturing')
-# ABE only changes the response to ECN marks, so the build matters only under CoDel ECN
-if args.protocol == "quic" and args.condition == "codel" and build_info["abe_enabled"] != args.abe:
+# ABE only changes the response to ECN marks, so the build matters only under CoDel ECN and DualPI2
+if args.protocol == "quic" and args.condition in ("codel", "dualpi2") and build_info["abe_enabled"] != args.abe:
     p.error(f"--build {build} was compiled with QUICLY_USE_ABE={'1' if build_info['abe_enabled'] else '0'}, "
             f"which does not match {'--abe' if args.abe else 'the absence of --abe'}")
 out = args.output.resolve()
@@ -99,16 +111,20 @@ else:
                "--jumpstart-default", "0", "--jumpstart-max", "0"]
     if args.abba:
         options += ["--abba"]
+    if args.l4s:
+        options += ["--l4s"]
     if args.rapid_start:
         options[options.index("--jumpstart-default") + 1] = "60"
         del options[options.index("--jumpstart-max"):options.index("--jumpstart-max") + 2]
         options += ["--rapid-start"]
     request = ["--delivery-stats", "-p", "/10000000000"]
 server_extra, tunulator_extra = [], []
+if args.txtime:
+    server_extra = ["--so-txtime"]
 if args.latency:
     tunulator_extra = ["-L", str(out / "tunulator.pktlog")]
     if args.protocol == "quic":
-        server_extra = ["-l", str(out / "keylog")]
+        server_extra += ["-l", str(out / "keylog")]
 commands = {
     "server": [str(binary), *credentials, *options, *server_extra, "127.0.0.1", port],
     "tunulator": [str(build / "tunulator"), "-t", "/dev/net/tun", "-n", lane['tun'],
@@ -125,7 +141,11 @@ if not args.dry_run:
     assert all(s in route for s in ["src 127.0.0.1", "initcwnd 30"]), route
     assert Path(f"/proc/sys/net/ipv4/conf/{lane['tun']}/route_localnet").read_text().strip() == '1'
     assert Path("/proc/sys/net/ipv4/tcp_ecn").read_text().strip() == "1" or "features ecn" in route
-metadata = dict(protocol=args.protocol, cc=args.cc, abba=args.abba, abe=args.abe, rapid_start=args.rapid_start,
+    if args.txtime:
+        qdisc = subprocess.check_output(["tc", "qdisc", "show", "dev", lane['tun'], "root"], text=True)
+        assert qdisc.startswith("qdisc fq "), qdisc
+metadata = dict(protocol=args.protocol, cc=args.cc, abba=args.abba, abe=args.abe, l4s=args.l4s, txtime=args.txtime,
+    rapid_start=args.rapid_start,
     condition=args.condition, trace_id=trace.name.split(".max=")[0].removeprefix("trace-"), trace_path=str(trace),
     queue=args.queue, dry_run=args.dry_run, build_metadata=build_info,
     commands=commands, worker=lane, route=route, kernel=platform.release(),

@@ -27,7 +27,10 @@ def parse_cpus(value):
         raise argparse.ArgumentTypeError(str(e) or 'Use unique CPU IDs/ranges from 0 through 253')
 
 
-def worker(cpu):
+def worker(cpu, txtime=False):
+    """With `txtime`, the lane is a separate TUN whose root qdisc is fq, which releases each packet at its departure time."""
+    if txtime:
+        return dict(cpu=cpu, tun=f'tunfq{cpu}', peer=f'192.0.2.{cpu + 129}', port=20200 + cpu)
     return dict(cpu=cpu, tun=f'tun{cpu}', peer=f'192.0.2.{cpu + 1}', port=20000 + cpu)
 
 

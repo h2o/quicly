@@ -16,7 +16,7 @@ The client, server, and emulator run on one Linux host. **TUN**, rather than Eth
 
 | Program | Source | Purpose |
 |---|---|---|
-| `tunulator` | `t/tunulator.c` | Replay bandwidth, add delay, implement tail drop or CoDel, count IP bytes |
+| `tunulator` | `t/tunulator.c` | Replay bandwidth, add delay, implement tail drop, CoDel or DualPI2, count IP bytes |
 | `http09` | `t/http09.c` | TCP/TLS bulk transfer using the selected Linux CC |
 | `cli` | `src/cli.c` | QUIC bulk transfer using quicly CC |
 
@@ -27,7 +27,7 @@ The primary matrix uses **ordinary CUBIC startup**, with Rapid Start and Jump St
 | Tail drop | CUBIC, BBR | CUBIC, CUBIC+ABBA |
 | CoDel ECN | CUBIC, BBR | CUBIC+ABE, CUBIC+ABE+ABBA, and with the no-ABE build CUBIC, CUBIC+ABBA |
 
-QUIC policies are named `CC[+abe][+abba]` (see §8). ABE only affects the response to ECN marks, so under tail drop `+abe` is omitted and policies differing only in ABE are measured once, with the ordinary build.
+QUIC policies are named `CC[+abe][+abba][+l4s][+txtime][+rapid]` (see §10). ABE only affects the response to ECN marks, so under tail drop `+abe` is omitted and policies differing only in ABE are measured once, with the ordinary build.
 
 With 23 traces and the four QUIC policies above (`--quic-cc cubic+abe --quic-cc cubic+abe+abba --quic-cc cubic --quic-cc cubic+abba`), this is **230 distinct transfers**: 92 TCP and 138 QUIC. The recorded durations total about **30 hours of sequential playback**, plus build, reporting, and capture overhead. With the default QUIC policies (`cubic+abe` and `cubic+abe+abba`) it is 184 transfers, about 24 hours. Repeat the complete matrix in a new result root for additional samples. Measure all compared policies on the same host with consistent settings.
 
@@ -41,6 +41,7 @@ With 23 traces and the four QUIC policies above (`--quic-cc cubic+abe --quic-cc 
 - `workers.py`: CPU-to-TUN mapping, CPU selection validation, and per-user resource locks.
 - `validate-parallel.py`: concurrent capture, affinity, lock contention, cleanup, resume, and report checks.
 - `trace-inventory.json`: all 23 original trace hashes, windows, capacities and queue sizes. Contains no performance results.
+- `quicly-txtime.patch`: experimental kernel pacing for quicly's `cli` (`--so-txtime`), used by the `+txtime` QUIC policies only (see §10).
 
 No source patches are needed at this revision: `--abba` is a native CLI option, and the no-ABE build is a compile-time flag (`-DQUICLY_USE_ABE=0`), not a patch. See §4.
 
@@ -179,10 +180,14 @@ For `2768760-taxi3`: `[5000,99814)` ms, duration **94.814 seconds**, peak **20.3
 | `-Q fifo` | Tail drop |
 | `-Q codel:5:100` | CoDel, target 5 ms, interval 100 ms, CE-mark capable packets and otherwise drop |
 | `-Q codel/noecn:5:100` | Same thresholds, drops instead of CE |
+| `-Q dualpi2` | Linux DualPI2 with its default parameters, for traffic of one kind; marks and drops as packets leave the queue for the link |
+| `-Q dualpi2:N` | Same, with a device buffer of N packets between DualPI2 and the link, which packets enter whenever it has room |
 
 Keep ECN enabled at endpoints even when testing `codel/noecn`. QUIC enables ECN by default; omit `--disable-ecn`. Verify actual negotiation/CE feedback in socket or endpoint statistics during smoke testing; configuration alone is not evidence that marks were received. CoDel queueing time excludes configured propagation delay, and ECN mode can still overflow its finite buffer.
 
 The `5:100` target:interval is the default, not fixed: `run-one.py --codel TARGET:INTERVAL` (and matching `--queue codel:TARGET:INTERVAL`) and `matrix.py --codel TARGET:INTERVAL` override it for the `codel` condition. `matrix.py --codel` can be repeated to measure several settings in one output root, e.g. `--codel 5:100 --codel 10:100`; runs of each setting are in directories named after it (`codel-5-100`, ...). `run-one.py` still rejects a `--queue` that does not match `--condition`/`--codel`, so both must be changed together. A `matrix.py` run records its `--codel` values in `matrix-settings.json`; resuming an output root with additional `--codel` values appended runs only the new settings, while removing or reordering values fails with "Matrix settings changed", same as changing `--quic-cc`.
+
+The DualPI2 disciplines require a tunulator built from quicly's `kazuho/l4s` branch (commit `855b867d` or later). `matrix.py --condition` selects the queue conditions to run; repeat it for several (`tail`, `codel`, `dualpi2`; default `tail` and `codel`). `--dualpi2-device N` adds the device buffer to the `dualpi2` condition; its runs are in a directory named `dualpi2-devN` rather than `dualpi2`, and `run-one.py` takes the same option, with `--condition dualpi2 --queue dualpi2:N`. As under CoDel, ABE matters under DualPI2, so QUIC policies without `+abe` use `--noabe-build` there. `--no-tcp` leaves out TCP CUBIC and BBR. These settings are recorded in `matrix-settings.json` and checked on resume like the others.
 
 ## 7. Smoke and individual taxi3 runs
 
@@ -244,7 +249,7 @@ The matrix generates the report after all captures finish, keeping report work o
 python3 tmp/tunulator-new-host/report.py tmp/ccbench-fresh
 ```
 
-Open `tmp/ccbench-fresh/index.html`. The report has an aggregate table per queue condition and, per trace, a panel per queue condition listed vertically, each with a table, application-delivery and IP-forwarding curves, and the probability density of delays on a logarithmic delay axis from the smallest delay to 2000 ms. Before rendering, the report runs `latency.py` on each transfer that has a packet log but no `latency.csv` yet. Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally. TCP rows/legends come first, then the QUIC policies of the `--quic-cc` list recorded in `matrix-settings.json`, in that order (under tail drop, each with `+abe` removed). Runs of other QUIC policies in the root, e.g. copied from another root, are not shown. Roots predating that list show all their QUIC runs, ordered by controller, ABBA and ABE. TCP CUBIC is green, TCP BBR purple; QUIC CUBIC is blue, CUBIC+ABBA red, CUBACK orange, CUBACK+ABBA brown, PICO pink. Under CoDel, QUIC policies without ABE use the same colors with dashed lines. There are no top-level summary charts.
+Open `tmp/ccbench-fresh/index.html`. The report has an aggregate table per queue condition (tail drop, each CoDel setting, then each DualPI2 setting) and, per trace, a panel per queue condition listed vertically, each with a table, application-delivery and IP-forwarding curves, and the probability density of delays on a logarithmic delay axis from the smallest delay to 2000 ms. Before rendering, the report runs `latency.py` on each transfer that has a packet log but no `latency.csv` yet. Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally. TCP rows/legends come first, then the QUIC policies of the `--quic-cc` list recorded in `matrix-settings.json`, in that order (under tail drop, each with `+abe` removed). Runs of other QUIC policies in the root, e.g. copied from another root, are not shown. Roots predating that list show all their QUIC runs, ordered by controller, ABBA and ABE. TCP CUBIC is green, TCP BBR purple; QUIC CUBIC is blue, CUBIC+ABBA red, CUBACK orange, CUBACK+ABBA brown, PICO pink, CUBACK+L4S cyan, CUBACK+ABBA+L4S olive, and with `+txtime` dark blue and gold respectively. Under CoDel, QUIC policies without ABE use the same colors with dashed lines. There are no top-level summary charts.
 
 For incomplete matrices, aggregate comparisons include only traces with every policy measured under that queue condition present. Result roots predating `--abe` (with `codel_noabe` directories) are rendered with the same names: `codel` runs as `+abe`, `codel_noabe` runs without. The report has a table and a panel per trace for each recorded CoDel setting, after tail drop. Older matrix settings without a `codel` field imply `5:100`. A repetition belongs in a separate result root; this renderer does not average repetitions.
 
@@ -314,7 +319,23 @@ python3 tmp/tunulator-new-host/matrix.py --traces tmp/Cellular-Traces-NYC \
 
 This has ten jobs, so only ten workers are used. Repeat `--trace-id` to select multiple traces. Omit it to run all 23 traces (230 transfers) with up to 15 concurrent captures. This scheduler assigns jobs round-robin to CPU queues. A completed run is reused on resume whichever CPU it was measured on; its `metadata.json` records the CPU. A worker immediately takes its next assigned job when free. `--dry-run` creates planned metadata without acquiring TUNs or producing measurements/HTML; use a separate root from real captures.
 
-`--quic-cc CC[+abe][+abba]` selects a QUIC policy; repeat it for several, e.g. `--quic-cc cubic --quic-cc cuback+abe+abba --quic-cc pico+abe`. CC is `cubic`, `cuback` or `pico`; `+abe` uses the ordinary build under CoDel, while its absence uses `--noabe-build` (required then); `+abba` enables ABBA on both endpoints (cubic and cuback only). The default is `--quic-cc cubic+abe --quic-cc cubic+abe+abba`. Under tail drop `+abe` is dropped, and specs that then coincide run once. Runs are in directories named `quic_` followed by the spec (`quic_cubic+abe+abba`, ...), and the report labels them `QUIC ` followed by the spec in capitals (`QUIC CUBIC+ABE+ABBA`). This changes only the QUIC controller: IW stays 30, pacing stays enabled, and Rapid Start and Jump Start stay disabled. TCP remains CUBIC/BBR. Resume rejects a different selection; result roots made before this option was repeatable can only be re-rendered.
+`--quic-cc CC[+abe][+abba][+l4s][+txtime][+rapid]` selects a QUIC policy; repeat it for several, e.g. `--quic-cc cubic --quic-cc cuback+abe+abba --quic-cc pico+abe`. CC is `cubic`, `cuback` or `pico`; `+abe` uses the ordinary build under CoDel and DualPI2, while its absence uses `--noabe-build` (required then); `+abba` enables ABBA on both endpoints (cubic and cuback only); `+l4s` sends ECT(1) and responds to CE as Prague (`cli --l4s`, cuback only); `+txtime` paces each packet in the kernel (see below); `+rapid` uses Jump Start (60 packets) and Rapid Start instead of ordinary startup (`run-one.py --rapid-start`). The default is `--quic-cc cubic+abe --quic-cc cubic+abe+abba`. Under tail drop `+abe` is dropped, and specs that then coincide run once. Runs are in directories named `quic_` followed by the spec (`quic_cubic+abe+abba`, ...), and the report labels them `QUIC ` followed by the spec in capitals (`QUIC CUBIC+ABE+ABBA`). This changes only the QUIC controller: IW stays 30, pacing stays enabled, and Rapid Start and Jump Start stay disabled unless `+rapid` is given. TCP remains CUBIC/BBR. Resume rejects a different selection; result roots made before this option was repeatable can only be re-rendered.
+
+#### Kernel pacing (`+txtime`)
+
+With `+txtime`, the QUIC server gives each packet a departure time (`SCM_TXTIME`) at the rate of quicly's pacer, so that the `fq` qdisc releases packets one at a time rather than in the bursts quicly's pacer permits. This is experimental and not part of quicly: apply `quicly-txtime.patch` to the quicly source and use that build for the `+txtime` policies (`git am path/to/quicly-txtime.patch`; it applies to `kazuho/l4s` at `f19c5913`). The patch adds `cli --so-txtime`, which `run-one.py --txtime` passes to the server only. Known issue: quicly measures RTT from when a packet is handed to the socket, so time spent waiting in `fq` counts as RTT.
+
+`+txtime` requires `--cpus`: CPU N uses a separate TUN, `tunfqN`, whose root qdisc is `fq`, with peer `192.0.2.(N+129)` and server port `20200+N`; other policies keep `tunN`. `run-one.py` checks that the root qdisc of `tunfqN` is `fq` before capturing. Create the lanes once as an administrator, e.g. for CPUs 8 to 15:
+
+```sh
+for cpu in $(seq 8 15); do
+  sudo ip tuntap add dev "tunfq${cpu}" mode tun user "$(id -u)" || break
+  sudo ip link set dev "tunfq${cpu}" mtu 1500 up || break
+  sudo sysctl -w "net.ipv4.conf.tunfq${cpu}.route_localnet=1" || break
+  sudo ip route add "192.0.2.$((cpu + 129))/32" dev "tunfq${cpu}" src 127.0.0.1 initcwnd 30 || break
+  sudo tc qdisc replace dev "tunfq${cpu}" root fq || break
+done
+```
 
 To reuse TCP measurements with different QUIC policies, copy the complete `<trace-id>/tail/tcp_cubic`, `tail/tcp_bbr`, `codel-5-100/tcp_cubic`, and `codel-5-100/tcp_bbr` directories (and those of any other CoDel setting) into the same relative paths in a new output root. Do not copy the old `matrix-settings.json` or QUIC directories. Existing completed variants are validated and skipped; only missing variants run. Trace/window, controller/startup, kernel, and binary hashes must match. Directories without `result.json` are incomplete and must be moved aside, not silently skipped. The new matrix settings are saved after validation succeeds.
 

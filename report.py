@@ -21,11 +21,19 @@ a = p.parse_args()
 root = a.output.resolve()
 settings_path = root / 'matrix-settings.json'
 settings = json.loads(settings_path.read_text()) if settings_path.exists() else None
-# QUIC policies are named CC[+abe][+abba]; the color is chosen by the controller and ABBA, as ABE is told apart by the dash
-quic_colors = {('cubic', False): '#1f77b4', ('cubic', True): '#d62728', ('cuback', False): '#ff7f0e',
-               ('cuback', True): '#8c564b', ('pico', False): '#e377c2'}
+# QUIC policies are named CC[+abe][+abba][+l4s]; the color is chosen by the controller, ABBA and L4S, as ABE is told apart by
+# the dash
+quic_colors = {('cubic', False, False): '#1f77b4', ('cubic', True, False): '#d62728', ('cuback', False, False): '#ff7f0e',
+               ('cuback', True, False): '#8c564b', ('pico', False, False): '#e377c2', ('cuback', False, True): '#17becf',
+               ('cuback', True, True): '#bcbd22', ('cuback', False, True, True): '#393b79', ('cuback', True, True, True): '#e7ba52'}
+
+def quic_color_key(name):
+    key = name.split('+')[0], '+abba' in name, '+l4s' in name
+    return key + (True,) if '+txtime' in name else key
 # The QUIC policies given to the matrix, in order; only these are shown. Roots predating the list show all their QUIC runs.
 quic_specs = settings['quic_cc'] if settings is not None and isinstance(settings.get('quic_cc'), list) else None
+if quic_specs is not None:
+    quic_specs = [spec.replace('+fq', '+txtime') for spec in quic_specs]  # roots predating +txtime named it +fq
 
 def quic_names(condition):
     """The names of the QUIC policies shown under a condition, in order; ABE is omitted under tail drop."""
@@ -34,19 +42,27 @@ def quic_names(condition):
 
 def policy_of(m):
     """The queue condition and the policy of a run."""
-    assert not m['rapid_start'], 'This matrix report requires ordinary startup'
-    assert m['condition'] in ['tail', 'codel', 'codel_noabe'], 'Use a separate report for drops-only CoDel'
-    if m['condition'] != 'tail' and not m['queue'].startswith('codel:'):
+    assert m['condition'] in ['tail', 'codel', 'codel_noabe', 'dualpi2'], 'Use a separate report for drops-only CoDel'
+    if m['condition'] in ('codel', 'codel_noabe') and not m['queue'].startswith('codel:'):
         p.error(f"Expected ECN-capable CoDel queue: {m['queue']}")
-    condition = 'tail' if m['condition'] == 'tail' else f"codel-{m['queue'].removeprefix('codel:').replace(':', '-')}"
+    if m['condition'] == 'tail':
+        condition = 'tail'
+    elif m['condition'] == 'dualpi2':
+        condition = 'dualpi2' if m['queue'] == 'dualpi2' else f"dualpi2-dev{m['queue'].removeprefix('dualpi2:')}"
+    else:
+        condition = f"codel-{m['queue'].removeprefix('codel:').replace(':', '-')}"
     if m['protocol'] == 'tcp':
         assert m['cc'] in ('cubic', 'bbr') and not m['abba']
         return condition, 'tcp_' + m['cc']
     # ABE only changes the response to ECN marks, so it is ignored under tail drop; runs predating the abe key used the
     # codel_noabe condition for ABE off
-    abe = m['condition'] == 'codel' and m.get('abe', True)
-    assert (m['cc'], m['abba']) in quic_colors, 'Unsupported QUIC controller'
-    return condition, 'quic_' + m['cc'] + ('+abe' if abe else '') + ('+abba' if m['abba'] else '')
+    abe = m['condition'] in ('codel', 'dualpi2') and m.get('abe', True)
+    # runs predating the txtime key recorded it as fq
+    l4s, txtime = m.get('l4s', False), m.get('txtime', m.get('fq', False))
+    name = m['cc'] + ('+abe' if abe else '') + ('+abba' if m['abba'] else '') + ('+l4s' if l4s else '') + ('+txtime' if txtime else '') + \
+        ('+rapid' if m['rapid_start'] else '')
+    assert quic_color_key(name) in quic_colors, 'Unsupported QUIC controller'
+    return condition, 'quic_' + name
 
 # (directory, metadata, condition, policy) of each run shown
 runs = []
@@ -58,6 +74,7 @@ for path in sorted(root.glob('*/*/*/result.json')):
     if quic_specs is None or not policy.startswith('quic_') or policy.removeprefix('quic_') in quic_names(condition):
         runs.append((path.parent, m, condition, policy))
 codel_settings = set()
+dualpi2_conditions = sorted({condition for _, _, condition, _ in runs if condition.startswith('dualpi2')})
 @functools.cache
 def tree_of(commit, diff):
     """The git tree a build was made from, i.e., the recorded commit with the recorded diff applied."""
@@ -86,13 +103,15 @@ environment = {'quicly': Counter(), 'Kernel': Counter()}
 for run, m, condition, policy in runs:
     environment['quicly'][source_label(m['build_metadata'], run)] += 1
     environment['Kernel'][m['kernel']] += 1
-    if condition != 'tail':
+    if condition.startswith('codel-'):
         codel_settings.add(m['queue'].removeprefix('codel:'))
-if settings is not None:
+if settings is not None and 'codel' in settings.get('conditions', ['codel']):
     codel_settings.update([settings['codel']] if isinstance(settings.get('codel'), str) else settings.get('codel', ['5:100']))
 codel_settings = sorted(codel_settings, key=lambda c: tuple(map(int, c.split(':'))))
 # (key, label) of each queue condition; the key names the plot directory
 conditions = [('tail', 'Tail drop')] + [(f"codel-{c.replace(':', '-')}", f'CoDel {c} ECN') for c in codel_settings]
+conditions += [(c, 'DualPI2' if c == 'dualpi2' else f"DualPI2, device buffer of {c.removeprefix('dualpi2-dev')} packets")
+               for c in dualpi2_conditions]
 # latency.py processes each run with --latency; do it before reading, in parallel, as all captures have completed
 latency_runs = [run for run, *_ in runs if (run / 'tunulator.pktlog').exists() and not (run / 'latency.csv').exists()]
 with ThreadPoolExecutor(os.cpu_count()) as pool:
@@ -140,11 +159,10 @@ if quic_specs is not None:
     names = [name for spec in quic_specs for name in (spec, spec.replace('+abe', ''))]
     quic_policies = sorted(present, key=names.index)
 else:
-    quic_policies = sorted(present, key=lambda name: (list(quic_colors).index((name.split('+')[0], '+abba' in name)),
-                                                      '+abe' not in name))
+    quic_policies = sorted(present, key=lambda name: (list(quic_colors).index(quic_color_key(name)), '+abe' not in name))
 policies = {'tcp_cubic': ('TCP CUBIC', '#2ca02c'), 'tcp_bbr': ('TCP BBR', '#9467bd')}
 for name in quic_policies:
-    policies['quic_' + name] = ('QUIC ' + name.upper(), quic_colors[(name.split('+')[0], '+abba' in name)])
+    policies['quic_' + name] = ('QUIC ' + name.upper(), quic_colors[quic_color_key(name)])
 quic_labels = [label for k, (label, _) in policies.items() if k.startswith('quic_')]
 
 def delay_stats(weighted):
@@ -181,8 +199,8 @@ def table(stats):
 page = ['<!doctype html><meta charset="utf-8"><title>Fresh-host CC benchmark</title>',
     '<style>body{font:16px system-ui;margin:2em}table{border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:right}td:first-child,th:first-child{text-align:left}.panel{overflow:auto}img{width:100%;max-width:1000px}</style>',
     '<h1>Congestion-control trace benchmark</h1>',
-    f'<h2>Policies</h2><ul><li>TCP CUBIC, TCP BBR: the host kernel\'s implementations, over TLS, with pacing and an initial window of 30.</li><li>{html.escape(', '.join(quic_labels))}: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start), and a 1472-byte UDP payload. Each is named by the congestion controller, followed by +ABE when built with QUICLY_USE_ABE=1 (otherwise 0), and +ABBA when ABBA is enabled. ABE only affects the response to ECN marks, so it is omitted under tail drop; in the CoDel charts, policies without ABE are dashed.</li></ul>',
-    f'<h2>Scenarios</h2><ul><li>Traces: <a href="https://github.com/Soheil-ab/Cellular-Traces-NYC">NYC cellular traces</a> set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: tail drop, and CoDel {html.escape(' and '.join(codel_settings))} (target:interval in ms) with ECN.</li></ul>',
+    f'<h2>Policies</h2><ul><li>TCP CUBIC, TCP BBR: the host kernel\'s implementations, over TLS, with pacing and an initial window of 30.</li><li>{html.escape(', '.join(quic_labels))}: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start) unless named +RAPID, and a 1472-byte UDP payload. Each is named by the congestion controller, followed by +ABE when built with QUICLY_USE_ABE=1 (otherwise 0), +ABBA when ABBA is enabled, +L4S when sending ECT(1) and responding to CE as Prague, +RAPID when using Jump Start (60 packets) and Rapid Start, and +TXTIME when the server gives each packet a departure time (SCM_TXTIME) at its pacing rate, so that the fq qdisc paces each packet. ABE only affects the response to ECN marks, so it is omitted under tail drop; in the CoDel charts, policies without ABE are dashed.</li></ul>',
+    f'<h2>Scenarios</h2><ul><li>Traces: <a href="https://github.com/Soheil-ab/Cellular-Traces-NYC">NYC cellular traces</a> set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: {html.escape(', '.join(label for _, label in conditions))}; CoDel is target:interval in ms with ECN, and DualPI2 follows Linux\'s with default parameters, with one queue for the single flow.</li></ul>',
     '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by tunulator but not forwarded; it includes packets remaining in tunulator at cutoff, while CE-marked packets are forwarded.</p>',
     '<p>Delay is measured for every 15000th byte of the stream: from when tunulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking.</p>',
     '<hr><h2>Aggregate comparison</h2><p>Aggregate tables weight each trace equally: goodput, IP forwarded and not delivered are averages of the per-trace values, and delay statistics are computed over the samples of all traces, weighted so that every trace counts equally.</p>']
