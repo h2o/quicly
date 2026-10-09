@@ -5659,13 +5659,26 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 
     s->dcid = get_dcid(conn, s->path_index);
 
-    /* send handshake flows; when PTO fires...
-     *  * quicly running as a client sends either a Handshake probe (or data) if the handshake keys are available, or else an
-     *    Initial probe (or data).
-     *  * quicly running as a server sends both Initial and Handshake probes (or data) if the corresponding keys are available. */
+    /* send handshake flows */
     if (s->path_index == 0) {
-        if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, s, ack_only,
-                                       min_packets_to_send != 0 && (!quicly_is_client(conn) || conn->handshake == NULL))) != 0)
+        int may_send_initial_probe = 0;
+        if (min_packets_to_send != 0) {
+            if (quicly_is_client(conn)) {
+                /* client: once it has the handshake keys, so does the server; hence omit the initial probes */
+                if (conn->handshake == NULL)
+                    may_send_initial_probe = 1;
+            } else {
+                /* server: once the client has received ServerHello, stop bundling Initial probes with Handshake probes. Otherwise,
+                 * a client waiting for an offloaded key derivation to complete and cannot make progress might ACK the Initial
+                 * probes. The ACK resets the PTO count and triggers another probe without backing off. */
+                quicly_stream_t *initial_stream;
+                if (conn->handshake == NULL ||
+                    ((initial_stream = quicly_get_stream(conn, (quicly_stream_id_t)-1 - QUICLY_EPOCH_INITIAL)) != NULL &&
+                     initial_stream->sendstate.acked.ranges[0].end < initial_stream->sendstate.size_inflight))
+                    may_send_initial_probe = 1;
+            }
+        }
+        if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_INITIAL, s, ack_only, may_send_initial_probe)) != 0)
             goto Exit;
         if ((ret = send_handshake_flow(conn, QUICLY_EPOCH_HANDSHAKE, s, ack_only, min_packets_to_send != 0)) != 0)
             goto Exit;
