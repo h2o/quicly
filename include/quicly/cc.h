@@ -683,11 +683,10 @@ inline void quicly_cc_rapid_start_on_recovery(struct st_quicly_cc_rapid_start_t 
     };
 
     int use_ecn_factor = QUICLY_USE_ABE && rs->by_ecn;
-    uint32_t reduction = factors[use_ecn_factor].ack * bytes_acked + factors[use_ecn_factor].loss * bytes_lost;
-    assert(reduction <= *cwnd && "CWND never underflows");
-    *cwnd -= reduction;
-    if (*cwnd < rs->cwnd_floor)
-        *cwnd = rs->cwnd_floor;
+    /* PTO probes are sent regardless of CWND, and those sent before the first loss is detected are acked within the recovery
+     * period. Therefore, the reduction can exceed CWND. */
+    double reduced = (double)*cwnd - factors[use_ecn_factor].ack * bytes_acked - factors[use_ecn_factor].loss * bytes_lost;
+    *cwnd = reduced > rs->cwnd_floor ? (uint32_t)reduced : rs->cwnd_floor;
 }
 
 inline void quicly_cc_rapid_start_exit_recovery(struct st_quicly_cc_rapid_start_t *rs)
