@@ -3682,18 +3682,13 @@ static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
 
     if (conn->egress.cc.num_loss_episodes == 0) {
         if (quicly_cc_in_jumpstart(&conn->egress.cc)) {
-            multiplier = 1;
+            multiplier = 1024;
         } else {
-            multiplier = quicly_cc_rapid_start_use_3x(&conn->egress.cc.rapid_start, &conn->egress.loss.rtt) ? 3 : 2;
+            multiplier = quicly_cc_rapid_start_use_3x(&conn->egress.cc.rapid_start, &conn->egress.loss.rtt) ? 3072 : 2048;
         }
     } else {
-        /* We use of 2x during congestion avoidance, which is different from Linux using 1.25x. The rationale behind this choice is
-         * that 1.25x is not sufficiently aggressive immediately after a loss event. Following a loss event, the congestion window
-         * (CWND) is halved (i.e., beta), but the RTT remains high for one RTT and SRTT can remain high even loger, since it is a
-         * moving average adjusted with each ACK received. Consequently, if the multiplier is set to 1.25x, the calculated send rate
-         * could drop to as low as 1.25 * 1/2 = 0.625. By using a 2x multiplier, the send rate is guaranteed to become no less than
-         * that immediately before the loss event, which would have been the link throughput. */
-        multiplier = 2;
+        struct st_quicly_context_egress_t *ctx = get_egress_context(conn);
+        multiplier = is_l4s(conn) ? ctx->pacing_multiplier_l4s : ctx->pacing_multiplier;
     }
 
     return quicly_pacer_calc_send_rate(multiplier, conn->egress.cc.cwnd, conn->egress.loss.rtt.smoothed);

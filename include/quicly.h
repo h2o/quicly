@@ -425,6 +425,14 @@ struct st_quicly_context_t {
          */
         uint32_t max_jumpstart_packets;
         /**
+         * Pacing multiplier used in congestion avoidance, unless L4S is used.
+         */
+        uint16_t pacing_multiplier;
+        /**
+         * Pacing multiplier used in congestion avoidance, when L4S is used.
+         */
+        uint16_t pacing_multiplier_l4s;
+        /**
          * prepares jumpstart but disengages before any action; provided for A/B testing between connections eligible for jumpstart
          */
         uint8_t disengage_jumpstart : 1;
