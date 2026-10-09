@@ -5807,10 +5807,10 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
 Exit:
     if (ret == QUICLY_ERROR_SENDBUF_FULL) {
         ret = 0;
-        /* when the buffer becomes full for the first time, try to use jumpstart; acting after the buffer becomes full does not
+        /* When the buffer becomes full for the first time, try to use jumpstart; acting after the buffer becomes full does not
          * delay switch to jump start, assuming that the buffer provided by the caller of quicly_send is no greater than the burst
-         * size of the pacer (10 packets) */
-        if (conn->egress.try_jumpstart && conn->egress.loss.rtt.minimum != FLT_MAX) {
+         * size of the pacer (10 packets). PTO is excluded, as the send window is then capped to the probes regardless of CWND. */
+        if (conn->egress.try_jumpstart && conn->egress.loss.rtt.minimum != FLT_MAX && !restrict_sending) {
             conn->egress.try_jumpstart = 0;
             conn->super.stats.jumpstart.new_rtt = 0;
             conn->super.stats.jumpstart.cwnd = 0;
