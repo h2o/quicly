@@ -8224,6 +8224,7 @@ quicly_error_t quicly_decrypt_address_token(ptls_aead_context_t *aead, quicly_ad
             case 20: /* ipv6 */
                 plaintext->remote.sin6 = (struct sockaddr_in6){.sin6_family = AF_INET6};
                 memcpy(&plaintext->remote.sin6.sin6_addr, src, 16);
+                src += 16;
                 if ((ret = ptls_decode32(&plaintext->remote.sin6.sin6_scope_id, &src, end)) != 0)
                     goto Exit;
                 portaddr = &plaintext->remote.sin6.sin6_port;

@@ -638,6 +638,28 @@ static void test_address_token_codec(void)
     ok(quicly_decrypt_address_token(dec, &output, buf.base, buf.off, 0, &err_desc) == PTLS_ALERT_DECODE_ERROR);
     buf.base[0] ^= 0x80;
 
+    /* round-trip of an IPv6 address with a non-zero scope_id (see h2o/h2o#3640) */
+    static const uint8_t addr6[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01};
+    input = (quicly_address_token_plaintext_t){QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION, 345};
+    input.remote.sin6.sin6_family = AF_INET6;
+    memcpy(&input.remote.sin6.sin6_addr, addr6, 16);
+    input.remote.sin6.sin6_scope_id = 5;
+    input.remote.sin6.sin6_port = htons(443);
+    strcpy((char *)input.resumption.bytes, "hello world");
+    input.resumption.len = strlen((char *)input.resumption.bytes);
+    ptls_buffer_dispose(&buf);
+    ptls_buffer_init(&buf, "", 0);
+    ok(quicly_encrypt_address_token(ptls_openssl_random_bytes, enc, &buf, 0, &input) == 0);
+    ptls_openssl_random_bytes(&output, sizeof(output));
+    ok(quicly_decrypt_address_token(dec, &output, buf.base, buf.off, 0, &err_desc) == 0);
+    ok(output.type == QUICLY_ADDRESS_TOKEN_TYPE_RESUMPTION);
+    ok(output.remote.sa.sa_family == AF_INET6);
+    ok(memcmp(output.remote.sin6.sin6_addr.s6_addr, addr6, 16) == 0);
+    ok(output.remote.sin6.sin6_scope_id == 5);
+    ok(output.remote.sin6.sin6_port == htons(443));
+    ok(output.resumption.len == 11);
+    ok(memcmp(output.resumption.bytes, "hello world", 11) == 0);
+
     ptls_buffer_dispose(&buf);
     ptls_aead_free(enc);
     ptls_aead_free(dec);
