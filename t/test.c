@@ -3339,6 +3339,7 @@ static void test_multipath_path_loss(void)
 
 #include "multipath-pacing.h"
 #include "multipath-scheduling.h"
+#include "multipath-health.h"
 
 #include "datagram-queue.h"
 #include "custom-scheduler-recovery.h"
@@ -3498,8 +3499,14 @@ int main(int argc, char **argv)
     subtest("custom-recovery-health", test_custom_recovery_health);
     subtest("custom-recovery-limits", test_custom_recovery_limits);
     subtest("custom-recovery-single-path", test_custom_recovery_single_path);
+    subtest("custom-recovery-opt-in", test_custom_recovery_opt_in);
     subtest("multipath-egress-context", test_multipath_egress_context);
     subtest("multipath-fractional-timing", test_multipath_fractional_timing);
+    subtest("multipath-automatic-failover", test_multipath_automatic_failover);
+    subtest("multipath-failover-disabled", test_multipath_failover_disabled);
+    subtest("multipath-health-progress", test_multipath_health_progress);
+    subtest("multipath-suspect-affinity", test_multipath_suspect_affinity);
+    subtest("multipath-health-rtt-matrix", test_multipath_health_rtt_matrix);
     subtest("multipath-datagram-rank-progress", test_multipath_datagram_rank_progress);
     subtest("multipath-tuple-lifecycle", test_multipath_tuple_lifecycle);
     subtest("multipath-unopened-abandoned-status", test_multipath_unopened_abandoned_status);

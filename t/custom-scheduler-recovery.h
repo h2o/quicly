@@ -166,6 +166,7 @@ static void test_custom_recovery_blackhole(void)
         /* ACKs and PTO probes must also progress without a maintenance helper or automatic failover. */
         if (sustained) {
             quic_ctx.path_scheduler = &custom_data_only_scheduler;
+            quic_ctx.multipath_failover_pto_threshold = 0;
         }
         quicly_stream_t *stream;
         ok(quicly_open_stream(f.client, &stream, 0) == 0);
@@ -560,4 +561,54 @@ static void test_custom_recovery_single_path(void)
     quicly_free(client);
     quic_ctx = saved;
     quic_now = saved_now;
+}
+
+static void test_custom_recovery_opt_in(void)
+{
+    unsigned saved_threshold = quic_ctx.multipath_failover_pto_threshold;
+    quic_ctx.multipath_failover_pto_threshold = 2;
+    custom_recovery_fixture_t f;
+    custom_recovery_setup(&f);
+    f.client_policy.data = 0;
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(f.client, &stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(stream, "application policy", 18) == 0);
+    ptls_iovec_t symbol = ptls_iovec_init("fec", 3);
+    quicly_send_datagram_frames_path(f.client, 1, &symbol, 1);
+    quicly_path_space_t *path = f.client->path_spaces[1];
+    f.client->path_spaces[0]->health.last_ack_at = quic_now;
+    f.client_policy.eligible = 2;
+    lock_now(f.client, 0);
+    ok(!path_has_health_alternative(f.client, path, 1));
+    unlock_now(f.client);
+    path->loss.pto_count = 1;
+    path->loss.alarm_at = quic_now;
+    quicly_stats_t before, after;
+    quicly_get_stats(f.client, &before);
+    ok(custom_recovery_transmit(f.client, f.server, 2, 1) == 1);
+    ok(path->health.state == QUICLY_PATH_USABLE); /* the only alternative has no physical socket */
+    f.client_policy.eligible = 3;
+    path->loss.pto_count = 1;
+    path->loss.alarm_at = quic_now;
+    ok(custom_recovery_transmit(f.client, f.server, 2, 1) == 1);
+    ok(path->health.state == QUICLY_PATH_SUSPECT);
+    quicly_get_stats(f.client, &after);
+    ok(after.num_frames_sent.stream == before.num_frames_sent.stream);
+    ok(after.num_frames_sent.datagram == before.num_frames_sent.datagram);
+    ok(quicly_get_num_datagram_frames_path(f.client, 1) == 1);
+    ok(multipath_received_length(f.server, stream->stream_id) == 0);
+    /* with data disabled on both paths, fresh probe ACKs must complete both recovery transitions */
+    int64_t until = quic_now + f.bound;
+    int saw_recovering = 0;
+    while (quic_now < until && path->health.state != QUICLY_PATH_USABLE) {
+        custom_recovery_round(&f, 0, 1);
+        saw_recovering |= path->health.state == QUICLY_PATH_RECOVERING;
+    }
+    ok(saw_recovering && path->health.state == QUICLY_PATH_USABLE);
+    quicly_get_stats(f.client, &after);
+    ok(after.num_frames_sent.stream == before.num_frames_sent.stream);
+    ok(after.num_frames_sent.datagram == before.num_frames_sent.datagram);
+    custom_recovery_free(&f);
+    test_custom_recovery_eligibility();
+    quic_ctx.multipath_failover_pto_threshold = saved_threshold;
 }

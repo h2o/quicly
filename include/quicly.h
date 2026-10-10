@@ -476,6 +476,12 @@ struct st_quicly_context_t {
          */
         uint8_t respect_app_limited : 1;
     } egress[1 + QUICLY_NUM_ALT_EGRESS];
+    /**
+     * opt-in failover: consecutive ordinary PTOs before suppressing data on a path when a validated, physically eligible
+     * alternative has recent ACK progress. zero disables this policy, retaining normal retransmission and scheduler behavior.
+     * recovery requires ACKs of two separately sent, fresh ack-eliciting packets. set before creating connections.
+     */
+    unsigned multipath_failover_pto_threshold;
 };
 
 /**
@@ -770,6 +776,13 @@ typedef struct st_quicly_path_stats_t {
     uint32_t bytes_in_flight;
 } quicly_path_stats_t;
 
+/** optional failover policy state, separate from validation and physical availability */
+typedef enum en_quicly_path_health_state_t {
+    QUICLY_PATH_USABLE,    /* ordinary scheduling; not a guarantee of reachability */
+    QUICLY_PATH_SUSPECT,   /* application data suppressed; PTO probes continue */
+    QUICLY_PATH_RECOVERING /* fresh ACK received; ordinary flight capped at the selected egress initial window */
+} quicly_path_health_state_t;
+
 /** read-only protocol state. address-candidate indices can share a wire path ID and its RTT/PTO/peer backup state.
  * does not incorporate application eligibility, congestion credit, pacing, or custom data preferences. */
 typedef struct st_quicly_path_health_t {
@@ -786,6 +799,8 @@ typedef struct st_quicly_path_health_t {
     uint8_t probe_only;
     uint8_t abandoned;
     uint8_t validated;
+    /** opt-in failover state; USABLE when the policy is disabled. independent of peer backup preference. */
+    quicly_path_health_state_t state;
 } quicly_path_health_t;
 
 /* clang-format off */

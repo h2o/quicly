@@ -306,6 +306,13 @@ typedef struct st_quicly_path_space_t {
     struct st_quicly_pn_space_t *pn_space;
     /* Loss recovery state */
     quicly_loss_t loss;
+    /* path health state */
+    struct {
+        quicly_path_health_state_t state;
+        int64_t last_ack_at;
+        uint64_t fresh_from_pn;
+        int confirmation_pending;
+    } health;
     /* Congestion control state */
     quicly_cc_t cc;
     /* Pacer state */
@@ -1833,7 +1840,8 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, qui
                     loss->sentmap.bytes_in_flight != 0 || (i == 0 && conn->super.remote.address_validation.send_probe),
                 handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
             int path_can_send_data = conn->path_spaces[i]->addrs[0] != NULL && !conn->path_spaces[i]->addrs[0]->abandoned &&
-                                     !conn->path_spaces[i]->addrs[0]->probe_only;
+                                     !conn->path_spaces[i]->addrs[0]->probe_only &&
+                                     conn->path_spaces[i]->health.state != QUICLY_PATH_SUSPECT;
             quicly_loss_update_alarm(
                 loss, conn->stash.now,
                 fmax(conn->path_spaces[i]->last_retransmittable_sent_at, conn->path_spaces[i]->last_recovery_at), has_outstanding,
@@ -2408,6 +2416,7 @@ static quicly_error_t alloc_path_space(quicly_conn_t *conn, size_t path_index, u
     memset(ps, 0, sizeof(*ps));
     ps->path_id = path_id;
     ps->conn = conn;
+    ps->health.last_ack_at = INT64_MIN;
     quicly_ratemeter_init(&ps->ratemeter);
     ps->try_jumpstart = 1;
     if ((conn->path_status.known_mask[path_id / 32] & ((uint32_t)1 << (path_id % 32))) != 0) {
@@ -4619,6 +4628,49 @@ static int path_can_send_validation(quicly_conn_t *conn, size_t path_index)
     return allowance != 0 && allowance >= path_validation_minimum(conn, get_path(conn, path_index));
 }
 
+/* check if another validated path has recent progress */
+static int path_has_health_alternative(quicly_conn_t *conn, quicly_path_space_t *excluded, int require_recent)
+{
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+        quicly_path_space_t *ps = conn->path_spaces[i];
+        if (ps == NULL || ps == excluded || ps->health.state == QUICLY_PATH_SUSPECT ||
+            (conn->super.ctx->multipath_failover_pto_threshold != 0 &&
+             ps->loss.pto_count >= (int64_t)conn->super.ctx->multipath_failover_pto_threshold))
+            continue;
+        if (require_recent) {
+            double recent =
+                3 * quicly_rtt_get_pto(&ps->loss.rtt, conn->super.remote.transport_params.max_ack_delay, ps->loss.conf->min_pto);
+            if (recent < 1000)
+                recent = 1000;
+            if (ps->health.last_ack_at == INT64_MIN || ps->health.last_ack_at > conn->stash.now ||
+                conn->stash.now - ps->health.last_ack_at > recent)
+                continue;
+        }
+        for (size_t j = 0; j < PTLS_ELEMENTSOF(ps->addrs); ++j) {
+            struct st_quicly_conn_path_t *path = ps->addrs[j];
+            if (path != NULL && !path->abandoned && !path->probe_only && path->path_challenge.send_at == INT64_MAX &&
+                path_can_send_packet(conn, encode_flat_path_index(i, j)))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static void path_health_on_ack(quicly_conn_t *conn, quicly_path_space_t *ps, uint64_t pn)
+{
+    ps->health.last_ack_at = conn->stash.now;
+    if (ps->health.state == QUICLY_PATH_USABLE || pn < ps->health.fresh_from_pn)
+        return;
+    if (ps->health.state == QUICLY_PATH_SUSPECT) {
+        ps->health.state = QUICLY_PATH_RECOVERING;
+        ps->health.confirmation_pending = 1;
+        /* require separate ACK after entering recovery */
+        ps->health.fresh_from_pn = ps->packet_number;
+    } else {
+        ps->health.state = QUICLY_PATH_USABLE;
+    }
+}
+
 /* Helper function to compute send window based on:
  * * state of peer validation,
  * * current cwnd,
@@ -4633,8 +4685,14 @@ static size_t calc_send_window(quicly_conn_t *conn, quicly_path_space_t *ps, siz
         /* Send min_bytes_to_send on PTO */
         window = min_bytes_to_send;
     } else {
-        /* Limit to cwnd */
+        /* recovery temporarily caps ordinary flight at the initial window;
+         * native CC accounting and PTO exceptions remain unchanged */
         uint64_t cwnd = ps->cc.cwnd;
+        if (ps->health.state == QUICLY_PATH_RECOVERING) {
+            uint32_t initial = quicly_cc_calc_initial_cwnd(get_egress_context(conn)->cc.initcwnd_packets, ps->max_udp_payload_size);
+            if (cwnd > initial)
+                cwnd = initial;
+        }
         if (cwnd > ps->loss.sentmap.bytes_in_flight) {
             window = cwnd - ps->loss.sentmap.bytes_in_flight;
             if (window > pacer_window)
@@ -4676,7 +4734,7 @@ static int64_t pacer_can_send_at(quicly_path_space_t *ps)
 /* Called after physical/CID/amplification eligibility has been checked. ACKs, validation, and PTO probes have their own budgets. */
 static int64_t path_ordinary_send_at(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
-    if (path->probe_only ||
+    if (path->probe_only || path->path_space->health.state == QUICLY_PATH_SUSPECT ||
         calc_send_window(conn, path->path_space, 0, calc_amplification_limit_allowance(conn, path), UINT64_MAX, 0) == 0)
         return INT64_MAX;
     return pacer_can_send_at(path->path_space);
@@ -4684,7 +4742,8 @@ static int64_t path_ordinary_send_at(quicly_conn_t *conn, struct st_quicly_conn_
 
 static int path_has_pending_control(quicly_conn_t *conn, struct st_quicly_conn_path_t *path)
 {
-    return (conn->egress.pending_flows != 0 &&
+    return path->path_space->health.confirmation_pending ||
+           (conn->egress.pending_flows != 0 &&
             ((conn->application != NULL && conn->application->cipher.egress.key.header_protection != NULL) ||
              (conn->egress.pending_flows & 0xf) != 0)) ||
            quicly_linklist_is_linked(&conn->egress.pending_streams.control);
@@ -4701,6 +4760,8 @@ static int64_t path_validation_at(struct st_quicly_conn_path_t *path)
 static unsigned path_scheduling_rank(struct st_quicly_conn_path_t *path)
 {
     quicly_path_space_t *ps = path->path_space;
+    if (ps->health.state == QUICLY_PATH_SUSPECT)
+        return UINT_MAX - 1;
     return (ps->loss.pto_count >= 2 ? (unsigned)ps->loss.pto_count * 2 : 0) + ps->is_backup;
 }
 
@@ -6918,9 +6979,21 @@ static quicly_error_t service_path_loss_alarm(quicly_conn_t *conn, struct st_qui
             if (bytes_to_mark != 0 && conn->handshake != NULL &&
                 (ret = mark_frames_on_pto(conn, ps, QUICLY_EPOCH_HANDSHAKE, &bytes_to_mark)) != 0)
                 return ret;
+            if (conn->super.ctx->multipath_failover_pto_threshold != 0 && quicly_is_multipath(conn) && conn->initial == NULL &&
+                conn->handshake == NULL && ps->health.state != QUICLY_PATH_SUSPECT &&
+                ps->loss.pto_count >= (int64_t)conn->super.ctx->multipath_failover_pto_threshold &&
+                path_has_health_alternative(conn, ps, 1)) {
+                ps->health.state = QUICLY_PATH_SUSPECT;
+                ps->health.confirmation_pending = 0;
+                ps->health.fresh_from_pn = ps->packet_number;
+                /* make all outstanding reliable ranges eligible on alternatives, preserving stream affinity */
+                size_t all_bytes = SIZE_MAX;
+                if ((ret = mark_frames_on_pto(conn, ps, QUICLY_EPOCH_1RTT, &all_bytes)) != 0)
+                    return ret;
+            }
             /* repeated multipath PTOs requeue old ranges even under a fresh-data backlog. placement remains the application's
              * decision: maintenance sends control probes, and the normal stream scheduler retains affinity and flow control */
-            if (bytes_to_mark != 0 &&
+            if (ps->health.state != QUICLY_PATH_SUSPECT && bytes_to_mark != 0 &&
                 (!scheduler_can_send(conn) || (quicly_is_multipath(conn) && ps->loss.pto_count >= 2)) &&
                 (ret = mark_frames_on_pto(conn, ps, QUICLY_EPOCH_1RTT, &bytes_to_mark)) != 0)
                 return ret;
@@ -7035,7 +7108,8 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         if (s->path_index == 0 || quicly_is_multipath(conn)) {
             /* PATH_ACK can be returned on any open path. Walk every due packet-number space so packets received shortly before or
              * after PATH_ABANDON can be acknowledged on the selected active path. */
-            if (conn->application->one_rtt_writable) {
+            if (conn->application->one_rtt_writable &&
+                (send_ps->health.state != QUICLY_PATH_SUSPECT || !path_has_health_alternative(conn, send_ps, 0))) {
                 for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
                     quicly_path_space_t *ps = conn->path_spaces[i];
                     if (ps == NULL || ps->pn_space == NULL || ps->pn_space->unacked_count == 0)
@@ -7052,7 +7126,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
              * * When given payload is too large and does not fit into a QUIC packet, a packet containing only PADDING frames is
              *   sent. This is because we do not have a way to retract the generation of a QUIC packet.
              * * Does not notify the application that the frame was dropped internally. */
-            if (!s->maintenance_only && should_send_datagram_frame(conn, path)) {
+            if (!s->maintenance_only && send_ps->health.state != QUICLY_PATH_SUSPECT && should_send_datagram_frame(conn, path)) {
                 for (size_t i = s->datagram_payloads_consumed; i != path->datagram_frame_payloads.count; ++i) {
                     ptls_iovec_t *payload = path->datagram_frame_payloads.payloads + i;
                     size_t required_space = quicly_datagram_frame_capacity(*payload);
@@ -7073,10 +7147,11 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 }
             }
             if (!ack_only) {
-                /* PTO or loss detection timeout, always send PING. This is the easiest thing to do in terms of timer control. */
-                if (min_packets_to_send != 0) {
+                /* schedule confirmation on first fresh ACK */
+                if (min_packets_to_send != 0 || send_ps->health.confirmation_pending) {
                     if ((ret = do_allocate_frame(conn, s, 1, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
                         goto Exit;
+                    send_ps->health.confirmation_pending = 0;
                     if (get_epoch(s->current.first_byte) == QUICLY_EPOCH_1RTT &&
                         conn->super.remote.transport_params.min_ack_delay_usec != UINT64_MAX) {
                         *s->dst++ = QUICLY_FRAME_TYPE_IMMEDIATE_ACK;
@@ -7090,6 +7165,9 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                         QUICLY_LOG_CONN(ping_send, conn, {});
                     }
                 }
+                /* do not send new stream data on suspect paths */
+                if (send_ps->health.state == QUICLY_PATH_SUSPECT)
+                    goto Exit;
                 /* take actions only permitted for short header packets */
                 if (conn->application->one_rtt_writable) {
                     /* send HANDSHAKE_DONE */
@@ -7131,7 +7209,8 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 }
             }
             /* stream operations might have requested emission of NEW_TOKEN at the tail; if so, try to bundle it */
-            if ((conn->egress.pending_flows & QUICLY_PENDING_FLOW_NEW_TOKEN_BIT) != 0) {
+            if (send_ps->health.state != QUICLY_PATH_SUSPECT &&
+                (conn->egress.pending_flows & QUICLY_PENDING_FLOW_NEW_TOKEN_BIT) != 0) {
                 assert(conn->application->one_rtt_writable);
                 if ((ret = send_resumption_token(conn, s)) != 0)
                     goto Exit;
@@ -8125,6 +8204,8 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
                 ++conn->super.stats.num_packets.ack_received_promoted_paths;
 
             int is_valid_pn = ack_ps->pn_path_start <= pn_acked;
+            if (is_valid_pn && sent->ack_eliciting && state->epoch == QUICLY_EPOCH_1RTT)
+                path_health_on_ack(conn, ack_ps, pn_acked);
             if (is_valid_pn) {
                 if (largest_newly_acked.pn == UINT64_MAX || pn_acked > largest_newly_acked.pn) {
                     largest_newly_acked.pn = pn_acked;
@@ -10557,7 +10638,8 @@ int quicly_get_path_health(quicly_conn_t *conn, size_t path_index, quicly_path_h
                                      .peer_is_backup = ps->is_backup,
                                      .probe_only = path->probe_only,
                                      .abandoned = path->abandoned,
-                                     .validated = path->path_challenge.send_at == INT64_MAX};
+                                     .validated = path->path_challenge.send_at == INT64_MAX,
+                                     .state = ps->health.state};
     return 0;
 }
 
