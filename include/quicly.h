@@ -140,6 +140,19 @@ typedef struct st_quicly_path_scheduler_t {
      * The scheduler should invoke `quicly_send_on_path` to build datagrams for the chosen path.
      */
     quicly_error_t (*do_send)(struct st_quicly_path_scheduler_t *sched, quicly_conn_t *conn, quicly_send_context_t *s);
+    /**
+     * optional physical socket/address eligibility, applied to every emission route and send deadline. NULL permits all paths.
+     * called for existing local path indices, including validation and closing. must be non-mutating and stable during a send
+     * call; may use read-only path accessors, but must not call send, receive, timeout, or eligibility callbacks recursively.
+     * the application must wake its event loop when eligibility changes. this is not a congestion or data-preference filter.
+     */
+    int (*is_path_eligible)(struct st_quicly_path_scheduler_t *sched, quicly_conn_t *conn, size_t path_index);
+    /**
+     * optional additional data-readiness filter for deadline reporting. zero means the scheduler will not place application
+     * data on this path now; maintenance remains eligible. NULL assumes any queued datagram or affinity-compatible stream can
+     * be selected. the application must arrange a wakeup when its policy changes. same callback restrictions as above.
+     */
+    int (*can_send_data)(struct st_quicly_path_scheduler_t *sched, quicly_conn_t *conn, size_t path_index);
 } quicly_path_scheduler_t;
 
 extern quicly_path_scheduler_t quicly_default_path_scheduler;
@@ -1128,6 +1141,11 @@ struct st_quicly_stream_t {
          */
         uint32_t max_ranges;
     } _recv_aux;
+    /**
+     * Path ID this stream is bound to (UINT32_MAX if no affinity is set).
+     * Used by the stream scheduler in multipath mode.
+     */
+    uint32_t affinity_path_id;
 };
 
 /**
@@ -1432,7 +1450,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
 int quicly_is_path_available(quicly_conn_t *conn, size_t path_index);
 /**
  * returns whether the stream scheduler has data sendable under connection flow control and current application keys.
- * does not check path preference, congestion credit, pacing, or queued DATAGRAM frames.
+ * does not check per-path affinity, physical eligibility, congestion credit, pacing, or queued DATAGRAM frames.
  */
 int quicly_has_pending_stream_data(quicly_conn_t *conn);
 /**
@@ -1442,8 +1460,8 @@ int quicly_has_pending_stream_data(quicly_conn_t *conn);
 quicly_error_t quicly_send_on_path(quicly_conn_t *conn, quicly_send_context_t *s, size_t path_index, size_t *packets_sent);
 /**
  * service due multipath ACKs/loss probes. quicly_send does this before invoking the path scheduler; existing schedulers may still
- * call this helper from do_send, under quicly_send's time lock. honors protocol limits. no application STREAM
- * or DATAGRAM payload is sent; reliable ranges made pending are subsequently placed by the data scheduler.
+ * call this helper from do_send, under quicly_send's time lock. honors is_path_eligible and protocol limits. no application STREAM
+ * or DATAGRAM payload is sent; reliable ranges made pending are subsequently placed by the data scheduler, retaining affinity.
  * protocol control/CRYPTO may accompany probes. optional packets_sent reports the total datagrams in this send context;
  * return on output or nonzero error.
  * repeated calls in the same callback are supported: after output they do nothing. zero output leaves data selection available.
@@ -1608,6 +1626,16 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
  */
 void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
 
+/**
+ * sets the path affinity for a stream.
+ * with the built-in schedulers, explicit affinity permits using a backup path. unbound streams still prefer regular paths unless
+ * repeated PTOs indicate that a backup is healthier. affinity is retained through temporary path failure and cleared on
+ * abandonment.
+ * @param stream    the stream
+ * @param path_id   the path_id to bind the stream to. Set to UINT32_MAX to clear the affinity.
+ * @return          0 if successful
+ */
+int quicly_set_stream_path_affinity(quicly_stream_t *stream, uint32_t path_id);
 
 /**
  * Gets the current path ID being transmitted on from a send context.
@@ -1615,7 +1643,8 @@ void quicly_reset_stream(quicly_stream_t *stream, quicly_error_t err);
 uint32_t quicly_get_current_send_path_id(quicly_conn_t *conn, quicly_send_context_t *s);
 
 /**
- * checks whether the selected send path matches the built-in path preference. custom path schedulers retain their own policy.
+ * checks whether the selected send path matches a stream's affinity or, for unbound streams using a built-in path scheduler,
+ * the path preference. custom path schedulers retain their own policy for unbound streams.
  * stream schedulers should skip streams returning zero before calling quicly_send_stream. this does not check flow control or
  * whether stream data is pending; use quicly_stream_can_send for those checks.
  */

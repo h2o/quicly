@@ -3053,6 +3053,112 @@ static void test_multipath_disable_migration(void)
     free_multipath_regression_peers(client, server, saved);
 }
 
+static void test_multipath_stream_affinity(void)
+{
+    int64_t saved_now = quic_now;
+    uint64_t orig_initial_max_path_id = quic_ctx.transport_params.initial_max_path_id;
+    quic_ctx.transport_params.initial_max_path_id = 4; /* enable multipath negotiation */
+
+    /* Set up cid_encryptor for the test context */
+    quicly_cid_encryptor_t *orig_cid_encryptor = quic_ctx.cid_encryptor;
+    char cid_key[] = "0123456789abcdef";
+    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+                                                              ptls_iovec_init(cid_key, strlen(cid_key)));
+    ok(quic_ctx.cid_encryptor != NULL);
+
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+
+    get_path(client, 0)->address.local = fake_address;
+    get_path(client, 0)->address.remote = fake_address;
+    get_path(server, 0)->address.local = fake_address;
+    get_path(server, 0)->address.remote = fake_address;
+
+    struct sockaddr_in remote_addrs[3], local_addrs[3];
+    for (size_t i = 0; i < 3; ++i) {
+        memset(&remote_addrs[i], 0, sizeof(remote_addrs[i]));
+        remote_addrs[i].sin_family = AF_INET;
+        remote_addrs[i].sin_port = htons((uint16_t)(10000 + i));
+        remote_addrs[i].sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+        memset(&local_addrs[i], 0, sizeof(local_addrs[i]));
+        local_addrs[i].sin_family = AF_INET;
+        local_addrs[i].sin_port = htons((uint16_t)(20000 + i));
+        local_addrs[i].sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+        quicly_error_t ret = quicly_open_path(client, (struct sockaddr *)&remote_addrs[i], (struct sockaddr *)&local_addrs[i]);
+        ok(ret == 0);
+    }
+
+    /* Exchange packets until all paths are validated */
+    for (size_t i = 0; i < 20; ++i) {
+        transmit_multipath(client, server);
+        transmit_multipath(server, client);
+    }
+
+    /* Target Path Index 1 for stream affinity */
+    quicly_tuple_t tuple;
+    quicly_error_t ret = quicly_get_path_tuple(client, 1, &tuple);
+    ok(ret == 0);
+
+    /* Send stream data with affinity set */
+    quicly_stream_t *stream;
+    ret = quicly_open_stream(client, &stream, 0);
+    ok(ret == 0);
+
+    ret = quicly_set_stream_path_affinity(stream, tuple.path_id);
+    ok(ret == 0);
+
+    uint64_t bytes_sent_before[4];
+    for (size_t i = 0; i < 4; ++i) {
+        bytes_sent_before[i] = get_path(client, i)->num_packets.bytes_sent;
+    }
+
+    for (size_t i = 0; i < 20; ++i) {
+        char buf[1024];
+        memset(buf, 'A', sizeof(buf));
+        quicly_streambuf_egress_write(stream, buf, sizeof(buf));
+
+        while (transmit_multipath(client, server) || transmit_multipath(server, client))
+            ;
+    }
+
+    uint64_t bytes_sent_after[4];
+    for (size_t i = 0; i < 4; ++i) {
+        bytes_sent_after[i] = get_path(client, i)->num_packets.bytes_sent;
+    }
+
+    /* Verify that Path 1 (where affinity was set) saw massive data transmission,
+       while the others saw minimal (mostly ACKs) or zero transmission. */
+    ok((bytes_sent_after[1] - bytes_sent_before[1]) > 5000); // Lower threshold to account for flow control
+    ok((bytes_sent_after[0] - bytes_sent_before[0]) < 2000);
+    ok((bytes_sent_after[2] - bytes_sent_before[2]) < 2000);
+    ok((bytes_sent_after[3] - bytes_sent_before[3]) < 2000);
+
+    /* verify spare credit on other paths does not cause busy loop */
+    for (size_t i = 0; i < 100; ++i) {
+        ++quic_now;
+        transmit_multipath(client, server);
+        transmit_multipath(server, client);
+    }
+    ok(!quicly_has_pending_stream_data(client));
+    ok(quicly_streambuf_egress_write(stream, "queued", 6) == 0);
+    ok(quicly_has_pending_stream_data(client));
+    uint32_t saved_cwnd = client->path_spaces[1]->cc.cwnd;
+    client->path_spaces[1]->cc.cwnd = 0;
+    ok(quicly_get_first_timeout(client) > quic_now);
+    client->path_spaces[1]->cc.cwnd = saved_cwnd;
+    ok(quicly_get_first_timeout(client) <= quic_now);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
+    quic_ctx.cid_encryptor = orig_cid_encryptor;
+    quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
+    quic_now = saved_now;
+}
+
 static void zero_length_encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
                                     const quicly_cid_plaintext_t *plaintext)
 {
@@ -3232,8 +3338,10 @@ static void test_multipath_path_loss(void)
 }
 
 #include "multipath-pacing.h"
+#include "multipath-scheduling.h"
 
 #include "datagram-queue.h"
+#include "custom-scheduler-recovery.h"
 #include "multipath-progress.h"
 #include "datagram-congestion.h"
 #include "multipath-rate.h"
@@ -3376,15 +3484,30 @@ int main(int argc, char **argv)
     subtest("multipath-abandoned-cids", test_multipath_abandoned_cids);
     subtest("multipath-resource-limit", test_multipath_resource_limit);
     subtest("multipath-disable-migration", test_multipath_disable_migration);
+    subtest("multipath-stream-affinity", test_multipath_stream_affinity);
     subtest("multipath-zero-length-cid", test_multipath_zero_length_cid);
     subtest("multipath-path-loss", test_multipath_path_loss);
 
     subtest("multipath-pacing", test_multipath_pacing);
+    subtest("multipath-backup-affinity", test_multipath_backup_affinity);
+    subtest("multipath-backup-failover", test_multipath_backup_failover);
+    subtest("multipath-backup-transient-loss", test_multipath_backup_transient_loss);
+    subtest("custom-recovery-blackhole", test_custom_recovery_blackhole);
+    subtest("custom-recovery-eligibility", test_custom_recovery_eligibility);
+    subtest("custom-recovery-data-policy", test_custom_recovery_data_policy);
+    subtest("custom-recovery-health", test_custom_recovery_health);
+    subtest("custom-recovery-limits", test_custom_recovery_limits);
+    subtest("custom-recovery-single-path", test_custom_recovery_single_path);
     subtest("multipath-egress-context", test_multipath_egress_context);
     subtest("multipath-fractional-timing", test_multipath_fractional_timing);
+    subtest("multipath-datagram-rank-progress", test_multipath_datagram_rank_progress);
     subtest("multipath-tuple-lifecycle", test_multipath_tuple_lifecycle);
     subtest("multipath-unopened-abandoned-status", test_multipath_unopened_abandoned_status);
     subtest("multipath-lifecycle-cleanup", test_multipath_lifecycle_cleanup);
+    subtest("multipath-path-zero-validation", test_multipath_path_zero_validation);
+    subtest("multipath-short-validation", test_multipath_short_validation);
+    subtest("multipath-small-rebinding", test_multipath_small_rebinding);
+    subtest("multipath-validation-retry-limit", test_multipath_validation_retry_limit);
 
     subtest("stats-foreach", test_stats_foreach);
 
