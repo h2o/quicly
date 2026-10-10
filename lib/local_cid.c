@@ -27,15 +27,17 @@ static int has_pending(quicly_local_cid_set_t *set)
 }
 
 /**
- * generates a new CID and increments path_id. returns true if successfully generated.
+ * generates a new CID and increments sequence. returns true if successfully generated.
  */
 static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
 {
-    if (set->_encryptor == NULL || set->plaintext.path_id >= QUICLY_MAX_PATH_ID)
+    if (set->_encryptor == NULL || set->plaintext.sequence >= QUICLY_MAX_PATH_ID)
         return 0;
 
+    set->cids[idx].sequence = set->plaintext.sequence;
+
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
-    set->cids[idx].sequence = set->plaintext.path_id++;
+    set->plaintext.sequence++;
 
     return 1;
 }
@@ -81,9 +83,8 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
         ._size = 1,
     };
 
-    /* if provided, set master id */
+    /* if provided, set plaintext */
     if (new_cid != NULL) {
-        assert(new_cid->path_id == 0);
         set->plaintext = *new_cid;
     }
 
@@ -106,8 +107,9 @@ int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
     assert(size <= PTLS_ELEMENTSOF(set->cids));
     assert(set->_size <= size);
 
-    for (size_t i = set->_size; i < size; i++)
+    for (size_t i = set->_size; i < size; i++) {
         set->cids[i].state = QUICLY_LOCAL_CID_STATE_IDLE;
+    }
 
     set->_size = size;
 

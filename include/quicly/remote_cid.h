@@ -70,16 +70,18 @@ typedef struct st_quicly_remote_cid_t {
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
 } quicly_remote_cid_t;
 
+#define QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * 4)
+
 /**
  * structure to hold active connection IDs received from the remote peer
  */
 typedef struct st_quicly_remote_cid_set_t {
     /**
-     * We retain QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT active connection IDs. `cids[0]` used to retain the current DCID, but it is
-     * no longer the case. DCID of the non-probing path should now be obtained via `get_dcid(conn->paths[0])` where `paths[0]` is
+     * We retain QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT active connection IDs. `cids[0]` used to retain the current DCID, but it
+     * is no longer the case. DCID of the non-probing path should now be obtained via `get_dcid(conn->paths[0])` where `paths[0]` is
      * the non-probing path.
      */
-    quicly_remote_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+    quicly_remote_cid_t cids[QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT];
     /**
      * we expect to receive CIDs with sequence number smaller than or equal to this number
      */
@@ -88,7 +90,7 @@ typedef struct st_quicly_remote_cid_set_t {
      * queue containing CID sequence numbers that should be sent using RETIRE_CONNECTION_ID frames
      */
     struct {
-        uint64_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * 2];
+        uint64_t cids[QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT * 2];
         size_t count;
     } retired;
 } quicly_remote_cid_set_t;
