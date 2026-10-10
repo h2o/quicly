@@ -157,7 +157,7 @@ static void default_encrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_t *enc
         break;
     }
     p = quicly_encode32(p, plaintext->master_id);
-    p = quicly_encode32(p, (plaintext->thread_id << 8) | plaintext->path_id);
+    p = quicly_encode32(p, (plaintext->thread_id << 16) | (plaintext->sequence << 8) | plaintext->path_id);
     assert(p - buf == self->cid_encrypt_ctx->algo->block_size);
 
     /* generate CID */
@@ -196,8 +196,10 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
         plaintext->node_id = 0;
     }
     plaintext->master_id = quicly_decode32(&p);
-    plaintext->thread_id = quicly_decode24(&p);
-    plaintext->path_id = *p++;
+    uint32_t v = quicly_decode32(&p);
+    plaintext->path_id = v & 0xff;
+    plaintext->sequence = (v >> 8) & 0xff;
+    plaintext->thread_id = v >> 16;
     assert(p - ptbuf == len);
 
     return len;
