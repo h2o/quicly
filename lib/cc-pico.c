@@ -1006,6 +1006,8 @@ static void pico_on_late_ack(quicly_cc_t *cc, uint64_t pn, int64_t now)
         cc->exit_slow_start_at = INT64_MAX;
         quicly_cc_jumpstart_reset(cc);
         cc->rapid_start.state = QUICLY_CC_RAPID_START_STATE_INACTIVE;
+        /* Prague: the estimator runs only past startup */
+        prague_stop(&cc->state.pico.prague);
     }
 }
 
