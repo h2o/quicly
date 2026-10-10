@@ -576,9 +576,8 @@ subtest "reset-stream-overflow" => sub {
     my $server = spawn_server();
     my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
     $conn->send("\x04\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff"); # reset stream with final_size=QUICINT_MAX
-    sleep 0.5;
+    my $received = $conn->receive_until(qr/^\x1c\x03\x04/, 2);
     ok !$server->is_dead(), "server process must be alive";
-    my $received = $conn->receive();
     like $received, qr/^\x1c\x03\x04/, "responds with CONNECTION_CLOSE(FLOW_CONTROL_ERROR) for RESET_STREAM";
 };
 
@@ -588,9 +587,8 @@ subtest "reset-stream-overflow-connection" => sub {
     my $server = spawn_server(qw(-M 1000 -m 1500));
     my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
     $conn->send("\x04\x00\x00\x43\xe8" . "\x04\x04\x00\x43\xe8");
-    sleep 0.5;
+    my $received = $conn->receive_until(qr/^\x1c\x03\x04/, 2);
     ok !$server->is_dead(), "server process must be alive";
-    my $received = $conn->receive();
     like $received, qr/^\x1c\x03\x04/, "responds with CONNECTION_CLOSE(FLOW_CONTROL_ERROR) for RESET_STREAM";
 };
 
@@ -607,19 +605,17 @@ subtest "invalid-ack" => sub {
     my $server = spawn_server();
     subtest "gap" => sub {
         my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
-        my $pn = $conn->largest_pn_received;
-        $conn->send("\x02" . chr($pn) . "\x00\x00" . chr($pn)); # ACK all PNs up to largest_pn_received
-        sleep 0.5;
+        my $pn = $conn->largest_1rtt_pn_received;
+        $conn->send("\x02" . chr($pn) . "\x00\x00" . chr($pn)); # ACK all 1-RTT PNs up to the largest received
         ok !$server->is_dead(), "server is alive";
-        my $received = $conn->receive();
+        my $received = $conn->receive_until(qr/^\x1c\x0a\x02/, 2);
         like $received, qr/^\x1c\x0a\x02/, "responds with CONNECTION_CLOSE(PROTOCOL_VIOLATION) for ACK";
     };
     subtest "too large" => sub {
         my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
         $conn->send("\x02\x3f\x00\x00\x00"); # ACK pn=63, server would not have sent so many packets
-        sleep 0.5;
         ok !$server->is_dead(), "server is alive";
-        my $received = $conn->receive();
+        my $received = $conn->receive_until(qr/^\x1c\x0a\x02/, 2);
         like $received, qr/^\x1c\x0a\x02/, "responds with CONNECTION_CLOSE(PROTOCOL_VIOLATION) for ACK";
     };
 };
