@@ -206,7 +206,7 @@ static void test_egress_selection(void)
                           NULL) == 0);
         ok(quicly_get_alt_egress(conn) == alt);
         ok(get_egress_context(conn) == &ctx.egress[alt]);
-        ok((conn->egress.pacer != NULL) == (alt != 0 || ctx.egress[0].pacing));
+        ok((conn->path_spaces[0]->pacer != NULL) == (alt != 0 || ctx.egress[0].pacing));
         quicly_stats_t stats;
         ok(quicly_get_stats(conn, &stats) == 0);
         ok(stats.num_alt_egress == (alt != 0));
@@ -1080,8 +1080,8 @@ static void test_ack_frequency(void)
     ok(server_stream != NULL);
 
     // Set some losses to trigger ack frequency path
-    server->egress.cc.num_loss_episodes = 5;
-    client->egress.cc.num_loss_episodes = 5;
+    server->path_spaces[0]->cc.num_loss_episodes = 5;
+    client->path_spaces[0]->cc.num_loss_episodes = 5;
 
     ok(server->application->super.reordering_threshold == 1);
     ok(client->application->super.reordering_threshold == 1);
@@ -1256,26 +1256,26 @@ static void test_cc_accel_context(void)
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
-        ok(conn->egress.cc.conf == &ctx.egress[0].cc && conn->egress.cc.conf->abba);
-        ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
+        ok(conn->path_spaces[0]->cc.conf == &ctx.egress[0].cc && conn->path_spaces[0]->cc.conf->abba);
+        ok(conn->path_spaces[0]->cc.state.pico.abba.high.cwnd == 0);
 
         /* Path promotion uses configured policy and discards the old path's measurements. */
         quicly_cc_conf_t stale_conf = ctx.egress[0].cc;
         stale_conf.abba = 0;
-        conn->egress.cc.conf = &stale_conf;
-        conn->egress.cc.state.pico.abba.high.cwnd = 100000;
-        quicly_rtt_update(&conn->egress.loss.rtt, 20, 0, conn->stash.now);
-        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20);
+        conn->path_spaces[0]->cc.conf = &stale_conf;
+        conn->path_spaces[0]->cc.state.pico.abba.high.cwnd = 100000;
+        quicly_rtt_update(&conn->path_spaces[0]->loss.rtt, 20, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->path_spaces[0]->loss.rtt) == 20);
         ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
         ok(promote_path(conn, 1) == 0);
-        ok(conn->egress.cc.conf == &ctx.egress[0].cc && conn->egress.cc.conf->abba);
-        ok(conn->egress.cc.type->cc_init == policies[i]);
-        ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
-        ok(conn->egress.loss.rtt.latest == 0);
-        ok(conn->egress.loss.rtt.floor.newest_sample_until == 0);
-        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20); /* initial estimate inherited from the old path */
-        quicly_rtt_update(&conn->egress.loss.rtt, 80, 0, conn->stash.now);
-        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 80);
+        ok(conn->path_spaces[0]->cc.conf == &ctx.egress[0].cc && conn->path_spaces[0]->cc.conf->abba);
+        ok(conn->path_spaces[0]->cc.type->cc_init == policies[i]);
+        ok(conn->path_spaces[0]->cc.state.pico.abba.high.cwnd == 0);
+        ok(conn->path_spaces[0]->loss.rtt.latest == 0);
+        ok(conn->path_spaces[0]->loss.rtt.floor.newest_sample_until == 0);
+        ok(quicly_rtt_get_floor(&conn->path_spaces[0]->loss.rtt) == 20); /* initial estimate inherited from the old path */
+        quicly_rtt_update(&conn->path_spaces[0]->loss.rtt, 80, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->path_spaces[0]->loss.rtt) == 80);
         quicly_free(conn);
     }
 }
@@ -1289,7 +1289,8 @@ void test_ecn_index_from_bits(void)
 
 static void test_resume_sendrate(void)
 {
-    quicly_conn_t conn = {0};
+    quicly_path_space_t ps = {0};
+    quicly_conn_t conn = {.path_spaces = {&ps}};
     uint64_t rate;
     uint32_t rtt;
     const struct {
@@ -1297,16 +1298,16 @@ static void test_resume_sendrate(void)
         uint32_t stored;
     } cases[] = {{0.001f, 1}, {0.25f, 1}, {1, 1}, {1.25f, 2}, {250, 250}};
 
-    quicly_ratemeter_init(&conn.egress.ratemeter);
-    conn.egress.loss.rtt.minimum = 0.25f;
+    quicly_ratemeter_init(&conn.path_spaces[0]->ratemeter);
+    conn.path_spaces[0]->loss.rtt.minimum = 0.25f;
     calc_resume_sendrate(&conn, &rate, &rtt);
     ok(rate == 0 && rtt == 0);
 
-    quicly_ratemeter_enter_cc_limited(&conn.egress.ratemeter, 0);
-    quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1000, 1000, 0);
-    quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1050, 51000, 1);
+    quicly_ratemeter_enter_cc_limited(&conn.path_spaces[0]->ratemeter, 0);
+    quicly_ratemeter_on_ack(&conn.path_spaces[0]->ratemeter, 1000, 1000, 0);
+    quicly_ratemeter_on_ack(&conn.path_spaces[0]->ratemeter, 1050, 51000, 1);
     for (size_t i = 0; i < PTLS_ELEMENTSOF(cases); ++i) {
-        conn.egress.loss.rtt.minimum = cases[i].minimum;
+        conn.path_spaces[0]->loss.rtt.minimum = cases[i].minimum;
         calc_resume_sendrate(&conn, &rate, &rtt);
         ok(rate == 1000000);
         ok(rtt == cases[i].stored);

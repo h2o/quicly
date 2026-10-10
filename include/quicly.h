@@ -869,7 +869,7 @@ struct _st_quicly_conn_public_t {
     quicly_state_t state;
     struct {
         /**
-         * connection IDs being issued to the remote peer.
+         * initial local CID snapshot retained for layout compatibility and tracing; live CID state belongs to path zero.
          * `quicly_conn_public_t::local.cid_set.plaintext.master_id has to be located right after `ctx` and `state`, as probes rely
          * on that assumption.
          */
@@ -886,7 +886,7 @@ struct _st_quicly_conn_public_t {
     } local;
     struct {
         /**
-         * CIDs received from the remote peer
+         * initial remote CID snapshot retained for layout compatibility; use quicly_get_remote_cid for path zero's live CID state.
          */
         quicly_remote_cid_set_t cid_set;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
@@ -1203,7 +1203,7 @@ static const quicly_cid_t *quicly_get_original_dcid(quicly_conn_t *conn);
 /**
  *
  */
-static const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn);
+const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn);
 /**
  *
  */
@@ -1670,12 +1670,6 @@ inline const quicly_cid_t *quicly_get_original_dcid(quicly_conn_t *conn)
 {
     struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
     return &c->original_dcid;
-}
-
-inline const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn)
-{
-    struct _st_quicly_conn_public_t *c = (struct _st_quicly_conn_public_t *)conn;
-    return &c->remote.cid_set.cids[0].cid;
 }
 
 inline const quicly_transport_parameters_t *quicly_get_remote_transport_parameters(quicly_conn_t *conn)
