@@ -542,11 +542,13 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
         return cc->state.pico.bytes_per_mtu_increase;
     } else {
         assert(cc->type == &quicly_cc_type_reno);
+        uint64_t target = cc->cwnd;
         if (cc->conf->normalize_mtu) {
-            uint64_t bytes = (uint64_t)cc->cwnd * max_udp_payload_size / QUICLY_CC_REFERENCE_MTU;
-            return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
+            target = (uint64_t)cc->cwnd * max_udp_payload_size / QUICLY_CC_REFERENCE_MTU;
+            if (target < 1)
+                target = 1;
         }
-        return cc->cwnd;
+        return target > UINT32_MAX ? UINT32_MAX : (uint32_t)target;
     }
 }
 
