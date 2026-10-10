@@ -1735,6 +1735,11 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc);
  */
 int quicly_is_multipath(quicly_conn_t *conn);
 /**
+ * Calculates total congestion window across all active paths.
+ */
+uint64_t quicly_calculate_total_cwnd(quicly_conn_t *conn);
+uint64_t quicly_calculate_lia_target(quicly_conn_t *conn);
+/**
  * Returns the index of `quicly_context_t::egress[]` being used by the connection; i.e., 0 if the default egress context is being
  * used, or a non-zero value if one of the alternatives is. The context is chosen when the connection is created, and remains
  * unchanged for the lifetime of the connection.

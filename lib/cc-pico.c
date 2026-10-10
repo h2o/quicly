@@ -548,6 +548,11 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
             if (target < 1)
                 target = 1;
         }
+        if (cc->conn != NULL && quicly_is_multipath(cc->conn)) {
+            uint64_t lia_target = quicly_calculate_lia_target(cc->conn);
+            if (lia_target > target)
+                target = lia_target;
+        }
         return target > UINT32_MAX ? UINT32_MAX : (uint32_t)target;
     }
 }

@@ -2611,6 +2611,8 @@ static void test_multipath_state_isolation(void)
     ok(quicly_set_cc(client, new_cc));
     ok(client->path_spaces[0]->cc.type == new_cc);
     ok(client->path_spaces[1]->cc.type == new_cc);
+    ok(client->path_spaces[0]->cc.conn == client);
+    ok(client->path_spaces[1]->cc.conn == client);
 
     /* An ACK for path zero must not traverse another path's overdue loss
      * state. That path is serviced by its own timer, even with healthy ACKs. */
@@ -2647,6 +2649,112 @@ static void test_multipath_state_isolation(void)
     client->path_spaces[2] = NULL;
     ok(alloc_path_space(client, 2, 4) == 0);
     ok(client->path_spaces[2]->cc.type == new_cc);
+    ok(client->path_spaces[2]->cc.conn == client);
+
+    quicly_free(client);
+    quicly_free(server);
+
+    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
+    quic_ctx.cid_encryptor = orig_cid_encryptor;
+    quic_ctx.transport_params.initial_max_path_id = orig_initial_max_path_id;
+}
+
+static void test_multipath_coupled_cc(void)
+{
+    uint64_t orig_initial_max_path_id = quic_ctx.transport_params.initial_max_path_id;
+    quic_ctx.transport_params.initial_max_path_id = 4; /* enable multipath negotiation */
+
+    quicly_conn_t *client, *server;
+    quicly_cid_encryptor_t *orig_cid_encryptor = quic_ctx.cid_encryptor;
+    char cid_key[] = "0123456789abcdef";
+    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+                                                              ptls_iovec_init(cid_key, strlen(cid_key)));
+
+    test_setup_connected_peers(&client, &server);
+
+    /* Open path 1 */
+    struct sockaddr_in remote_addr, local_addr;
+    memset(&remote_addr, 0, sizeof(remote_addr));
+    remote_addr.sin_family = AF_INET;
+    remote_addr.sin_port = htons(12345);
+    remote_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    memset(&local_addr, 0, sizeof(local_addr));
+    local_addr.sin_family = AF_INET;
+    local_addr.sin_port = htons(54321);
+    local_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    quicly_error_t ret = new_path(client, 1, 1, (struct sockaddr *)&remote_addr, (struct sockaddr *)&local_addr);
+    ok(ret == 0);
+    ok(get_path(client, 1) != NULL);
+
+    /* Set cwnd and rtt on both paths */
+    client->path_spaces[0]->cc.cwnd = 10000;
+    client->path_spaces[1]->cc.cwnd = 10000;
+    client->path_spaces[0]->loss.rtt.smoothed = 100;
+    client->path_spaces[1]->loss.rtt.smoothed = 100;
+    get_path(client, 1)->probe_only = 0;
+    /* Move both out of slow start (so we test CA) */
+    client->path_spaces[0]->cc.ssthresh = 5000;
+    client->path_spaces[1]->cc.ssthresh = 5000;
+
+    /* Total cwnd should be 20000 */
+    uint64_t total = quicly_calculate_total_cwnd(client);
+    ok(total == 20000);
+
+    /* Fractional SRTT is significant to LIA because RTT is squared in the numerator term. */
+    client->path_spaces[0]->loss.rtt.smoothed = 1.9f;
+    client->path_spaces[1]->loss.rtt.smoothed = 2.1f;
+    ok(quicly_calculate_lia_target(client) == 36281);
+    client->path_spaces[0]->loss.rtt.smoothed = 100;
+    client->path_spaces[1]->loss.rtt.smoothed = 100;
+
+    /* exclude suspect path and re-include recovering path in LIA target */
+    ok(quicly_calculate_lia_target(client) == 40000);
+    client->path_spaces[0]->health.state = QUICLY_PATH_SUSPECT;
+    ok(quicly_calculate_lia_target(client) == 10000);
+    ok(client->path_spaces[0]->cc.cwnd == 10000);
+    client->path_spaces[0]->cc.cwnd = 1000000;
+    ok(quicly_calculate_lia_target(client) == 10000);
+    client->path_spaces[0]->cc.cwnd = 10000;
+    client->path_spaces[0]->health.state = QUICLY_PATH_RECOVERING;
+    ok(quicly_calculate_lia_target(client) == 40000);
+    client->path_spaces[0]->health.state = QUICLY_PATH_USABLE;
+    client->path_spaces[1]->health.state = QUICLY_PATH_SUSPECT;
+    ok(quicly_calculate_lia_target(client) == 10000);
+    client->path_spaces[1]->health.state = QUICLY_PATH_USABLE;
+    ok(quicly_calculate_lia_target(client) == 40000);
+
+    /* Acknowledge bytes on path 1 (in CA).
+     * Standard Reno CA would increase cwnd after 10000 bytes.
+     * Under correct LIA with equal RTTs, alpha = 0.5, so it should require 40000 bytes to increase! */
+    quicly_cc_t *cc = &client->path_spaces[1]->cc;
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 15000, 100, 15000, 1, 101, client->stash.now, 1200);
+    /* 25,000 bytes remain before the 40,000-byte LIA target is reached. */
+    ok(cc->cwnd == 10000);
+    ok(cc->state.pico.bytes_to_mtu_increase == 25000);
+
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 20000, 101, 20000, 1, 102, client->stash.now, 1200);
+    /* Another 20,000 bytes leaves 5,000 bytes in the current interval. */
+    ok(cc->cwnd == 10000);
+    ok(cc->state.pico.bytes_to_mtu_increase == 5000);
+
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 5000, 102, 5000, 1, 103, client->stash.now, 1200);
+    /* Reaching 40,000 increases CWND by one MSS and starts the next LIA interval. */
+    ok(cc->cwnd == 11200);
+    ok(cc->state.pico.bytes_to_mtu_increase == 40128);
+
+    /* The coupled term can be smaller than a slow path's own CWND. LIA must remain bounded by standard Reno in that case. */
+    client->path_spaces[0]->cc.cwnd = 1000;
+    client->path_spaces[0]->loss.rtt.smoothed = 1;
+    cc->cwnd = 100000;
+    client->path_spaces[1]->loss.rtt.smoothed = 1000;
+    uint64_t reno_target = quic_ctx.egress[0].cc.normalize_mtu ? (uint64_t)cc->cwnd * 1200 / QUICLY_CC_REFERENCE_MTU : cc->cwnd;
+    ok(quicly_calculate_lia_target(client) < reno_target);
+    cc->state.pico.bytes_to_mtu_increase = 0;
+    cc->type->cc_on_acked(cc, &client->path_spaces[1]->loss, 2000, 103, 2000, 1, 104, client->stash.now, 1200);
+    ok(cc->cwnd == 100000);
+    ok(cc->state.pico.bytes_to_mtu_increase == reno_target - 2000);
 
     quicly_free(client);
     quicly_free(server);
@@ -3479,6 +3587,7 @@ int main(int argc, char **argv)
     subtest("multipath-path-ack-limit", test_multipath_path_ack_limit);
     subtest("multipath-state-isolation", test_multipath_state_isolation);
     subtest("multipath-delivery-rate", test_multipath_delivery_rate);
+    subtest("multipath-coupled-cc", test_multipath_coupled_cc);
     subtest("multipath-key-update-delay", test_multipath_key_update_delay);
     subtest("multipath-active-use", test_multipath_active_use);
     subtest("multipath-path-management", test_multipath_path_management);

@@ -38,6 +38,7 @@ static void test_multipath_egress_context(void)
         quicly_path_space_t *ps = client->path_spaces[1];
         ok(ps->cc.conf == &policy->cc && ps->loss.conf == &policy->loss);
         ok(ps->cc.type->cc_init == controllers[alt]);
+        ok(ps->cc.conn == client);
         ok(ps->cc.cwnd == quicly_cc_calc_initial_cwnd(policy->cc.initcwnd_packets, ps->max_udp_payload_size));
         ok(ps->cc.rapid_start.state == QUICLY_CC_RAPID_START_STATE_PROBING);
         ok((ps->pacer != NULL) == policy->pacing);
@@ -51,7 +52,7 @@ static void test_multipath_egress_context(void)
         ok(new_path(client, candidate, 1, &fake_address.sa, &fake_address.sa) == 0);
         ok(promote_path(client, candidate) == 0);
         ok(ps->cc.conf == &policy->cc && ps->loss.conf == &policy->loss);
-        ok(ps->cc.type->cc_init == controllers[alt]);
+        ok(ps->cc.conn == client && ps->cc.type->cc_init == controllers[alt]);
         ok(ps->loss.rtt.smoothed == 0.25f && ps->loss.rtt.latest == 0);
         ok(client->path_spaces[0]->cc.cwnd == primary_cwnd);
         ok(quicly_get_alt_egress(client) == alt);
@@ -66,6 +67,7 @@ static void test_multipath_egress_context(void)
         for (size_t i = 0; i != 3; ++i) {
             ok(client->path_spaces[i]->cc.type == &quicly_cc_type_reno);
             ok(client->path_spaces[i]->cc.conf == &policy->cc);
+            ok(client->path_spaces[i]->cc.conn == client);
         }
         ok(quicly_get_alt_egress(client) == alt);
         unlock_now(client);

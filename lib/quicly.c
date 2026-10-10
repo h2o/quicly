@@ -711,6 +711,46 @@ int quicly_is_multipath(quicly_conn_t *conn)
            conn->super.remote.transport_params.enable_multipath;
 }
 
+uint64_t quicly_calculate_total_cwnd(quicly_conn_t *conn)
+{
+    uint64_t total = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+        if (conn->path_spaces[i] != NULL && get_path(conn, i) != NULL && !get_path(conn, i)->probe_only &&
+            !get_path(conn, i)->abandoned) {
+            total += conn->path_spaces[i]->cc.cwnd;
+        }
+    }
+    return total;
+}
+
+uint64_t quicly_calculate_lia_target(quicly_conn_t *conn)
+{
+    double max_num = 0.0;
+    double sum_den = 0.0;
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+        if (conn->path_spaces[i] != NULL && get_path(conn, i) != NULL && !get_path(conn, i)->probe_only &&
+            !get_path(conn, i)->abandoned && conn->path_spaces[i]->health.state != QUICLY_PATH_SUSPECT) {
+            /* exclude suspect path windows from active LIA coupling */
+            uint32_t cwnd = conn->path_spaces[i]->cc.cwnd;
+            double rtt = conn->path_spaces[i]->loss.rtt.smoothed;
+            if (rtt == 0)
+                rtt = 1;
+
+            double num = (double)cwnd / ((double)rtt * rtt);
+            if (num > max_num)
+                max_num = num;
+
+            sum_den += (double)cwnd / rtt;
+        }
+    }
+
+    if (max_num == 0.0)
+        return quicly_calculate_total_cwnd(conn);
+
+    return (uint64_t)(sum_den * sum_den / max_num);
+}
+
 #if QUICLY_USE_TRACER
 #include "quicly-tracer.h"
 #endif
@@ -2466,6 +2506,7 @@ static quicly_error_t alloc_path_space(quicly_conn_t *conn, size_t path_index, u
             free(ps);
             return QUICLY_TRANSPORT_ERROR_INTERNAL;
         }
+        ps->cc.conn = conn;
 
         if (conn->path_spaces[0]->pacer != NULL) {
             if ((ps->pacer = malloc(sizeof(*ps->pacer))) == NULL) {
@@ -2809,6 +2850,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     /* reset CC */
     ps->cc.type->cc_init->cb(ps->cc.type->cc_init, &ps->cc, &get_egress_context(conn)->cc, ps->max_udp_payload_size,
                              conn->stash.now);
+    ps->cc.conn = conn;
 
     if (ps_index == 0) {
         /* set jumpstart target */
@@ -3602,6 +3644,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->egress.send_probe_at = INT64_MAX;
     get_egress_context(conn)->cc.init_cc->cb(get_egress_context(conn)->cc.init_cc, &ps->cc, &get_egress_context(conn)->cc,
                                              ctx->transport_params.max_udp_payload_size, conn->stash.now);
+    ps->cc.conn = conn;
     if (pacer != NULL) {
         ps->pacer = pacer;
         quicly_pacer_reset(ps->pacer);
@@ -7343,6 +7386,7 @@ int quicly_set_cc(quicly_conn_t *conn, quicly_cc_type_t *cc)
         if (conn->path_spaces[i] == NULL)
             continue;
         int success = cc->cc_switch(&conn->path_spaces[i]->cc);
+        conn->path_spaces[i]->cc.conn = conn;
         if (!success) {
             for (size_t j = 0; j < PTLS_ELEMENTSOF(conn->path_spaces); ++j)
                 if (conn->path_spaces[j] != NULL)
