@@ -1300,7 +1300,7 @@ static void test_resume_sendrate(void)
 
     quicly_ratemeter_init(&conn.path_spaces[0]->ratemeter);
     conn.path_spaces[0]->loss.rtt.minimum = 0.25f;
-    calc_resume_sendrate(&conn, &rate, &rtt);
+    calc_resume_sendrate(conn.path_spaces[0], &rate, &rtt);
     ok(rate == 0 && rtt == 0);
 
     quicly_ratemeter_enter_cc_limited(&conn.path_spaces[0]->ratemeter, 0);
@@ -1308,7 +1308,7 @@ static void test_resume_sendrate(void)
     quicly_ratemeter_on_ack(&conn.path_spaces[0]->ratemeter, 1050, 51000, 1);
     for (size_t i = 0; i < PTLS_ELEMENTSOF(cases); ++i) {
         conn.path_spaces[0]->loss.rtt.minimum = cases[i].minimum;
-        calc_resume_sendrate(&conn, &rate, &rtt);
+        calc_resume_sendrate(conn.path_spaces[0], &rate, &rtt);
         ok(rate == 1000000);
         ok(rtt == cases[i].stored);
     }
