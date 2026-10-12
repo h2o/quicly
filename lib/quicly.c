@@ -6333,59 +6333,49 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
 }
 
 /**
- * Validates the ECN counts carried by an ACK frame (RFC 9000, Section 13.4.2), and sets to `counts` the increase of the counters.
- * Counter snapshots are accepted atomically, so that reordered ACKs cannot manufacture a different marking fraction by advancing
- * only part of a snapshot.
+ * Validates the ECN counts carried by an ACK frame (RFC 9000, Section 13.4.2) and returns their increases.
  */
-static void handle_ecn_feedback(quicly_conn_t *conn, uint8_t epoch, const quicly_ack_frame_t *frame, int has_ecn,
-                                uint64_t largest_newly_acked, quicly_cc_ecn_counts_t *counts)
+static void handle_ecn_feedback(quicly_conn_t *conn, uint8_t epoch, const quicly_ack_frame_t *frame, int is_ack_ecn,
+                                quicly_cc_ecn_counts_t *increases)
 {
-    *counts = (quicly_cc_ecn_counts_t){0};
+    *increases = (quicly_cc_ecn_counts_t){0};
 
-    if (conn->egress.ecn.state == QUICLY_ECN_OFF || frame->largest_acknowledged < conn->egress.pn_path_start)
+    /* return if ECN is already turned off, PN belongs to the previous path, or if the ACK is not advancing */
+    if (conn->egress.ecn.state == QUICLY_ECN_OFF || frame->largest_acknowledged < conn->egress.pn_path_start ||
+        frame->largest_acknowledged < conn->egress.loss.largest_acked_packet_plus1.per_epoch[epoch])
         return;
 
-    uint64_t *previous = conn->egress.ecn.counts[epoch];
-    /* `ecn_counts` are ECT(0), ECT(1), CE in that order; ECT(1) is used for L4S and ECT(0) otherwise, the other is never expected
-     */
-    size_t ect_index = is_l4s(conn);
-    /* an ACK frame is newer than those processed so far iff its largest acknowledged is newly acknowledged */
-    int is_newer = largest_newly_acked == frame->largest_acknowledged;
+    /* the slot of `ecn_counts` where packets not marked CE should be counted: ECT(1) for L4S, ECT(0) otherwise */
+    const size_t ect_index = is_l4s(conn);
 
-    if (!has_ecn) {
-        if (is_newer)
-            update_ecn_state(conn, QUICLY_ECN_OFF);
-        return;
-    }
-    if (frame->ecn_counts[!ect_index] != 0) {
-        update_ecn_state(conn, QUICLY_ECN_OFF);
-        return;
-    }
-    if (frame->ecn_counts[ect_index] < previous[ect_index] || frame->ecn_counts[2] < previous[2]) {
-        if (is_newer)
-            update_ecn_state(conn, QUICLY_ECN_OFF);
-        return;
-    }
-    if (frame->ecn_counts[ect_index] + frame->ecn_counts[2] > conn->egress.packet_number ||
-        (frame->ecn_counts[ect_index] + frame->ecn_counts[2] == 0 && largest_newly_acked != UINT64_MAX)) {
+    /* if the peer signal is suspicious, turn off ECN */
+    if (!is_ack_ecn || frame->ecn_counts[!ect_index] != 0 || frame->ecn_counts[ect_index] + frame->ecn_counts[2] == 0 ||
+        frame->ecn_counts[ect_index] < conn->egress.ecn.counts[epoch][ect_index] ||
+        frame->ecn_counts[2] < conn->egress.ecn.counts[epoch][2] ||
+        frame->ecn_counts[ect_index] + frame->ecn_counts[2] > conn->egress.packet_number) {
         update_ecn_state(conn, QUICLY_ECN_OFF);
         return;
     }
 
-    uint64_t ect = frame->ecn_counts[ect_index] - previous[ect_index], ce = frame->ecn_counts[2] - previous[2];
-    conn->super.stats.num_packets.acked_ecn_counts[ect_index] += ect;
-    conn->super.stats.num_packets.acked_ecn_counts[2] += ce;
-    previous[ect_index] = frame->ecn_counts[ect_index];
-    previous[2] = frame->ecn_counts[2];
+    /* validation complete; calculate the increase */
+    increases->ce = frame->ecn_counts[2] - conn->egress.ecn.counts[epoch][2];
+    increases->total = frame->ecn_counts[ect_index] - conn->egress.ecn.counts[epoch][ect_index] + increases->ce;
 
-    if (conn->egress.ecn.state == QUICLY_ECN_PROBING && ect + ce != 0)
+    /* update counters */
+    conn->super.stats.num_packets.acked_ecn_counts[ect_index] += increases->total - increases->ce;
+    conn->super.stats.num_packets.acked_ecn_counts[2] += increases->ce;
+    conn->egress.ecn.counts[epoch][ect_index] = frame->ecn_counts[ect_index];
+    conn->egress.ecn.counts[epoch][2] = frame->ecn_counts[2];
+
+    /* call probing done if ECN reporting has been observed the first time */
+    if (conn->egress.ecn.state == QUICLY_ECN_PROBING && increases->total != 0)
         update_ecn_state(conn, QUICLY_ECN_ON);
-    if (ce != 0) {
+
+    if (increases->ce != 0) {
         QUICLY_PROBE(ECN_CONGESTION, conn, conn->stash.now, conn->super.stats.num_packets.acked_ecn_counts[2]);
         QUICLY_LOG_CONN(ecn_congestion, conn,
                         { PTLS_LOG_ELEMENT_NUMBER(ce_count, conn->super.stats.num_packets.acked_ecn_counts[2]); });
     }
-    *counts = (quicly_cc_ecn_counts_t){.total = ect + ce, .ce = ce};
 }
 
 static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
@@ -6523,6 +6513,11 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
         quicly_ratemeter_on_ack(&conn->egress.ratemeter, conn->stash.now, conn->super.stats.num_bytes.ack_received,
                                 largest_newly_acked.pn);
 
+    /* ECN feedback is processed before the loss detection engine updates the largest acknowledged, and before OnPacketAckedCC, as
+     * L4S feeds it to the marking estimator. */
+    quicly_cc_ecn_counts_t ecn_counts;
+    handle_ecn_feedback(conn, state->epoch, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN, &ecn_counts);
+
     /* Update loss detection engine on ack. The function uses ack_delay only when the largest_newly_acked is also the largest acked
      * so far. So, it does not matter if the ack_delay being passed in does not apply to the largest_newly_acked. */
     quicly_loss_on_ack_received(&conn->egress.loss, largest_newly_acked.pn, largest_late_acked, conn->egress.packet_number,
@@ -6530,11 +6525,6 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
                                 includes_ack_eliciting ? includes_late_ack ? QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING_LATE_ACK
                                                                            : QUICLY_LOSS_ACK_RECEIVED_KIND_ACK_ELICITING
                                                        : QUICLY_LOSS_ACK_RECEIVED_KIND_NON_ACK_ELICITING);
-
-    /* ECN feedback is processed before OnPacketAckedCC, as L4S feeds it to the marking estimator. */
-    quicly_cc_ecn_counts_t ecn_counts;
-    handle_ecn_feedback(conn, state->epoch, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN, largest_newly_acked.pn,
-                        &ecn_counts);
 
     /* OnPacketAcked and OnPacketAckedCC */
     conn->egress.cc.type->cc_on_acked(&conn->egress.cc, &conn->egress.loss, (uint32_t)bytes_acked, frame.largest_acknowledged,

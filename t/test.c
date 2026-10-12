@@ -1322,38 +1322,37 @@ static void test_l4s_feedback(void)
     conn->egress.packet_number = 100;
     quicly_ack_frame_t frame = {.largest_acknowledged = 20, .ecn_counts = {0, 19, 1}};
     quicly_cc_ecn_counts_t counts;
-    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, 20, &counts);
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, &counts);
     ok(counts.total == 20 && counts.ce == 1 && conn->egress.ecn.state == QUICLY_ECN_ON);
     ok(conn->super.stats.num_packets.acked_ecn_counts[1] == 19);
     ok(conn->super.stats.num_packets.acked_ecn_counts[2] == 1);
+    conn->egress.loss.largest_acked_packet_plus1.per_epoch[QUICLY_EPOCH_1RTT] = 21; /* as the loss detection engine records */
 
-    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, UINT64_MAX, &counts);
-    ok(counts.total == 0 && counts.ce == 0); /* duplicate snapshot */
-    frame.largest_acknowledged = 19;
-    frame.ecn_counts[1] = 18;
-    frame.ecn_counts[2] = 0;
-    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, UINT64_MAX, &counts);
-    ok(counts.total == 0 && counts.ce == 0 && conn->egress.ecn.state == QUICLY_ECN_ON); /* old reordered snapshot */
-    frame.largest_acknowledged = 20;
-    frame.ecn_counts[1] = 19;
+    /* ACKs that do not advance the largest acknowledged are ignored, whether the counters advance or regress. */
     frame.ecn_counts[2] = 2;
-    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, UINT64_MAX, &counts);
-    ok(counts.total == 1 && counts.ce == 1); /* counters can advance without newly acknowledged bytes */
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, &counts);
+    ok(counts.total == 0 && counts.ce == 0 && conn->egress.ecn.state == QUICLY_ECN_ON);
+    frame.largest_acknowledged = 15; /* newly acknowledging a range omitted by newer ACKs */
+    frame.ecn_counts[1] = 14;
+    frame.ecn_counts[2] = 0;
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, &counts);
+    ok(counts.total == 0 && counts.ce == 0 && conn->egress.ecn.state == QUICLY_ECN_ON);
 
-    /* Counter regression in a newer ACK fails validation, unlike an old reordered snapshot. */
+    /* Counter regression in an ACK that advances the largest acknowledged fails validation. */
     frame.largest_acknowledged = 21;
-    frame.ecn_counts[2] = 1;
-    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, 21, &counts);
+    frame.ecn_counts[1] = 19;
+    frame.ecn_counts[2] = 0;
+    handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, &counts);
     ok(counts.total == 0 && counts.ce == 0 && conn->egress.ecn.state == QUICLY_ECN_OFF);
     ok(quicly_send_get_ecn_bits(conn) == 0);
     quicly_free(conn);
 
-    for (int has_ecn = 0; has_ecn != 2; ++has_ecn) {
+    for (int is_ack_ecn = 0; is_ack_ecn != 2; ++is_ack_ecn) {
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
         conn->egress.packet_number = 100;
         frame = (quicly_ack_frame_t){.largest_acknowledged = 20, .ecn_counts = {20, 0, 0}};
-        handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, has_ecn, 20, &counts);
+        handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, is_ack_ecn, &counts);
         ok(counts.total == 0 && conn->egress.ecn.state == QUICLY_ECN_OFF); /* missing feedback or ECT(1) rewritten to ECT(0) */
         quicly_free(conn);
     }
