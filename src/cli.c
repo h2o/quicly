@@ -1337,7 +1337,7 @@ static void usage(const char *cmd)
            "  -R                        require Retry (server only)\n"
            "  -r [initial-pto]          initial PTO (in milliseconds)\n"
            "  --abba                    enables ABBA bandwidth adaptation\n"
-           "  --l4s                     enables L4S with CUBACK (including pacing)\n"
+           "  --l4s                     enables L4S; CUBACK must be used\n"
            "  --rapid-start             turns on rapid start\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"

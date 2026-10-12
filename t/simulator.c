@@ -912,7 +912,7 @@ static void usage(const char *cmd)
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
            "  -R                  turns on rapid start\n"
            "  --abba              enables ABBA\n"
-           "  --l4s               enables L4S with CUBACK (including pacing)\n"
+           "  --l4s               enables L4S; CUBACK must be used\n"
            "  -s <seconds>        delay until the sender is added to the simulation\n"
            "                      (default: 0)\n"
            "  -t                  emits trace as well\n"
