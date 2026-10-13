@@ -1610,6 +1610,55 @@ static void test_fractional_rtt_measurement(void)
     quic_now = saved_now;
 }
 
+static void test_time_threshold_loss_episode(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    quicly_address_t dest, src;
+    struct iovec datagrams[10];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size], data[4000] = {0};
+    quicly_decoded_packet_t decoded;
+    size_t num_datagrams;
+    quicly_stats_t stats;
+
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+
+    /* send two packets; drop the first and deliver the second */
+    ok(quicly_streambuf_egress_write(stream, data, 2000) == 0);
+    num_datagrams = 2;
+    ok(quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(num_datagrams == 2);
+    ok(decode_packets(&decoded, datagrams + 1, 1) == 1);
+    ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    ok(transmit(server, client) == 1);
+
+    /* upon the alarm, the first packet is declared lost by time threshold; drop the first packet being sent, deliver the rest */
+    quic_now = quicly_get_first_timeout(client);
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_packets.lost_time_threshold == 1);
+    ok(stats.cc.num_loss_episodes == 1);
+    for (size_t i = 1; i < num_datagrams; ++i) {
+        ok(decode_packets(&decoded, datagrams + i, 1) == 1);
+        ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    }
+
+    /* deliver packets sent subsequently, so that the dropped packet is declared lost */
+    ok(quicly_streambuf_egress_write(stream, data, 4000) == 0);
+    ok(transmit(client, server) > 0);
+    ok(transmit(server, client) == 1);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_packets.lost == 2);
+
+    /* loss of the packet sent upon the alarm belongs to the same congestion episode */
+    ok(stats.cc.num_loss_episodes == 1);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void retransmit_trigger_reset_stream(quicly_conn_t *client, quicly_conn_t *server)
 {
     quicly_stream_t *stream;
@@ -2400,6 +2449,7 @@ int main(int argc, char **argv)
     subtest("cc", test_cc);
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
     subtest("fractional-close-timeout", test_fractional_close_timeout);
+    subtest("time-threshold-loss-episode", test_time_threshold_loss_episode);
 
     subtest("retransmit", test_retransmit);
     subtest("retransmit-max-stream-data-lower-window", test_retransmit_max_stream_data_lower_window);
