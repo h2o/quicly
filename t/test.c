@@ -1659,6 +1659,73 @@ static void test_time_threshold_loss_episode(void)
     quicly_free(server);
 }
 
+static void test_time_threshold_loss_in_recovery(void)
+{
+    uint32_t initcwnd_packets_backup = quic_ctx.egress[0].cc.initcwnd_packets;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    quicly_address_t dest, src;
+    struct iovec first[2], second[18], datagrams[10];
+    uint8_t first_buf[PTLS_ELEMENTSOF(first) * quic_ctx.transport_params.max_udp_payload_size],
+        second_buf[PTLS_ELEMENTSOF(second) * quic_ctx.transport_params.max_udp_payload_size],
+        buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size], data[40000] = {0};
+    quicly_decoded_packet_t decoded;
+    size_t num_datagrams;
+    quicly_stats_t stats;
+
+    quic_ctx.egress[0].cc.initcwnd_packets = 20;
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
+
+    /* send P0 and P1, then P2 to P19 5ms later; deliver P1 with an RTT of 10ms */
+    num_datagrams = PTLS_ELEMENTSOF(first);
+    ok(quicly_send(client, &dest, &src, first, &num_datagrams, first_buf, sizeof(first_buf)) == 0);
+    ok(num_datagrams == PTLS_ELEMENTSOF(first));
+    quic_now += 5;
+    num_datagrams = PTLS_ELEMENTSOF(second);
+    ok(quicly_send(client, &dest, &src, second, &num_datagrams, second_buf, sizeof(second_buf)) == 0);
+    ok(num_datagrams == PTLS_ELEMENTSOF(second));
+    quic_now += 5;
+    ok(decode_packets(&decoded, first + 1, 1) == 1);
+    ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    ok(transmit(server, client) == 1);
+
+    /* upon the alarm, P0 is declared lost by time threshold, entering recovery; packets being sent are kept in flight */
+    quic_now = client->egress.loss.alarm_at;
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_packets.lost_time_threshold == 1);
+
+    /* deliver P3, so that P2 becomes subject to time-threshold loss detection while in recovery with bytes in flight exceeding CWND
+     * by one packet or more */
+    quic_now += 3;
+    ok(decode_packets(&decoded, second + 1, 1) == 1);
+    ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    ok(transmit(server, client) == 1);
+    ok(client->egress.loss.loss_time != INT64_MAX);
+    ok(client->egress.loss.largest_acked_packet_plus1.all_ - 1 < client->egress.cc.recovery_end);
+    ok(client->egress.loss.sentmap.bytes_in_flight >= client->egress.cc.cwnd + client->egress.max_udp_payload_size);
+
+    /* the alarm is not scheduled for time-threshold loss detection */
+    ok(client->egress.loss.alarm_at != client->egress.loss.loss_time);
+
+    /* P2 is declared lost upon receiving the next ACK, that is sent in response to P4 and P5 */
+    quic_now = client->egress.loss.loss_time;
+    for (size_t i = 2; i <= 3; ++i) {
+        ok(decode_packets(&decoded, second + i, 1) == 1);
+        ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+    }
+    ok(transmit(server, client) == 1);
+    quicly_get_stats(client, &stats);
+    ok(stats.num_packets.lost == 2);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.egress[0].cc.initcwnd_packets = initcwnd_packets_backup;
+}
+
 static void retransmit_trigger_reset_stream(quicly_conn_t *client, quicly_conn_t *server)
 {
     quicly_stream_t *stream;
@@ -2450,6 +2517,7 @@ int main(int argc, char **argv)
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
     subtest("fractional-close-timeout", test_fractional_close_timeout);
     subtest("time-threshold-loss-episode", test_time_threshold_loss_episode);
+    subtest("time-threshold-loss-in-recovery", test_time_threshold_loss_in_recovery);
 
     subtest("retransmit", test_retransmit);
     subtest("retransmit-max-stream-data-lower-window", test_retransmit_max_stream_data_lower_window);
