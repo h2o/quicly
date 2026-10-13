@@ -1595,8 +1595,18 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int
 {
     int has_outstanding = conn->egress.loss.sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe,
         handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
+
+    /* During recovery, the alarm respects time-threshold loss detection only if bytes in flight is below CWND plus one packet;
+     * i.e., when the detection causes a packet to be sent (see `do_allocate_frame`). Otherwise, the loss is detected when the next
+     * ACK is processed. Outside of recovery, the alarm always respects time-threshold loss detection. */
+    uint64_t largest_acked_plus1 = conn->egress.loss.largest_acked_packet_plus1.all_;
+    int in_recovery = largest_acked_plus1 != 0 && largest_acked_plus1 - 1 < conn->egress.cc.recovery_end;
+    int use_loss_time = !in_recovery || conn->egress.loss.sentmap.bytes_in_flight <
+                                            (uint64_t)conn->egress.cc.cwnd + conn->egress.max_udp_payload_size;
+
     quicly_loss_update_alarm(&conn->egress.loss, conn->stash.now, conn->egress.last_retransmittable_sent_at, has_outstanding,
-                             can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
+                             can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send,
+                             use_loss_time);
 }
 
 static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int sendbuf_full, int pacer_limited)
