@@ -139,7 +139,7 @@ typedef struct st_quicly_application_close_frame_t {
 static quicly_error_t quicly_decode_application_close_frame(const uint8_t **src, const uint8_t *end,
                                                             quicly_application_close_frame_t *frame);
 
-static size_t quicly_close_frame_capacity(uint64_t error_code, uint64_t offending_frame_type, const char *reason_phrase);
+size_t quicly_close_frame_capacity(uint64_t error_code, uint64_t offending_frame_type, const char *reason_phrase);
 /**
  * @param offending_frame_type the offending frame type if sending a transport close, or UINT64_MAX if sending an application close
  */
@@ -470,7 +470,8 @@ inline quicly_error_t quicly_decode_reset_stream_frame(const uint8_t **src, cons
         goto Error;
     if ((frame->app_error_code = quicly_decodev(src, end)) == UINT64_MAX)
         goto Error;
-    frame->final_size = quicly_decodev(src, end);
+    if ((frame->final_size = quicly_decodev(src, end)) == UINT64_MAX)
+        goto Error;
     return 0;
 Error:
     return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
@@ -512,11 +513,6 @@ inline quicly_error_t quicly_decode_transport_close_frame(const uint8_t **src, c
     return 0;
 Error:
     return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
-}
-
-inline size_t quicly_close_frame_capacity(uint64_t error_code, uint64_t offending_frame_type, const char *reason_phrase)
-{
-    return quicly_encode_close_frame(NULL, error_code, offending_frame_type, reason_phrase) - (uint8_t *)NULL;
 }
 
 inline uint8_t *quicly_encode_max_data_frame(uint8_t *dst, uint64_t max_data)
@@ -681,12 +677,14 @@ inline quicly_error_t quicly_decode_new_connection_id_frame(const uint8_t **src,
     /* The Retire Prior To field MUST be less than or equal to the Sequence Number field. */
     if (frame->sequence < frame->retire_prior_to)
         goto Fail;
-    if (end - *src < 1)
-        goto Fail;
 
     { /* cid */
+        if (end - *src < 1)
+            goto Fail;
         uint8_t cid_len = *(*src)++;
         if (!(1 <= cid_len && cid_len <= QUICLY_MAX_CID_LEN_V1))
+            goto Fail;
+        if (end - *src < cid_len)
             goto Fail;
         frame->cid = ptls_iovec_init(*src, cid_len);
         *src += cid_len;

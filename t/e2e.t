@@ -470,8 +470,6 @@ subtest "slow-start" => sub {
         $each_cc->(sub {
             my $cc = shift;
             subtest "respect-app-limited" => sub {
-                plan skip_all => "Cubic TODO respect app-limited"
-                    if $cc eq "cubic";
                 my $guard = spawn_server("-C", "$cc:10");
                 # tail of 1st, 2nd, and 3rd batch fits into each round trip
                 $doit->(@$_)
@@ -490,8 +488,6 @@ subtest "slow-start" => sub {
         $each_cc->(sub {
             my $cc = shift;
             subtest "respect-app-limited" => sub {
-                plan skip_all => "Cubic TODO respect app-limited"
-                    if $cc eq "cubic";
                 my $guard = spawn_server("-C", "$cc:20:p");
                 # check head of 1st and 3rd batch, tail of 1st and 2nd
                 $doit->(@$_)
@@ -509,8 +505,6 @@ subtest "slow-start" => sub {
     subtest "jumpstart" => sub {
         $each_cc->(sub {
             my $cc = shift;
-            plan skip_all => "Cubic TODO respect app-limited (mandatory for jumpstart)"
-                if $cc eq "cubic";
             my $guard = spawn_server("-C", "$cc:20:p", "--jumpstart-default", "80");
             $doit->(@$_)
                 for ([1450 * 45, 2.45, 2.8], [1450 * 90, 3.0, 3.3]);
@@ -518,10 +512,11 @@ subtest "slow-start" => sub {
     };
 
     subtest "jumpstart-resume" => sub {
+        # The path has no queue; udpfw's 100-packet buffer is fully used by the 100ms propagation delay, so packets are dropped as
+        # soon as more than 99 are in flight. The training connection hence keeps losing packets in the rounds following startup,
+        # which affects the rate it records. A queue should probably be added to make the path realistic.
         $each_cc->(sub {
             my $cc = shift;
-            plan skip_all => "Cubic TODO respect app-limited (mandatory for jumpstart)"
-                if $cc eq "cubic";
             unlink "$tempdir/session";
             my $guard = spawn_server("-C", "$cc:10:p", "--jumpstart-max", "80");
             # test RT without jumpstart
@@ -540,7 +535,7 @@ subtest "slow-start" => sub {
             kill 'KILL', $pid;
             while (waitpid($pid, 0) != $pid) {}
             # test RT using the obtained session information
-            $doit->(100000, 2, 2.999, "-s", "$tempdir/session");
+            $doit->(100000, $cc eq "reno" ? (2.8, 3.5) : (2, 2.999), "-s", "$tempdir/session");
         });
     };
 };
@@ -584,6 +579,18 @@ subtest "reset-stream-overflow" => sub {
     my $server = spawn_server();
     my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
     $conn->send("\x04\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff"); # reset stream with final_size=QUICINT_MAX
+    sleep 0.5;
+    ok !$server->is_dead(), "server process must be alive";
+    my $received = $conn->receive();
+    like $received, qr/^\x1c\x03\x04/, "responds with CONNECTION_CLOSE(FLOW_CONTROL_ERROR) for RESET_STREAM";
+};
+
+subtest "reset-stream-overflow-connection" => sub {
+    # Two RESET_STREAMs, each with a final_size fitting the 1000-byte stream window but together overrunning the 1500-byte
+    # connection-wide limit. The limits are set explicitly, as a change in the defaults could otherwise mask the check.
+    my $server = spawn_server(qw(-M 1000 -m 1500));
+    my $conn = t::RawConnection->new("127.0.0.1", $port, cli => $cli);
+    $conn->send("\x04\x00\x00\x43\xe8" . "\x04\x04\x00\x43\xe8");
     sleep 0.5;
     ok !$server->is_dead(), "server process must be alive";
     my $received = $conn->receive();
