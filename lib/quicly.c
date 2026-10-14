@@ -1601,8 +1601,18 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int
 {
     int has_outstanding = conn->egress.loss.sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe,
         handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
+
+    /* During recovery, the alarm respects time-threshold loss detection only if bytes in flight is below CWND plus one packet;
+     * i.e., when the detection causes a packet to be sent (see `do_allocate_frame`). Otherwise, the loss is detected when the next
+     * ACK is processed. Outside of recovery, the alarm always respects time-threshold loss detection. */
+    uint64_t largest_acked_plus1 = conn->egress.loss.largest_acked_packet_plus1.all_;
+    int in_recovery = largest_acked_plus1 != 0 && largest_acked_plus1 - 1 < conn->egress.cc.recovery_end;
+    int use_loss_time = !in_recovery || conn->egress.loss.sentmap.bytes_in_flight <
+                                            (uint64_t)conn->egress.cc.cwnd + conn->egress.max_udp_payload_size;
+
     quicly_loss_update_alarm(&conn->egress.loss, conn->stash.now, conn->egress.last_retransmittable_sent_at, has_outstanding,
-                             can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send);
+                             can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send,
+                             use_loss_time);
 }
 
 static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int sendbuf_full, int pacer_limited)
@@ -4759,11 +4769,11 @@ static quicly_error_t mark_frames_on_pto(quicly_conn_t *conn, uint8_t ack_epoch,
     return 0;
 }
 
-static void notify_congestion_to_cc(quicly_conn_t *conn, uint16_t lost_bytes, uint64_t lost_pn)
+static void notify_congestion_to_cc(quicly_conn_t *conn, uint16_t lost_bytes, uint64_t lost_pn, uint64_t next_pn)
 {
     if (conn->egress.pn_path_start <= lost_pn) {
-        conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_bytes, lost_pn, conn->egress.packet_number,
-                                         conn->stash.now, conn->egress.max_udp_payload_size);
+        conn->egress.cc.type->cc_on_lost(&conn->egress.cc, &conn->egress.loss, lost_bytes, lost_pn, next_pn, conn->stash.now,
+                                         conn->egress.max_udp_payload_size);
         QUICLY_PROBE(CC_CONGESTION, conn, conn->stash.now, lost_pn + 1, conn->egress.loss.sentmap.bytes_in_flight,
                      conn->egress.cc.cwnd);
         QUICLY_LOG_CONN(cc_congestion, conn, {
@@ -4774,10 +4784,9 @@ static void notify_congestion_to_cc(quicly_conn_t *conn, uint16_t lost_bytes, ui
     }
 }
 
-static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold)
+static void handle_lost_packet(quicly_conn_t *conn, const quicly_sent_packet_t *lost_packet, int is_time_threshold,
+                               uint64_t next_pn)
 {
-    quicly_conn_t *conn = (void *)((char *)loss - offsetof(quicly_conn_t, egress.loss));
-
     assert(lost_packet->cc_bytes_in_flight != 0);
 
     ++conn->super.stats.num_packets.lost;
@@ -4789,9 +4798,22 @@ static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lo
         PTLS_LOG_ELEMENT_NUMBER(pn, lost_packet->packet_number);
         PTLS_LOG_ELEMENT_NUMBER(packet_type, lost_packet->ack_epoch);
     });
-    notify_congestion_to_cc(conn, lost_packet->cc_bytes_in_flight, lost_packet->packet_number);
+    notify_congestion_to_cc(conn, lost_packet->cc_bytes_in_flight, lost_packet->packet_number, next_pn);
     QUICLY_PROBE(QUICTRACE_CC_LOST, conn, conn->stash.now, &conn->egress.loss.rtt, conn->egress.cc.cwnd,
                  conn->egress.loss.sentmap.bytes_in_flight);
+}
+
+static void on_loss_detected(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold)
+{
+    quicly_conn_t *conn = (void *)((char *)loss - offsetof(quicly_conn_t, egress.loss));
+    handle_lost_packet(conn, lost_packet, is_time_threshold, conn->egress.packet_number);
+}
+
+static void on_loss_detected_by_alarm(quicly_loss_t *loss, const quicly_sent_packet_t *lost_packet, int is_time_threshold)
+{
+    quicly_conn_t *conn = (void *)((char *)loss - offsetof(quicly_conn_t, egress.loss));
+    /* the packet that is sent upon the alarm regardless of CWND (see `calc_send_window`) is part of the congestion episode */
+    handle_lost_packet(conn, lost_packet, is_time_threshold, conn->egress.packet_number + 1);
 }
 
 static quicly_error_t send_max_streams(quicly_conn_t *conn, int uni, quicly_send_context_t *s)
@@ -5629,7 +5651,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     if (conn->egress.loss.alarm_at <= conn->stash.now) {
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
                                         conn->initial == NULL && conn->handshake == NULL, &min_packets_to_send, &restrict_sending,
-                                        on_loss_detected)) != 0)
+                                        on_loss_detected_by_alarm)) != 0)
             goto Exit;
         assert(min_packets_to_send > 0);
         assert(min_packets_to_send <= s->max_datagrams);
@@ -6592,7 +6614,7 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
 
     /* ECN: report CE as congestion; for L4S, the counts have already been fed to the marking estimator through `cc_on_acked` */
     if (ecn_counts.ce != 0)
-        notify_congestion_to_cc(conn, 0, frame.largest_acknowledged);
+        notify_congestion_to_cc(conn, 0, frame.largest_acknowledged, conn->egress.packet_number);
 
     setup_next_send(conn);
 
