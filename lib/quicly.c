@@ -831,6 +831,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
     packet->token = ptls_iovec_init(NULL, 0);
     packet->decrypted.pn = UINT64_MAX;
     packet->ecn = 0; /* non-ECT */
+    packet->inferior_path = 0; /* applications that know better set this explicitly after decoding */
 
     /* move the cursor to the second byte */
     src += *off + 1;
@@ -7417,6 +7418,9 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
+    /* record that paths[0] was born on an inferior path; observational only, as the packet accepting the connection is never
+     * passed to `do_receive` and hence is counted by neither of the two counters that are updated there */
+    (*conn)->super.stats.num_paths.accepted_on_inferior_path = packet->inferior_path;
     (*conn)->super.state = QUICLY_STATE_ACCEPTING;
     quicly_set_cid(&(*conn)->super.original_dcid, packet->cid.dest.encrypted);
     if (address_token != NULL) {
@@ -7758,6 +7762,12 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
     if (path_index == PTLS_ELEMENTSOF(conn->paths) && (ret = open_path(conn, &path_index, src_addr, dest_addr)) != 0)
         goto Exit;
 
+    /* A packet that arrived over an inferior path, on the path that is already the primary one; i.e. the 4-tuple did not
+     * change and therefore no path is opened or promoted. The counterpart for a packet that promotes the path it arrived on
+     * is bumped at the promotion site below. Replays cannot reach here, having been rejected as duplicates above. */
+    if (packet->inferior_path && path_index == 0)
+        conn->super.stats.num_paths.received_on_inferior_primary_path += 1;
+
     /* update states */
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
@@ -7856,6 +7866,10 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
             !conn->paths[path_index]->probe_only) {
             if ((ret = promote_path(conn, path_index)) != 0)
                 goto Exit;
+            /* the promoting packet is what decides whether the new primary path is an inferior one; promotions of ordinary
+             * paths (the common case, e.g. NAT rebinding) leave this counter alone */
+            if (packet->inferior_path)
+                conn->super.stats.num_paths.promoted_to_inferior_path += 1;
             recalc_send_probe_at(conn);
         }
         break;
