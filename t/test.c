@@ -1506,6 +1506,33 @@ static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *
     setup_send_space(conn, QUICLY_EPOCH_1RTT, s);
 }
 
+/**
+ * An ACK for the packet number to be assigned next acknowledges a packet that has never been sent, hence must be rejected (RFC 9000
+ * Section 13.1).
+ */
+static void test_ack_for_unsent_pn(void)
+{
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+
+    quicly_ranges_t ranges;
+    uint64_t ecn_counts[3] = {0};
+    uint8_t ackbuf[64], *ack_end;
+    quicly_ranges_init(&ranges);
+    ok(quicly_ranges_add(&ranges, server->egress.packet_number, server->egress.packet_number + 1) == 0);
+    ok((ack_end = quicly_encode_ack_frame(ackbuf, ackbuf + sizeof(ackbuf), &ranges, ecn_counts, 0)) != NULL);
+    quicly_ranges_clear(&ranges);
+
+    struct st_quicly_handle_payload_state_t state = {
+        .src = ackbuf + 1 /* skip frame type */, .end = ack_end, .epoch = QUICLY_EPOCH_1RTT, .frame_type = QUICLY_FRAME_TYPE_ACK};
+    lock_now(server, 0);
+    ok(handle_ack_frame(server, &state) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    unlock_now(server);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_fractional_close_timeout(void)
 {
     int64_t saved_now = quic_now;
@@ -2512,6 +2539,7 @@ int main(int argc, char **argv)
     subtest("resume-sendrate", test_resume_sendrate);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
+    subtest("ack-for-unsent-pn", test_ack_for_unsent_pn);
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
