@@ -6290,6 +6290,9 @@ quicly_error_t quicly_get_or_open_stream(quicly_conn_t *conn, uint64_t stream_id
             if (should_send_max_streams(conn, quicly_stream_is_unidirectional(stream_id)))
                 conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
         }
+    } else if (stream_id >= get_streamgroup_state(conn, stream_id)->next_stream_id) {
+        /* locally-initiated stream that has not yet been created (RFC 9000 Sections 19.5, 19.8, 19.10) */
+        ret = QUICLY_TRANSPORT_ERROR_STREAM_STATE;
     }
 
 Exit:
@@ -6610,8 +6613,8 @@ static quicly_error_t handle_max_stream_data_frame(quicly_conn_t *conn, struct s
     if (!quicly_stream_has_send_side(quicly_is_client(conn), frame.stream_id))
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
-    if ((stream = quicly_get_stream(conn, frame.stream_id)) == NULL)
-        return 0;
+    if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
+        return ret;
 
     if (frame.max_stream_data <= stream->_send_aux.max_stream_data)
         return 0;
@@ -6660,11 +6663,12 @@ static quicly_error_t handle_stream_data_blocked_frame(quicly_conn_t *conn, stru
     if (!quicly_stream_has_receive_side(quicly_is_client(conn), frame.stream_id))
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
 
-    if ((stream = quicly_get_stream(conn, frame.stream_id)) != NULL) {
-        quicly_maxsender_blocked(&stream->_send_aux.max_stream_data_sender, frame.offset);
-        if (should_send_max_stream_data(stream))
-            sched_stream_control(stream);
-    }
+    if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
+        return ret;
+
+    quicly_maxsender_blocked(&stream->_send_aux.max_stream_data_sender, frame.offset);
+    if (should_send_max_stream_data(stream))
+        sched_stream_control(stream);
 
     return 0;
 }
