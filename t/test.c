@@ -1533,6 +1533,92 @@ static void test_ack_for_unsent_pn(void)
     quicly_free(server);
 }
 
+static quicly_error_t test_handle_stream_level_frame(quicly_conn_t *conn,
+                                                     quicly_error_t (*handler)(quicly_conn_t *,
+                                                                               struct st_quicly_handle_payload_state_t *),
+                                                     const uint8_t *frame, const uint8_t *frame_end)
+{
+    struct st_quicly_handle_payload_state_t state = {
+        .src = frame + 1 /* skip frame type */, .end = frame_end, .epoch = QUICLY_EPOCH_1RTT, .frame_type = *frame};
+    lock_now(conn, 0);
+    quicly_error_t ret = handler(conn, &state);
+    unlock_now(conn);
+    return ret;
+}
+
+/**
+ * Receiving STREAM, STOP_SENDING, or MAX_STREAM_DATA frames for a locally-initiated stream that has not yet been created is a
+ * STREAM_STATE_ERROR (RFC 9000 Sections 19.5, 19.8, 19.10).
+ */
+static void test_frames_for_unopened_local_stream(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint8_t buf[32], *end;
+
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_open_stream(server, &stream, 0) == 0);
+    ok(stream->stream_id == 1);
+
+    /* STREAM */
+    buf[0] = QUICLY_FRAME_TYPE_STREAM_BASE;
+    end = quicly_encodev(buf + 1, 1);
+    *end++ = 'a';
+    ok(test_handle_stream_level_frame(server, handle_stream_frame, buf, end) == 0);
+    end = quicly_encodev(buf + 1, 5);
+    *end++ = 'a';
+    ok(test_handle_stream_level_frame(server, handle_stream_frame, buf, end) == QUICLY_TRANSPORT_ERROR_STREAM_STATE);
+
+    /* STOP_SENDING */
+    end = quicly_encode_stop_sending_frame(buf, 1, 0);
+    ok(test_handle_stream_level_frame(server, handle_stop_sending_frame, buf, end) == 0);
+    end = quicly_encode_stop_sending_frame(buf, 5, 0);
+    ok(test_handle_stream_level_frame(server, handle_stop_sending_frame, buf, end) == QUICLY_TRANSPORT_ERROR_STREAM_STATE);
+    end = quicly_encode_stop_sending_frame(buf, 3, 0);
+    ok(test_handle_stream_level_frame(server, handle_stop_sending_frame, buf, end) == QUICLY_TRANSPORT_ERROR_STREAM_STATE);
+
+    /* MAX_STREAM_DATA */
+    end = quicly_encode_max_stream_data_frame(buf, 1, 100000);
+    ok(test_handle_stream_level_frame(server, handle_max_stream_data_frame, buf, end) == 0);
+    end = quicly_encode_max_stream_data_frame(buf, 5, 100000);
+    ok(test_handle_stream_level_frame(server, handle_max_stream_data_frame, buf, end) == QUICLY_TRANSPORT_ERROR_STREAM_STATE);
+    end = quicly_encode_max_stream_data_frame(buf, 3, 100000);
+    ok(test_handle_stream_level_frame(server, handle_max_stream_data_frame, buf, end) == QUICLY_TRANSPORT_ERROR_STREAM_STATE);
+
+    /* STREAM_DATA_BLOCKED */
+    end = quicly_encode_stream_data_blocked_frame(buf, 1, 0);
+    ok(test_handle_stream_level_frame(server, handle_stream_data_blocked_frame, buf, end) == 0);
+    end = quicly_encode_stream_data_blocked_frame(buf, 5, 0);
+    ok(test_handle_stream_level_frame(server, handle_stream_data_blocked_frame, buf, end) == QUICLY_TRANSPORT_ERROR_STREAM_STATE);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
+/**
+ * MAX_STREAM_DATA and STREAM_DATA_BLOCKED frames create peer-initiated streams, as do other stream-level frames (RFC 9000 Section
+ * 3.2).
+ */
+static void test_frames_opening_peer_stream(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint8_t buf[32], *end;
+
+    test_setup_connected_peers(&client, &server);
+
+    end = quicly_encode_max_stream_data_frame(buf, 0, 100 * 1024 * 1024);
+    ok(test_handle_stream_level_frame(server, handle_max_stream_data_frame, buf, end) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL && stream->_send_aux.max_stream_data == 100 * 1024 * 1024);
+
+    end = quicly_encode_stream_data_blocked_frame(buf, 4, 0);
+    ok(test_handle_stream_level_frame(server, handle_stream_data_blocked_frame, buf, end) == 0);
+    ok(quicly_get_stream(server, 4) != NULL);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_fractional_close_timeout(void)
 {
     int64_t saved_now = quic_now;
@@ -2540,6 +2626,8 @@ int main(int argc, char **argv)
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
     subtest("ack-for-unsent-pn", test_ack_for_unsent_pn);
+    subtest("frames-for-unopened-local-stream", test_frames_for_unopened_local_stream);
+    subtest("frames-opening-peer-stream", test_frames_opening_peer_stream);
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
