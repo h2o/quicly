@@ -644,6 +644,20 @@ struct st_quicly_conn_streamgroup_state_t {
          * number of paths that were deemed as ECN black holes                                                                     \
          */                                                                                                                        \
         uint64_t ecn_failed;                                                                                                       \
+        /**                                                                                                                        \
+         * 1 if the connection was accepted from a packet that arrived over an inferior path                                       \
+         */                                                                                                                        \
+        uint64_t accepted_on_inferior_path;                                                                                        \
+        /**                                                                                                                        \
+         * number of times a packet that arrived over an inferior path promoted that path to be the primary path                   \
+         */                                                                                                                        \
+        uint64_t promoted_to_inferior_path;                                                                                        \
+        /**                                                                                                                        \
+         * number of packets that arrived over an inferior path and were processed on the path that was already the primary        \
+         * one. Together with `promoted_to_inferior_path`, this is how an application observes that the connection has come        \
+         * to be carried over an inferior path.                                                                                    \
+         */                                                                                                                        \
+        uint64_t received_on_inferior_primary_path;                                                                                \
     } num_paths;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
@@ -806,6 +820,9 @@ typedef struct st_quicly_stats_t {
     apply(num_paths.closed_no_dcid, "num-paths.closed-no-dcid")                                                                    \
     apply(num_paths.ecn_validated, "num-paths.ecn-validated")                                                                      \
     apply(num_paths.ecn_failed, "num-paths.ecn-failed")                                                                            \
+    apply(num_paths.accepted_on_inferior_path, "num-paths.accepted-on-inferior-path")                                              \
+    apply(num_paths.promoted_to_inferior_path, "num-paths.promoted-to-inferior-path")                                              \
+    apply(num_paths.received_on_inferior_primary_path, "num-paths.received-on-inferior-primary-path")                              \
     apply(num_ptos, "num-ptos")                                                                                                    \
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
@@ -1147,6 +1164,14 @@ typedef struct st_quicly_decoded_packet_t {
      * if it is the first packet within the datagram
      */
     uint8_t first_packet : 1;
+    /**
+     * if the datagram carrying this packet arrived over a network path that the application considers inferior to a direct one,
+     * e.g. one that reached this node by being relayed through another. quicly attaches no meaning to what makes a path
+     * inferior; it merely propagates the flag onto the counters in `quicly_stats_t::num_paths` so that the application can tell
+     * when the connection has come to be carried over such a path. `quicly_decode_packet` always clears this bit; applications
+     * that know better set it after decoding.
+     */
+    uint8_t inferior_path : 1;
     /**
      *
      */
