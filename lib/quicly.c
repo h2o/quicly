@@ -6898,8 +6898,8 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
         eos_type == QUICLY_SENDSTATE_EOS_TYPE_RESET_AT ? stream->sendstate.app_error_code : frame.app_error_code);
     quicly_reset_stream(stream, err);
 
-    /* notify the application unless it had already reset the stream */
-    if (eos_type < QUICLY_SENDSTATE_EOS_TYPE_RESET_AT) {
+    /* notify the application unless it had already ended the stream, by a shutdown or a reliable reset */
+    if (eos_type == QUICLY_SENDSTATE_EOS_TYPE_NONE) {
         QUICLY_PROBE(STREAM_ON_SEND_STOP, stream->conn, stream->conn->stash.now, stream, err);
         QUICLY_LOG_CONN(stream_on_send_stop, stream->conn, {
             PTLS_LOG_ELEMENT_NUMBER(stream_id, stream->stream_id);

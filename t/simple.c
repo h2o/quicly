@@ -1031,6 +1031,8 @@ static void test_reliable_reset_stop_sending(void)
     quicly_request_stop(server_stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7654321));
     transmit(server, client);
     ok(client_stream->sendstate.reliable_size == 0);
+    /* the application, having reset the stream, is not notified */
+    ok(((test_streambuf_t *)client_stream->data)->error_received.stop_sending == -1);
 
     /* hence what the client sends is a RESET_STREAM that retains the error code of the reset, rather than the bytes committed
      * to and a RESET_STREAM_AT */
