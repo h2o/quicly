@@ -6896,9 +6896,12 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
     /* preserve the error code when downgrading a reliable reset (section 5.4 of draft-ietf-quic-reliable-stream-reset) */
     quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(
         eos_type == QUICLY_SENDSTATE_EOS_TYPE_RESET_AT ? stream->sendstate.app_error_code : frame.app_error_code);
+    /* if the application had ended the stream, the reset retires the bytes that it holds up to the final size */
+    size_t bytes_to_shift =
+        eos_type == QUICLY_SENDSTATE_EOS_TYPE_NONE ? 0 : stream->sendstate.final_size - stream->sendstate.acked.ranges[0].end;
     quicly_reset_stream(stream, err);
 
-    /* notify the application unless it had already ended the stream, by a shutdown or a reliable reset */
+    /* notify the application of STOP_SENDING, or if it had ended the stream, tell it to release those bytes */
     if (eos_type == QUICLY_SENDSTATE_EOS_TYPE_NONE) {
         QUICLY_PROBE(STREAM_ON_SEND_STOP, stream->conn, stream->conn->stash.now, stream, err);
         QUICLY_LOG_CONN(stream_on_send_stop, stream->conn, {
@@ -6908,6 +6911,13 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
         stream->callbacks->on_send_stop(stream, err);
         if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
             return QUICLY_ERROR_IS_CLOSING;
+    } else if (bytes_to_shift != 0) {
+        QUICLY_PROBE(STREAM_ON_SEND_SHIFT, stream->conn, stream->conn->stash.now, stream, bytes_to_shift);
+        stream->callbacks->on_send_shift(stream, bytes_to_shift);
+        QUICLY_LOG_CONN(stream_on_send_shift, stream->conn, {
+            PTLS_LOG_ELEMENT_NUMBER(stream_id, stream->stream_id);
+            PTLS_LOG_ELEMENT_NUMBER(delta, bytes_to_shift);
+        });
     }
 
     return 0;

@@ -2651,8 +2651,9 @@ static void test_stop_sending_after_fin(int fin_state)
         ok(stream->sendstate.app_error_code == 11);
         /* an emitted FIN fixes the final size; an unsent FIN can be withdrawn */
         ok(stream->sendstate.final_size == (fin_state == QUICLY_SENDSTATE_EOS_STATE_UNSENT ? 0 : 5));
-        /* the application, having shut down the stream, is not notified */
+        /* the application, having shut down the stream, is not notified, but releases what it was holding */
         ok(streambuf->error_received.stop_sending == -1);
+        ok(streambuf->super.egress.vecs.size == 0);
         ok(inject_frames(client, stop, sizeof(stop)) == 0);
         transmit(client, server);
         quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
