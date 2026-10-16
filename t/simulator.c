@@ -828,9 +828,9 @@ static uint64_t tls_now_cb(ptls_get_time_t *self)
     return (uint64_t)(now * 1000);
 }
 
-static int64_t quic_now_cb(quicly_now_t *self)
+static void quic_now_cb(quicly_now_t *self, double *value)
 {
-    return (int64_t)(now * 1000);
+    *value = now * 1000;
 }
 
 static void stream_destroy_cb(quicly_stream_t *stream, quicly_error_t err)
@@ -911,12 +911,14 @@ static void usage(const char *cmd)
            "                      fq_codel\n"
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
            "  -R                  turns on rapid start\n"
+           "  --abba              enables ABBA\n"
+           "  --l4s               enables L4S; CUBACK must be used\n"
            "  -s <seconds>        delay until the sender is added to the simulation\n"
            "                      (default: 0)\n"
            "  -t                  emits trace as well\n"
            "  -h                  print this help\n"
            "\n",
-           cmd, quicly_spec_context.initcwnd_packets);
+           cmd, quicly_spec_context.egress[0].cc.initcwnd_packets);
 }
 
 static void reset_getopt_state(void)
@@ -969,10 +971,21 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                          double *ack_scheduler_probability, double *ack_scheduler_delay, FILE **trace_fp)
 {
     reset_getopt_state();
-    int ch;
-    while ((ch = getopt(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:Rs:th")) != -1) {
+    static const struct option longopts[] = {{"abba", no_argument, NULL, 0}, {"l4s", no_argument, NULL, 0}, {NULL}};
+    int ch, opt_index;
+    while ((ch = getopt_long(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:Rs:th", longopts, &opt_index)) != -1) {
 
         switch (ch) {
+        case 0:
+            if (strcmp(longopts[opt_index].name, "abba") == 0) {
+                quicctx->egress[0].cc.abba = 1;
+            } else if (strcmp(longopts[opt_index].name, "l4s") == 0) {
+                quicctx->egress[0].ecn = QUICLY_ECN_MODE_L4S;
+                quicctx->egress[0].pacing = 1;
+            } else {
+                assert(!"unexpected longname");
+            }
+            break;
         case 'a': {
             if (ack_scheduler_probability == NULL) {
                 fprintf(stderr, "-%c is not available here\n", ch);
@@ -1004,7 +1017,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                 fprintf(stderr, "unknown congestion controller: %s\n", optarg);
                 return 0;
             }
-            quicctx->init_cc = (*cc)->cc_init;
+            quicctx->egress[0].cc.init_cc = (*cc)->cc_init;
         } break;
         case 'A':
             if (aqm == NULL) {
@@ -1040,13 +1053,13 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             }
             break;
         case 'i':
-            if (sscanf(optarg, "%" PRIu32, &quicctx->initcwnd_packets) != 1) {
+            if (sscanf(optarg, "%" PRIu32, &quicctx->egress[0].cc.initcwnd_packets) != 1) {
                 fprintf(stderr, "invalid INITCWND size: %s\n", optarg);
                 return 0;
             }
             break;
         case 'j':
-            if (sscanf(optarg, "%" PRIu32, &quicctx->default_jumpstart_cwnd_packets) != 1) {
+            if (sscanf(optarg, "%" PRIu32, &quicctx->egress[0].default_jumpstart_packets) != 1) {
                 fprintf(stderr, "invalid jumpstart window size: %s\n", optarg);
                 return 0;
             }
@@ -1072,10 +1085,10 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             quicctx->transport_params.max_udp_payload_size = max_udp_payload_size;
         } break;
         case 'M':
-            quicctx->normalize_cc_mtu = 0;
+            quicctx->egress[0].cc.normalize_mtu = 0;
             break;
         case 'p':
-            quicctx->enable_ratio.pacing = 255;
+            quicctx->egress[0].pacing = 1;
             break;
         case 'q':
             if (depth == NULL) {
@@ -1105,10 +1118,10 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
             *isolate_flows = 1;
             break;
         case 'E':
-            quicctx->enable_ratio.ecn = 0;
+            quicctx->egress[0].ecn = QUICLY_ECN_MODE_OFF;
             break;
         case 'R':
-            quicctx->enable_ratio.rapid_start = 255;
+            quicctx->egress[0].cc.rapid_start = 1;
             break;
         case 's':
             if (sscanf(optarg, "%lf", start) != 1) {
