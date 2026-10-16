@@ -6428,7 +6428,12 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
         return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
 
     if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        uint64_t prev_eos = stream->recvstate.eos, bytes_missing;
+        /* the credit held for the stream: up to the final size upon the first reset, as that is what the peer has consumed, and up
+         * to the offset of allocation upon a subsequent one, the rest having been returned by the reset(s) that preceded */
+        uint64_t allocated_before = stream->recvstate.app_error_code == UINT64_MAX
+                                        ? frame.final_size
+                                        : quicly_recvstate_bytes_allocated(&stream->recvstate),
+                 bytes_missing;
         if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, frame.reliable_size, frame.app_error_code,
                                           &bytes_missing)) != 0)
             return ret;
@@ -6436,9 +6441,9 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
         stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
         /* Return the credit of the bytes that the reset has placed out of reach, down to the offset up to which memory has been
-         * allocated; the credit of the rest stays tied to that memory and is returned in `destroy_stream`. */
-        release_ingress_credit(conn, (prev_eos != UINT64_MAX ? prev_eos : frame.final_size) -
-                                         quicly_recvstate_bytes_allocated(&stream->recvstate));
+         * allocated; the credit of the rest stays tied to that memory and is returned in `destroy_stream`. A subsequent reset
+         * returns credit only if it lowers that offset, by reducing the Reliable Size. */
+        release_ingress_credit(conn, allocated_before - quicly_recvstate_bytes_allocated(&stream->recvstate));
         if (quicly_recvstate_transfer_complete(&stream->recvstate) && (ret = notify_receive_reset(stream)) != 0)
             return ret;
         if (stream_is_destroyable(stream))

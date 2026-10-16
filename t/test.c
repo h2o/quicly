@@ -2450,6 +2450,63 @@ static void test_reset_stream_at_accounting(void)
 }
 
 /**
+ * Credit is returned by a subsequent reset only when it lowers the offset up to which memory is allocated. Bytes stranded above the
+ * Reliable Size keep that offset in place, hence neither a repeated reset nor one reducing the Reliable Size returns anything.
+ */
+static void test_reset_stream_at_repeated(int with_data_above)
+{
+    /* STREAM(id=0, off=7, len=3) "789", RESET_STREAM_AT(id=0, error=11, final=10, reliable=5 or 3), STREAM(id=0, len=3) "012" */
+    static const uint8_t data_above[] = {0x0e, 0x00, 0x07, 0x03, '7', '8', '9'};
+    static const uint8_t reset5[] = {0x24, 0x00, 0x0b, 0x0a, 0x05};
+    static const uint8_t reset3[] = {0x24, 0x00, 0x0b, 0x0a, 0x03};
+    static const uint8_t prefix[] = {0x0a, 0x00, 0x03, '0', '1', '2'};
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint64_t consumed, shifted;
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    if (with_data_above)
+        ok(inject_frames(server, data_above, sizeof(data_above)) == 0);
+
+    /* the first reset returns the credit above the offset of allocation, which is 10 when bytes are stranded above, 5 otherwise */
+    ok(inject_frames(server, reset5, sizeof(reset5)) == 0);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 10);
+    ok(shifted == (with_data_above ? 0 : 5));
+
+    /* a repeated reset changes nothing */
+    ok(inject_frames(server, reset5, sizeof(reset5)) == 0);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 10);
+    ok(shifted == (with_data_above ? 0 : 5));
+
+    /* reducing the Reliable Size returns the credit of the bytes that the peer is no longer committed to, unless memory remains
+     * allocated for the bytes stranded above */
+    ok(inject_frames(server, reset3, sizeof(reset3)) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL);
+    ok(stream->recvstate.eos == 3);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 10);
+    ok(shifted == (with_data_above ? 0 : 7));
+
+    /* once the committed prefix is received and consumed, the credit returned adds up to the final size, unless memory is held for
+     * the bytes stranded above, in which case the rest is returned when the stream is destroyed */
+    ok(inject_frames(server, prefix, sizeof(prefix)) == 0);
+    ok(quicly_recvstate_transfer_complete(&stream->recvstate));
+    quicly_streambuf_ingress_shift(stream, 3);
+    quicly_get_max_data(server, NULL, NULL, &consumed, &shifted);
+    ok(consumed == 10);
+    ok(shifted == (with_data_above ? 3 : 10));
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+}
+
+/**
  * Section 5.2 forbids changing the application error code, and requires a Reliable Size that does not reduce the commitment to be
  * ignored. Those are separate rules: a first reset whose Reliable Size equals the Final Size reduces nothing, yet its error code
  * has to be retained and surfaced once the remaining bytes arrive.
@@ -3000,6 +3057,8 @@ int main(int argc, char **argv)
     subtest("data-credit-growth", test_data_credit_growth);
     subtest("reset-stream-overflow-connection", test_reset_stream_overflow_connection);
     subtest("reset-stream-at-accounting", test_reset_stream_at_accounting);
+    subtest("reset-stream-at-repeated", test_reset_stream_at_repeated, 0);
+    subtest("reset-stream-at-repeated-data-above", test_reset_stream_at_repeated, 1);
     subtest("reset-stream-at-gap-after-reset", test_reset_stream_at_gap_after_reset);
     subtest("reset-stream-at-data-above", test_reset_stream_at_data_above);
     subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
