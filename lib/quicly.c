@@ -8131,6 +8131,7 @@ quicly_error_t quicly_set_reset_stream_at(quicly_stream_t *stream, quicly_error_
     assert(reliable_size != 0 && "use quicly_reset_stream to send a RESET_STREAM; the semantics differ");
     assert(quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id));
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
+    assert(!quicly_sendstate_transfer_complete(&stream->sendstate));
     assert(stream->sendstate.app_error_code == UINT64_MAX && "reliable reset can be used only once");
 
     /* bail out unless the peer is willing to receive RESET_STREAM_AT */

@@ -104,9 +104,7 @@ int quicly_sendstate_reset(quicly_sendstate_t *state, uint64_t app_error_code, u
 {
     int ret;
 
-    /* reset is a no-op if the transfer is already complete */
-    if (quicly_sendstate_transfer_complete(state))
-        return 0;
+    assert(!quicly_sendstate_transfer_complete(state));
 
     /* 2nd reset: it must not be a reliable reset and the error code must remain the same */
     if (state->app_error_code != UINT64_MAX)
