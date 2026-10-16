@@ -984,11 +984,15 @@ typedef struct st_quicly_stream_callbacks_t {
     /**
      * called when data is newly received.  `off` is the offset within the buffer (the beginning position changes as the application
      * calls `quicly_stream_sync_recvbuf`.  Applications should consult `quicly_stream_t::recvstate` to see if it has contiguous
-     * input.
+     * input.  Once `quicly_recvstate_transfer_complete` returns true, the stream has ended.  When the reliable stream reset
+     * extension (draft-ietf-quic-reliable-stream-reset) is used, the closing error code is available as
+     * `quicly_stream_t::recvstate.app_error_code`; it being UINT64_MAX indicates that the stream was closed by a FIN.
      */
     void (*on_receive)(quicly_stream_t *stream, size_t off, const void *src, size_t len);
     /**
-     * called when a RESET_STREAM frame is received
+     * called when the stream is reset with a Reliable Size of zero; i.e., by a RESET_STREAM frame or by a RESET_STREAM_AT frame
+     * carrying zero. If set to NULL, reset are notified as a zero-byte delivery to `on_receive` as if it was a reliable reset; see
+     * `on_receive`.
      */
     void (*on_receive_reset)(quicly_stream_t *stream, quicly_error_t err);
 } quicly_stream_callbacks_t;

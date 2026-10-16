@@ -2434,20 +2434,6 @@ static quicly_error_t reinstall_initial_encryption(quicly_conn_t *conn, quicly_e
         ptls_iovec_init(salt->initial, sizeof(salt->initial)), NULL);
 }
 
-static quicly_error_t notify_receive_reset(quicly_stream_t *stream)
-{
-    quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->recvstate.app_error_code);
-
-    QUICLY_PROBE(STREAM_ON_RECEIVE_RESET, stream->conn, stream->conn->stash.now, stream, err);
-    QUICLY_LOG_CONN(stream_on_receive_reset, stream->conn, {
-        PTLS_LOG_ELEMENT_NUMBER(stream_id, stream->stream_id);
-        PTLS_LOG_ELEMENT_NUMBER(err, err);
-    });
-    stream->callbacks->on_receive_reset(stream, err);
-
-    return stream->conn->super.state >= QUICLY_STATE_CLOSING ? QUICLY_ERROR_IS_CLOSING : 0;
-}
-
 static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_frame_t *frame)
 {
     quicly_error_t ret;
@@ -2510,10 +2496,6 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
 
     if (stream->stream_id >= 0 && should_send_max_stream_data(stream))
         sched_stream_control(stream);
-
-    if (quicly_recvstate_transfer_complete(&stream->recvstate) && stream->recvstate.app_error_code != UINT64_MAX &&
-        (ret = notify_receive_reset(stream)) != 0)
-        return ret;
 
     if (stream_is_destroyable(stream))
         destroy_stream(stream, 0);
@@ -6427,28 +6409,60 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
     if ((int64_t)frame.final_size > stream->_send_aux.max_stream_data_sender.committed)
         return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
 
-    if (!quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        /* the credit held for the stream: up to the final size upon the first reset, as that is what the peer has consumed, and up
-         * to the offset of allocation upon a subsequent one, the rest having been returned by the reset(s) that preceded */
-        uint64_t allocated_before = stream->recvstate.app_error_code == UINT64_MAX
-                                        ? frame.final_size
-                                        : quicly_recvstate_bytes_allocated(&stream->recvstate),
-                 bytes_missing;
-        if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, frame.reliable_size, frame.app_error_code,
-                                          &bytes_missing)) != 0)
-            return ret;
-        if (stream->conn->ingress.max_data.bytes_consumed + bytes_missing > stream->conn->ingress.max_data.sender.committed)
-            return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
-        stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
-        /* Return the credit of the bytes that the reset has placed out of reach, down to the offset up to which memory has been
-         * allocated; the credit of the rest stays tied to that memory and is returned in `destroy_stream`. A subsequent reset
-         * returns credit only if it lowers that offset, by reducing the Reliable Size. */
-        release_ingress_credit(conn, allocated_before - quicly_recvstate_bytes_allocated(&stream->recvstate));
-        if (quicly_recvstate_transfer_complete(&stream->recvstate) && (ret = notify_receive_reset(stream)) != 0)
-            return ret;
-        if (stream_is_destroyable(stream))
-            destroy_stream(stream, 0);
+    /* early return if the stream has already been completely delivered */
+    if (quicly_recvstate_transfer_complete(&stream->recvstate))
+        return 0;
+
+    uint64_t allocated_before = stream->recvstate.app_error_code == UINT64_MAX
+                                    ? frame.final_size
+                                    : quicly_recvstate_bytes_allocated(&stream->recvstate),
+             bytes_missing;
+
+    if ((ret = quicly_recvstate_reset(&stream->recvstate, frame.final_size, frame.reliable_size, frame.app_error_code,
+                                      &bytes_missing)) != 0)
+        return ret;
+
+    /* update connection-level flow control */
+    if (stream->conn->ingress.max_data.bytes_consumed + bytes_missing > stream->conn->ingress.max_data.sender.committed)
+        return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
+    stream->conn->ingress.max_data.bytes_consumed += bytes_missing;
+
+    /* Return the credit of the bytes that the reset has placed out of reach. The credit held for the stream extends up to the final
+     * size until the first reset, as that is what the peer has consumed, and up to the offset of allocation thereafter; the
+     * difference between the two before and after this reset is returned. The credit of the rest stays tied to the memory and is
+     * returned in `destroy_stream`. A subsequent reset therefore returns credit only if it lowers the offset of allocation, by
+     * reducing the Reliable Size. */
+    release_ingress_credit(conn, allocated_before - quicly_recvstate_bytes_allocated(&stream->recvstate));
+
+    /* early return if still waiting for data due to a reliable reset */
+    if (!quicly_recvstate_transfer_complete(&stream->recvstate))
+        return 0;
+
+    /* A reset with a non-zero Reliable Size ends the stream as a FIN does, through `on_receive`, which is invoked with zero bytes.
+     * Other resets are surfaced through `on_receive_reset`, unless the application has chosen to receive them in the same way by
+     * leaving it NULL. */
+    if (frame.reliable_size != 0 || stream->callbacks->on_receive_reset == NULL) {
+        QUICLY_PROBE(STREAM_ON_RECEIVE, stream->conn, stream->conn->stash.now, stream, (size_t)0, (size_t)0, (size_t)0);
+        QUICLY_LOG_CONN(stream_on_receive, stream->conn, {
+            PTLS_LOG_ELEMENT_NUMBER(stream_id, stream->stream_id);
+            PTLS_LOG_ELEMENT_NUMBER(buf_off, 0);
+            PTLS_LOG_ELEMENT_NUMBER(apply_off, 0);
+            PTLS_LOG_ELEMENT_NUMBER(apply_len, 0);
+        });
+        stream->callbacks->on_receive(stream, 0, "", 0);
+    } else {
+        quicly_error_t err = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->recvstate.app_error_code);
+        QUICLY_PROBE(STREAM_ON_RECEIVE_RESET, stream->conn, stream->conn->stash.now, stream, err);
+        QUICLY_LOG_CONN(stream_on_receive_reset, stream->conn, {
+            PTLS_LOG_ELEMENT_NUMBER(stream_id, stream->stream_id);
+            PTLS_LOG_ELEMENT_NUMBER(err, err);
+        });
+        stream->callbacks->on_receive_reset(stream, err);
     }
+    if (stream->conn->super.state >= QUICLY_STATE_CLOSING)
+        return QUICLY_ERROR_IS_CLOSING;
+    if (stream_is_destroyable(stream))
+        destroy_stream(stream, 0);
 
     return 0;
 }

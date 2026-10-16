@@ -301,13 +301,22 @@ void on_egress_stop(quicly_stream_t *stream, quicly_error_t err)
 
 void on_ingress_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len)
 {
+    test_streambuf_t *sbuf = stream->data;
+
     quicly_streambuf_ingress_receive(stream, off, src, len);
+
+    /* the end of the stream is notified once, and a reset being notified here is never notified through `on_receive_reset` */
+    if (quicly_recvstate_transfer_complete(&stream->recvstate) && stream->recvstate.app_error_code != UINT64_MAX) {
+        assert(sbuf->error_received.reset_on_receive == -1 && sbuf->error_received.reset_stream == -1);
+        sbuf->error_received.reset_on_receive = QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(stream->recvstate.app_error_code);
+    }
 }
 
 void on_ingress_reset(quicly_stream_t *stream, quicly_error_t err)
 {
     assert(QUICLY_ERROR_IS_QUIC_APPLICATION(err));
     test_streambuf_t *sbuf = stream->data;
+    assert(sbuf->error_received.reset_on_receive == -1 && sbuf->error_received.reset_stream == -1);
     sbuf->error_received.reset_stream = err;
 }
 
@@ -328,6 +337,7 @@ static quicly_error_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t
     sbuf = stream->data;
     sbuf->error_received.stop_sending = -1;
     sbuf->error_received.reset_stream = -1;
+    sbuf->error_received.reset_on_receive = -1;
     stream->callbacks = &stream_callbacks;
 
     return 0;
@@ -2540,7 +2550,7 @@ static void test_reset_stream_at_gap_after_reset(void)
     /* completing the committed prefix completes the transfer regardless; waiting for the gap would hang the stream */
     ok(inject_frames(server, prefix, sizeof(prefix)) == 0);
     ok(quicly_recvstate_transfer_complete(&stream->recvstate));
-    ok(streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+    ok(streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
     ok(quicly_recvstate_bytes_available(&stream->recvstate) == 5);
     ok(quicly_streambuf_ingress_get(stream).len == 5);
 
@@ -2584,7 +2594,7 @@ static void test_reset_stream_at_data_above(void)
     ok(quicly_recvstate_bytes_available(&stream->recvstate) == 5);
     ok(quicly_streambuf_ingress_get(stream).len == 5);
     ok(buffer_is(&streambuf->super.ingress, "01234"));
-    ok(streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+    ok(streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
 
     quicly_free(client);
     quicly_free(server);
@@ -2722,6 +2732,57 @@ static void test_stop_sending_after_fin(int fin_state)
     quicly_free(server);
 }
 
+/**
+ * A reset that completes the transfer by itself, all bytes below its Reliable Size having been received, ends the stream through
+ * `on_receive` if the Reliable Size is non-zero, or if `on_receive_reset` is NULL; otherwise through `on_receive_reset`.
+ */
+static void test_reset_completing_transfer(int reliable_size, int is_reset_stream_at, int null_on_receive_reset)
+{
+    /* STREAM(id=0, len=3) "abc", then RESET_STREAM_AT(id=0, error=11, final=3, reliable=reliable_size) or
+     * RESET_STREAM(id=0, error=11, final=3) */
+    static const uint8_t data[] = {0x0a, 0x00, 0x03, 'a', 'b', 'c'};
+    const uint8_t reset_at[] = {0x24, 0x00, 0x0b, 0x03, (uint8_t)reliable_size}, reset[] = {0x04, 0x00, 0x0b, 0x03};
+    uint8_t reset_stream_at_orig = quic_ctx.transport_params.reset_stream_at;
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    quicly_stream_callbacks_t callbacks;
+    test_streambuf_t *streambuf;
+
+    assert(is_reset_stream_at || reliable_size == 0);
+
+    quic_ctx.transport_params.reset_stream_at = 1;
+    test_setup_connected_peers(&client, &server);
+
+    ok(inject_frames(server, data, sizeof(data)) == 0);
+    ok((stream = quicly_get_stream(server, 0)) != NULL);
+    streambuf = stream->data;
+    ok(!quicly_recvstate_transfer_complete(&stream->recvstate));
+    if (null_on_receive_reset) {
+        callbacks = *stream->callbacks;
+        callbacks.on_receive_reset = NULL;
+        stream->callbacks = &callbacks;
+    }
+
+    if (is_reset_stream_at) {
+        ok(inject_frames(server, reset_at, sizeof(reset_at)) == 0);
+    } else {
+        ok(inject_frames(server, reset, sizeof(reset)) == 0);
+    }
+    ok(quicly_recvstate_transfer_complete(&stream->recvstate));
+    ok(buffer_is(&streambuf->super.ingress, "abc"));
+    if (reliable_size != 0 || null_on_receive_reset) {
+        ok(streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+        ok(streambuf->error_received.reset_stream == -1);
+    } else {
+        ok(streambuf->error_received.reset_on_receive == -1);
+        ok(streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+    }
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.reset_stream_at = reset_stream_at_orig;
+}
+
 static void test_reset_stream_at_after_fin(void)
 {
     /* STREAM(id=0, off=2, len=3, FIN) "234", RESET_STREAM_AT(id=0, error=11, final=5, reliable=5), STREAM(id=0, len=2) "01" */
@@ -2745,12 +2806,12 @@ static void test_reset_stream_at_after_fin(void)
     /* the reset reduces nothing, its Reliable Size being the Final Size, but its error code is to be retained */
     ok(inject_frames(server, reset, sizeof(reset)) == 0);
     ok(!quicly_recvstate_transfer_complete(&stream->recvstate));
-    ok(streambuf->error_received.reset_stream == -1);
+    ok(streambuf->error_received.reset_on_receive == -1);
 
     /* filling the gap completes the transfer, and it is then that the error code of the reset is surfaced */
     ok(inject_frames(server, fill_gap, sizeof(fill_gap)) == 0);
     ok(quicly_recvstate_transfer_complete(&stream->recvstate));
-    ok(streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
+    ok(streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(11));
 
     quicly_free(client);
     quicly_free(server);
@@ -3063,6 +3124,11 @@ int main(int argc, char **argv)
     subtest("reset-stream-at-data-above", test_reset_stream_at_data_above);
     subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
+    subtest("reset-stream-at-completing", test_reset_completing_transfer, 3, 1, 0);
+    subtest("reset-stream-at-zero-completing", test_reset_completing_transfer, 0, 1, 0);
+    subtest("reset-stream-completing", test_reset_completing_transfer, 0, 0, 0);
+    subtest("reset-stream-at-zero-completing-null-cb", test_reset_completing_transfer, 0, 1, 1);
+    subtest("reset-stream-completing-null-cb", test_reset_completing_transfer, 0, 0, 1);
     subtest("stop-sending-after-reset", test_stop_sending_after_reset, 1);
     subtest("stop-sending-repeated", test_stop_sending_after_reset, 0);
     subtest("stop-sending-before-fin", test_stop_sending_after_fin, QUICLY_SENDSTATE_EOS_STATE_UNSENT);

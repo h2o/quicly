@@ -639,13 +639,13 @@ static void test_reliable_reset(int deliver_in_order)
     ok(server_stream != NULL);
     server_streambuf = server_stream->data;
     ok(!quicly_recvstate_transfer_complete(&server_stream->recvstate));
-    ok(server_streambuf->error_received.reset_stream == -1);
+    ok(server_streambuf->error_received.reset_on_receive == -1);
 
     /* the second completes the transfer, and it is then that the reset is surfaced */
     ok(decode_packets(&decoded, second, 1) == 1);
     ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
-    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(server_streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     ok(buffer_is(&server_streambuf->super.ingress, "hello"));
 
     /* the final size is charged to connection-level flow control exactly once */
@@ -682,7 +682,7 @@ static void test_reliable_reset_pending(void)
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
     ok(buffer_is(&server_streambuf->super.ingress, "abcd"));
     /* had a FIN been sent, the transfer would have completed before the reset arrived, leaving it unreported */
-    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(server_streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     ok(max_data_is_equal(client, server));
 }
 
@@ -733,7 +733,7 @@ static void test_reliable_reset_tail(void)
     ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
     ok(server_stream->recvstate.eos == 5);
-    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(server_streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     ok(buffer_is(&server_streambuf->super.ingress, "hello"));
 
     /* the ten bytes are charged to connection-level flow control on both ends */
@@ -846,7 +846,7 @@ static void test_reliable_reset_data_below(void)
     ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at + 1);
     ok(client_stream->sendstate.pending.num_ranges == 0);
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
-    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(server_streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     ok(max_data_is_equal(client, server));
 }
 
@@ -886,7 +886,7 @@ static void test_reliable_reset_beyond_window(void)
     /* the application reads, the window opens, and only once it reaches the final size does the reset go out */
     quicly_get_stats(client, &before);
     size_t i;
-    for (i = 0; i < 10 && server_streambuf->error_received.reset_stream == -1; ++i) {
+    for (i = 0; i < 10 && server_streambuf->error_received.reset_on_receive == -1; ++i) {
         quicly_streambuf_ingress_shift(server_stream, quicly_streambuf_ingress_get(server_stream).len);
         quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
         transmit(server, client);
@@ -896,7 +896,7 @@ static void test_reliable_reset_beyond_window(void)
     ok(after.num_frames_sent.reset_stream_at == before.num_frames_sent.reset_stream_at + 1);
     ok(client_stream->sendstate.size_inflight == 10);
     ok(client_stream->_send_aux.max_stream_data >= 10);
-    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(server_streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     ok(server_stream->recvstate.eos == 10);
 
     quic_ctx.transport_params.max_stream_data = max_stream_data_orig;
@@ -964,7 +964,7 @@ static void test_reliable_reset_after_fin(void)
     ok(decode_packets(&decoded, &fin_datagram, 1) == 1);
     ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
     ok(quicly_recvstate_transfer_complete(&server_stream->recvstate));
-    ok(server_streambuf->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
+    ok(server_streambuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1234567));
     ok(buffer_is(&server_streambuf->super.ingress, "hello"));
 
     /* The acknowledgement of the FIN does not stand in for that of the reset, the marker being tracked by what it tells the peer
