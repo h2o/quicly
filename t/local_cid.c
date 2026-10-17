@@ -28,14 +28,14 @@
 static void encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
                         const quicly_cid_plaintext_t *plaintext)
 {
-    encrypted->cid[0] = plaintext->path_id;
+    encrypted->cid[0] = plaintext->sequence;
     encrypted->len = 1;
 }
 
 static size_t decrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
                           size_t len)
 {
-    plaintext->path_id = ((const uint8_t *)encrypted)[0];
+    plaintext->sequence = ((const uint8_t *)encrypted)[0];
     return 1;
 }
 
@@ -58,7 +58,7 @@ static int verify_cid(const quicly_local_cid_t *cid, quicly_cid_encryptor_t *enc
         return 0;
 
     encryptor->decrypt_cid(encryptor, &plaintext, cid->cid.cid, cid->cid.len);
-    return !(cid->sequence == plaintext.path_id);
+    return !(cid->sequence == plaintext.sequence);
 }
 
 /**
