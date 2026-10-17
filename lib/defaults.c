@@ -163,7 +163,7 @@ static void default_encrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_t *enc
         break;
     }
     p = quicly_encode32(p, plaintext->master_id);
-    p = quicly_encode32(p, (plaintext->thread_id << 16) | (plaintext->sequence << 8) | plaintext->path_id);
+    p = quicly_encode32(p, ((uint32_t)plaintext->thread_id << 16) | (plaintext->sequence << 8) | plaintext->path_id);
     assert(p - buf == self->cid_encrypt_ctx->algo->block_size);
 
     /* generate CID */
