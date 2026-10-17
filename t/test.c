@@ -206,7 +206,7 @@ static void test_egress_selection(void)
                           NULL) == 0);
         ok(quicly_get_alt_egress(conn) == alt);
         ok(get_egress_context(conn) == &ctx.egress[alt]);
-        ok((conn->egress.pacer != NULL) == (alt != 0 || ctx.egress[0].pacing));
+        ok((conn->path_spaces[0]->pacer != NULL) == (alt != 0 || ctx.egress[0].pacing));
         quicly_stats_t stats;
         ok(quicly_get_stats(conn, &stats) == 0);
         ok(stats.num_alt_egress == (alt != 0));
@@ -1108,8 +1108,8 @@ static void test_ack_frequency(void)
     ok(server_stream != NULL);
 
     // Set some losses to trigger ack frequency path
-    server->egress.cc.num_loss_episodes = 5;
-    client->egress.cc.num_loss_episodes = 5;
+    server->path_spaces[0]->cc.num_loss_episodes = 5;
+    client->path_spaces[0]->cc.num_loss_episodes = 5;
 
     ok(server->application->super.reordering_threshold == 1);
     ok(client->application->super.reordering_threshold == 1);
@@ -1284,26 +1284,26 @@ static void test_cc_accel_context(void)
         quicly_conn_t *conn;
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
-        ok(conn->egress.cc.conf == &ctx.egress[0].cc && conn->egress.cc.conf->abba);
-        ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
+        ok(conn->path_spaces[0]->cc.conf == &ctx.egress[0].cc && conn->path_spaces[0]->cc.conf->abba);
+        ok(conn->path_spaces[0]->cc.state.pico.abba.high.cwnd == 0);
 
         /* Path promotion uses configured policy and discards the old path's measurements. */
         quicly_cc_conf_t stale_conf = ctx.egress[0].cc;
         stale_conf.abba = 0;
-        conn->egress.cc.conf = &stale_conf;
-        conn->egress.cc.state.pico.abba.high.cwnd = 100000;
-        quicly_rtt_update(&conn->egress.loss.rtt, 20, 0, conn->stash.now);
-        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20);
+        conn->path_spaces[0]->cc.conf = &stale_conf;
+        conn->path_spaces[0]->cc.state.pico.abba.high.cwnd = 100000;
+        quicly_rtt_update(&conn->path_spaces[0]->loss.rtt, 20, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->path_spaces[0]->loss.rtt) == 20);
         ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
         ok(promote_path(conn, 1) == 0);
-        ok(conn->egress.cc.conf == &ctx.egress[0].cc && conn->egress.cc.conf->abba);
-        ok(conn->egress.cc.type->cc_init == policies[i]);
-        ok(conn->egress.cc.state.pico.abba.high.cwnd == 0);
-        ok(conn->egress.loss.rtt.latest == 0);
-        ok(conn->egress.loss.rtt.floor.newest_sample_until == 0);
-        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 20); /* initial estimate inherited from the old path */
-        quicly_rtt_update(&conn->egress.loss.rtt, 80, 0, conn->stash.now);
-        ok(quicly_rtt_get_floor(&conn->egress.loss.rtt) == 80);
+        ok(conn->path_spaces[0]->cc.conf == &ctx.egress[0].cc && conn->path_spaces[0]->cc.conf->abba);
+        ok(conn->path_spaces[0]->cc.type->cc_init == policies[i]);
+        ok(conn->path_spaces[0]->cc.state.pico.abba.high.cwnd == 0);
+        ok(conn->path_spaces[0]->loss.rtt.latest == 0);
+        ok(conn->path_spaces[0]->loss.rtt.floor.newest_sample_until == 0);
+        ok(quicly_rtt_get_floor(&conn->path_spaces[0]->loss.rtt) == 20); /* initial estimate inherited from the old path */
+        quicly_rtt_update(&conn->path_spaces[0]->loss.rtt, 80, 0, conn->stash.now);
+        ok(quicly_rtt_get_floor(&conn->path_spaces[0]->loss.rtt) == 80);
         quicly_free(conn);
     }
 }
@@ -1341,14 +1341,15 @@ static void test_l4s_feedback(void)
     quicly_conn_t *conn;
     ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                       NULL) == 0);
-    conn->egress.packet_number = 100;
+    conn->path_spaces[0]->packet_number = 100;
     quicly_ack_frame_t frame = {.largest_acknowledged = 20, .ecn_counts = {0, 19, 1}};
     quicly_cc_ecn_counts_t counts;
     handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, 1, &counts);
     ok(counts.total == 20 && counts.ce == 1 && conn->egress.ecn.state == QUICLY_ECN_ON);
     ok(conn->super.stats.num_packets.acked_ecn_counts[1] == 19);
     ok(conn->super.stats.num_packets.acked_ecn_counts[2] == 1);
-    conn->egress.loss.largest_acked_packet_plus1.per_epoch[QUICLY_EPOCH_1RTT] = 21; /* as the loss detection engine records */
+    conn->path_spaces[0]->loss.largest_acked_packet_plus1.per_epoch[QUICLY_EPOCH_1RTT] =
+        21; /* as the loss detection engine records */
 
     /* ACKs that do not advance the largest acknowledged are ignored, whether the counters advance or regress. */
     frame.ecn_counts[2] = 2;
@@ -1372,7 +1373,7 @@ static void test_l4s_feedback(void)
     for (int is_ack_ecn = 0; is_ack_ecn != 2; ++is_ack_ecn) {
         ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
                           NULL) == 0);
-        conn->egress.packet_number = 100;
+        conn->path_spaces[0]->packet_number = 100;
         frame = (quicly_ack_frame_t){.largest_acknowledged = 20, .ecn_counts = {20, 0, 0}};
         handle_ecn_feedback(conn, QUICLY_EPOCH_1RTT, &frame, is_ack_ecn, &counts);
         ok(counts.total == 0 && conn->egress.ecn.state == QUICLY_ECN_OFF); /* missing feedback or ECT(1) rewritten to ECT(0) */
@@ -1419,7 +1420,7 @@ static void test_l4s_transfer(void)
     ok(transmit(server, client) > 0);
     ok(client->super.stats.num_packets.acked_ecn_counts[2] != 0);
     /* the CE marks have reached the congestion controller */
-    ok(client->egress.cc.num_ecn_loss_episodes == 1);
+    ok(client->path_spaces[0]->cc.num_ecn_loss_episodes == 1);
     ok(quicly_send_get_ecn_bits(client) == 1);
     quicly_free(client);
     quicly_free(server);
@@ -1427,7 +1428,8 @@ static void test_l4s_transfer(void)
 
 static void test_resume_sendrate(void)
 {
-    quicly_conn_t conn = {0};
+    quicly_path_space_t ps = {0};
+    quicly_conn_t conn = {.path_spaces = {&ps}};
     uint64_t rate;
     uint32_t rtt;
     const struct {
@@ -1435,16 +1437,16 @@ static void test_resume_sendrate(void)
         uint32_t stored;
     } cases[] = {{0.001f, 1}, {0.25f, 1}, {1, 1}, {1.25f, 2}, {250, 250}};
 
-    quicly_ratemeter_init(&conn.egress.ratemeter);
-    conn.egress.loss.rtt.minimum = 0.25f;
+    quicly_ratemeter_init(&conn.path_spaces[0]->ratemeter);
+    conn.path_spaces[0]->loss.rtt.minimum = 0.25f;
     calc_resume_sendrate(&conn, &rate, &rtt);
     ok(rate == 0 && rtt == 0);
 
-    quicly_ratemeter_enter_cc_limited(&conn.egress.ratemeter, 0);
-    quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1000, 1000, 0);
-    quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1050, 51000, 1);
+    quicly_ratemeter_enter_cc_limited(&conn.path_spaces[0]->ratemeter, 0);
+    quicly_ratemeter_on_ack(&conn.path_spaces[0]->ratemeter, 1000, 1000, 0);
+    quicly_ratemeter_on_ack(&conn.path_spaces[0]->ratemeter, 1050, 51000, 1);
     for (size_t i = 0; i < PTLS_ELEMENTSOF(cases); ++i) {
-        conn.egress.loss.rtt.minimum = cases[i].minimum;
+        conn.path_spaces[0]->loss.rtt.minimum = cases[i].minimum;
         calc_resume_sendrate(&conn, &rate, &rtt);
         ok(rate == 1000000);
         ok(rtt == cases[i].stored);
@@ -1519,7 +1521,7 @@ static void test_ack_for_unsent_pn(void)
     uint64_t ecn_counts[3] = {0};
     uint8_t ackbuf[64], *ack_end;
     quicly_ranges_init(&ranges);
-    ok(quicly_ranges_add(&ranges, server->egress.packet_number, server->egress.packet_number + 1) == 0);
+    ok(quicly_ranges_add(&ranges, server->path_spaces[0]->packet_number, server->path_spaces[0]->packet_number + 1) == 0);
     ok((ack_end = quicly_encode_ack_frame(ackbuf, ackbuf + sizeof(ackbuf), &ranges, ecn_counts, 0)) != NULL);
     quicly_ranges_clear(&ranges);
 
@@ -1805,7 +1807,7 @@ static void test_time_threshold_loss_in_recovery(void)
     ok(transmit(server, client) == 1);
 
     /* upon the alarm, P0 is declared lost by time threshold, entering recovery; packets being sent are kept in flight */
-    quic_now = client->egress.loss.alarm_at;
+    quic_now = client->path_spaces[0]->loss.alarm_at;
     num_datagrams = PTLS_ELEMENTSOF(datagrams);
     ok(quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
     quicly_get_stats(client, &stats);
@@ -1817,15 +1819,16 @@ static void test_time_threshold_loss_in_recovery(void)
     ok(decode_packets(&decoded, second + 1, 1) == 1);
     ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
     ok(transmit(server, client) == 1);
-    ok(client->egress.loss.loss_time != INT64_MAX);
-    ok(client->egress.loss.largest_acked_packet_plus1.all_ - 1 < client->egress.cc.recovery_end);
-    ok(client->egress.loss.sentmap.bytes_in_flight >= client->egress.cc.cwnd + client->egress.max_udp_payload_size);
+    ok(client->path_spaces[0]->loss.loss_time != INT64_MAX);
+    ok(client->path_spaces[0]->loss.largest_acked_packet_plus1.all_ - 1 < client->path_spaces[0]->cc.recovery_end);
+    ok(client->path_spaces[0]->loss.sentmap.bytes_in_flight >=
+       client->path_spaces[0]->cc.cwnd + client->path_spaces[0]->max_udp_payload_size);
 
     /* the alarm is not scheduled for time-threshold loss detection */
-    ok(client->egress.loss.alarm_at != client->egress.loss.loss_time);
+    ok(client->path_spaces[0]->loss.alarm_at != client->path_spaces[0]->loss.loss_time);
 
     /* P2 is declared lost upon receiving the next ACK, that is sent in response to P4 and P5 */
-    quic_now = client->egress.loss.loss_time;
+    quic_now = client->path_spaces[0]->loss.loss_time;
     for (size_t i = 2; i <= 3; ++i) {
         ok(decode_packets(&decoded, second + i, 1) == 1);
         ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
@@ -2021,7 +2024,7 @@ static void test_retransmit(void)
     quic_ctx.transport_params.max_stream_data.bidi_local = 4096;
     quic_ctx.transport_params.max_stream_data.bidi_remote = 4096;
     quic_ctx.transport_params.max_stream_data.uni = 4096;
-    
+
 #define TEST(frame, from_server, trigger)                                                                                          \
     subtest(#frame, do_test_retransmit, offsetof(quicly_stats_t, num_frames_sent.frame), from_server, retransmit_trigger_##trigger)
     TEST(reset_stream, 0, reset_stream);
