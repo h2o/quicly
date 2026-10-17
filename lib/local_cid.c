@@ -27,15 +27,17 @@ static int has_pending(quicly_local_cid_set_t *set)
 }
 
 /**
- * generates a new CID and increments path_id. returns true if successfully generated.
+ * generates a new CID and increments sequence. returns true if successfully generated.
  */
 static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
 {
-    if (set->_encryptor == NULL || set->plaintext.path_id >= QUICLY_MAX_PATH_ID)
+    if (set->_encryptor == NULL || set->plaintext.sequence >= QUICLY_MAX_PATH_ID)
         return 0;
 
+    set->cids[idx].sequence = set->plaintext.sequence;
+
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
-    set->cids[idx].sequence = set->plaintext.path_id++;
+    set->plaintext.sequence++;
 
     return 1;
 }
@@ -80,9 +82,8 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
         ._encryptor = encryptor,
     };
 
-    /* if provided, set master id */
+    /* if provided, set plaintext */
     if (new_cid != NULL) {
-        assert(new_cid->path_id == 0);
         set->plaintext = *new_cid;
     }
 
@@ -257,15 +258,15 @@ int quicly_local_cid_rotate(quicly_local_cid_set_t *set, int *exhausted)
      * might be encrypted using the newer key, in which case they are replaced again, rather than the change being missed. */
     set->key_generation = new_key_generation;
 
-    /* replace all or nothing; once there are not enough path IDs, there will never be, as `path_id` never decreases while the
-     * number of CIDs in use decreases only when `path_id` reaches the maximum */
-    if (set->plaintext.path_id + num_cids > QUICLY_MAX_PATH_ID) {
+    /* replace all or nothing; once there are not enough CID sequence numbers, there will never be, as `sequence` never decreases while the
+     * number of CIDs in use decreases only when `sequence` reaches the maximum */
+    if (set->plaintext.sequence + num_cids > QUICLY_MAX_PATH_ID) {
         *exhausted = 1;
         return 0;
     }
 
     /* issue new CIDs using the IDLE entries; there are enough, as all the CIDs in use are at or above `retire_prior_to` */
-    set->retire_prior_to = set->plaintext.path_id;
+    set->retire_prior_to = set->plaintext.sequence;
     for (i = 0; num_cids != 0; i++) {
         assert(i < PTLS_ELEMENTSOF(set->cids));
         if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE)

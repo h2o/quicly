@@ -38,14 +38,14 @@ static void encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *en
         --num_key_changes_on_encrypt;
         ++test_key_generation;
     }
-    encrypted->cid[0] = plaintext->path_id;
+    encrypted->cid[0] = plaintext->sequence;
     encrypted->len = 1;
 }
 
 static size_t decrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
                           size_t len)
 {
-    plaintext->path_id = ((const uint8_t *)encrypted)[0];
+    plaintext->sequence = ((const uint8_t *)encrypted)[0];
     return 1;
 }
 
@@ -68,7 +68,7 @@ static int verify_cid(const quicly_local_cid_t *cid, quicly_cid_encryptor_t *enc
         return 0;
 
     encryptor->decrypt_cid(encryptor, &plaintext, cid->cid.cid, cid->cid.len);
-    return !(cid->sequence == plaintext.path_id);
+    return !(cid->sequence == plaintext.sequence);
 }
 
 /**
@@ -233,14 +233,14 @@ static void test_rotate_exhaustion(void)
     int exhausted;
 
     init_delivered_set(&set, &test_generational_encryptor);
-    set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS + 1;
+    set.plaintext.sequence = QUICLY_MAX_PATH_ID - NUM_CIDS + 1;
     ++test_key_generation;
     ok(!quicly_local_cid_rotate(&set, &exhausted) && exhausted);
     /* not attempted again until the key changes again */
     ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
 
     /* rotated if there are just enough path IDs */
-    set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS;
+    set.plaintext.sequence = QUICLY_MAX_PATH_ID - NUM_CIDS;
     ++test_key_generation;
     ok(quicly_local_cid_rotate(&set, &exhausted));
 }
@@ -270,7 +270,7 @@ static void test_retire_without_replacement(void)
     int has_pending, exhausted;
 
     init_delivered_set(&set, &test_generational_encryptor);
-    set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS;
+    set.plaintext.sequence = QUICLY_MAX_PATH_ID - NUM_CIDS;
     ++test_key_generation;
     ok(quicly_local_cid_rotate(&set, &exhausted));
     send_and_ack_all(&set);

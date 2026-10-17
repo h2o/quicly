@@ -1561,9 +1561,9 @@ static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **s
 }
 
 /**
- * sends stream data from `src` to `dst`, returning the path ID of the DCID being used
+ * sends stream data from `src` to `dst`, returning the sequence of the DCID being used
  */
-static uint64_t send_and_get_dcid_path_id(quicly_conn_t *src, quicly_conn_t *dst)
+static uint64_t send_and_get_dcid_sequence(quicly_conn_t *src, quicly_conn_t *dst)
 {
     quicly_stream_t *stream;
     ok(quicly_open_stream(src, &stream, 0) == 0);
@@ -1578,11 +1578,11 @@ static uint64_t send_and_get_dcid_path_id(quicly_conn_t *src, quicly_conn_t *dst
 
     quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
     size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
-    uint64_t path_id = decoded[0].cid.dest.plaintext.path_id;
+    uint64_t sequence = decoded[0].cid.dest.plaintext.sequence;
     for (size_t i = 0; i < num_packets; ++i)
         ok(quicly_receive(dst, NULL, &fake_address.sa, decoded + i) == 0);
 
-    return path_id;
+    return sequence;
 }
 
 /**
@@ -1623,11 +1623,11 @@ static void test_rotate_local_cids_upon_key_change(void)
 
     /* the CIDs are rotated when the server sends packets, and the client switches to the new ones, whose sequence numbers start
      * from the next one to be issued at the moment the key changes */
-    uint64_t first_new_sequence = server->super.local.cid_set.plaintext.path_id;
+    uint64_t first_new_sequence = server->super.local.cid_set.plaintext.sequence;
     ++rotating_key_generation;
-    send_and_get_dcid_path_id(server, client);
+    send_and_get_dcid_sequence(server, client);
     exchange_until_idle(client, server);
-    ok(send_and_get_dcid_path_id(client, server) >= first_new_sequence);
+    ok(send_and_get_dcid_sequence(client, server) >= first_new_sequence);
 
     quicly_free(client);
     quicly_free(server);

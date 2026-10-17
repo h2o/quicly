@@ -63,7 +63,7 @@ typedef struct st_quicly_local_cid_t {
 typedef struct st_quicly_local_cid_set_t {
     /**
      * Identifier of the connection used by quicly. Three tuple of (node_id, thread_id, master_id) is used to identify the
-     * connection. `path_id` is maintained by the "local_cid" module, and used for identifying each CID being issued.
+     * connection. `sequence` is maintained by the "local_cid" module, and used for identifying each CID being issued.
      */
     quicly_cid_plaintext_t plaintext;
     /**
