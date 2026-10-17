@@ -260,6 +260,59 @@ static void test_multipath_health_progress(void)
     quic_now = saved_now;
 }
 
+static void test_multipath_idle_health_recovery(void)
+{
+    quicly_context_t saved = quic_ctx;
+    int64_t saved_now = quic_now;
+    quicly_conn_t *client, *server;
+    health_setup(&client, &server);
+    quic_ctx.path_scheduler = &(quicly_path_scheduler_t){health_primary_only_scheduler};
+    quicly_path_space_t *bad = client->path_spaces[1];
+    lock_now(client, 0);
+    /* a delayed ACK for the pre-suspicion flight is not fresh evidence of
+     * recovery, but can leave the path without any packet in flight */
+    ok(bad->loss.sentmap.bytes_in_flight == 0);
+    uint64_t old = health_prepare_packet(bad, 1);
+    bad->health.state = QUICLY_PATH_SUSPECT;
+    bad->health.fresh_from_pn = bad->packet_number;
+    bad->last_recovery_at = quic_now;
+    bad->loss.pto_count = 2;
+    health_ack_packet(client, bad, old);
+    setup_next_send(client);
+    ok(bad->health.state == QUICLY_PATH_SUSPECT);
+    ok(bad->loss.sentmap.bytes_in_flight == 0);
+    ok(bad->loss.alarm_at != INT64_MAX);
+    unlock_now(client);
+
+    /* there is no application data and the custom scheduler avoids this path;
+     * maintenance must still probe, with PTO backoff while the path is down */
+    uint64_t packets_before = get_path(client, 1)->num_packets.sent;
+    for (size_t i = 0; i < 1000; ++i) {
+        ++quic_now;
+        transmit_multipath_with_loss(client, server, 20000);
+        transmit_multipath(server, client);
+    }
+    uint64_t probes = get_path(client, 1)->num_packets.sent - packets_before;
+    ok(probes > 0 && probes <= 20);
+    ok(bad->health.state == QUICLY_PATH_SUSPECT);
+    ok(bad->loss.pto_count > 0);
+
+    int recovering = 0;
+    for (size_t i = 0; i < 5000 && bad->health.state != QUICLY_PATH_USABLE; ++i) {
+        ++quic_now;
+        transmit_multipath(client, server);
+        transmit_multipath(server, client);
+        recovering |= bad->health.state == QUICLY_PATH_RECOVERING;
+    }
+    ok(recovering);
+    ok(bad->health.state == QUICLY_PATH_USABLE);
+    quicly_free(client);
+    quicly_free(server);
+    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
+    quic_ctx = saved;
+    quic_now = saved_now;
+}
+
 static void test_multipath_suspect_affinity(void)
 {
     quicly_context_t saved = quic_ctx;
