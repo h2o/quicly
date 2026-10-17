@@ -346,7 +346,7 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
         /* relink the stream to the blocked list if necessary */
         if (conn_is_blocked && !quicly_stream_can_send(stream, 0)) {
             quicly_linklist_insert(sched->blocked.prev, &stream->_send_aux.pending_link.default_scheduler);
-            node = sched->active.next;
+            node = next_node;
             continue;
         }
         /* send! */
@@ -364,6 +364,7 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
         if (quicly_stream_can_send(stream, 1))
             link_stream(sched, stream, conn_is_blocked);
 
+        /* on_send_emit can reset other streams and unlink their nodes, so restart from the stable list head. */
         node = sched->active.next;
     }
 

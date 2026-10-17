@@ -3607,7 +3607,7 @@ static void test_multipath_stream_affinity(void)
 
     /* Verify that Path 1 (where affinity was set) saw massive data transmission,
        while the others saw minimal (mostly ACKs) or zero transmission. */
-    ok((bytes_sent_after[1] - bytes_sent_before[1]) > 5000); // Lower threshold to account for flow control
+    ok((bytes_sent_after[1] - bytes_sent_before[1]) > 5000); /* lower threshold to account for flow control */
     ok((bytes_sent_after[0] - bytes_sent_before[0]) < 2000);
     ok((bytes_sent_after[2] - bytes_sent_before[2]) < 2000);
     ok((bytes_sent_after[3] - bytes_sent_before[3]) < 2000);
@@ -3977,6 +3977,7 @@ int main(int argc, char **argv)
 
     subtest("multipath-pacing", test_multipath_pacing);
     subtest("multipath-backup-affinity", test_multipath_backup_affinity);
+    subtest("multipath-scheduler-callback-reset", test_multipath_scheduler_callback_reset);
     subtest("multipath-backup-failover", test_multipath_backup_failover);
     subtest("multipath-backup-transient-loss", test_multipath_backup_transient_loss);
     subtest("custom-recovery-blackhole", test_custom_recovery_blackhole);

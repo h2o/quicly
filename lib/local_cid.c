@@ -126,7 +126,7 @@ int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
         is_pending = 1;
     }
 
-    return is_pending;
+    return is_pending || has_pending(set);
 }
 
 void quicly_local_cid_on_sent(quicly_local_cid_set_t *set, size_t num_sent)
@@ -204,7 +204,7 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
     }
 
     /* it is a protocol violation for the remote peer to retire the only CID that is available to it */
-    if (becomes_empty)
+    if (becomes_empty && (set->_size > 1 || set->_encryptor == NULL || set->plaintext.sequence >= QUICLY_MAX_PATH_ID))
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     /* retire given CID */

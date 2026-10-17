@@ -43,7 +43,7 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
     for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
         set->cids[i] = (quicly_remote_cid_t){
             .state = QUICLY_REMOTE_CID_UNAVAILABLE,
-            .sequence = i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT ? i : UINT64_MAX,
+            .sequence = i,
         };
 
     set->_largest_sequence_expected = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1;

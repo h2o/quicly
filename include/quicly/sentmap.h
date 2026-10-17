@@ -49,10 +49,6 @@ typedef struct st_quicly_sent_packet_t {
      */
     uint8_t ack_epoch;
     /**
-     * path id on which the packet was sent
-     */
-    uint8_t path_id;
-    /**
      *
      */
     uint8_t ack_eliciting : 1;
@@ -72,6 +68,10 @@ typedef struct st_quicly_sent_packet_t {
      * number of bytes in-flight for the packet, from the context of CC (becomes zero when deemed lost, but not when PTO fires)
      */
     uint16_t cc_bytes_in_flight;
+    /**
+     * path id on which the packet was sent
+     */
+    uint32_t path_id;
 } quicly_sent_packet_t;
 
 typedef enum en_quicly_sentmap_event_t {

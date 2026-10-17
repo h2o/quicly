@@ -29,6 +29,43 @@ static size_t multipath_received_length(quicly_conn_t *conn, quicly_stream_id_t 
     return stream != NULL ? quicly_streambuf_ingress_get(stream).len : 0;
 }
 
+static void reset_preceding_stream_on_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
+{
+    quicly_stream_t *preceding = quicly_get_stream(stream->conn, stream->stream_id - 4);
+    if (preceding != NULL && preceding->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE)
+        quicly_reset_stream(preceding, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0));
+    quicly_streambuf_egress_emit(stream, off, dst, len, wrote_all);
+}
+
+static void test_multipath_scheduler_callback_reset(void)
+{
+    quicly_path_scheduler_t *schedulers[] = {&quicly_default_path_scheduler, &quicly_round_robin_path_scheduler};
+    for (size_t n = 0; n < PTLS_ELEMENTSOF(schedulers); ++n) {
+        int64_t saved_now = quic_now;
+        quicly_conn_t *client, *server;
+        quicly_context_t saved = setup_multipath_scheduling_peers(&client, &server, schedulers[n]);
+        quicly_stream_callbacks_t callbacks = stream_callbacks;
+        callbacks.on_destroy = quicly_streambuf_destroy;
+        callbacks.on_send_emit = reset_preceding_stream_on_emit;
+        quicly_stream_t *pinned, *ordinary;
+        ok(quicly_open_stream(client, &pinned, 0) == 0);
+        ok(quicly_open_stream(client, &ordinary, 0) == 0);
+        pinned->callbacks = ordinary->callbacks = &callbacks;
+        ok(quicly_set_stream_path_affinity(pinned, 1) == 0);
+        ok(quicly_streambuf_egress_write(pinned, "pinned", 6) == 0);
+        ok(quicly_streambuf_egress_write(ordinary, "ordinary", 8) == 0);
+
+        /* skip the pinned stream on path zero, then unlink it inside the next stream's send callback */
+        client->next_send_path_index = 0;
+        transmit_multipath(client, server);
+        ok(pinned->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE);
+        ok(!quicly_linklist_is_linked(&pinned->_send_aux.pending_link.default_scheduler));
+        ok(multipath_received_length(server, ordinary->stream_id) == 8);
+        free_multipath_regression_peers(client, server, saved);
+        quic_now = saved_now;
+    }
+}
+
 static void test_multipath_backup_affinity(void)
 {
     quicly_path_scheduler_t *schedulers[] = {&quicly_default_path_scheduler, &quicly_round_robin_path_scheduler};
