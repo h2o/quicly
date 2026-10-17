@@ -79,6 +79,7 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
                                const quicly_cid_plaintext_t *new_cid)
 {
     *set = (quicly_local_cid_set_t){
+        ._size = 1,
         ._encryptor = encryptor,
     };
 
@@ -103,24 +104,19 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
 
 int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
 {
-    int is_pending = 0;
+    assert(set->_size <= size && size <= QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
+    size_t additional = size - set->_size;
+    set->_size = size;
 
-    assert(size <= QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
-    /* called once, while the only CID is the one created upon initialization */
-    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
-        assert(set->cids[i].state == QUICLY_LOCAL_CID_STATE_IDLE);
-
-    /* First we prepare N CIDs (to be precise here we prepare N-1, as we already had one upon initialization).
-     * Later, every time one of the CIDs is retired, we immediately prepare one additional CID
-     * to always fill the CID list. */
-    for (size_t i = 1; i < size; i++) {
+    for (size_t i = 0; additional != 0 && i < PTLS_ELEMENTSOF(set->cids); i++) {
+        if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE)
+            continue;
         if (!generate_cid(set, i))
             break;
         do_mark_pending(set, i);
-        is_pending = 1;
+        --additional;
     }
-
-    return is_pending;
+    return has_pending(set);
 }
 
 void quicly_local_cid_on_sent(quicly_local_cid_set_t *set, size_t num_sent)
@@ -201,7 +197,7 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
     }
 
     /* it is a protocol violation for the remote peer to retire the only CID that is available to it */
-    if (becomes_empty)
+    if (becomes_empty && (set->_size > 1 || set->_encryptor == NULL || set->plaintext.sequence >= QUICLY_MAX_PATH_ID))
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     /* retire given CID */
