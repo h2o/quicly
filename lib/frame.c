@@ -46,6 +46,8 @@ static uint8_t *encode_ack_frame_core(uint8_t *dst, uint8_t *dst_end, uint8_t fr
     size_t range_index = ranges->num_ranges - 1;
 
     assert(ranges->num_ranges != 0);
+    if ((size_t)(dst_end - dst) < quicly_encodev_capacity(ranges->ranges[range_index].end - 1) + quicly_encodev_capacity(ack_delay) + 1)
+        return NULL;
 
     dst = quicly_encodev(dst, ranges->ranges[range_index].end - 1); /* largest acknowledged */
     dst = quicly_encodev(dst, ack_delay);                           /* ack delay */
