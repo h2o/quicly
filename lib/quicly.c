@@ -4855,7 +4855,7 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     int64_t at = conn->idle_timeout.at;
     if (has_application_path_eligibility(conn) && (conn->initial != NULL || conn->handshake != NULL)) {
         int64_t handshake_at = ceil(conn->created_at + (double)conn->super.ctx->handshake_timeout_rtt_multiplier *
-                                                           conn->path_spaces[0]->loss.rtt.smoothed);
+                                                           fmax(1.0, conn->path_spaces[0]->loss.rtt.smoothed));
         if (handshake_at < at)
             at = handshake_at;
     }
@@ -7748,7 +7748,8 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
         goto CloseNow;
     }
     if ((conn->initial != NULL || conn->handshake != NULL) &&
-        conn->created_at + (double)conn->super.ctx->handshake_timeout_rtt_multiplier * conn->path_spaces[0]->loss.rtt.smoothed <=
+        conn->created_at +
+                (double)conn->super.ctx->handshake_timeout_rtt_multiplier * fmax(1.0, conn->path_spaces[0]->loss.rtt.smoothed) <=
             conn->stash.now) {
         QUICLY_PROBE(HANDSHAKE_TIMEOUT, conn, conn->stash.now, conn->stash.now - conn->created_at,
                      (uint32_t)conn->path_spaces[0]->loss.rtt.smoothed);
