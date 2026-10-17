@@ -1884,6 +1884,13 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, qui
             int has_outstanding =
                     loss->sentmap.bytes_in_flight != 0 || (i == 0 && conn->super.remote.address_validation.send_probe),
                 handshake_is_in_progress = conn->initial != NULL || conn->handshake != NULL;
+            /* an old ACK can drain the flight without confirming recovery; keep
+             * its health probes on the PTO timer even when no data remains,
+             * otherwise a suspect path cannot emit the fresh packet needed to
+             * restore its scheduling eligibility; abandoned paths stay idle */
+            if (conn->path_spaces[i]->health.state != QUICLY_PATH_USABLE && conn->path_spaces[i]->addrs[0] != NULL &&
+                !conn->path_spaces[i]->addrs[0]->abandoned)
+                has_outstanding = 1;
             int path_can_send_data = conn->path_spaces[i]->addrs[0] != NULL && !conn->path_spaces[i]->addrs[0]->abandoned &&
                                      !conn->path_spaces[i]->addrs[0]->probe_only &&
                                      conn->path_spaces[i]->health.state != QUICLY_PATH_SUSPECT;

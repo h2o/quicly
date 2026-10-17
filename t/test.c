@@ -3991,6 +3991,7 @@ int main(int argc, char **argv)
     subtest("multipath-automatic-failover", test_multipath_automatic_failover);
     subtest("multipath-failover-disabled", test_multipath_failover_disabled);
     subtest("multipath-health-progress", test_multipath_health_progress);
+    subtest("multipath-idle-health-recovery", test_multipath_idle_health_recovery);
     subtest("multipath-suspect-affinity", test_multipath_suspect_affinity);
     subtest("multipath-health-rtt-matrix", test_multipath_health_rtt_matrix);
     subtest("multipath-datagram-rank-progress", test_multipath_datagram_rank_progress);
