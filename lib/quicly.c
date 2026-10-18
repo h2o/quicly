@@ -63,6 +63,7 @@
 #define QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_SOURCE_CONNECTION_ID 15
 #define QUICLY_TRANSPORT_PARAMETER_ID_RETRY_SOURCE_CONNECTION_ID 16
 #define QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT 29
+#define QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT_PROVISIONAL 0x17f7586d2cb571 /* draft-ietf-quic-reliable-stream-reset-07 */
 #define QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE 32
 #define QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY 0xff04de1b
 
@@ -2561,7 +2562,10 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
     if (params->reset_stream_at)
-        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT, {});
+        PUSH_TP(buf,
+                params->reset_stream_at_provisional ? QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT_PROVISIONAL
+                                                    : QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT,
+                {});
     if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); });
@@ -2762,7 +2766,16 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                 params->active_connection_id_limit = v;
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
-            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT, { params->reset_stream_at = 1; });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT, {
+                params->reset_stream_at = 1;
+                params->reset_stream_at_provisional = 0;
+            });
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT_PROVISIONAL, {
+                if (!params->reset_stream_at) {
+                    params->reset_stream_at = 1;
+                    params->reset_stream_at_provisional = 1;
+                }
+            });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
@@ -3179,12 +3192,14 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     if (conn->egress.max_udp_payload_size > conn->super.remote.transport_params.max_udp_payload_size)
         conn->egress.max_udp_payload_size = conn->super.remote.transport_params.max_udp_payload_size;
 
-    /* set transport_parameters extension to be sent in EE */
+    /* set transport_parameters extension to be sent in EE, advertising reset_stream_at using the codepoint the client used */
     assert(properties->additional_extensions == NULL);
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     assert(conn->super.local.cid_set.cids[0].sequence == 0 && "make sure that local_cid is in expected state before sending SRT");
+    quicly_transport_parameters_t local_params = conn->super.ctx->transport_params;
+    local_params.reset_stream_at_provisional = conn->super.remote.transport_params.reset_stream_at_provisional;
     if ((ret = quicly_encode_transport_parameter_list(
-             &conn->crypto.transport_params.buf, &conn->super.ctx->transport_params,
+             &conn->crypto.transport_params.buf, &local_params,
              needs_cid_auth(conn) || is_retry(conn) ? &conn->super.original_dcid : NULL,
              needs_cid_auth(conn) ? &conn->super.local.cid_set.cids[0].cid : NULL,
              needs_cid_auth(conn) && is_retry(conn) ? &conn->retry_scid : NULL,
