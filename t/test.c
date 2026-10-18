@@ -1619,6 +1619,71 @@ static void test_frames_opening_peer_stream(void)
     quicly_free(server);
 }
 
+static quicly_error_t test_handle_ack_frequency_frame(quicly_conn_t *conn, const uint8_t *frame, const uint8_t *frame_end)
+{
+    struct st_quicly_handle_payload_state_t state = {.src = frame, .end = frame_end, .epoch = QUICLY_EPOCH_1RTT};
+    state.frame_type = quicly_decodev(&state.src, state.end);
+    assert(state.frame_type == QUICLY_FRAME_TYPE_ACK_FREQUENCY);
+    lock_now(conn, 0);
+    quicly_error_t ret = handle_ack_frequency_frame(conn, &state);
+    unlock_now(conn);
+    return ret;
+}
+
+/**
+ * The Request Max Ack Delay of an ACK_FREQUENCY frame replaces the delay quicly applies to ACKs in the application packet number
+ * space, as long as it is not below the advertised min_ack_delay (draft-ietf-quic-ack-frequency Section 4).
+ */
+static void test_ack_frequency_max_ack_delay(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    uint8_t buf[32], *end;
+
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_get_remote_transport_parameters(client)->min_ack_delay_usec == QUICLY_LOCAL_MIN_ACK_DELAY * 1000);
+    ok(server->application->super.max_ack_delay == QUICLY_DELAYED_ACK_TIMEOUT);
+
+    /* receipt of an ack-eliciting packet schedules an ACK after the default delay */
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(stream, "hello", 5) == 0);
+    ok(transmit(client, server) == 1);
+    ok(server->egress.send_ack_at == quic_now + QUICLY_DELAYED_ACK_TIMEOUT);
+
+    /* a request below min_ack_delay, or at or above 2^14 ms, is a protocol violation */
+    end = quicly_encode_ack_frequency_frame(buf, 0, 10, QUICLY_LOCAL_MIN_ACK_DELAY * 1000 - 1, 1);
+    ok(test_handle_ack_frequency_frame(server, buf, end) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    end = quicly_encode_ack_frequency_frame(buf, 0, 10, (1 << 14) * 1000, 1);
+    ok(test_handle_ack_frequency_frame(server, buf, end) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+    ok(server->application->super.max_ack_delay == QUICLY_DELAYED_ACK_TIMEOUT);
+
+    /* a request for 10 ms is honored, including for the ACK that has already been scheduled */
+    end = quicly_encode_ack_frequency_frame(buf, 0, 10, 10000, 1);
+    ok(test_handle_ack_frequency_frame(server, buf, end) == 0);
+    ok(server->application->super.max_ack_delay == 10);
+    ok(server->egress.send_ack_at == quic_now + 10);
+
+    /* once that ACK is sent, the next ack-eliciting packet schedules one after 10 ms */
+    quic_now += 10;
+    ok(transmit(server, client) == 1);
+    ok(server->egress.send_ack_at == INT64_MAX);
+    ok(quicly_streambuf_egress_write(stream, "world", 5) == 0);
+    ok(transmit(client, server) == 1);
+    ok(server->egress.send_ack_at == quic_now + 10);
+
+    /* a request with an old sequence number is ignored, and a request that is not a whole number of milliseconds is rounded down */
+    end = quicly_encode_ack_frequency_frame(buf, 0, 10, 20000, 1);
+    ok(test_handle_ack_frequency_frame(server, buf, end) == 0);
+    ok(server->application->super.max_ack_delay == 10);
+    end = quicly_encode_ack_frequency_frame(buf, 1, 10, 1999, 1);
+    ok(test_handle_ack_frequency_frame(server, buf, end) == 0);
+    ok(server->application->super.max_ack_delay == 1);
+    ok(server->egress.send_ack_at == quic_now + 1);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_fractional_close_timeout(void)
 {
     int64_t saved_now = quic_now;
@@ -2629,6 +2694,7 @@ int main(int argc, char **argv)
     subtest("frames-for-unopened-local-stream", test_frames_for_unopened_local_stream);
     subtest("frames-opening-peer-stream", test_frames_opening_peer_stream);
     subtest("ack-frequency", test_ack_frequency);
+    subtest("ack-frequency-max-ack-delay", test_ack_frequency_max_ack_delay);
     subtest("cc", test_cc);
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
     subtest("fractional-close-timeout", test_fractional_close_timeout);

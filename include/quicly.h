@@ -254,7 +254,8 @@ typedef struct st_quicly_transport_parameters_t {
     uint16_t max_ack_delay;
     /**
      * Delayed-ack extension. UINT64_MAX indicates that the extension is disabled or that the peer does not support it. Any local
-     * value other than UINT64_MAX indicates that the use of the extension should be negotiated.
+     * value other than UINT64_MAX indicates that the use of the extension should be negotiated, in which case
+     * QUICLY_LOCAL_MIN_ACK_DELAY is advertised.
      */
     uint64_t min_ack_delay_usec;
     /**
