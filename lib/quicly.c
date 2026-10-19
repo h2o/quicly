@@ -5237,7 +5237,7 @@ static quicly_error_t send_handshake_flow(quicly_conn_t *conn, size_t epoch, qui
         return 0;
 
     /* send ACK */
-    if (space != NULL && (space->unacked_count != 0 || send_probe))
+    if (space->unacked_count != 0 || send_probe)
         if ((ret = send_ack(conn, space, s)) != 0)
             goto Exit;
 
