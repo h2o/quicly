@@ -599,7 +599,6 @@ const quicly_salt_t *quicly_get_salt(uint32_t protocol_version)
         return &draft29;
     case QUICLY_PROTOCOL_VERSION_DRAFT27:
         return &draft27;
-        break;
     default:
         return NULL;
     }
