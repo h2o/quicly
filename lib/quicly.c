@@ -3798,6 +3798,9 @@ static int should_send_datagram_frame(quicly_conn_t *conn)
 {
     if (conn->egress.datagram_frame_payloads.count == 0)
         return 0;
+    /* QMux can send DATAGRAM frames once the peer's transport parameters are received (draft-ietf-quic-qmux-02 Section 4.2) */
+    if (quicly_is_qmux(conn))
+        return conn->super.stats.num_frames_received.qx_transport_parameters != 0;
     if (conn->application == NULL)
         return 0;
     if (conn->application->cipher.egress.key.aead == NULL)
@@ -8721,6 +8724,50 @@ Exit:
     return ret;
 }
 
+static quicly_error_t qmux_send_datagram_frames(quicly_conn_t *conn, quicly_send_context_t *s)
+{
+    size_t num_sent;
+    quicly_error_t ret = 0;
+
+    if (!should_send_datagram_frame(conn))
+        return 0;
+
+    for (num_sent = 0; num_sent != conn->egress.datagram_frame_payloads.count; ++num_sent) {
+        ptls_iovec_t *payload = conn->egress.datagram_frame_payloads.payloads + num_sent;
+        if (quicly_datagram_frame_capacity(*payload) <= QUICLY_QMUX_MAX_RECORD_SIZE) {
+            if ((ret = do_allocate_qmux_frame(conn, s, quicly_datagram_frame_capacity(*payload))) != 0)
+                break;
+            s->dst = quicly_encode_datagram_frame(s->dst, *payload);
+        } else if (1 + payload->len <= QUICLY_QMUX_MAX_RECORD_SIZE) {
+            /* The frame fits only when the Length field is omitted, which requires the frame to be the last one in the record
+             * (draft-ietf-quic-qmux-02 Section 9.1). */
+            if ((ret = do_allocate_qmux_frame(conn, s, 1 + payload->len)) != 0)
+                break;
+            *s->dst++ = QUICLY_FRAME_TYPE_DATAGRAM_NOLEN;
+            memcpy(s->dst, payload->base, payload->len);
+            s->dst += payload->len;
+            qmux_commit_record(conn, s);
+        } else {
+            /* Does not fit into a QMux record. As is the case with QUIC v1, the frame is dropped without notifying the
+             * application. */
+            continue;
+        }
+        ++conn->super.stats.num_frames_sent.datagram;
+        QUICLY_PROBE(DATAGRAM_SEND, conn, conn->stash.now, payload->base, payload->len);
+        QUICLY_LOG_CONN(datagram_send, conn, { PTLS_LOG_APPDATA_ELEMENT_HEXDUMP(payload, payload->base, payload->len); });
+    }
+
+    /* Discard the payloads being sent or dropped. Unlike QUIC v1, those that did not fit into the buffer are retained, as QMux is
+     * not subject to congestion control. */
+    for (size_t i = 0; i != num_sent; ++i)
+        free(conn->egress.datagram_frame_payloads.payloads[i].base);
+    memmove(conn->egress.datagram_frame_payloads.payloads, conn->egress.datagram_frame_payloads.payloads + num_sent,
+            (conn->egress.datagram_frame_payloads.count - num_sent) * sizeof(conn->egress.datagram_frame_payloads.payloads[0]));
+    conn->egress.datagram_frame_payloads.count -= num_sent;
+
+    return ret;
+}
+
 quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
 {
     quicly_send_context_t s = {.payload_buf = {.datagram = buf, .end = (uint8_t *)buf + *bufsize}, .max_datagrams = 1};
@@ -8743,7 +8790,10 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
     /* send frames (or destroy all streams and advance to draining) */
     switch (conn->super.state) {
     case QUICLY_STATE_CONNECTED:
-        if ((ret = do_send_core(conn, &s)) != 0 && ret != QUICLY_ERROR_SENDBUF_FULL)
+        /* as is the case with QUIC v1, DATAGRAM frames are sent before STREAM frames */
+        if ((ret = qmux_send_datagram_frames(conn, &s)) == 0)
+            ret = do_send_core(conn, &s);
+        if (ret != 0 && ret != QUICLY_ERROR_SENDBUF_FULL)
             goto Exit;
         if ((ret = qmux_call_acked(conn, &s)) != 0)
             goto Exit;
