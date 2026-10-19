@@ -7581,8 +7581,8 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         goto Exit;
     }
 
-    /* update num_bytes.received which is counted at the datagram-level */
-    if (packet->first_packet)
+    /* update num_bytes.received which is counted at the datagram-level, when the datagram is received (not when replayed) */
+    if (packet->first_packet && receive_delay < 0)
         conn->super.stats.num_bytes.received += packet->datagram_size;
 
     switch (conn->super.state) {
