@@ -2571,6 +2571,13 @@ static int test_qmux_writable(quicly_qmux_writable_t *_self, quicly_conn_t *conn
     return 1;
 }
 
+static ssize_t test_qmux_open_count;
+
+static void test_qmux_update_open_count(quicly_update_open_count_t *self, ssize_t delta)
+{
+    test_qmux_open_count += delta;
+}
+
 static void qmux_transmit(quicly_conn_t *src, quicly_conn_t *dest)
 {
     char buf[16384];
@@ -2748,15 +2755,19 @@ static void test_qmux(void)
 {
     quicly_closed_t closed = {.cb = test_qmux_record_closed_by_remote};
     quicly_qmux_writable_t qmux_writable = {.cb = test_qmux_writable};
+    quicly_update_open_count_t update_open_count = {.cb = test_qmux_update_open_count};
 
     quicly_context_t orig_ctx = quic_ctx;
     quic_ctx.closed = &closed;
     quic_ctx.qmux_writable = &qmux_writable;
+    quic_ctx.update_open_count = &update_open_count;
 
     subtest("simple", test_qmux_simple);
     subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
+
+    ok(test_qmux_open_count == 0);
 
     quic_ctx = orig_ctx;
 }

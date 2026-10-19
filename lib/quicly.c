@@ -8829,6 +8829,8 @@ quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appda
     conn->egress.pending_flows = QUICLY_PENDING_FLOW_OTHERS_BIT; /* set for sending QX_TRANSPORT_PARAMETERS */
     conn->egress.send_ack_at = INT64_MAX;                        /* used when closing */
 
+    update_open_count(conn->super.ctx, 1);
+
     unlock_now(conn);
 
     return conn;
