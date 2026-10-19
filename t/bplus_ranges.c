@@ -139,27 +139,27 @@ static void test_basic(void)
 
     quicly_bplus_ranges_init(&ranges);
     ok(ranges.num_ranges == 1);
-    ok(quicly_bplus_ranges_first(&ranges)->start == 0 && quicly_bplus_ranges_first(&ranges)->end == 0);
-    ok(quicly_bplus_ranges_last(&ranges) == quicly_bplus_ranges_first(&ranges));
+    ok(ranges.first.ranges[0].start == 0 && ranges.first.ranges[0].end == 0);
+    ok(ranges.last == ranges.first.ranges);
 
     ok(quicly_bplus_ranges_add(&ranges, 0, 10, NO_LIMIT) == 0);
     ok(ranges.num_ranges == 1);
-    ok(quicly_bplus_ranges_first(&ranges)->end == 10);
+    ok(ranges.first.ranges[0].end == 10);
 
     ok(quicly_bplus_ranges_add(&ranges, 20, 30, NO_LIMIT) == 0);
     ok(quicly_bplus_ranges_add(&ranges, 40, 50, NO_LIMIT) == 0);
     ok(ranges.num_ranges == 3);
-    ok(quicly_bplus_ranges_last(&ranges)->start == 40);
+    ok(ranges.last->start == 40);
 
     /* touching merges */
     ok(quicly_bplus_ranges_add(&ranges, 10, 20, NO_LIMIT) == 0);
     ok(ranges.num_ranges == 2);
-    ok(quicly_bplus_ranges_first(&ranges)->end == 30);
+    ok(ranges.first.ranges[0].end == 30);
 
     /* covering everything */
     ok(quicly_bplus_ranges_add(&ranges, 5, 100, NO_LIMIT) == 0);
     ok(ranges.num_ranges == 1);
-    ok(quicly_bplus_ranges_first(&ranges)->start == 0 && quicly_bplus_ranges_first(&ranges)->end == 100);
+    ok(ranges.first.ranges[0].start == 0 && ranges.first.ranges[0].end == 100);
     ok(check(&ranges, NULL));
 
     quicly_bplus_ranges_clear(&ranges);
@@ -179,7 +179,7 @@ static void test_basic(void)
     /* extend the first range downward */
     ok(quicly_bplus_ranges_add(&ranges, 3, 6, NO_LIMIT) == 0);
     ok(ranges.num_ranges == 1);
-    ok(quicly_bplus_ranges_first(&ranges)->start == 3 && quicly_bplus_ranges_first(&ranges)->end == 6);
+    ok(ranges.first.ranges[0].start == 3 && ranges.first.ranges[0].end == 6);
     ok(check(&ranges, NULL));
 
     quicly_bplus_ranges_clear(&ranges);

@@ -69,7 +69,7 @@ inline int quicly_recvstate_transfer_complete(quicly_recvstate_t *state)
 
 inline size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state)
 {
-    uint64_t total = quicly_recvstate_transfer_complete(state) ? state->eos : quicly_bplus_ranges_first(&state->received)->end;
+    uint64_t total = quicly_recvstate_transfer_complete(state) ? state->eos : state->received.first.ranges[0].end;
     assert(state->data_off <= total);
     return total - state->data_off;
 }

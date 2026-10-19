@@ -50,7 +50,7 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, 
     if (state->eos == UINT64_MAX) {
         if (is_fin) {
             state->eos = off + *len;
-            if (state->eos < quicly_bplus_ranges_last(&state->received)->end)
+            if (state->eos < state->received.last->end)
                 return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
         }
     } else {
@@ -61,7 +61,7 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, 
     /* no state change; entire data has already been received */
     if (off + *len <= state->data_off) {
         *len = 0;
-        if (quicly_bplus_ranges_first(&state->received)->end == state->eos)
+        if (state->received.first.ranges[0].end == state->eos)
             goto Complete;
         return 0;
     }
@@ -79,8 +79,8 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t off, 
         if ((ret = quicly_bplus_ranges_add(&state->received, off, off + *len, max_committed)) != 0)
             return ret;
     }
-    if (state->received.num_ranges == 1 && quicly_bplus_ranges_first(&state->received)->start == 0 &&
-        quicly_bplus_ranges_first(&state->received)->end == state->eos)
+    if (state->received.num_ranges == 1 && state->received.first.ranges[0].start == 0 &&
+        state->received.first.ranges[0].end == state->eos)
         goto Complete;
 
     return 0;
@@ -97,11 +97,11 @@ quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t eos_at
     /* validate */
     if (state->eos != UINT64_MAX && state->eos != eos_at)
         return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
-    if (eos_at < quicly_bplus_ranges_last(&state->received)->end)
+    if (eos_at < state->received.last->end)
         return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
 
     /* calculate bytes missing */
-    *bytes_missing = eos_at - quicly_bplus_ranges_last(&state->received)->end;
+    *bytes_missing = eos_at - state->received.last->end;
 
     /* the stream ends where the reset says it does */
     state->eos = eos_at;

@@ -19,6 +19,7 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+#include <assert.h>
 #include <stdlib.h>
 #include "picotls.h"
 #include "quicly/bplus_ranges.h"

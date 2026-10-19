@@ -26,7 +26,6 @@
 extern "C" {
 #endif
 
-#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "quicly/constants.h"
@@ -90,14 +89,6 @@ void quicly_bplus_ranges_clear(quicly_bplus_ranges_t *ranges);
  * reached max(63, (max_committed - first.end) / 1024 + 1). The structure is left unmodified when an error is returned.
  */
 quicly_error_t quicly_bplus_ranges_add(quicly_bplus_ranges_t *ranges, uint64_t start, uint64_t end, uint64_t max_committed);
-/**
- * returns the first range; `num_ranges` must be non-zero
- */
-static const quicly_range_t *quicly_bplus_ranges_first(quicly_bplus_ranges_t *ranges);
-/**
- * returns the last range; `num_ranges` must be non-zero
- */
-static const quicly_range_t *quicly_bplus_ranges_last(quicly_bplus_ranges_t *ranges);
 
 /* inline functions */
 
@@ -113,18 +104,6 @@ inline void quicly_bplus_ranges_init(quicly_bplus_ranges_t *ranges)
     ranges->height = 1;
     ranges->root = &ranges->first;
     ranges->last = ranges->first.ranges;
-}
-
-inline const quicly_range_t *quicly_bplus_ranges_first(quicly_bplus_ranges_t *ranges)
-{
-    assert(ranges->num_ranges != 0);
-    return ranges->first.ranges;
-}
-
-inline const quicly_range_t *quicly_bplus_ranges_last(quicly_bplus_ranges_t *ranges)
-{
-    assert(ranges->num_ranges != 0);
-    return ranges->last;
 }
 
 #ifdef __cplusplus

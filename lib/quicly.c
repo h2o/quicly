@@ -1091,7 +1091,7 @@ static int should_send_max_stream_data(quicly_stream_t *stream)
     if (stream->recvstate.eos != UINT64_MAX)
         return 0;
     return quicly_maxsender_should_send_max(&stream->_send_aux.max_stream_data_sender, stream->recvstate.data_off,
-                                            quicly_bplus_ranges_last(&stream->recvstate.received)->end,
+                                            stream->recvstate.received.last->end,
                                             stream->_recv_aux.window, 512);
 }
 
@@ -2441,8 +2441,8 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
         uint64_t max_stream_data = frame->offset + frame->data.len;
         if ((int64_t)max_stream_data > stream->_send_aux.max_stream_data_sender.committed)
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
-        if (quicly_bplus_ranges_last(&stream->recvstate.received)->end < max_stream_data) {
-            uint64_t newly_received = max_stream_data - quicly_bplus_ranges_last(&stream->recvstate.received)->end;
+        if (stream->recvstate.received.last->end < max_stream_data) {
+            uint64_t newly_received = max_stream_data - stream->recvstate.received.last->end;
             if (stream->conn->ingress.max_data.bytes_consumed + newly_received >
                 stream->conn->ingress.max_data.sender.committed)
                 return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
