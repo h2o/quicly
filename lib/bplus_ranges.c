@@ -62,25 +62,33 @@ static void init_leaf(quicly_bplus_ranges_node_t *node)
 }
 
 /**
- * returns the number of ranges in the leaf whose start is <= x
+ * Returns the number of ranges in the leaf whose start is <= x, which is also the index of the first range whose start is > x. As
+ * the ranges are sorted and unused slots hold UINT64_MAX, the number is found by a binary search of fixed steps (8, 4, 2, 1),
+ * accumulating the results of the comparisons without branching. The 16th slot is compared separately.
  */
 static size_t leaf_count_le(const quicly_bplus_ranges_node_t *leaf, uint64_t x)
 {
-    size_t n = 0;
-    for (size_t i = 0; i < FANOUT; ++i)
-        n += leaf->ranges[i].start <= x;
-    return n;
+    PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(leaf->ranges) == 16);
+
+    size_t n = (size_t)(leaf->ranges[7].start <= x) << 3;
+    n += (size_t)(leaf->ranges[n + 3].start <= x) << 2;
+    n += (size_t)(leaf->ranges[n + 1].start <= x) << 1;
+    n += leaf->ranges[n].start <= x;
+    return n + (leaf->ranges[15].start <= x);
 }
 
 /**
- * returns the number of keys in the non-leaf node that are <= x, which is the index of the child to descend into
+ * Returns the number of keys in the non-leaf node that are <= x, which is the index of the child to descend into. Searched in the
+ * same way as `leaf_count_le`.
  */
 static size_t keys_count_le(const quicly_bplus_ranges_node_t *node, uint64_t x)
 {
-    size_t n = 0;
-    for (size_t i = 0; i < FANOUT - 1; ++i)
-        n += node->keys[i] <= x;
-    return n;
+    PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(node->keys) == 15);
+
+    size_t n = (size_t)(node->keys[7] <= x) << 3;
+    n += (size_t)(node->keys[n + 3] <= x) << 2;
+    n += (size_t)(node->keys[n + 1] <= x) << 1;
+    return n + (node->keys[n] <= x);
 }
 
 /**
