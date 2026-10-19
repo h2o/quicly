@@ -2088,7 +2088,7 @@ static void stringify_address(char *buf, struct sockaddr *sa)
         port = ntohs(((struct sockaddr_in *)sa)->sin_port);
         break;
     default:
-        assert("unexpected address family");
+        assert(!"unexpected address family");
         break;
     }
 
