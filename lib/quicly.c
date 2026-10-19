@@ -8683,26 +8683,30 @@ void quicly__debug_printf(quicly_conn_t *conn, const char *function, int line, c
 static quicly_error_t emit_qmux_transport_parameters(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     quicly_sent_t *sent;
-    ptls_buffer_t buf;
+    ptls_buffer_t tp;
+    uint8_t tpbuf[256];
     quicly_error_t ret;
 
-    if ((ret = allocate_ack_eliciting_frame(conn, s, 100, &sent, NULL)) != 0)
-        return ret;
-    ptls_buffer_init(&buf, s->dst, 100);
+    /* encode the transport parameters first, as the size of the frame depends on their length */
+    ptls_buffer_init(&tp, tpbuf, sizeof(tpbuf));
+    if ((ret = quicly_encode_transport_parameter_list(&tp, 1, &conn->super.ctx->transport_params, NULL, NULL, NULL, NULL, 0)) != 0)
+        goto Exit;
 
-    ptls_buffer_push_quicint(&buf, QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS);
-    ptls_buffer_push_block(&buf, -1, {
-        if ((ret = quicly_encode_transport_parameter_list(&buf, 1, &conn->super.ctx->transport_params, NULL, NULL, NULL, NULL,
-                                                          0)) != 0)
-            goto Exit;
-    });
-
-    assert(!buf.is_allocated);
-    s->dst += buf.off;
+    /* emit the frame */
+    if ((ret = allocate_ack_eliciting_frame(conn, s,
+                                            quicly_encodev_capacity(QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS) +
+                                                quicly_encodev_capacity(tp.off) + tp.off,
+                                            &sent, NULL)) != 0)
+        goto Exit;
+    s->dst = quicly_encodev(s->dst, QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS);
+    s->dst = quicly_encodev(s->dst, tp.off);
+    memcpy(s->dst, tp.base, tp.off);
+    s->dst += tp.off;
 
     ++conn->super.stats.num_frames_sent.qx_transport_parameters;
 
 Exit:
+    ptls_buffer_dispose(&tp);
     return ret;
 }
 

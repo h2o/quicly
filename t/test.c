@@ -2751,6 +2751,37 @@ static void test_qmux_unkown_frame(void)
     quicly_free(sc);
 }
 
+static void test_qmux_large_tp(void)
+{
+    quicly_context_t ctx = quic_ctx;
+    ctx.transport_params.max_stream_data.bidi_local = (uint64_t)1 << 40;
+    ctx.transport_params.max_stream_data.bidi_remote = ((uint64_t)1 << 40) + 1;
+    ctx.transport_params.max_stream_data.uni = ((uint64_t)1 << 40) + 2;
+    ctx.transport_params.max_data = ((uint64_t)1 << 40) + 3;
+    ctx.transport_params.max_streams_bidi = ((uint64_t)1 << 40) + 4;
+    ctx.transport_params.max_streams_uni = ((uint64_t)1 << 40) + 5;
+    ctx.transport_params.max_idle_timeout = ((uint64_t)1 << 40) + 6;
+    ctx.transport_params.max_datagram_frame_size = 65535;
+
+    quicly_conn_t *cc = quicly_qmux_new(&ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+
+    qmux_transmit(cc, sc);
+    ok(quicly_connection_is_ready(sc));
+
+    const quicly_transport_parameters_t *tp = quicly_get_remote_transport_parameters(sc);
+    ok(tp->max_stream_data.bidi_local == (uint64_t)1 << 40);
+    ok(tp->max_stream_data.bidi_remote == ((uint64_t)1 << 40) + 1);
+    ok(tp->max_stream_data.uni == ((uint64_t)1 << 40) + 2);
+    ok(tp->max_data == ((uint64_t)1 << 40) + 3);
+    ok(tp->max_streams_bidi == ((uint64_t)1 << 40) + 4);
+    ok(tp->max_streams_uni == ((uint64_t)1 << 40) + 5);
+    ok(tp->max_idle_timeout == ((uint64_t)1 << 40) + 6);
+    ok(tp->max_datagram_frame_size == 65535);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_small_buffer(void)
 {
     quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
@@ -2800,6 +2831,7 @@ static void test_qmux(void)
     subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
+    subtest("large-tp", test_qmux_large_tp);
     subtest("small-buffer", test_qmux_small_buffer);
 
     ok(test_qmux_open_count == 0);
