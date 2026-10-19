@@ -5103,6 +5103,9 @@ quicly_error_t quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptl
     uint8_t digest[PTLS_SHA256_DIGEST_SIZE], buf[(QUICLY_MAX_CID_LEN_V1 + 1) * 2], *p = buf;
     int ret;
 
+    assert(client_cid.len <= QUICLY_MAX_CID_LEN_V1);
+    assert(server_cid.len <= QUICLY_MAX_CID_LEN_V1);
+
     *p++ = (uint8_t)client_cid.len;
     memcpy(p, client_cid.base, client_cid.len);
     p += client_cid.len;
