@@ -7591,7 +7591,11 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t _epoch, size_t 
         }
         /* check if frame is allowed, then process */
         if ((frame_handler->permitted_epochs & (1 << state.epoch)) == 0) {
-            ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+            /* In QMux, receipt of prohibited frames is FRAME_ENCODING_ERROR, but QX_TRANSPORT_PARAMETERS frame not being the first
+             * frame is PROTOCOL_VIOLATION (qmux-02 Sections 4 and 4.2). */
+            ret = state.epoch == QUICLY_EPOCH_ON_STREAMS_OTHER && state.frame_type != QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS
+                      ? QUICLY_TRANSPORT_ERROR_FRAME_ENCODING
+                      : QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
             break;
         }
         ++*(uint64_t *)((uint8_t *)conn + frame_handler->counter_offset);

@@ -2668,10 +2668,8 @@ static void test_qmux_notp(void)
     uint64_t close_frame_type = ptls_decode_quicint(&src, end);
     ok(close_frame_type == QUICLY_FRAME_TYPE_TRANSPORT_CLOSE);
     uint64_t close_error_code = ptls_decode_quicint(&src, end);
-    ok(close_error_code ==
-       QUICLY_ERROR_GET_ERROR_CODE(
-           QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION)); /* draft-ietf-qmux-01 says TRANSPORT_PARAMETER_ERROR but use of
-                                                           PROTOCOL_VIOLATION is always allowed as an alternative */
+    /* first frame not being QX_TRANSPORT_PARAMETERS is PROTOCOL_VIOLATION (draft-ietf-quic-qmux-02 Section 4.2) */
+    ok(close_error_code == QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION));
     uint64_t close_frame = ptls_decode_quicint(&src, end);
     ok(close_frame == QUICLY_FRAME_TYPE_DATA_BLOCKED);
 
@@ -2749,6 +2747,45 @@ static void test_qmux_unkown_frame(void)
 
     quicly_free(cc);
     quicly_free(sc);
+}
+
+static void do_test_qmux_misplaced_frame(const uint8_t *record, size_t record_len, quicly_error_t expected_err,
+                                         uint64_t expected_frame_type)
+{
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+
+    /* exchange transport parameters */
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    quicly_error_t ret = quicly_qmux_receive(cc, record, &record_len);
+    ok(ret == 0);
+    ok(quicly_get_state(cc) == QUICLY_STATE_CLOSING);
+
+    uint64_t frame_type;
+    int is_remote;
+    ok(quicly_get_close_reason(cc, &frame_type, NULL, &is_remote) == expected_err);
+    ok(frame_type == expected_frame_type);
+    ok(!is_remote);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
+static void test_qmux_misplaced_frame(void)
+{
+    { /* frames prohibited in QMux are FRAME_ENCODING_ERROR (draft-ietf-quic-qmux-02 Section 4) */
+        static const uint8_t ping[] = {1, QUICLY_FRAME_TYPE_PING};
+        do_test_qmux_misplaced_frame(ping, sizeof(ping), QUICLY_TRANSPORT_ERROR_FRAME_ENCODING, QUICLY_FRAME_TYPE_PING);
+        static const uint8_t handshake_done[] = {1, QUICLY_FRAME_TYPE_HANDSHAKE_DONE};
+        do_test_qmux_misplaced_frame(handshake_done, sizeof(handshake_done), QUICLY_TRANSPORT_ERROR_FRAME_ENCODING,
+                                     QUICLY_FRAME_TYPE_HANDSHAKE_DONE);
+    }
+    { /* QX_TRANSPORT_PARAMETERS frame other than as the first frame is PROTOCOL_VIOLATION (Section 4.2) */
+        static const uint8_t tp[] = {9, 0xff, 0x51, 0x53, 0x30, 0x0d, 0x0a, 0x0d, 0x0a, 0};
+        do_test_qmux_misplaced_frame(tp, sizeof(tp), QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION,
+                                     QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS);
+    }
 }
 
 static void test_qmux_large_tp(void)
@@ -2831,6 +2868,7 @@ static void test_qmux(void)
     subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
+    subtest("misplaced-frame", test_qmux_misplaced_frame);
     subtest("large-tp", test_qmux_large_tp);
     subtest("small-buffer", test_qmux_small_buffer);
 
