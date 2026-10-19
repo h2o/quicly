@@ -645,7 +645,7 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t ecn_failed;                                                                                                       \
         /**                                                                                                                        \
-         * 1 if the connection was accepted from a packet that arrived over an inferior path                                       \
+         * number of connections accepted from a packet that arrived over an inferior path                                       \
          */                                                                                                                        \
         uint64_t accepted_on_inferior_path;                                                                                        \
         /**                                                                                                                        \
