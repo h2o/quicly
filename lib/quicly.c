@@ -2083,6 +2083,7 @@ static void stringify_address(char *buf, struct sockaddr *sa)
     case AF_INET6:
         *p++ = '[';
         inet_ntop(AF_INET6, &((struct sockaddr_in6 *)sa)->sin6_addr, p, sizeof(LONGEST_ADDRESS_STR));
+        p += strlen(p);
         *p++ = ']';
         port = ntohs(((struct sockaddr_in *)sa)->sin_port);
         break;
