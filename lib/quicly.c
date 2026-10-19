@@ -5881,7 +5881,7 @@ Exit:
         if ((s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
             (quicly_is_client(conn) || !ack_only))
             s->target.full_size = 1;
-        commit_send_packet(conn, s, 0);
+        ret = commit_send_packet(conn, s, 0);
     }
     if (ret == 0) {
         /* update timers, cc and delivery rate estimator states */
