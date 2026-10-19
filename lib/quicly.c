@@ -8841,7 +8841,7 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
 
     lock_now(conn, 0);
 
-    while (1) {
+    while (conn->super.state < QUICLY_STATE_CLOSING) {
         offending_frame_type = QUICLY_FRAME_TYPE_PADDING;
         /* parse the QMux record */
         const uint8_t *payload = src;
@@ -8865,10 +8865,12 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
         src = payload + payload_len;
     }
 
-    if (ret != 0 && conn->super.state < QUICLY_STATE_DRAINING) {
-        initiate_close(conn, ret, offending_frame_type, "");
-        ret = 0;
-    }
+    if (ret != 0 && conn->super.state < QUICLY_STATE_DRAINING)
+        ret = initiate_close(conn, ret, offending_frame_type, "");
+
+    /* once closing, records being received are discarded without being processed (draft-ietf-quic-qmux-02 Section 7.2) */
+    if (conn->super.state >= QUICLY_STATE_CLOSING)
+        *len = end - (const uint8_t *)_src;
 
     update_idle_timeout(conn, 1);
     unlock_now(conn);

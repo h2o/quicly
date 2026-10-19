@@ -2925,6 +2925,54 @@ static void test_qmux_large_tp(void)
     quicly_free(sc);
 }
 
+static void test_qmux_discard_while_closing(void)
+{
+    /* records carrying STREAM frames that open a stream; the first for streams opened by the client, the second for the server */
+    static const uint8_t client_stream_record[] = {4, 0x0b /* STREAM with LEN and FIN */, 0 /* stream ID */, 1, 'x'},
+                         server_stream_record[] = {4, 0x0b, 1, 1, 'x'};
+
+    { /* records following CONNECTION_CLOSE are discarded (draft-ietf-quic-qmux-02 Section 7.2) */
+        memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
+        quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+        qmux_transmit(sc, cc);
+        qmux_transmit(cc, sc);
+
+        ok(quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), "bye") == 0);
+        uint8_t buf[256];
+        size_t len = sizeof(buf);
+        ok(quicly_qmux_send(cc, buf, &len) == 0);
+        ok(len + sizeof(client_stream_record) <= sizeof(buf));
+        memcpy(buf + len, client_stream_record, sizeof(client_stream_record));
+        len += sizeof(client_stream_record);
+
+        size_t consumed = len;
+        ok(quicly_qmux_receive(sc, buf, &consumed) == QUICLY_ERROR_IS_CLOSING);
+        ok(consumed == len);
+        ok(quicly_get_state(sc) == QUICLY_STATE_DRAINING);
+        ok(quicly_get_stream(sc, 0) == NULL);
+
+        quicly_free(cc);
+        quicly_free(sc);
+    }
+
+    { /* records received after initiating close are discarded */
+        memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
+        quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+        qmux_transmit(sc, cc);
+        qmux_transmit(cc, sc);
+
+        ok(quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), "bye") == 0);
+        size_t len = sizeof(server_stream_record);
+        ok(quicly_qmux_receive(cc, server_stream_record, &len) == 0);
+        ok(len == sizeof(server_stream_record));
+        ok(quicly_get_state(cc) == QUICLY_STATE_CLOSING);
+        ok(quicly_get_stream(cc, 1) == NULL);
+
+        quicly_free(cc);
+        quicly_free(sc);
+    }
+}
+
 static void test_qmux_small_buffer(void)
 {
     quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
@@ -2978,6 +3026,7 @@ static void test_qmux(void)
     subtest("tp-filter", test_qmux_tp_filter);
     subtest("datagram", test_qmux_datagram);
     subtest("large-tp", test_qmux_large_tp);
+    subtest("discard-while-closing", test_qmux_discard_while_closing);
     subtest("small-buffer", test_qmux_small_buffer);
 
     ok(test_qmux_open_count == 0);
