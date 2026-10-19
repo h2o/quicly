@@ -1366,8 +1366,14 @@ size_t quicly_send_retry(quicly_context_t *ctx, ptls_aead_context_t *token_encry
  *                                from the address provided by `buf`, and that succeeding packets (if any) will be contiguously laid
  *                                out. This constraint reduces the number of vectors that need to be passed to the kernel when using
  *                                GSO.
- * @return 0 if successful, otherwise an error. When an error is returned, the caller must call `quicly_close` to discard the
- *         connection context.
+ * @return 0 if successful, otherwise one of the following:
+ *         * QUICLY_ERROR_FREE_CONNECTION - the connection has been closed (e.g., the closing period has ended, or the idle timeout
+ *           has fired). The caller must call `quicly_free` to discard the connection.
+ *         * QUICLY_ERROR_STATE_EXHAUSTION - the peer caused the endpoint to retain too much state. The caller may either close the
+ *           connection by calling `quicly_close` with this error code then continue calling `quicly_send`, or discard the
+ *           connection by calling `quicly_free`.
+ *         * other errors (e.g., PTLS_ERROR_NO_MEMORY) - the connection might have been left in an inconsistent state. The caller
+ *           must call `quicly_free` to discard the connection, without trying to close it.
  */
 quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_address_t *src, struct iovec *datagrams,
                            size_t *num_datagrams, void *buf, size_t bufsize);
@@ -1389,7 +1395,17 @@ size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, v
  */
 quicly_error_t quicly_send_resumption_token(quicly_conn_t *conn);
 /**
- *
+ * Processes a received packet. Errors found in the packet (e.g., protocol violations by the peer) are not reported through the
+ * return value; instead, quicly initiates the closure of the connection, which is reported to the application through the `closed`
+ * callback.
+ * @return 0 if successful, otherwise one of the following:
+ *         * QUICLY_ERROR_PACKET_IGNORED - the packet has been discarded, or buffered for later processing. The connection remains
+ *           usable.
+ *         * QUICLY_ERROR_STATE_EXHAUSTION - the peer caused the endpoint to retain too much state. The caller may either close the
+ *           connection by calling `quicly_close` with this error code then continue calling `quicly_send`, or discard the
+ *           connection by calling `quicly_free`.
+ *         * other errors (e.g., PTLS_ERROR_NO_MEMORY) - the connection might have been left in an inconsistent state. The caller
+ *           must call `quicly_free` to discard the connection, without trying to close it.
  */
 quicly_error_t quicly_receive(quicly_conn_t *conn, struct sockaddr *dest_addr, struct sockaddr *src_addr,
                               quicly_decoded_packet_t *packet);
