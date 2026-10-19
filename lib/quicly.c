@@ -4102,8 +4102,6 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         coalescible = 0;
     } else if (((*s->target.first_byte_at ^ s->current.first_byte) & QUICLY_PACKET_TYPE_BITMASK) != 0) {
         coalescible = QUICLY_PACKET_IS_LONG_HEADER(*s->target.first_byte_at);
-    } else if (s->dst_end - s->dst < min_space) {
-        coalescible = 0;
     } else {
         /* use the existing packet */
         goto TargetReady;
