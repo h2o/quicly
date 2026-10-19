@@ -2801,8 +2801,11 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                 }
                 params->max_ack_delay = (uint16_t)v;
             });
-            DECODE_TP_V1(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
-                if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
+                if (qmux) {
+                    /* not defined in RFC 9000 nor specified for QMux, therefore ignored (qmux-02 Section 5.1) */
+                    src = end;
+                } else if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }
@@ -2820,6 +2823,10 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                 params->active_connection_id_limit = v;
             });
             DECODE_TP_V1(QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, { params->disable_active_migration = 1; });
+            DECODE_TP_V1(QUICLY_TRANSPORT_PARAMETER_ID_PREFERRED_ADDRESS, {
+                /* quicly does not use the preferred address */
+                src = end;
+            });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE, {
                 uint64_t v;
                 if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX) {

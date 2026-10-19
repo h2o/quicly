@@ -2788,6 +2788,40 @@ static void test_qmux_misplaced_frame(void)
     }
 }
 
+static quicly_error_t decode_single_tp(int qmux, uint64_t id, const void *value, size_t value_len,
+                                       quicly_transport_parameters_t *params)
+{
+    ptls_buffer_t buf;
+    quicly_error_t ret;
+
+    ptls_buffer_init(&buf, "", 0);
+    ptls_buffer_push_quicint(&buf, id);
+    ptls_buffer_push_quicint(&buf, value_len);
+    ptls_buffer_pushv(&buf, value, value_len);
+    ret = quicly_decode_transport_parameter_list(params, qmux, NULL, NULL, NULL, NULL, buf.base, buf.base + buf.off);
+
+Exit:
+    ptls_buffer_dispose(&buf);
+    return ret;
+}
+
+static void test_qmux_tp_filter(void)
+{
+    quicly_transport_parameters_t params;
+
+    /* min_ack_delay is not a QUIC v1 transport parameter, therefore is ignored (draft-ietf-quic-qmux-02 Section 5.1) */
+    ok(decode_single_tp(1, 0xff04de1b, "\x01", 1, &params) == 0);
+    ok(params.min_ack_delay_usec == UINT64_MAX);
+    ok(decode_single_tp(0, 0xff04de1b, "\x01", 1, &params) == 0);
+    ok(params.min_ack_delay_usec == 1);
+
+    /* preferred_address is prohibited in QMux, while being ignored by quicly in QUIC v1 */
+    static const uint8_t preferred_address[4 + 2 + 16 + 2 + 1 + 16] = {};
+    ok(decode_single_tp(1, 13, preferred_address, sizeof(preferred_address), &params) ==
+       QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
+    ok(decode_single_tp(0, 13, preferred_address, sizeof(preferred_address), &params) == 0);
+}
+
 static void test_qmux_large_tp(void)
 {
     quicly_context_t ctx = quic_ctx;
@@ -2869,6 +2903,7 @@ static void test_qmux(void)
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
     subtest("misplaced-frame", test_qmux_misplaced_frame);
+    subtest("tp-filter", test_qmux_tp_filter);
     subtest("large-tp", test_qmux_large_tp);
     subtest("small-buffer", test_qmux_small_buffer);
 
