@@ -2422,7 +2422,9 @@ static quicly_error_t reinstall_initial_encryption(quicly_conn_t *conn, quicly_e
 
     /* dispose existing context */
     dispose_cipher(&conn->initial->cipher.ingress);
+    conn->initial->cipher.ingress = (struct st_quicly_cipher_context_t){NULL};
     dispose_cipher(&conn->initial->cipher.egress);
+    conn->initial->cipher.egress = (struct st_quicly_cipher_context_t){NULL};
 
     /* setup encryption context */
     return setup_initial_encryption(
