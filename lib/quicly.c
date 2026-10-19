@@ -4364,11 +4364,14 @@ static quicly_error_t do_allocate_qmux_frame(quicly_conn_t *conn, quicly_send_co
     if (s->dst_end - s->dst < min_space) {
         if (s->dst != NULL)
             qmux_commit_record(conn, s);
+        /* start a new record, if the remaining space can contain the header and the frame */
         if (s->payload_buf.end - s->payload_buf.datagram < 2)
             return QUICLY_ERROR_SENDBUF_FULL;
         size_t capacity = s->payload_buf.end - s->payload_buf.datagram - 2;
         if (capacity > QUICLY_QMUX_MAX_RECORD_SIZE)
             capacity = QUICLY_QMUX_MAX_RECORD_SIZE;
+        if (capacity < min_space)
+            return QUICLY_ERROR_SENDBUF_FULL;
         s->dst = s->payload_buf.datagram + 2;
         s->dst_end = s->dst + capacity;
     }

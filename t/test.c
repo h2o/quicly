@@ -2751,6 +2751,40 @@ static void test_qmux_unkown_frame(void)
     quicly_free(sc);
 }
 
+static void test_qmux_small_buffer(void)
+{
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    quicly_error_t ret;
+
+    /* exchange transport parameters */
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* close with a reason phrase that does not fit into the buffer being supplied */
+    ret = quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), "reason phrase longer than the buffer");
+    ok(ret == 0);
+
+    uint8_t buf[256];
+    memset(buf, 0xa5, sizeof(buf));
+    size_t len = 20;
+    ret = quicly_qmux_send(cc, buf, &len);
+    ok(ret == QUICLY_ERROR_SENDBUF_FULL);
+    size_t i;
+    for (i = 20; i < sizeof(buf); ++i)
+        if (buf[i] != 0xa5)
+            break;
+    ok(i == sizeof(buf));
+
+    /* sending succeeds once enough space is provided */
+    len = sizeof(buf);
+    ret = quicly_qmux_send(cc, buf, &len);
+    ok(ret == 0);
+    ok(len > 20);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux(void)
 {
     quicly_closed_t closed = {.cb = test_qmux_record_closed_by_remote};
@@ -2766,6 +2800,7 @@ static void test_qmux(void)
     subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
+    subtest("small-buffer", test_qmux_small_buffer);
 
     ok(test_qmux_open_count == 0);
 
