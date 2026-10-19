@@ -197,7 +197,7 @@ int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t of
 {
     if (len != 0) {
         int ret;
-        if ((ret = ptls_buffer_reserve(rb, off + len - rb->off)) != 0) {
+        if (rb->off < off + len && (ret = ptls_buffer_reserve(rb, off + len - rb->off)) != 0) {
             convert_error(stream, ret);
             return -1;
         }
