@@ -179,6 +179,28 @@ static void update_separator(struct st_quicly_bplus_ranges_path_t *path, size_t 
 }
 
 /**
+ * Moves `path` to the leaf preceding the one it points to, returning the index of the last range in that leaf. The leaf being
+ * pointed to must not be the first.
+ */
+static size_t prev_leaf(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_ranges_path_t *path)
+{
+    size_t leaf_level = ranges->height - 1, level = leaf_level;
+
+    /* go up to the lowest node where the path can step to the preceding child, then down along the last children */
+    while (path->slots[--level] == 0)
+        ;
+    quicly_bplus_ranges_node_t *node = path->nodes[level]->children[--path->slots[level]];
+    while (++level < leaf_level) {
+        path->nodes[level] = node;
+        path->slots[level] = keys_count_le(node, UINT64_MAX - 1);
+        node = node->children[path->slots[level]];
+    }
+    path->nodes[leaf_level] = node;
+
+    return leaf_count_le(node, UINT64_MAX - 1) - 1;
+}
+
+/**
  * Splits a full node by moving its high half to `high`, returning the key that separates the two.
  */
 static uint64_t split_node(quicly_bplus_ranges_t *ranges, quicly_bplus_ranges_node_t *node, quicly_bplus_ranges_node_t *high,
@@ -299,28 +321,32 @@ static quicly_error_t insert_range(quicly_bplus_ranges_t *ranges, struct st_quic
 }
 
 /**
- * Removes the range at `pos` of the leaf found at the bottom of `path`, rebalancing the tree. When two nodes are merged, the high
- * one is freed; therefore `first` is never freed.
+ * Removes the range at `*pos` of the leaf found at the bottom of `path`, rebalancing the tree. `path` and `*pos` are updated to
+ * point to the range that preceded the removed one, as rebalancing might move it; `*pos` is set to SIZE_MAX if that range is the
+ * last one of the leaf preceding the one pointed to by `path`. When two nodes are merged, the high one is freed; therefore `first`
+ * is never freed.
  */
-static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_ranges_path_t *path, size_t pos)
+static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_ranges_path_t *path, size_t *pos)
 {
     size_t level = ranges->height - 1;
     quicly_bplus_ranges_node_t *node = path->nodes[level];
 
     /* remove from leaf */
-    move_ranges(node->ranges + pos, node->ranges + FANOUT, node->ranges + pos + 1);
+    move_ranges(node->ranges + *pos, node->ranges + FANOUT, node->ranges + *pos + 1);
     if (holds_last(ranges, node))
         --ranges->last;
     --ranges->num_ranges;
-    if (pos == 0)
+    if (*pos == 0)
         update_separator(path, level, node->ranges[0].start);
+    --*pos;
 
     /* Rebalance, while `node` has MIN_ENTRIES - 1 entries. The sibling is the high one unless `node` is the last child; as the
-     * sibling has at least MIN_ENTRIES entries, it is merged if it has exactly that many, otherwise an entry is borrowed. */
+     * sibling has at least MIN_ENTRIES entries, it is merged if it has exactly that many, otherwise an entry is borrowed. The entry
+     * of `node` being tracked by `path` (and `*pos` for leaves) is updated when the entries of `node` move. */
     for (; level != 0 && !has_entry(node, level == ranges->height - 1, MIN_ENTRIES - 1); --level) {
         int is_leaf = level == ranges->height - 1;
         quicly_bplus_ranges_node_t *parent = path->nodes[level - 1], *low, *high;
-        size_t slot = path->slots[level - 1], num_low, sep;
+        size_t slot = path->slots[level - 1], num_low, sep, *tracked = is_leaf ? pos : &path->slots[level];
         if (slot + 1 < FANOUT && has_entry(parent, 0, slot + 1)) {
             sep = slot;
             low = node;
@@ -366,6 +392,7 @@ static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_r
                     parent->keys[sep] = low->keys[num_low - 2];
                     low->keys[num_low - 2] = UINT64_MAX;
                 }
+                ++*tracked;
                 break;
             }
         }
@@ -386,6 +413,11 @@ static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_r
         free(high);
         move_keys(parent->keys + sep, parent->keys + (FANOUT - 1), parent->keys + sep + 1);
         move_children(parent->children + sep + 1, parent->children + FANOUT, parent->children + sep + 2);
+        if (node == high) {
+            path->nodes[level] = low;
+            path->slots[level - 1] = sep;
+            *tracked += num_low;
+        }
         node = parent;
     }
 
@@ -395,6 +427,11 @@ static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_r
         ranges->root = old_root->children[0];
         --ranges->height;
         free(old_root);
+        for (level = 0; level < ranges->height; ++level) {
+            path->nodes[level] = path->nodes[level + 1];
+            if (level + 1 < ranges->height)
+                path->slots[level] = path->slots[level + 1];
+        }
     }
 }
 
@@ -453,7 +490,8 @@ quicly_error_t quicly_bplus_ranges_add(quicly_bplus_ranges_t *ranges, uint64_t s
     }
 
     /* Merge, starting from the last range that touches. The range is extended, then merged into its predecessor while the
-     * predecessor touches. The predecessor is looked up by descending from the root only when it is not in the same leaf. */
+     * predecessor touches. When the range is the first one of a leaf, the predecessor is found by walking `path` to the preceding
+     * leaf. */
     size_t pos = num_le - 1;
     quicly_range_t *r = leaf->ranges + pos;
     if (r->end < end)
@@ -465,19 +503,20 @@ quicly_error_t quicly_bplus_ranges_add(quicly_bplus_ranges_t *ranges, uint64_t s
         } else if (leaf == &ranges->first) {
             break;
         } else {
-            struct st_quicly_bplus_ranges_path_t pred_path;
-            size_t pred_num_le = descend(ranges, r->start - 1, &pred_path);
-            pred = pred_path.nodes[ranges->height - 1]->ranges + pred_num_le - 1;
+            struct st_quicly_bplus_ranges_path_t pred_path = path;
+            size_t pred_pos = prev_leaf(ranges, &pred_path);
+            pred = pred_path.nodes[ranges->height - 1]->ranges + pred_pos;
         }
         if (pred->end < start)
             break;
         uint64_t pred_start = pred->start;
         pred->end = r->end;
-        delete_range(ranges, &path, pos);
+        delete_range(ranges, &path, &pos);
         if (pred_start <= start)
             return 0;
-        /* more ranges might touch; locate the predecessor, as the deletion might have moved it */
-        pos = descend(ranges, pred_start, &path) - 1;
+        /* more ranges might touch; continue with the predecessor, which `delete_range` has tracked */
+        if (pos == SIZE_MAX)
+            pos = prev_leaf(ranges, &path);
         leaf = path.nodes[ranges->height - 1];
         r = leaf->ranges + pos;
     }

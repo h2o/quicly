@@ -172,6 +172,16 @@ static void test_basic(void)
     ok(ranges.num_ranges == 1);
     ok(check(&ranges, NULL));
 
+    /* empty range is ignored */
+    ok(quicly_bplus_ranges_add(&ranges, 100, 100, NO_LIMIT) == 0);
+    ok(ranges.num_ranges == 1);
+
+    /* extend the first range downward */
+    ok(quicly_bplus_ranges_add(&ranges, 3, 6, NO_LIMIT) == 0);
+    ok(ranges.num_ranges == 1);
+    ok(quicly_bplus_ranges_first(&ranges)->start == 3 && quicly_bplus_ranges_first(&ranges)->end == 6);
+    ok(check(&ranges, NULL));
+
     quicly_bplus_ranges_clear(&ranges);
 }
 
@@ -276,6 +286,35 @@ static void test_fill_gaps(void)
 }
 
 /**
+ * adds ranges that swallow runs of various lengths, within a leaf and across leaves, starting at various offsets
+ */
+static void test_swallow(void)
+{
+    static const uint64_t lengths[] = {3, 5, 17, 33, 100, 300, 1000};
+    int success = 1;
+
+    for (size_t li = 0; success && li < PTLS_ELEMENTSOF(lengths); ++li) {
+        for (uint64_t offset = 0; success && offset < 40; offset += 3) {
+            quicly_bplus_ranges_t ranges;
+            quicly_ranges_t expected;
+            quicly_bplus_ranges_init(&ranges);
+            quicly_ranges_init_with_range(&expected, 0, 0);
+            for (uint64_t i = 1; success && i < 2000; ++i)
+                success = add_both(&ranges, &expected, i * 4, i * 4 + 2);
+            /* swallow a run, then swallow the merged range together with its neighbors */
+            uint64_t start = 1000 + offset * 4 + 1, end = start + lengths[li] * 4;
+            if (success)
+                success = add_both(&ranges, &expected, start, end) && check(&ranges, &expected);
+            if (success)
+                success = add_both(&ranges, &expected, start - 9, end + 9) && check(&ranges, &expected);
+            quicly_bplus_ranges_clear(&ranges);
+            quicly_ranges_clear(&expected);
+        }
+    }
+    ok(success);
+}
+
+/**
  * compares against quicly_ranges_t using random additions of various sizes
  */
 static void test_random(void)
@@ -318,5 +357,6 @@ void test_bplus_ranges(void)
     subtest("basic", test_basic);
     subtest("limit", test_limit);
     subtest("fill-gaps", test_fill_gaps);
+    subtest("swallow", test_swallow);
     subtest("random", test_random);
 }
