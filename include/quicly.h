@@ -575,6 +575,12 @@ struct st_quicly_conn_streamgroup_state_t {
          * Number of packets that were delayed processing and successfully used.                                                   \
          */                                                                                                                        \
         uint64_t delayed_used;                                                                                                     \
+        /**                                                                                                                        \
+         * number of packets that arrived over an inferior path and were processed on the path that was already the primary        \
+         * one. Together with `promoted_to_inferior_path`, this is how an application observes that the connection has come        \
+         * to be carried over an inferior path.                                                                                    \
+         */                                                                                                                        \
+        uint64_t received_on_inferior_primary_path;                                                                                \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -645,19 +651,13 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t ecn_failed;                                                                                                       \
         /**                                                                                                                        \
-         * number of connections accepted from a packet that arrived over an inferior path                                       \
+         * number of connections accepted from a packet that arrived over an inferior path                                         \
          */                                                                                                                        \
         uint64_t accepted_on_inferior_path;                                                                                        \
         /**                                                                                                                        \
          * number of times a packet that arrived over an inferior path promoted that path to be the primary path                   \
          */                                                                                                                        \
         uint64_t promoted_to_inferior_path;                                                                                        \
-        /**                                                                                                                        \
-         * number of packets that arrived over an inferior path and were processed on the path that was already the primary        \
-         * one. Together with `promoted_to_inferior_path`, this is how an application observes that the connection has come        \
-         * to be carried over an inferior path.                                                                                    \
-         */                                                                                                                        \
-        uint64_t received_on_inferior_primary_path;                                                                                \
     } num_paths;                                                                                                                   \
     /**                                                                                                                            \
      * Total number of PTOs observed during the connection.                                                                        \
@@ -771,7 +771,8 @@ typedef struct st_quicly_stats_t {
     apply(num_packets.sent_promoted_paths, "num-packets.sent-promoted-paths")                                                      \
     apply(num_packets.ack_received_promoted_paths, "num-packets.ack-received-promoted-paths")                                      \
     apply(num_packets.max_delayed, "num-packets.max-delayed")                                                                      \
-    apply(num_packets.delayed_used, "num-packets.delayed-used")
+    apply(num_packets.delayed_used, "num-packets.delayed-used")                                                                    \
+    apply(num_packets.received_on_inferior_primary_path, "num-packets.received-on-inferior-primary-path")
 
 #define QUICLY_STATS_FOREACH_NUM_BYTES(apply)                                                                                      \
     apply(num_bytes.received, "num-bytes.received")                                                                                \
@@ -822,7 +823,6 @@ typedef struct st_quicly_stats_t {
     apply(num_paths.ecn_failed, "num-paths.ecn-failed")                                                                            \
     apply(num_paths.accepted_on_inferior_path, "num-paths.accepted-on-inferior-path")                                              \
     apply(num_paths.promoted_to_inferior_path, "num-paths.promoted-to-inferior-path")                                              \
-    apply(num_paths.received_on_inferior_primary_path, "num-paths.received-on-inferior-primary-path")                              \
     apply(num_ptos, "num-ptos")                                                                                                    \
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \

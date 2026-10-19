@@ -7766,7 +7766,7 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
      * change and therefore no path is opened or promoted. The counterpart for a packet that promotes the path it arrived on
      * is bumped at the promotion site below. Replays cannot reach here, having been rejected as duplicates above. */
     if (packet->inferior_path && path_index == 0)
-        conn->super.stats.num_paths.received_on_inferior_primary_path += 1;
+        conn->super.stats.num_packets.received_on_inferior_primary_path += 1;
 
     /* update states */
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
