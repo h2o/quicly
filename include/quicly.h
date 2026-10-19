@@ -812,8 +812,8 @@ typedef struct st_quicly_stats_t {
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(datagram, dir, apply)                                                                      \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply)                                                                 \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(immediate_ack, dir, apply)                                                                 \
-    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(qx_transport_parameters, dir, apply) \
-    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(qx_ping, dir, apply) \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(qx_transport_parameters, dir, apply)                                                       \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(qx_ping, dir, apply)                                                                       \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(qx_pong, dir, apply)
 
 #define QUICLY_STATS_FOREACH_TRANSPORT_COUNTERS(apply)                                                                             \

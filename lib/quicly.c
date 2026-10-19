@@ -8711,10 +8711,9 @@ static quicly_error_t emit_qmux_transport_parameters(quicly_conn_t *conn, quicly
         goto Exit;
 
     /* emit the frame */
-    if ((ret = allocate_ack_eliciting_frame(conn, s,
-                                            quicly_encodev_capacity(QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS) +
-                                                quicly_encodev_capacity(tp.off) + tp.off,
-                                            &sent, NULL)) != 0)
+    if ((ret = allocate_ack_eliciting_frame(
+             conn, s, quicly_encodev_capacity(QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS) + quicly_encodev_capacity(tp.off) + tp.off,
+             &sent, NULL)) != 0)
         goto Exit;
     s->dst = quicly_encodev(s->dst, QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS);
     s->dst = quicly_encodev(s->dst, tp.off);
