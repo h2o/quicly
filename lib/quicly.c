@@ -1538,11 +1538,15 @@ uint32_t quicly_num_streams_by_group(quicly_conn_t *conn, int uni, int locally_i
 
 struct sockaddr *quicly_get_sockname(quicly_conn_t *conn)
 {
+    if (quicly_is_qmux(conn))
+        return NULL;
     return &conn->paths[0]->address.local.sa;
 }
 
 struct sockaddr *quicly_get_peername(quicly_conn_t *conn)
 {
+    if (quicly_is_qmux(conn))
+        return NULL;
     return &conn->paths[0]->address.remote.sa;
 }
 

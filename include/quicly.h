@@ -1246,7 +1246,7 @@ static const quicly_cid_t *quicly_get_remote_cid(quicly_conn_t *conn);
  */
 static const quicly_transport_parameters_t *quicly_get_remote_transport_parameters(quicly_conn_t *conn);
 /**
- *
+ * Returns if the connection is a QMux connection (i.e., one created by `quicly_qmux_new`).
  */
 int quicly_is_qmux(quicly_conn_t *conn);
 /**
@@ -1285,14 +1285,16 @@ static quicly_stream_id_t quicly_get_local_next_stream_id(quicly_conn_t *conn, i
 static quicly_stream_id_t quicly_get_remote_next_stream_id(quicly_conn_t *conn, int uni);
 /**
  * Returns the local address of the connection. This may be AF_UNSPEC, indicating that the operating system is choosing the address.
+ * For QMux connections, NULL is returned, as the addresses are those of the underlying transport.
  */
 struct sockaddr *quicly_get_sockname(quicly_conn_t *conn);
 /**
- * Returns the remote address of the connection. This would never be AF_UNSPEC.
+ * Returns the remote address of the connection. This would never be AF_UNSPEC. For QMux connections, NULL is returned.
  */
 struct sockaddr *quicly_get_peername(quicly_conn_t *conn);
 /**
- *
+ * Returns the statistics of the connection. For QMux connections, values related to loss recovery, congestion control, and rate
+ * estimation are zero (e.g., `cc.type` is NULL), as they are handled by the underlying transport.
  */
 quicly_error_t quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats);
 /**
@@ -1489,7 +1491,7 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
                              const quicly_cid_plaintext_t *new_cid, ptls_handshake_properties_t *handshake_properties,
                              void *appdata);
 /**
- *
+ * Returns the TLS object of the connection. For QMux connections, NULL is returned.
  */
 ptls_t *quicly_get_tls(quicly_conn_t *conn);
 /**
@@ -1690,17 +1692,40 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
     } while (0)
 
 /**
- * Creates a new connection object.
+ * Creates a new QMux connection (draft-ietf-quic-qmux-02). The connection runs on top of a reliable byte stream provided by the
+ * application (e.g., TLS over TCP, or a UNIX socket), which feeds the bytes being received to `quicly_qmux_receive`, and writes
+ * the bytes obtained by calling `quicly_qmux_send`. `ctx->qmux_writable` must be set, as well as `ctx->qmux_log_state` when logging
+ * is enabled.
+ * @return the connection, or NULL if memory allocation failed
  */
 quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appdata);
 /**
- * Writes QMux records to the given buffer.
+ * Writes QMux records to the given buffer. As is the case with `quicly_send`, the application calls this function when the
+ * timeout returned by `quicly_get_first_timeout` is reached.
  * @param [in,out] bufsize  Upon entry, the size of the buffer. Upon return, number of bytes being written to the buffer.
+ * @return 0 if successful, otherwise one of the following:
+ *         * QUICLY_ERROR_FREE_CONNECTION - the connection has been closed; i.e., a CONNECTION_CLOSE frame has been sent or
+ *           received, or the idle timeout has fired. The caller must call `quicly_free` to discard the connection. Then, as
+ *           specified in draft-ietf-quic-qmux-02 Section 7, the application SHOULD gracefully shut down the sending side of the
+ *           underlying transport (e.g., send a TCP FIN), and SHOULD wait for the peer to do the same, discarding any data being
+ *           received.
+ *         * QUICLY_ERROR_SENDBUF_FULL - the buffer is too small to hold the next record. The caller may call this function again
+ *           with a larger buffer.
+ *         * other errors (e.g., PTLS_ERROR_NO_MEMORY) - the connection might have been left in an inconsistent state. The caller
+ *           must call `quicly_free` to discard the connection, without trying to close it.
  */
 quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize);
 /**
- * Reads QMux records in a given buffer and processes them.
- * @param [in,out] len  Upon entry, the size of the input. Upon return, the number of bytes being read out.
+ * Reads QMux records in a given buffer and processes them. Errors found in the input (e.g., protocol violations by the peer) are
+ * not reported through the return value; instead, quicly initiates the closure of the connection, which is reported to the
+ * application through the `closed` callback. Once the connection starts closing, input is discarded without being processed.
+ * @param [in,out] len  Upon entry, the size of the input. Upon return, the number of bytes being read out. Bytes that have not
+ *                      been read out are a partial record; the application supplies them again along with the bytes that follow.
+ * @return 0 if successful, otherwise one of the following:
+ *         * QUICLY_ERROR_IS_CLOSING - the peer has closed the connection. The next call to `quicly_qmux_send` returns
+ *           QUICLY_ERROR_FREE_CONNECTION.
+ *         * other errors (e.g., PTLS_ERROR_NO_MEMORY) - the connection might have been left in an inconsistent state. The caller
+ *           must call `quicly_free` to discard the connection, without trying to close it.
  */
 quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *src, size_t *len);
 

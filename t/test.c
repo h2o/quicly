@@ -2973,6 +2973,21 @@ static void test_qmux_discard_while_closing(void)
     }
 }
 
+static void test_qmux_accessors(void)
+{
+    quicly_conn_t *conn = quicly_qmux_new(&quic_ctx, 1, NULL);
+    quicly_stats_t stats;
+
+    ok(quicly_is_qmux(conn));
+    ok(quicly_get_tls(conn) == NULL);
+    ok(quicly_get_sockname(conn) == NULL);
+    ok(quicly_get_peername(conn) == NULL);
+    ok(quicly_get_stats(conn, &stats) == 0);
+    ok(stats.cc.type == NULL);
+
+    quicly_free(conn);
+}
+
 static void test_qmux_small_buffer(void)
 {
     quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
@@ -3056,6 +3071,7 @@ static void test_qmux(void)
     subtest("datagram", test_qmux_datagram);
     subtest("large-tp", test_qmux_large_tp);
     subtest("discard-while-closing", test_qmux_discard_while_closing);
+    subtest("accessors", test_qmux_accessors);
     subtest("small-buffer", test_qmux_small_buffer);
 
     ok(test_qmux_open_count == 0);
