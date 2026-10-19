@@ -166,7 +166,13 @@ int quicly_sendbuf_write_vec(quicly_stream_t *stream, quicly_sendbuf_t *sb, quic
     sb->vecs.entries[sb->vecs.size++] = *vec;
     sb->bytes_written += vec->len;
 
-    return quicly_stream_sync_sendbuf(stream, 1);
+    int ret;
+    if ((ret = quicly_stream_sync_sendbuf(stream, 1)) != 0) {
+        /* revert, so that the vector is not retained when returning an error */
+        --sb->vecs.size;
+        sb->bytes_written -= vec->len;
+    }
+    return ret;
 }
 
 void quicly_recvbuf_shift(quicly_stream_t *stream, ptls_buffer_t *rb, size_t delta)
