@@ -8817,9 +8817,10 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
         break;
     }
 
-    /* ordinary handling of */
-
 Exit:
+    /* if some records have been built, return them; the remaining frames will be sent in the next call */
+    if (ret == QUICLY_ERROR_SENDBUF_FULL && (s.dst != NULL || s.payload_buf.datagram != buf))
+        ret = 0;
     if (ret == 0) {
         if (s.dst != NULL)
             qmux_commit_record(conn, &s);

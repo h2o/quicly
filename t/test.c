@@ -3005,6 +3005,35 @@ static void test_qmux_small_buffer(void)
 
     quicly_free(cc);
     quicly_free(sc);
+
+    /* when the buffer can hold the transport parameters but not the CONNECTION_CLOSE frame, the former is returned */
+    memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
+    size_t tp_len;
+    {
+        quicly_conn_t *conn = quicly_qmux_new(&quic_ctx, 1, NULL);
+        tp_len = sizeof(buf);
+        ok(quicly_qmux_send(conn, buf, &tp_len) == 0);
+        quicly_free(conn);
+    }
+    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
+    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    ok(quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), "reason phrase longer than the buffer") == 0);
+    len = tp_len + 5;
+    ret = quicly_qmux_send(cc, buf, &len);
+    ok(ret == 0);
+    ok(0 < len && len <= tp_len);
+    size_t consumed = len;
+    ok(quicly_qmux_receive(sc, buf, &consumed) == 0);
+    ok(quicly_connection_is_ready(sc));
+    len = sizeof(buf);
+    ok(quicly_qmux_send(cc, buf, &len) == 0);
+    consumed = len;
+    ok(quicly_qmux_receive(sc, buf, &consumed) == QUICLY_ERROR_IS_CLOSING);
+    ok(test_qmux_closed_by_remote.conn == sc);
+    ok(test_qmux_closed_by_remote.err == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1));
+
+    quicly_free(cc);
+    quicly_free(sc);
 }
 
 static void test_qmux(void)
