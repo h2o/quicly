@@ -50,6 +50,10 @@ void quicly_recvstate_init(quicly_recvstate_t *state);
 void quicly_recvstate_init_closed(quicly_recvstate_t *state);
 void quicly_recvstate_dispose(quicly_recvstate_t *state);
 static int quicly_recvstate_transfer_complete(quicly_recvstate_t *state);
+/**
+ * Returns the number of bytes that have been received contiguously from `data_off`. Cannot be used once a reset has been received
+ * (i.e., after `on_receive_reset` is called).
+ */
 static size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state);
 /**
  * Records that the range identified by (off, *len) has been received. When 0 (success) is returned, *len contains the number of
