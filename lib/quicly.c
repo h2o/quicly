@@ -3094,6 +3094,7 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
     conn->crypto.handshake_properties.client.max_early_data_size = NULL;
     if (ret != PTLS_ERROR_IN_PROGRESS) {
         assert(ret > 0); /* no QUIC errors */
+        ptls_buffer_dispose(&buf);
         goto Exit;
     }
     write_crypto_data(conn, &buf, epoch_offsets);
