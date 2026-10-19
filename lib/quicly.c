@@ -2074,7 +2074,6 @@ static void stringify_address(char *buf, struct sockaddr *sa)
     char *p = buf;
     uint16_t port = 0;
 
-    p = buf;
     switch (sa->sa_family) {
     case AF_INET:
         inet_ntop(AF_INET, &((struct sockaddr_in *)sa)->sin_addr, p, sizeof(LONGEST_ADDRESS_STR));
