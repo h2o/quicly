@@ -1065,6 +1065,28 @@ static void test_is_duplicate_pn(void)
     quicly_ranges_clear(&ranges);
 }
 
+static void test_record_pn(void)
+{
+    quicly_ranges_t ranges;
+    int is_out_of_order;
+    quicly_error_t ret = 0;
+
+    quicly_ranges_init(&ranges);
+
+    /* record discontiguous packet numbers 0, 2, ..., so that the number of ranges exceeds the maximum by one */
+    for (uint64_t pn = 0; pn <= QUICLY_MAX_ACK_BLOCKS * 2; pn += 2)
+        if ((ret = record_pn(&ranges, pn, &is_out_of_order)) != 0)
+            break;
+    ok(ret == 0);
+
+    /* the oldest range is dropped, and the newest ones including the one just being recorded are retained */
+    ok(ranges.num_ranges == QUICLY_MAX_ACK_BLOCKS);
+    ok(ranges.ranges[0].start == 2);
+    ok(ranges.ranges[ranges.num_ranges - 1].start == QUICLY_MAX_ACK_BLOCKS * 2);
+
+    quicly_ranges_clear(&ranges);
+}
+
 static void test_ack_frequency(void)
 {
     quicly_conn_t *client, *server;
@@ -2601,6 +2623,7 @@ int main(int argc, char **argv)
     subtest("rate", test_rate);
     subtest("record-receipt", test_record_receipt);
     subtest("is-duplicate-pn", test_is_duplicate_pn);
+    subtest("record-pn", test_record_pn);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
     subtest("pacer", test_pacer);
