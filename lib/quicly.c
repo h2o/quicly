@@ -2820,7 +2820,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
 {
     ptls_log_conn_state_t log_state_override;
     ptls_t *tls;
-    quicly_conn_t *conn;
+    quicly_conn_t *conn = NULL;
     quicly_pacer_t *pacer = NULL;
 
     /* consistency checks */
@@ -2843,38 +2843,25 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
 
     if (tls == NULL)
         return NULL;
-    if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0) {
-        ptls_free(tls);
-        return NULL;
-    }
+    if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0)
+        goto Fail;
 
     /* allocate memory and start creating QUIC context */
-    if ((conn = malloc(sizeof(*conn))) == NULL) {
-        ptls_free(tls);
-        return NULL;
-    }
+    if ((conn = malloc(sizeof(*conn))) == NULL)
+        goto Fail;
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
     conn->super.data = appdata;
     conn->egress.alt_ctx = select_with_ratio255(ctx->alt_egress_ratio, QUICLY_NUM_ALT_EGRESS, ctx->tls->random_bytes);
-    if (get_egress_context(conn)->pacing && (pacer = malloc(sizeof(*pacer))) == NULL) {
-        ptls_free(tls);
-        free(conn);
-        return NULL;
-    }
     lock_now(conn, 0);
+    if (get_egress_context(conn)->pacing && (pacer = malloc(sizeof(*pacer))) == NULL)
+        goto Fail;
     conn->created_at = conn->stash.now;
     conn->super.stats.handshake_confirmed_msec = UINT64_MAX;
     conn->super.stats.num_alt_egress = conn->egress.alt_ctx != 0;
     conn->crypto.tls = tls;
-    if (new_path(conn, 0, remote_addr, local_addr) != 0) {
-        unlock_now(conn);
-        if (pacer != NULL)
-            free(pacer);
-        ptls_free(tls);
-        free(conn);
-        return NULL;
-    }
+    if (new_path(conn, 0, remote_addr, local_addr) != 0)
+        goto Fail;
     quicly_local_cid_init_set(&conn->super.local.cid_set, ctx->cid_encryptor, local_cid);
     conn->super.local.long_header_src_cid = conn->super.local.cid_set.cids[0].cid;
     quicly_remote_cid_init_set(&conn->super.remote.cid_set, remote_cid, ctx->tls->random_bytes);
@@ -2896,7 +2883,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->super.version = protocol_version;
     quicly_linklist_init(&conn->super._default_scheduler.active);
     quicly_linklist_init(&conn->super._default_scheduler.blocked);
-    conn->streams = kh_init(quicly_stream_t);
+    if ((conn->streams = kh_init(quicly_stream_t)) == NULL)
+        goto Fail;
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->transport_params.max_data);
     quicly_maxsender_init(&conn->ingress.max_streams.uni, conn->super.ctx->transport_params.max_streams_uni);
     quicly_maxsender_init(&conn->ingress.max_streams.bidi, conn->super.ctx->transport_params.max_streams_bidi);
@@ -2942,6 +2930,16 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     update_open_count(conn->super.ctx, 1);
 
     return conn;
+
+Fail:
+    if (conn != NULL) {
+        unlock_now(conn);
+        free(conn->paths[0]);
+        free(conn);
+    }
+    free(pacer);
+    ptls_free(tls);
+    return NULL;
 }
 
 static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t *properties, ptls_raw_extension_t *slots)
