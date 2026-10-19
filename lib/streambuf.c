@@ -29,7 +29,7 @@ static void convert_error(quicly_stream_t *stream, quicly_error_t err)
     assert(err != 0);
     if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
         if (quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id) &&
-            quicly_sendstate_is_open(&stream->sendstate))
+            !quicly_sendstate_transfer_complete(&stream->sendstate))
             quicly_reset_stream(stream, err);
         if (quicly_stream_has_receive_side(quicly_is_client(stream->conn), stream->stream_id))
             quicly_request_stop(stream, err);
