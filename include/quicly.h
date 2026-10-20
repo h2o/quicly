@@ -1416,7 +1416,7 @@ size_t quicly_send_close_invalid_token(quicly_context_t *ctx, uint32_t protocol_
  */
 size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, void *payload);
 /**
- *
+ * Schedules the emission of a NEW_TOKEN frame. This is a no-op for QMux connections, as the frame is not used.
  */
 quicly_error_t quicly_send_resumption_token(quicly_conn_t *conn);
 /**

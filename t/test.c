@@ -3208,6 +3208,17 @@ static void test_qmux_accessors(void)
     ok(conn->created_at == quic_now);
 
     quicly_free(conn);
+
+    /* resumption tokens are not used by QMux, as NEW_TOKEN frames are prohibited */
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+    qmux_transmit(sc, cc);
+    ok(quicly_get_first_timeout(sc) > quic_now);
+    ok(quicly_send_resumption_token(sc) == 0);
+    ok(quicly_get_first_timeout(sc) > quic_now);
+    quicly_free(cc);
+    quicly_free(sc);
 }
 
 static void test_qmux_long_reason_phrase(void)
