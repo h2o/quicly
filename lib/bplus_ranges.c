@@ -24,23 +24,25 @@
 #include "picotls.h"
 #include "quicly/bplus_ranges.h"
 
+#define FANOUT_BITS QUICLY_BPLUS_RANGES_FANOUT_BITS
 #define FANOUT QUICLY_BPLUS_RANGES_FANOUT
 /**
  * minimum number of entries in a node other than the root
  */
 #define MIN_ENTRIES (FANOUT / 2)
 /**
- * Bounds the descent path kept on the stack. As non-root nodes hold at least MIN_ENTRIES entries, a tree of this height holds more
- * than 2 * 8^11 ranges; `add` returns QUICLY_ERROR_STATE_EXHAUSTION instead of growing beyond it.
- */
-#define MAX_HEIGHT 12
-/**
  * The number of ranges is capped so that the receive window can be maintained even in the worst case, where every one of the two
  * packets being sent are lost and each packet carries >= ~512 bytes of the stream (see https://github.com/h2o/quicly/issues/278).
- * The cap is at least MIN_MAX_RANGES so that streams with small windows carrying small frames can tolerate some loss.
+ * The cap is at least MIN_MAX_RANGES so that streams with small windows carrying small frames can tolerate some loss, and at most
+ * MAX_RANGES, which is what a window of 4GB permits.
  */
 #define BYTES_PER_RANGE 1024
 #define MIN_MAX_RANGES 63
+#define MAX_RANGES (1 << 22)
+/**
+ * maximum height of the tree, which bounds the descent path kept on the stack; see `calc_max_ranges` for why it is sufficient
+ */
+#define MAX_HEIGHT 8
 
 /**
  * One level of the path from the root to a range; a path is an array of these, indexed by the level.
@@ -171,10 +173,19 @@ static int holds_last(quicly_bplus_ranges_t *ranges, quicly_bplus_ranges_node_t 
 
 static size_t calc_max_ranges(quicly_bplus_ranges_t *ranges, uint64_t max_committed)
 {
+    /* As nodes other than the root hold at least MIN_ENTRIES entries, a tree of MAX_HEIGHT holds at least
+     * 2 * MIN_ENTRIES^(MAX_HEIGHT - 1) ranges. Ranges are inserted only while there are less than MAX_RANGES, therefore the tree
+     * never grows beyond MAX_HEIGHT. */
+    PTLS_BUILD_ASSERT(MAX_RANGES <= (uint64_t)2 << ((FANOUT_BITS - 1) * (MAX_HEIGHT - 1)));
+
     uint64_t first_end = ranges->num_ranges != 0 ? ranges->first.ranges[0].end : 0;
     assert(first_end <= max_committed);
     uint64_t max_ranges = (max_committed - first_end) / BYTES_PER_RANGE + 1;
-    return max_ranges < MIN_MAX_RANGES ? MIN_MAX_RANGES : max_ranges;
+    if (max_ranges < MIN_MAX_RANGES)
+        max_ranges = MIN_MAX_RANGES;
+    if (max_ranges > MAX_RANGES)
+        max_ranges = MAX_RANGES;
+    return (size_t)max_ranges;
 }
 
 /**
@@ -271,8 +282,7 @@ static quicly_error_t insert_range(quicly_bplus_ranges_t *ranges, struct st_quic
     for (level = ranges->height; level-- != 0 && has_entry(path[level].node, level == leaf_level, FANOUT - 1);)
         ++num_new_nodes;
     if (num_new_nodes == ranges->height) {
-        if (ranges->height == MAX_HEIGHT)
-            return QUICLY_ERROR_STATE_EXHAUSTION;
+        assert(ranges->height < MAX_HEIGHT);
         ++num_new_nodes;
     }
     for (size_t i = 0; i < num_new_nodes; ++i) {

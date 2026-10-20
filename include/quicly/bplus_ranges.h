@@ -31,7 +31,8 @@ extern "C" {
 #include "quicly/constants.h"
 #include "quicly/ranges.h"
 
-#define QUICLY_BPLUS_RANGES_FANOUT 16
+#define QUICLY_BPLUS_RANGES_FANOUT_BITS 4
+#define QUICLY_BPLUS_RANGES_FANOUT (1 << QUICLY_BPLUS_RANGES_FANOUT_BITS)
 
 /**
  * A node of the B+ tree. Entries are packed at the front; unused slots hold UINT64_MAX as the start of the range (leaf) or as the
@@ -90,7 +91,7 @@ void quicly_bplus_ranges_clear(quicly_bplus_ranges_t *ranges);
 /**
  * Adds given range, merging it with the ranges it overlaps or touches. `max_committed` is the maximum offset that the peer is
  * permitted to send. A range disjoint from all existing ones is rejected with QUICLY_ERROR_STATE_EXHAUSTION if `num_ranges` has
- * reached max(63, (max_committed - first.end) / 1024 + 1). The structure is left unmodified when an error is returned.
+ * reached max(63, (max_committed - first.end) / 1024 + 1), up to 2^22. The structure is left unmodified when an error is returned.
  */
 quicly_error_t quicly_bplus_ranges_add(quicly_bplus_ranges_t *ranges, uint64_t start, uint64_t end, uint64_t max_committed);
 
