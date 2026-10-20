@@ -3082,6 +3082,91 @@ static void test_qmux_close_in_callback(void)
     quicly_free(sc);
 }
 
+static void test_qmux_reset_on_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
+{
+    quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1));
+}
+
+static quicly_error_t test_qmux_open_reset_on_emit(quicly_stream_open_t *self, quicly_stream_t *stream)
+{
+    static quicly_stream_callbacks_t callbacks;
+    callbacks = stream_callbacks;
+    callbacks.on_send_emit = test_qmux_reset_on_emit;
+
+    quicly_error_t ret = stream_open.cb(&stream_open, stream);
+    stream->callbacks = &callbacks;
+    return ret;
+}
+
+static void test_qmux_reset_in_emit(void)
+{
+    static uint8_t data[1900];
+    quicly_stream_open_t open_reset_on_emit = {.cb = test_qmux_open_reset_on_emit};
+    quicly_context_t server_ctx = quic_ctx;
+    server_ctx.transport_params.max_stream_data.bidi_remote = 2000;
+    server_ctx.stream_open = &open_reset_on_emit;
+
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&server_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* the client sends data, which the server consumes so that MAX_STREAM_DATA would be sent */
+    quicly_stream_t *client_stream, *server_stream;
+    ok(quicly_open_stream(cc, &client_stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(client_stream, data, sizeof(data)) == 0);
+    qmux_transmit(cc, sc);
+    server_stream = quicly_get_stream(sc, client_stream->stream_id);
+    ok(server_stream != NULL);
+    quicly_streambuf_ingress_shift(server_stream, sizeof(data));
+
+    /* the server sends MAX_STREAM_DATA, then the stream is reset while emitting data; RESET_STREAM is sent in place of STREAM */
+    ok(quicly_streambuf_egress_write(server_stream, "y", 1) == 0);
+    qmux_transmit(sc, cc);
+    ok(((test_streambuf_t *)client_stream->data)->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1));
+    ok(quicly_get_state(cc) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(sc) == QUICLY_STATE_CONNECTED);
+
+    quicly_free(cc);
+    quicly_free(sc);
+
+    /* when the stream is reset while emitting data, the record opened for the frame is discarded */
+    static uint8_t payload[16381];
+    quicly_receive_datagram_frame_t on_receive = {.cb = test_qmux_on_receive_datagram_frame};
+    server_ctx.transport_params.max_datagram_frame_size = 65535;
+    server_ctx.receive_datagram_frame = &on_receive;
+    quicly_context_t client_ctx = quic_ctx;
+    client_ctx.transport_params.max_datagram_frame_size = 65535;
+    client_ctx.receive_datagram_frame = &on_receive;
+    memset(&test_qmux_datagrams_received, 0, sizeof(test_qmux_datagrams_received));
+    cc = quicly_qmux_new(&client_ctx, 1, NULL);
+    sc = quicly_qmux_new(&server_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+    ok(quicly_open_stream(cc, &client_stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(client_stream, "x", 1) == 0);
+    qmux_transmit(cc, sc);
+    server_stream = quicly_get_stream(sc, client_stream->stream_id);
+    ok(server_stream != NULL);
+    ok(quicly_streambuf_egress_write(server_stream, "y", 1) == 0);
+    ptls_iovec_t datagram = ptls_iovec_init(payload, sizeof(payload));
+    quicly_send_datagram_frames(sc, &datagram, 1);
+    { /* the datagram fills 16384 bytes, leaving space for the STREAM frame but not for RESET_STREAM */
+        uint8_t buf[QUICLY_QMUX_MIN_SEND_BUFSIZE + 10];
+        size_t len = sizeof(buf);
+        ok(quicly_qmux_send(sc, buf, &len) == 0);
+        ok(len == QUICLY_QMUX_MIN_SEND_BUFSIZE);
+        size_t consumed = len;
+        ok(quicly_qmux_receive(cc, buf, &consumed) == 0);
+        ok(consumed == len);
+    }
+    ok(test_qmux_datagrams_received.count == 1);
+    qmux_transmit(sc, cc);
+    ok(((test_streambuf_t *)client_stream->data)->error_received.reset_stream == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1));
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_idle_timeout(void)
 {
     quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
@@ -3248,6 +3333,7 @@ static void test_qmux(void)
     subtest("tp-roundtrip", test_qmux_tp_roundtrip);
     subtest("discard-while-closing", test_qmux_discard_while_closing);
     subtest("close-in-callback", test_qmux_close_in_callback);
+    subtest("reset-in-emit", test_qmux_reset_in_emit);
     subtest("idle-timeout", test_qmux_idle_timeout);
     subtest("accessors", test_qmux_accessors);
     subtest("receive-error", test_qmux_receive_error);

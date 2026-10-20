@@ -4371,14 +4371,16 @@ static void qmux_commit_record(quicly_conn_t *conn, quicly_send_context_t *s)
 {
     assert(s->dst != NULL);
 
-    /* write the QMux record header */
+    /* write the QMux record header, unless nothing has been written (e.g., the stream was reset while emitting data) */
     size_t rec_size = s->dst - (s->payload_buf.datagram + 2);
-    assert(1 <= rec_size && rec_size <= QUICLY_QMUX_MAX_RECORD_SIZE);
-    s->payload_buf.datagram[0] = 0x40 | (rec_size >> 8);
-    s->payload_buf.datagram[1] = (uint8_t)rec_size;
+    assert(rec_size <= QUICLY_QMUX_MAX_RECORD_SIZE);
+    if (rec_size != 0) {
+        s->payload_buf.datagram[0] = 0x40 | (rec_size >> 8);
+        s->payload_buf.datagram[1] = (uint8_t)rec_size;
+        s->payload_buf.datagram = s->dst;
+    }
 
     /* adjust pointers */
-    s->payload_buf.datagram = s->dst;
     s->dst = NULL;
     s->dst_end = NULL;
 }
@@ -4810,6 +4812,10 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
     if (stream->conn->super.state >= QUICLY_STATE_CLOSING) {
         return QUICLY_ERROR_IS_CLOSING;
     } else if (stream->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE) {
+        /* record an empty range, as the callback being registered is invoked regardless */
+        sent->data.stream.stream_id = stream->stream_id;
+        sent->data.stream.args.start = off;
+        sent->data.stream.args.end = off;
         return 0;
     }
     assert(len != 0);
