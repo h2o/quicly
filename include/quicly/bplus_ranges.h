@@ -98,8 +98,7 @@ quicly_error_t quicly_bplus_ranges_add(quicly_bplus_ranges_t *ranges, uint64_t s
 
 inline void quicly_bplus_ranges_init(quicly_bplus_ranges_t *ranges)
 {
-    ranges->first.ranges[0].start = 0;
-    ranges->first.ranges[0].end = 0;
+    ranges->first.ranges[0] = (quicly_range_t){0, 0};
     for (size_t i = 1; i < QUICLY_BPLUS_RANGES_FANOUT; ++i) {
         ranges->first.ranges[i].start = UINT64_MAX;
         ranges->first.ranges[i].end = UINT64_MAX;
