@@ -74,13 +74,12 @@ static int walk(quicly_bplus_ranges_t *ranges, quicly_bplus_ranges_node_t *node,
     }
 
     /* non-leaf */
-    size_t num_keys = 0;
-    while (num_keys < FANOUT - 1 && node->keys[num_keys] != UINT64_MAX)
-        ++num_keys;
-    for (size_t i = num_keys; i < FANOUT - 1; ++i)
+    size_t num_children = 1;
+    while (num_children < FANOUT && node->keys[num_children] != UINT64_MAX)
+        ++num_children;
+    for (size_t i = num_children; i < FANOUT; ++i)
         if (node->keys[i] != UINT64_MAX)
             return fail("keys are not packed");
-    size_t num_children = num_keys + 1;
     if (is_root ? num_children < 2 : num_children < FANOUT / 2)
         return fail("non-leaf underflow");
     for (size_t i = 0; i < num_children; ++i) {
@@ -91,7 +90,7 @@ static int walk(quicly_bplus_ranges_t *ranges, quicly_bplus_ranges_node_t *node,
             return 0;
         if (i == 0) {
             *min_start = child_min;
-        } else if (node->keys[i - 1] != child_min) {
+        } else if (node->keys[i] != child_min) {
             return fail("separator is not the smallest start of the child");
         }
     }

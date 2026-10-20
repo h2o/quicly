@@ -79,26 +79,26 @@ static size_t leaf_count_le(const quicly_bplus_ranges_node_t *leaf, uint64_t x)
 }
 
 /**
- * Returns the number of keys in the non-leaf node that are <= x, which is the index of the child to descend into. Searched in the
- * same way as `leaf_count_le`.
+ * Returns the number of keys in the non-leaf node that are <= x, which is the index of the child to descend into. As the first
+ * child has no key, `keys[1]` to `keys[15]` are searched in the same way as `leaf_count_le`.
  */
 static size_t keys_count_le(const quicly_bplus_ranges_node_t *node, uint64_t x)
 {
-    PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(node->keys) == 15);
+    PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(node->keys) == 16);
 
-    size_t n = (size_t)(node->keys[7] <= x) << 3;
+    size_t n = ((size_t)(node->keys[8] <= x) << 3) + 1;
     n += (size_t)(node->keys[n + 3] <= x) << 2;
     n += (size_t)(node->keys[n + 1] <= x) << 1;
-    return n + (node->keys[n] <= x);
+    return n - 1 + (node->keys[n] <= x);
 }
 
 /**
  * Returns if the node has an entry at given index; as entries are packed, this tells if the node has more than `index` entries. For
- * non-leaf nodes, the entry is the child, which exists if the key preceding it is in use; `index` must therefore be non-zero.
+ * non-leaf nodes, the entry is the child, which exists if its key is in use; `index` must therefore be non-zero.
  */
 static int has_entry(const quicly_bplus_ranges_node_t *node, int is_leaf, size_t index)
 {
-    return is_leaf ? node->ranges[index].start != UINT64_MAX : node->keys[index - 1] != UINT64_MAX;
+    return is_leaf ? node->ranges[index].start != UINT64_MAX : node->keys[index] != UINT64_MAX;
 }
 
 /**
@@ -128,56 +128,36 @@ static quicly_range_t remove_range_at(quicly_bplus_ranges_node_t *leaf, size_t p
 }
 
 /**
- * inserts a key at `index` of a non-leaf node that is not full, shifting the keys up to the first unused slot
+ * inserts a child and its key at `index` (which must be non-zero) of a non-leaf node that is not full, shifting the entries up to
+ * the first unused slot
  */
-static void insert_key_at(quicly_bplus_ranges_node_t *node, size_t index, uint64_t key)
+static void insert_entry_at(quicly_bplus_ranges_node_t *node, size_t index, uint64_t key, quicly_bplus_ranges_node_t *child)
 {
     for (;; ++index) {
-        uint64_t displaced = node->keys[index];
+        uint64_t displaced_key = node->keys[index];
         node->keys[index] = key;
-        if (displaced == UINT64_MAX)
+        if (displaced_key == UINT64_MAX) {
+            node->children[index] = child;
             break;
-        key = displaced;
+        }
+        quicly_bplus_ranges_node_t *displaced_child = node->children[index];
+        node->children[index] = child;
+        key = displaced_key;
+        child = displaced_child;
     }
 }
 
 /**
- * removes the key at `index` of a non-leaf node, returning it
+ * removes the child and its key at `index` (which must be non-zero) of a non-leaf node, returning the key
  */
-static uint64_t remove_key_at(quicly_bplus_ranges_node_t *node, size_t index)
+static uint64_t remove_entry_at(quicly_bplus_ranges_node_t *node, size_t index)
 {
     uint64_t removed = node->keys[index];
-    for (; index + 1 < FANOUT - 1 && node->keys[index + 1] != UINT64_MAX; ++index)
+    for (; index + 1 < FANOUT && node->keys[index + 1] != UINT64_MAX; ++index) {
         node->keys[index] = node->keys[index + 1];
-    node->keys[index] = UINT64_MAX;
-    return removed;
-}
-
-/**
- * Inserts a child at `index` of a non-leaf node that is not full, shifting the children up to the first unused slot. As the keys
- * tell which slots are in use, this function must be called before the corresponding key is inserted.
- */
-static void insert_child_at(quicly_bplus_ranges_node_t *node, size_t index, quicly_bplus_ranges_node_t *child)
-{
-    for (;; ++index) {
-        int in_use = index == 0 || has_entry(node, 0, index);
-        quicly_bplus_ranges_node_t *displaced = node->children[index];
-        node->children[index] = child;
-        if (!in_use)
-            break;
-        child = displaced;
-    }
-}
-
-/**
- * Removes the child at `index` of a non-leaf node, returning it. As the keys tell which slots are in use, this function must be
- * called before the corresponding key is removed. The vacated slot is left as is.
- */
-static quicly_bplus_ranges_node_t *remove_child_at(quicly_bplus_ranges_node_t *node, size_t index)
-{
-    quicly_bplus_ranges_node_t *removed = node->children[index];
-    for (; index + 1 < FANOUT && has_entry(node, 0, index + 1); ++index)
         node->children[index] = node->children[index + 1];
+    }
+    node->keys[index] = UINT64_MAX;
     return removed;
 }
 
@@ -222,7 +202,7 @@ static void update_separator(struct st_quicly_bplus_ranges_path_t *path, size_t 
 {
     while (level-- != 0) {
         if (path[level].slot != 0) {
-            path[level].node->keys[path[level].slot - 1] = new_min;
+            path[level].node->keys[path[level].slot] = new_min;
             return;
         }
     }
@@ -265,16 +245,13 @@ static uint64_t split_node(quicly_bplus_ranges_t *ranges, quicly_bplus_ranges_no
             ranges->last = high->ranges + (ranges->last - node->ranges - MIN_ENTRIES);
         return high->ranges[0].start;
     } else {
-        uint64_t sep = node->keys[MIN_ENTRIES - 1];
-        for (size_t i = 0; i < MIN_ENTRIES - 1; ++i) {
+        uint64_t sep = node->keys[MIN_ENTRIES];
+        for (size_t i = 0; i < MIN_ENTRIES; ++i) {
             high->keys[i] = node->keys[MIN_ENTRIES + i];
-            high->keys[MIN_ENTRIES - 1 + i] = UINT64_MAX;
+            high->keys[MIN_ENTRIES + i] = UINT64_MAX;
+            high->children[i] = node->children[MIN_ENTRIES + i];
             node->keys[MIN_ENTRIES + i] = UINT64_MAX;
         }
-        high->keys[FANOUT - 2] = UINT64_MAX;
-        node->keys[MIN_ENTRIES - 1] = UINT64_MAX;
-        for (size_t i = 0; i < MIN_ENTRIES; ++i)
-            high->children[i] = node->children[MIN_ENTRIES + i];
         return sep;
     }
 }
@@ -328,8 +305,8 @@ static quicly_error_t insert_range(quicly_bplus_ranges_t *ranges, struct st_quic
     for (level = leaf_level; high != NULL; --level) {
         if (level == 0) {
             quicly_bplus_ranges_node_t *root = new_nodes[new_node_index++];
-            root->keys[0] = sep;
-            for (size_t i = 1; i < FANOUT - 1; ++i)
+            root->keys[1] = sep;
+            for (size_t i = 2; i < FANOUT; ++i)
                 root->keys[i] = UINT64_MAX;
             root->children[0] = ranges->root;
             root->children[1] = high;
@@ -349,8 +326,7 @@ static quicly_error_t insert_range(quicly_bplus_ranges_t *ranges, struct st_quic
                 slot -= MIN_ENTRIES;
             }
         }
-        insert_child_at(parent, slot + 1, child);
-        insert_key_at(parent, slot, child_sep);
+        insert_entry_at(parent, slot + 1, child_sep, child);
     }
 
     assert(new_node_index == num_new_nodes);
@@ -383,9 +359,9 @@ static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_r
         quicly_bplus_ranges_node_t *parent = path[level - 1].node, *low, *high;
         size_t slot = path[level - 1].slot, num_low, sep;
         if (slot + 1 < FANOUT && has_entry(parent, 0, slot + 1)) {
-            sep = slot;
+            sep = slot + 1;
             low = node;
-            high = parent->children[slot + 1];
+            high = parent->children[sep];
             num_low = MIN_ENTRIES - 1;
             if (has_entry(high, is_leaf, MIN_ENTRIES)) {
                 /* borrow the first entry of `high` */
@@ -395,15 +371,17 @@ static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_r
                     if (holds_last(ranges, high))
                         --ranges->last;
                 } else {
-                    low->keys[num_low - 1] = parent->keys[sep];
-                    low->children[num_low] = remove_child_at(high, 0);
-                    parent->keys[sep] = remove_key_at(high, 0);
+                    low->keys[num_low] = parent->keys[sep];
+                    low->children[num_low] = high->children[0];
+                    parent->keys[sep] = high->keys[1];
+                    high->children[0] = high->children[1];
+                    remove_entry_at(high, 1);
                 }
                 break;
             }
         } else {
-            sep = slot - 1;
-            low = parent->children[sep];
+            sep = slot;
+            low = parent->children[sep - 1];
             high = node;
             num_low = MIN_ENTRIES;
             if (has_entry(low, is_leaf, MIN_ENTRIES)) {
@@ -415,9 +393,9 @@ static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_r
                     if (holds_last(ranges, high))
                         ++ranges->last;
                 } else {
-                    insert_child_at(high, 0, low->children[num_low - 1]);
-                    insert_key_at(high, 0, parent->keys[sep]);
-                    parent->keys[sep] = remove_key_at(low, num_low - 2);
+                    insert_entry_at(high, 1, parent->keys[sep], high->children[0]);
+                    high->children[0] = low->children[num_low - 1];
+                    parent->keys[sep] = remove_entry_at(low, num_low - 1);
                 }
                 ++path[level].slot;
                 break;
@@ -431,19 +409,19 @@ static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_r
             if (holds_last(ranges, high))
                 ranges->last = low->ranges + num_low + (ranges->last - high->ranges);
         } else {
-            low->keys[num_low - 1] = parent->keys[sep];
-            for (size_t i = 0; i < num_high - 1; ++i)
+            low->keys[num_low] = parent->keys[sep];
+            low->children[num_low] = high->children[0];
+            for (size_t i = 1; i < num_high; ++i) {
                 low->keys[num_low + i] = high->keys[i];
-            for (size_t i = 0; i < num_high; ++i)
                 low->children[num_low + i] = high->children[i];
+            }
         }
         free(high);
-        remove_child_at(parent, sep + 1);
-        remove_key_at(parent, sep);
+        remove_entry_at(parent, sep);
         if (node == high) {
             path[level].node = low;
             path[level].slot += num_low;
-            path[level - 1].slot = sep;
+            path[level - 1].slot = sep - 1;
         }
         node = parent;
     }
