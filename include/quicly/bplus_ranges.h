@@ -37,19 +37,17 @@ extern "C" {
  * A node of the B+ tree. Entries are packed at the front; unused slots hold UINT64_MAX as the start of the range (leaf) or as the
  * key (non-leaf). `children[i + 1]` exists if `keys[i]` is in use; the content of unused child slots is undefined.
  */
-typedef struct st_quicly_bplus_ranges_node_t {
-    union {
-        /**
-         * leaf
-         */
-        quicly_range_t ranges[QUICLY_BPLUS_RANGES_FANOUT];
-        /**
-         * non-leaf; keys[i] is the start of the first range under children[i + 1]
-         */
-        struct {
-            uint64_t keys[QUICLY_BPLUS_RANGES_FANOUT - 1];
-            struct st_quicly_bplus_ranges_node_t *children[QUICLY_BPLUS_RANGES_FANOUT];
-        };
+typedef union un_quicly_bplus_ranges_node_t {
+    /**
+     * leaf
+     */
+    quicly_range_t ranges[QUICLY_BPLUS_RANGES_FANOUT];
+    /**
+     * non-leaf; keys[i] is the start of the first range under children[i + 1]
+     */
+    struct {
+        uint64_t keys[QUICLY_BPLUS_RANGES_FANOUT - 1];
+        union un_quicly_bplus_ranges_node_t *children[QUICLY_BPLUS_RANGES_FANOUT];
     };
 } quicly_bplus_ranges_node_t;
 
