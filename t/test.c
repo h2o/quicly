@@ -2701,6 +2701,13 @@ static void test_qmux_ping(void)
     ok(len == 2 + 8 + 1);
     ok(memcmp(buf, "\x40\x09\xf4\x8c\x67\x52\x9e\xf8\xc7\xbe\x0b", 2 + 8 + 1) == 0);
 
+    /* QX_PING is not repeated when other control frames are sent */
+    sc->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    len = sizeof(buf);
+    ret = quicly_qmux_send(sc, buf, &len);
+    ok(ret == 0);
+    ok(sc->super.stats.num_frames_sent.qx_pong == 1);
+
     quicly_free(cc);
     quicly_free(sc);
 }

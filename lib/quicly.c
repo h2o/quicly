@@ -5787,6 +5787,7 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
         if ((ret = allocate_ack_eliciting_frame(conn, s, QUICLY_QX_PING_FRAME_CAPACITY, &sent, NULL)) != 0)
             return ret;
         s->dst = quicly_encode_qx_ping_frame(s->dst, 1, conn->qmux.pong.sequence_plus1 - 1);
+        conn->qmux.pong.queued = 0;
         ++conn->super.stats.num_frames_sent.qx_pong;
     }
 
