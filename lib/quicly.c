@@ -2843,7 +2843,10 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_RECORD_SIZE, {
                 uint64_t v;
-                if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX || v < QUICLY_QMUX_MAX_RECORD_SIZE) {
+                if (!qmux) {
+                    /* not specified for QUIC v1, therefore ignored (qmux-02 Section 5.2) */
+                    src = end;
+                } else if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX || v < QUICLY_QMUX_MAX_RECORD_SIZE) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }

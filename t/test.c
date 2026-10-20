@@ -2845,6 +2845,11 @@ static void test_qmux_tp_filter(void)
     ok(decode_single_tp(1, 13, preferred_address, sizeof(preferred_address), &params) ==
        QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
     ok(decode_single_tp(0, 13, preferred_address, sizeof(preferred_address), &params) == 0);
+
+    /* max_record_size smaller than the default is rejected, while QUIC v1 ignores the transport parameter (Section 5.2) */
+    ok(decode_single_tp(1, 0x0571c59429cd0845, "\x40\x64", 2, &params) == QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
+    ok(decode_single_tp(1, 0x0571c59429cd0845, "\x7f\xfe", 2, &params) == 0);
+    ok(decode_single_tp(0, 0x0571c59429cd0845, "\x40\x64", 2, &params) == 0);
 }
 
 static struct {
