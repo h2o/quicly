@@ -8864,10 +8864,18 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
         src = payload + payload_len;
     }
 
-    if (ret != 0 && conn->super.state < QUICLY_STATE_DRAINING)
-        ret = initiate_close(conn, ret, offending_frame_type, "");
+    switch (ret) {
+    case 0:
+    case PTLS_ERROR_NO_MEMORY:
+    case QUICLY_ERROR_STATE_EXHAUSTION:
+        break;
+    default: /* close connection, unless the peer has closed it */
+        if (conn->super.state < QUICLY_STATE_DRAINING)
+            ret = initiate_close(conn, ret, offending_frame_type, "");
+        break;
+    }
 
-    /* once closing, records being received are discarded without being processed (draft-ietf-quic-qmux-02 Section 7.2) */
+    /* once closing, records being received are discarded without being processed (qmux-02 Section 7.2) */
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         *len = end - (const uint8_t *)_src;
 

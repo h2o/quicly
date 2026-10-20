@@ -1725,6 +1725,9 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
  * @return 0 if successful, otherwise one of the following:
  *         * QUICLY_ERROR_IS_CLOSING - the peer has closed the connection. The next call to `quicly_qmux_send` returns
  *           QUICLY_ERROR_FREE_CONNECTION.
+ *         * QUICLY_ERROR_STATE_EXHAUSTION - the peer caused the endpoint to retain too much state. The caller may either close the
+ *           connection by calling `quicly_close` with this error code then continue calling `quicly_qmux_send`, or discard the
+ *           connection by calling `quicly_free`.
  *         * other errors (e.g., PTLS_ERROR_NO_MEMORY) - the connection might have been left in an inconsistent state. The caller
  *           must call `quicly_free` to discard the connection, without trying to close it.
  */

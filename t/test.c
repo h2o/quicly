@@ -3035,6 +3035,36 @@ static void test_qmux_long_reason_phrase(void)
     quicly_free(sc);
 }
 
+static quicly_error_t test_qmux_stream_open_nomem(quicly_stream_open_t *self, quicly_stream_t *stream)
+{
+    return PTLS_ERROR_NO_MEMORY;
+}
+
+static void test_qmux_receive_error(void)
+{
+    quicly_stream_open_t stream_open_nomem = {.cb = test_qmux_stream_open_nomem};
+    quicly_context_t server_ctx = quic_ctx;
+    server_ctx.stream_open = &stream_open_nomem;
+
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&server_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(cc, &stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(stream, "hello", 5) == 0);
+    uint8_t buf[16384];
+    size_t len = sizeof(buf);
+    ok(quicly_qmux_send(cc, buf, &len) == 0);
+
+    /* as is the case with `quicly_receive`, memory allocation failures are returned without closing the connection */
+    ok(quicly_qmux_receive(sc, buf, &len) == PTLS_ERROR_NO_MEMORY);
+    ok(quicly_get_state(sc) == QUICLY_STATE_CONNECTED);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_small_buffer(void)
 {
     quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
@@ -3119,6 +3149,7 @@ static void test_qmux(void)
     subtest("large-tp", test_qmux_large_tp);
     subtest("discard-while-closing", test_qmux_discard_while_closing);
     subtest("accessors", test_qmux_accessors);
+    subtest("receive-error", test_qmux_receive_error);
     subtest("small-buffer", test_qmux_small_buffer);
     subtest("long-reason-phrase", test_qmux_long_reason_phrase);
 
