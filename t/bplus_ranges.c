@@ -314,41 +314,78 @@ static void test_swallow(void)
 }
 
 /**
- * compares against quicly_ranges_t using random additions of various sizes
+ * Builds a fragmented tree by adding isolated ranges in ascending (`order == 0`), descending (1), or shuffled (2) order, then
+ * interleaves adding isolated ranges into gaps, extending ranges, filling gaps, and adding ranges that span multiple ranges,
+ * comparing against quicly_ranges_t after every addition. Unlike the ascending order, the descending and shuffled orders split
+ * nodes other than those on the rightmost path.
  */
-static void test_random(void)
+static int test_fragmented_order(int order)
 {
+    enum { NUM_RANGES = 4000, NUM_OPS = 6000, STRIDE = 8 };
+    quicly_bplus_ranges_t ranges;
+    quicly_ranges_t expected;
+    uint64_t *indices = malloc(NUM_RANGES * sizeof(*indices));
     int success = 1;
 
-    srand(2);
-    for (int round = 0; success && round < 20; ++round) {
-        quicly_bplus_ranges_t ranges;
-        quicly_ranges_t expected;
-        uint64_t space = 2000 + (uint64_t)rand() % 20000;
-        quicly_bplus_ranges_init(&ranges);
-        quicly_ranges_init_with_range(&expected, 0, 0);
-        for (int i = 0; success && i < 5000; ++i) {
-            uint64_t start = (uint64_t)rand() % space, len;
-            switch (rand() % 4) {
-            case 0:
-                len = 1 + (uint64_t)rand() % 2;
-                break;
-            case 1:
-                len = 1 + (uint64_t)rand() % 10;
-                break;
-            case 2:
-                len = 1 + (uint64_t)rand() % 100;
-                break;
-            default:
-                len = 1 + (uint64_t)rand() % 2000;
-                break;
-            }
-            success = add_both(&ranges, &expected, start, start + len) && check(&ranges, &expected);
+    quicly_bplus_ranges_init(&ranges);
+    quicly_ranges_init_with_range(&expected, 0, 0);
+    srand(3 + order);
+
+    /* build; ranges are at STRIDE * index + 4, leaving gaps of STRIDE - 1 bytes */
+    for (size_t i = 0; i < NUM_RANGES; ++i)
+        indices[i] = order == 1 ? NUM_RANGES - 1 - i : i;
+    if (order == 2) {
+        for (size_t i = NUM_RANGES - 1; i > 0; --i) {
+            size_t j = (size_t)rand() % (i + 1);
+            uint64_t t = indices[i];
+            indices[i] = indices[j];
+            indices[j] = t;
         }
-        quicly_bplus_ranges_clear(&ranges);
-        quicly_ranges_clear(&expected);
     }
-    ok(success);
+    for (size_t i = 0; success && i < NUM_RANGES; ++i) {
+        uint64_t off = indices[i] * STRIDE + 4;
+        success = add_both(&ranges, &expected, off, off + 1) && check(&ranges, &expected);
+    }
+
+    /* interleave additions of various kinds at random positions */
+    for (size_t i = 0; success && i < NUM_OPS; ++i) {
+        uint64_t base = (uint64_t)(rand() % (NUM_RANGES - 1)) * STRIDE, start, end;
+        switch (rand() % 8) {
+        case 0:
+        case 1:
+        case 2: /* isolated range in the middle of a gap */
+            start = base + 8;
+            end = start + 1;
+            break;
+        case 3:
+        case 4: /* extend a range */
+            start = base + 5;
+            end = start + 1;
+            break;
+        case 5:
+        case 6: /* fill a gap, merging the neighbors */
+            start = base + 5;
+            end = base + 12;
+            break;
+        default: /* span multiple ranges */
+            start = base + (uint64_t)rand() % STRIDE;
+            end = start + 1 + (uint64_t)rand() % (16 * STRIDE);
+            break;
+        }
+        success = add_both(&ranges, &expected, start, end) && check(&ranges, &expected);
+    }
+
+    free(indices);
+    quicly_bplus_ranges_clear(&ranges);
+    quicly_ranges_clear(&expected);
+    return success;
+}
+
+static void test_fragmented(void)
+{
+    ok(test_fragmented_order(0));
+    ok(test_fragmented_order(1));
+    ok(test_fragmented_order(2));
 }
 
 void test_bplus_ranges(void)
@@ -357,5 +394,5 @@ void test_bplus_ranges(void)
     subtest("limit", test_limit);
     subtest("fill-gaps", test_fill_gaps);
     subtest("swallow", test_swallow);
-    subtest("random", test_random);
+    subtest("fragmented", test_fragmented);
 }
