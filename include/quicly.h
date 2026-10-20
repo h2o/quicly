@@ -1723,8 +1723,9 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
  * Reads QMux records in a given buffer and processes them. Errors found in the input (e.g., protocol violations by the peer) are
  * not reported through the return value; instead, quicly initiates the closure of the connection, which is reported to the
  * application through the `closed` callback. Once the connection starts closing, input is discarded without being processed.
- * @param [in,out] len  Upon entry, the size of the input. Upon return, the number of bytes being read out. Bytes that have not
- *                      been read out are a partial record; the application supplies them again along with the bytes that follow.
+ * @param [in,out] len  Upon entry, the size of the input. Upon return, the number of bytes being read out. When 0 is returned,
+ *                      bytes that have not been read out are a partial record; the application supplies them again along with the
+ *                      bytes that follow.
  * @return 0 if successful, otherwise one of the following:
  *         * QUICLY_ERROR_IS_CLOSING - the peer has closed the connection. The next call to `quicly_qmux_send` returns
  *           QUICLY_ERROR_FREE_CONNECTION.
