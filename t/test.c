@@ -2888,22 +2888,19 @@ static void test_qmux_datagram(void)
         ok(test_qmux_datagrams_received.first_bytes[2] == 'a');
     }
 
-    { /* datagram that does not fit into the buffer does not block stream data */
+    { /* datagram filling the buffer does not block stream data being sent subsequently */
         quicly_stream_t *stream;
         ok(quicly_open_stream(cc, &stream, 0) == 0);
         ok(quicly_streambuf_egress_write(stream, "stream", 6) == 0);
-        ptls_iovec_t datagram = ptls_iovec_init(payload, 5000);
+        ptls_iovec_t datagram = ptls_iovec_init(payload, 16381);
         quicly_send_datagram_frames(cc, &datagram, 1);
-        uint8_t buf[4096];
-        size_t len = sizeof(buf);
-        ok(quicly_qmux_send(cc, buf, &len) == 0);
-        size_t consumed = len;
-        ok(quicly_qmux_receive(sc, buf, &consumed) == 0);
-        ok(consumed == len);
+        qmux_transmit(cc, sc);
+        ok(test_qmux_datagrams_received.count == 4);
+        ok(quicly_get_first_timeout(cc) <= quic_now);
+        qmux_transmit(cc, sc);
         quicly_stream_t *peer_stream = quicly_get_stream(sc, stream->stream_id);
         ok(peer_stream != NULL);
         ok(((quicly_streambuf_t *)peer_stream->data)->ingress.off == 6);
-        ok(test_qmux_datagrams_received.count == 3);
         ok(quicly_get_first_timeout(cc) > quic_now);
     }
 
@@ -2958,10 +2955,9 @@ static void test_qmux_discard_while_closing(void)
         qmux_transmit(cc, sc);
 
         ok(quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), "bye") == 0);
-        uint8_t buf[256];
-        size_t len = sizeof(buf);
+        uint8_t buf[QUICLY_QMUX_MIN_SEND_BUFSIZE + sizeof(client_stream_record)];
+        size_t len = QUICLY_QMUX_MIN_SEND_BUFSIZE;
         ok(quicly_qmux_send(cc, buf, &len) == 0);
-        ok(len + sizeof(client_stream_record) <= sizeof(buf));
         memcpy(buf + len, client_stream_record, sizeof(client_stream_record));
         len += sizeof(client_stream_record);
 
@@ -3065,60 +3061,40 @@ static void test_qmux_receive_error(void)
     quicly_free(sc);
 }
 
-static void test_qmux_small_buffer(void)
+static void test_qmux_full_buffer(void)
 {
+    static char reason[16371];
+    memset(reason, 'r', sizeof(reason) - 1);
+
+    memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
     quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
     quicly_error_t ret;
 
-    /* exchange transport parameters */
-    qmux_transmit(sc, cc);
-    qmux_transmit(cc, sc);
+    /* close before sending the transport parameters, with a reason phrase such that the CONNECTION_CLOSE frame fits into a record
+     * but not into the space left after the record carrying the transport parameters */
+    ok(quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), reason) == 0);
 
-    /* close with a reason phrase that does not fit into the buffer being supplied */
-    ret = quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), "reason phrase longer than the buffer");
-    ok(ret == 0);
-
-    uint8_t buf[256];
+    /* only the transport parameters are written, without overrunning the buffer */
+    uint8_t buf[QUICLY_QMUX_MIN_SEND_BUFSIZE + 256];
     memset(buf, 0xa5, sizeof(buf));
-    size_t len = 20;
+    size_t len = QUICLY_QMUX_MIN_SEND_BUFSIZE;
     ret = quicly_qmux_send(cc, buf, &len);
-    ok(ret == QUICLY_ERROR_SENDBUF_FULL);
+    ok(ret == 0);
+    ok(0 < len && len < 100);
     size_t i;
-    for (i = 20; i < sizeof(buf); ++i)
+    for (i = QUICLY_QMUX_MIN_SEND_BUFSIZE; i < sizeof(buf); ++i)
         if (buf[i] != 0xa5)
             break;
     ok(i == sizeof(buf));
-
-    /* sending succeeds once enough space is provided */
-    len = sizeof(buf);
-    ret = quicly_qmux_send(cc, buf, &len);
-    ok(ret == 0);
-    ok(len > 20);
-
-    quicly_free(cc);
-    quicly_free(sc);
-
-    /* when the buffer can hold the transport parameters but not the CONNECTION_CLOSE frame, the former is returned */
-    memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
-    size_t tp_len;
-    {
-        quicly_conn_t *conn = quicly_qmux_new(&quic_ctx, 1, NULL);
-        tp_len = sizeof(buf);
-        ok(quicly_qmux_send(conn, buf, &tp_len) == 0);
-        quicly_free(conn);
-    }
-    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
-    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
-    ok(quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), "reason phrase longer than the buffer") == 0);
-    len = tp_len + 5;
-    ret = quicly_qmux_send(cc, buf, &len);
-    ok(ret == 0);
-    ok(0 < len && len <= tp_len);
     size_t consumed = len;
     ok(quicly_qmux_receive(sc, buf, &consumed) == 0);
     ok(quicly_connection_is_ready(sc));
-    len = sizeof(buf);
+
+    /* CONNECTION_CLOSE is sent by the next call */
+    ok(quicly_get_first_timeout(cc) <= quic_now);
+    len = QUICLY_QMUX_MIN_SEND_BUFSIZE;
     ok(quicly_qmux_send(cc, buf, &len) == 0);
+    ok(len > 16000);
     consumed = len;
     ok(quicly_qmux_receive(sc, buf, &consumed) == QUICLY_ERROR_IS_CLOSING);
     ok(test_qmux_closed_by_remote.conn == sc);
@@ -3150,7 +3126,7 @@ static void test_qmux(void)
     subtest("discard-while-closing", test_qmux_discard_while_closing);
     subtest("accessors", test_qmux_accessors);
     subtest("receive-error", test_qmux_receive_error);
-    subtest("small-buffer", test_qmux_small_buffer);
+    subtest("full-buffer", test_qmux_full_buffer);
     subtest("long-reason-phrase", test_qmux_long_reason_phrase);
 
     ok(test_qmux_open_count == 0);

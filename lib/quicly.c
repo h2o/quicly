@@ -8758,6 +8758,9 @@ static void qmux_send_datagram_frames(quicly_conn_t *conn, quicly_send_context_t
 
 quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
 {
+    PTLS_BUILD_ASSERT(QUICLY_QMUX_MIN_SEND_BUFSIZE == 2 + QUICLY_QMUX_MAX_RECORD_SIZE);
+    assert(*bufsize >= QUICLY_QMUX_MIN_SEND_BUFSIZE);
+
     quicly_send_context_t s = {.payload_buf = {.datagram = buf, .end = (uint8_t *)buf + *bufsize}, .max_datagrams = 1};
     quicly_error_t ret;
 
@@ -8816,9 +8819,11 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
 Exit:
     /* as is the case with `quicly_send`, DATAGRAM frames that have not been sent are discarded */
     clear_datagram_frame_payloads(conn);
-    /* if some records have been built, return them; the remaining frames will be sent in the next call */
-    if (ret == QUICLY_ERROR_SENDBUF_FULL && (s.dst != NULL || s.payload_buf.datagram != buf))
+    /* when the buffer becomes full, return the records being built; the remaining frames will be sent in the next call */
+    if (ret == QUICLY_ERROR_SENDBUF_FULL) {
+        assert(s.payload_buf.datagram != buf && "the buffer can always hold a record of the maximum size");
         ret = 0;
+    }
     if (ret == 0) {
         if (s.dst != NULL)
             qmux_commit_record(conn, &s);

@@ -1701,17 +1701,20 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
  */
 quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appdata);
 /**
+ * The minimum size of the buffer supplied to `quicly_qmux_send`, being the size of a QMux record of the maximum size.
+ */
+#define QUICLY_QMUX_MIN_SEND_BUFSIZE 16384
+/**
  * Writes QMux records to the given buffer. As is the case with `quicly_send`, the application calls this function when the
  * timeout returned by `quicly_get_first_timeout` is reached.
- * @param [in,out] bufsize  Upon entry, the size of the buffer. Upon return, number of bytes being written to the buffer.
+ * @param [in,out] bufsize  Upon entry, the size of the buffer, which must be no less than QUICLY_QMUX_MIN_SEND_BUFSIZE. Upon
+ *                          return, number of bytes being written to the buffer. The value is not updated when an error is returned.
  * @return 0 if successful, otherwise one of the following:
- *         * QUICLY_ERROR_FREE_CONNECTION - the connection has been closed; i.e., a CONNECTION_CLOSE frame has been sent or
- *           received, or the idle timeout has fired. The caller must call `quicly_free` to discard the connection. Then, as
- *           specified in draft-ietf-quic-qmux-02 Section 7, the application SHOULD gracefully shut down the sending side of the
- *           underlying transport (e.g., send a TCP FIN), and SHOULD wait for the peer to do the same, discarding any data being
- *           received.
- *         * QUICLY_ERROR_SENDBUF_FULL - the buffer is too small to hold the next record. The caller may call this function again
- *           with a larger buffer.
+ *         * QUICLY_ERROR_FREE_CONNECTION - the connection has been closed; i.e., a CONNECTION_CLOSE frame has been sent by a
+ *           preceding call or received, or the idle timeout has fired. The caller must call `quicly_free` to discard the
+ *           connection. Then, as specified in draft-ietf-quic-qmux-02 Section 7, the application SHOULD gracefully shut down the
+ *           sending side of the underlying transport (e.g., send a TCP FIN), and SHOULD wait for the peer to do the same,
+ *           discarding any data being received.
  *         * other errors (e.g., PTLS_ERROR_NO_MEMORY) - the connection might have been left in an inconsistent state. The caller
  *           must call `quicly_free` to discard the connection, without trying to close it.
  */
