@@ -2824,8 +2824,8 @@ static void test_qmux_tp_filter(void)
 
 static struct {
     size_t count;
-    size_t lens[4];
-    uint8_t first_bytes[4];
+    size_t lens[8];
+    uint8_t first_bytes[8];
 } test_qmux_datagrams_received;
 
 static void test_qmux_on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
@@ -2849,42 +2849,62 @@ static void test_qmux_datagram(void)
 
     quicly_conn_t *cc = quicly_qmux_new(&ctx, 1, NULL), *sc = quicly_qmux_new(&ctx, 0, NULL);
 
-    { /* datagrams are not sent until the peer's transport parameters are received (draft-ietf-quic-qmux-02 Section 4.2) */
+    { /* datagrams are not sent before receiving the peer's transport parameters; as is the case with QUIC v1, they are dropped */
         ptls_iovec_t datagram = ptls_iovec_init("early", 5);
         quicly_send_datagram_frames(cc, &datagram, 1);
         qmux_transmit(cc, sc);
-        ok(test_qmux_datagrams_received.count == 0);
+        ok(cc->egress.datagram_frame_payloads.count == 0);
         qmux_transmit(sc, cc);
+        qmux_transmit(cc, sc);
+        ok(test_qmux_datagrams_received.count == 0);
+    }
+
+    { /* datagram being sent */
+        ptls_iovec_t datagram = ptls_iovec_init("hello", 5);
+        quicly_send_datagram_frames(cc, &datagram, 1);
         ok(quicly_get_first_timeout(cc) <= quic_now);
         qmux_transmit(cc, sc);
         ok(test_qmux_datagrams_received.count == 1);
         ok(test_qmux_datagrams_received.lens[0] == 5);
-        ok(test_qmux_datagrams_received.first_bytes[0] == 'e');
+        ok(test_qmux_datagrams_received.first_bytes[0] == 'h');
     }
 
-    { /* largest datagram that fits into a record (Section 9.1) followed by a small one */
+    { /* largest datagram that fits into a record (Section 9.1); the one that follows is dropped as the buffer becomes full */
         ptls_iovec_t datagrams[] = {ptls_iovec_init(payload, 16381), ptls_iovec_init("small", 5)};
         quicly_send_datagram_frames(cc, datagrams, PTLS_ELEMENTSOF(datagrams));
-        /* the 16384-byte record fills the buffer being supplied by qmux_transmit */
         qmux_transmit(cc, sc);
         ok(test_qmux_datagrams_received.count == 2);
         ok(test_qmux_datagrams_received.lens[1] == 16381);
         ok(test_qmux_datagrams_received.first_bytes[1] == 'A');
-        /* the small one is retained, and sent subsequently */
-        ok(quicly_get_first_timeout(cc) <= quic_now);
-        qmux_transmit(cc, sc);
-        ok(test_qmux_datagrams_received.count == 3);
-        ok(test_qmux_datagrams_received.lens[2] == 5);
-        ok(test_qmux_datagrams_received.first_bytes[2] == 's');
+        ok(cc->egress.datagram_frame_payloads.count == 0);
     }
 
     { /* datagrams that do not fit into a record are dropped */
         ptls_iovec_t datagrams[] = {ptls_iovec_init(payload, 16382), ptls_iovec_init("after", 5)};
         quicly_send_datagram_frames(cc, datagrams, PTLS_ELEMENTSOF(datagrams));
         qmux_transmit(cc, sc);
-        ok(test_qmux_datagrams_received.count == 4);
-        ok(test_qmux_datagrams_received.lens[3] == 5);
-        ok(test_qmux_datagrams_received.first_bytes[3] == 'a');
+        ok(test_qmux_datagrams_received.count == 3);
+        ok(test_qmux_datagrams_received.lens[2] == 5);
+        ok(test_qmux_datagrams_received.first_bytes[2] == 'a');
+    }
+
+    { /* datagram that does not fit into the buffer does not block stream data */
+        quicly_stream_t *stream;
+        ok(quicly_open_stream(cc, &stream, 0) == 0);
+        ok(quicly_streambuf_egress_write(stream, "stream", 6) == 0);
+        ptls_iovec_t datagram = ptls_iovec_init(payload, 5000);
+        quicly_send_datagram_frames(cc, &datagram, 1);
+        uint8_t buf[4096];
+        size_t len = sizeof(buf);
+        ok(quicly_qmux_send(cc, buf, &len) == 0);
+        size_t consumed = len;
+        ok(quicly_qmux_receive(sc, buf, &consumed) == 0);
+        ok(consumed == len);
+        quicly_stream_t *peer_stream = quicly_get_stream(sc, stream->stream_id);
+        ok(peer_stream != NULL);
+        ok(((quicly_streambuf_t *)peer_stream->data)->ingress.off == 6);
+        ok(test_qmux_datagrams_received.count == 3);
+        ok(quicly_get_first_timeout(cc) > quic_now);
     }
 
     ok(quicly_get_state(cc) == QUICLY_STATE_CONNECTED);
