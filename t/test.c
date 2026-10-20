@@ -2911,8 +2911,9 @@ static void test_qmux_datagram(void)
     quicly_free(sc);
 }
 
-static void test_qmux_large_tp(void)
+static void test_qmux_tp_roundtrip(void)
 {
+    /* transport parameters at their maximum encoded sizes */
     quicly_context_t ctx = quic_ctx;
     ctx.transport_params.max_stream_data.bidi_local = (uint64_t)1 << 40;
     ctx.transport_params.max_stream_data.bidi_remote = ((uint64_t)1 << 40) + 1;
@@ -3122,7 +3123,7 @@ static void test_qmux(void)
     subtest("misplaced-frame", test_qmux_misplaced_frame);
     subtest("tp-filter", test_qmux_tp_filter);
     subtest("datagram", test_qmux_datagram);
-    subtest("large-tp", test_qmux_large_tp);
+    subtest("tp-roundtrip", test_qmux_tp_roundtrip);
     subtest("discard-while-closing", test_qmux_discard_while_closing);
     subtest("accessors", test_qmux_accessors);
     subtest("receive-error", test_qmux_receive_error);
