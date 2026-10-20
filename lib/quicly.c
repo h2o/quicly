@@ -7389,6 +7389,8 @@ static quicly_error_t handle_datagram_frame(quicly_conn_t *conn, struct st_quicl
 
     /* handle the frame. Applications might call quicly_close or other functions that modify the connection state. */
     conn->super.ctx->receive_datagram_frame->cb(conn->super.ctx->receive_datagram_frame, conn, frame.payload);
+    if (conn->super.state >= QUICLY_STATE_CLOSING)
+        return QUICLY_ERROR_IS_CLOSING;
 
     return 0;
 }

@@ -3022,6 +3022,34 @@ static void test_qmux_discard_while_closing(void)
     }
 }
 
+static void test_qmux_close_on_datagram(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
+{
+    quicly_close(conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), "");
+}
+
+static void test_qmux_close_in_callback(void)
+{
+    quicly_receive_datagram_frame_t on_receive = {.cb = test_qmux_close_on_datagram};
+    quicly_context_t server_ctx = quic_ctx;
+    server_ctx.transport_params.max_datagram_frame_size = 65535;
+    server_ctx.receive_datagram_frame = &on_receive;
+
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&server_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* frames following the one during which the application closed the connection are not processed */
+    static const uint8_t record[] = {7, QUICLY_FRAME_TYPE_DATAGRAM_WITHLEN, 1, 'd', 0x0b /* STREAM with LEN and FIN */, 0, 1, 'x'};
+    size_t len = sizeof(record);
+    ok(quicly_qmux_receive(sc, record, &len) == 0);
+    ok(len == sizeof(record));
+    ok(quicly_get_state(sc) == QUICLY_STATE_CLOSING);
+    ok(quicly_get_stream(sc, 0) == NULL);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_idle_timeout(void)
 {
     quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
@@ -3186,6 +3214,7 @@ static void test_qmux(void)
     subtest("datagram", test_qmux_datagram);
     subtest("tp-roundtrip", test_qmux_tp_roundtrip);
     subtest("discard-while-closing", test_qmux_discard_while_closing);
+    subtest("close-in-callback", test_qmux_close_in_callback);
     subtest("idle-timeout", test_qmux_idle_timeout);
     subtest("accessors", test_qmux_accessors);
     subtest("receive-error", test_qmux_receive_error);
