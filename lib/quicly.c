@@ -8912,6 +8912,11 @@ quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appda
 {
     quicly_conn_t *conn;
 
+    /* consistency checks */
+    assert(ctx->qmux_writable != NULL);
+    if (ctx->transport_params.max_datagram_frame_size != 0)
+        assert(ctx->receive_datagram_frame != NULL);
+
     if ((conn = malloc(sizeof(*conn))) == NULL)
         return NULL;
 

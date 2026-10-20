@@ -2953,6 +2953,8 @@ static void test_qmux_tp_roundtrip(void)
     ctx.transport_params.max_streams_uni = ((uint64_t)1 << 40) + 5;
     ctx.transport_params.max_idle_timeout = ((uint64_t)1 << 40) + 6;
     ctx.transport_params.max_datagram_frame_size = 65535;
+    quicly_receive_datagram_frame_t on_receive = {.cb = test_qmux_on_receive_datagram_frame};
+    ctx.receive_datagram_frame = &on_receive;
 
     quicly_conn_t *cc = quicly_qmux_new(&ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
 
