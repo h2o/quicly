@@ -7450,10 +7450,8 @@ static quicly_error_t handle_qx_transport_parameters_frame(quicly_conn_t *conn, 
 
     state->epoch = QUICLY_EPOCH_ON_STREAMS_OTHER;
 
-    if (conn->super.remote.transport_params.max_streams_uni != 0)
-        open_blocked_streams(conn, 0);
-    if (conn->super.remote.transport_params.max_streams_bidi != 0)
-        open_blocked_streams(conn, 1);
+    open_blocked_streams(conn, 1);
+    open_blocked_streams(conn, 0);
 
     return 0;
 }

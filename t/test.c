@@ -2661,6 +2661,38 @@ static void test_qmux_tp_first(void)
     quicly_free(sc);
 }
 
+static void do_test_qmux_open_before_tp(int uni)
+{
+    /* the peer permits only the type of streams being opened before receiving its transport parameters */
+    quicly_context_t client_ctx = quic_ctx;
+    client_ctx.transport_params.max_streams_uni = uni ? 3 : 0;
+    client_ctx.transport_params.max_streams_bidi = uni ? 0 : 3;
+
+    quicly_conn_t *cc = quicly_qmux_new(&client_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(sc, &stream, uni) == 0);
+    ok(quicly_streambuf_egress_write(stream, "hello", 5) == 0);
+
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+    ok(quicly_get_first_timeout(sc) <= quic_now);
+    qmux_transmit(sc, cc);
+
+    quicly_stream_t *peer_stream = quicly_get_stream(cc, stream->stream_id);
+    ok(peer_stream != NULL);
+    if (peer_stream != NULL)
+        ok(((quicly_streambuf_t *)peer_stream->data)->ingress.off == 5);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
+static void test_qmux_open_before_tp(void)
+{
+    subtest("uni", do_test_qmux_open_before_tp, 1);
+    subtest("bidi", do_test_qmux_open_before_tp, 0);
+}
+
 static void test_qmux_notp(void)
 {
     static const uint8_t input[] = {1, 0x14 /* 1st frame = DATA_BLOCKED */};
@@ -3206,6 +3238,7 @@ static void test_qmux(void)
 
     subtest("simple", test_qmux_simple);
     subtest("tp-first", test_qmux_tp_first);
+    subtest("open-before-tp", test_qmux_open_before_tp);
     subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
