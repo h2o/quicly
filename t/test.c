@@ -3246,6 +3246,27 @@ static void test_qmux_long_reason_phrase(void)
 
     quicly_free(cc);
     quicly_free(sc);
+
+    /* truncation happens at a UTF-8 character boundary (in this case, the character being cut is 3 bytes long) */
+    static char reason_utf8[20002];
+    for (size_t i = 0; i < sizeof(reason_utf8) - 1; i += 3)
+        memcpy(reason_utf8 + i, "\xe3\x81\x82", 3);
+    memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
+    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
+    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+    ok(quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), reason_utf8) == 0);
+    len = sizeof(buf);
+    ok(quicly_qmux_send(cc, buf, &len) == 0);
+    consumed = len;
+    ok(quicly_qmux_receive(sc, buf, &consumed) == QUICLY_ERROR_IS_CLOSING);
+    quicly_get_close_reason(sc, NULL, &received_reason, NULL);
+    ok(strlen(received_reason) > 16000);
+    ok(strlen(received_reason) % 3 == 0);
+
+    quicly_free(cc);
+    quicly_free(sc);
 }
 
 static quicly_error_t test_qmux_stream_open_nomem(quicly_stream_open_t *self, quicly_stream_t *stream)
