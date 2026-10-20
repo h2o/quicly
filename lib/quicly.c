@@ -8790,6 +8790,15 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
         uint64_t error_code, frame_type;
         const char *reason_phrase;
         determine_connection_close_payload(conn, 0, &error_code, &frame_type, &reason_phrase);
+        /* truncate the reason phrase (at a UTF-8 character boundary) so that the frame fits into a record */
+        size_t frame_capacity = quicly_close_frame_capacity(error_code, frame_type, reason_phrase);
+        if (frame_capacity > QUICLY_QMUX_MAX_RECORD_SIZE) {
+            assert(reason_phrase == conn->connection_close.reason_phrase);
+            size_t reason_len = strlen(reason_phrase) - (frame_capacity - QUICLY_QMUX_MAX_RECORD_SIZE);
+            while (reason_len != 0 && (reason_phrase[reason_len] & 0xc0) == 0x80)
+                --reason_len;
+            conn->connection_close.reason_phrase[reason_len] = '\0';
+        }
         if ((ret = do_allocate_qmux_frame(conn, &s, quicly_close_frame_capacity(error_code, frame_type, reason_phrase))) != 0 ||
             (ret = do_send_connection_close(conn, &s, error_code, frame_type, reason_phrase)) != 0)
             goto Exit;

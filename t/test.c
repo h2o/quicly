@@ -3008,6 +3008,33 @@ static void test_qmux_accessors(void)
     quicly_free(conn);
 }
 
+static void test_qmux_long_reason_phrase(void)
+{
+    static char reason[20000];
+    memset(reason, 'r', sizeof(reason) - 1);
+
+    memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* reason phrase is truncated so that the CONNECTION_CLOSE frame fits into a record */
+    ok(quicly_close(cc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), reason) == 0);
+    uint8_t buf[16384];
+    size_t len = sizeof(buf);
+    ok(quicly_qmux_send(cc, buf, &len) == 0);
+    size_t consumed = len;
+    ok(quicly_qmux_receive(sc, buf, &consumed) == QUICLY_ERROR_IS_CLOSING);
+    ok(test_qmux_closed_by_remote.conn == sc);
+    const char *received_reason;
+    quicly_get_close_reason(sc, NULL, &received_reason, NULL);
+    ok(strlen(received_reason) > 16000);
+    ok(strlen(received_reason) < 16382);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_small_buffer(void)
 {
     quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
@@ -3093,6 +3120,7 @@ static void test_qmux(void)
     subtest("discard-while-closing", test_qmux_discard_while_closing);
     subtest("accessors", test_qmux_accessors);
     subtest("small-buffer", test_qmux_small_buffer);
+    subtest("long-reason-phrase", test_qmux_long_reason_phrase);
 
     ok(test_qmux_open_count == 0);
 
