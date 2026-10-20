@@ -3020,6 +3020,32 @@ static void test_qmux_discard_while_closing(void)
     }
 }
 
+static void test_qmux_idle_timeout(void)
+{
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    int64_t idle_timeout_at = cc->idle_timeout.at;
+    quic_now += 10;
+
+    /* idle timer is not reset by partial records (qmux-02 Section 7.1) */
+    static const uint8_t partial[] = {0x40}, padding[] = {1, QUICLY_FRAME_TYPE_PADDING};
+    size_t len = sizeof(partial);
+    ok(quicly_qmux_receive(cc, partial, &len) == 0);
+    ok(len == 0);
+    ok(cc->idle_timeout.at == idle_timeout_at);
+
+    /* but is reset by complete records */
+    len = sizeof(padding);
+    ok(quicly_qmux_receive(cc, padding, &len) == 0);
+    ok(len == sizeof(padding));
+    ok(cc->idle_timeout.at == idle_timeout_at + 10);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_accessors(void)
 {
     quicly_conn_t *conn = quicly_qmux_new(&quic_ctx, 1, NULL);
@@ -3156,6 +3182,7 @@ static void test_qmux(void)
     subtest("datagram", test_qmux_datagram);
     subtest("tp-roundtrip", test_qmux_tp_roundtrip);
     subtest("discard-while-closing", test_qmux_discard_while_closing);
+    subtest("idle-timeout", test_qmux_idle_timeout);
     subtest("accessors", test_qmux_accessors);
     subtest("receive-error", test_qmux_receive_error);
     subtest("full-buffer", test_qmux_full_buffer);
