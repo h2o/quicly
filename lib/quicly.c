@@ -3885,9 +3885,16 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     /* Other than the idle timeout and `send_ack_at` which is used for closing, QMux needs to consult only transport state and if
      * there are any frames need to be sent. */
     if (quicly_is_qmux(conn)) {
-        if (conn->super.ctx->qmux_writable->cb(conn->super.ctx->qmux_writable, conn) &&
-            (conn->egress.pending_flows != 0 || quicly_linklist_is_linked(&conn->egress.pending_streams.control) ||
-             should_send_datagram_frame(conn) || scheduler_can_send(conn)))
+        /* until the peer's transport parameters are received, the only frame to be sent is QX_TRANSPORT_PARAMETERS */
+        int has_frames_to_send;
+        if (!quicly_connection_is_ready(conn)) {
+            has_frames_to_send = conn->super.stats.num_frames_sent.qx_transport_parameters == 0;
+        } else {
+            has_frames_to_send = conn->egress.pending_flows != 0 ||
+                                 quicly_linklist_is_linked(&conn->egress.pending_streams.control) ||
+                                 should_send_datagram_frame(conn) || scheduler_can_send(conn);
+        }
+        if (has_frames_to_send && conn->super.ctx->qmux_writable->cb(conn->super.ctx->qmux_writable, conn))
             at = 0;
         return at;
     }
@@ -8782,6 +8789,9 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
     /* send frames (or destroy all streams and advance to draining) */
     switch (conn->super.state) {
     case QUICLY_STATE_CONNECTED:
+        /* other frames are sent after receiving the peer's transport parameters (qmux-02 Section 4.2) */
+        if (!quicly_connection_is_ready(conn))
+            break;
         /* as is the case with QUIC v1, DATAGRAM frames are sent before STREAM frames */
         qmux_send_datagram_frames(conn, &s);
         if ((ret = do_send_core(conn, &s)) != 0 && ret != QUICLY_ERROR_SENDBUF_FULL)

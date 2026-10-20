@@ -2643,6 +2643,24 @@ static void test_qmux_simple(void)
     quicly_free(sc);
 }
 
+static void test_qmux_tp_first(void)
+{
+    quicly_conn_t *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+
+    /* until receiving the peer's transport parameters, only QX_TRANSPORT_PARAMETERS is sent (qmux-02 Section 4.2) */
+    uint8_t buf[16384];
+    size_t len = sizeof(buf);
+    ok(quicly_qmux_send(sc, buf, &len) == 0);
+    const uint8_t *src = buf, *end = buf + len;
+    ok(ptls_decode_quicint(&src, end) == end - src);
+    ok(ptls_decode_quicint(&src, end) == QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS);
+    uint64_t tp_len = ptls_decode_quicint(&src, end);
+    ok(src + tp_len == end);
+    ok(quicly_get_first_timeout(sc) > quic_now);
+
+    quicly_free(sc);
+}
+
 static void test_qmux_notp(void)
 {
     static const uint8_t input[] = {1, 0x14 /* 1st frame = DATA_BLOCKED */};
@@ -3124,6 +3142,7 @@ static void test_qmux(void)
     quic_ctx.update_open_count = &update_open_count;
 
     subtest("simple", test_qmux_simple);
+    subtest("tp-first", test_qmux_tp_first);
     subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
