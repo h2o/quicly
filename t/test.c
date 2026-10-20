@@ -2706,6 +2706,7 @@ static void test_qmux_notp(void)
     uint8_t buf[16384];
     len = sizeof(buf);
     ret = quicly_qmux_send(conn, buf, &len);
+    ok(ret == 0);
 
     const uint8_t *src = buf, *end = src + len;
     uint64_t reclen = ptls_decode_quicint(&src, end);
@@ -2718,7 +2719,7 @@ static void test_qmux_notp(void)
     uint64_t close_frame_type = ptls_decode_quicint(&src, end);
     ok(close_frame_type == QUICLY_FRAME_TYPE_TRANSPORT_CLOSE);
     uint64_t close_error_code = ptls_decode_quicint(&src, end);
-    /* first frame not being QX_TRANSPORT_PARAMETERS is PROTOCOL_VIOLATION (draft-ietf-quic-qmux-02 Section 4.2) */
+    /* first frame not being QX_TRANSPORT_PARAMETERS is PROTOCOL_VIOLATION (qmux-02 Section 4.2) */
     ok(close_error_code == QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION));
     uint64_t close_frame = ptls_decode_quicint(&src, end);
     ok(close_frame == QUICLY_FRAME_TYPE_DATA_BLOCKED);
@@ -2831,7 +2832,7 @@ static void do_test_qmux_misplaced_frame(const uint8_t *record, size_t record_le
 
 static void test_qmux_misplaced_frame(void)
 {
-    { /* frames prohibited in QMux are FRAME_ENCODING_ERROR (draft-ietf-quic-qmux-02 Section 4) */
+    { /* frames prohibited in QMux are FRAME_ENCODING_ERROR (qmux-02 Section 4) */
         static const uint8_t ping[] = {1, QUICLY_FRAME_TYPE_PING};
         do_test_qmux_misplaced_frame(ping, sizeof(ping), QUICLY_TRANSPORT_ERROR_FRAME_ENCODING, QUICLY_FRAME_TYPE_PING);
         static const uint8_t handshake_done[] = {1, QUICLY_FRAME_TYPE_HANDSHAKE_DONE};
@@ -2866,7 +2867,7 @@ static void test_qmux_tp_filter(void)
 {
     quicly_transport_parameters_t params;
 
-    /* min_ack_delay is not a QUIC v1 transport parameter, therefore is ignored (draft-ietf-quic-qmux-02 Section 5.1) */
+    /* min_ack_delay is not a QUIC v1 transport parameter, therefore is ignored (qmux-02 Section 5.1) */
     ok(decode_single_tp(1, 0xff04de1b, "\x01", 1, &params) == 0);
     ok(params.min_ack_delay_usec == UINT64_MAX);
     ok(decode_single_tp(0, 0xff04de1b, "\x01", 1, &params) == 0);
@@ -3013,7 +3014,7 @@ static void test_qmux_discard_while_closing(void)
     static const uint8_t client_stream_record[] = {4, 0x0b /* STREAM with LEN and FIN */, 0 /* stream ID */, 1, 'x'},
                          server_stream_record[] = {4, 0x0b, 1, 1, 'x'};
 
-    { /* records following CONNECTION_CLOSE are discarded (draft-ietf-quic-qmux-02 Section 7.2) */
+    { /* records following CONNECTION_CLOSE are discarded (qmux-02 Section 7.2) */
         memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
         quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
         qmux_transmit(sc, cc);
