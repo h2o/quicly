@@ -3059,6 +3059,8 @@ static void test_qmux_accessors(void)
     ok(quicly_get_peername(conn) == NULL);
     ok(quicly_get_stats(conn, &stats) == 0);
     ok(stats.cc.type == NULL);
+    ok(stats.handshake_confirmed_msec == UINT64_MAX);
+    ok(conn->created_at == quic_now);
 
     quicly_free(conn);
 }

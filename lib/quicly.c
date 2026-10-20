@@ -1559,8 +1559,8 @@ quicly_error_t quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
     stats->rtt = conn->egress.loss.rtt;
     stats->loss_thresholds = conn->egress.loss.thresholds;
     stats->cc = conn->egress.cc;
-    /* convert `exit_slow_start_at` to time spent since the connection was created */
-    if (stats->cc.exit_slow_start_at != INT64_MAX) {
+    /* convert `exit_slow_start_at` to time spent since the connection was created (QMux does not run congestion control) */
+    if (!quicly_is_qmux(conn) && stats->cc.exit_slow_start_at != INT64_MAX) {
         assert(stats->cc.exit_slow_start_at >= conn->created_at);
         stats->cc.exit_slow_start_at -= conn->created_at;
     }
@@ -8926,6 +8926,8 @@ quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appda
 
     lock_now(conn, 0);
 
+    conn->created_at = conn->stash.now;
+    conn->super.stats.handshake_confirmed_msec = UINT64_MAX; /* the handshake is that of the underlying transport */
     if (init_connection_core(conn, is_client) != 0) {
         unlock_now(conn);
         free(conn);
