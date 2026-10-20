@@ -442,7 +442,9 @@ static void delete_range(quicly_bplus_ranges_t *ranges, struct st_quicly_bplus_r
  */
 static void free_children(quicly_bplus_ranges_t *ranges, quicly_bplus_ranges_node_t *node, size_t height)
 {
-    for (size_t i = 0; i == 0 || (i < FANOUT && has_entry(node, 0, i)); ++i) {
+    size_t num_children = keys_count_le(node, UINT64_MAX - 1) + 1;
+
+    for (size_t i = 0; i < num_children; ++i) {
         quicly_bplus_ranges_node_t *child = node->children[i];
         if (height > 2)
             free_children(ranges, child, height - 1);
