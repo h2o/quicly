@@ -56,11 +56,17 @@ typedef union un_quicly_bplus_ranges_node_t {
  * ranges are removed only by being merged into the added one.
  */
 typedef struct st_quicly_bplus_ranges_t {
+    /**
+     * number of ranges contained
+     */
     size_t num_ranges;
     /**
      * number of levels including the leaves; 1 means `root` is a leaf
      */
     uint8_t height;
+    /**
+     * the root node; points to `quicly_bplus_ranges_t::first` if `root` is a leaf
+     */
     quicly_bplus_ranges_node_t *root;
     /**
      * last range; NULL if `num_ranges == 0`
