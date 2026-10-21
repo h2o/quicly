@@ -1828,7 +1828,7 @@ static quicly_error_t record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_ou
     if ((ret = quicly_ranges_add(ranges, pn, pn + 1)) != 0)
         return ret;
     if (ranges->num_ranges > QUICLY_MAX_ACK_BLOCKS)
-        quicly_ranges_drop_by_range_indices(ranges, ranges->num_ranges - QUICLY_MAX_ACK_BLOCKS, ranges->num_ranges);
+        quicly_ranges_drop_by_range_indices(ranges, 0, ranges->num_ranges - QUICLY_MAX_ACK_BLOCKS);
 
     return 0;
 }
@@ -3389,8 +3389,7 @@ static quicly_error_t do_on_ack_ack(quicly_conn_t *conn, const quicly_sent_packe
         space->largest_pn_received_at = INFINITY;
         space->unacked_count = 0;
     } else if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS) {
-        quicly_ranges_drop_by_range_indices(&space->ack_queue, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS,
-                                            space->ack_queue.num_ranges);
+        quicly_ranges_drop_by_range_indices(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS);
     }
 
     return 0;
