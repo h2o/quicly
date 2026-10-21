@@ -1083,13 +1083,6 @@ struct st_quicly_stream_t {
          * size of the receive window
          */
         uint32_t window;
-        /**
-         * Maximum number of ranges (i.e. gaps + 1) permitted in `recvstate.ranges`.
-         * As discussed in https://github.com/h2o/quicly/issues/278, this value should be proportional to the size of the receive
-         * window, so that the receive window can be maintained even in the worst case, where every one of the two packets being
-         * sent are received.
-         */
-        uint32_t max_ranges;
     } _recv_aux;
 };
 

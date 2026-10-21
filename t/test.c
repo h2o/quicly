@@ -2597,6 +2597,7 @@ int main(int argc, char **argv)
     subtest("select_with_ratio255", test_select_with_ratio255);
     subtest("next-packet-number", test_next_packet_number);
     subtest("address-token-codec", test_address_token_codec);
+    subtest("bplus_ranges", test_bplus_ranges);
     subtest("ranges", test_ranges);
     subtest("rate", test_rate);
     subtest("record-receipt", test_record_receipt);

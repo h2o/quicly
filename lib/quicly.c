@@ -1092,7 +1092,7 @@ static int should_send_max_stream_data(quicly_stream_t *stream)
     if (stream->recvstate.eos != UINT64_MAX)
         return 0;
     return quicly_maxsender_should_send_max(&stream->_send_aux.max_stream_data_sender, stream->recvstate.data_off,
-                                            stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end,
+                                            stream->recvstate.received.last->end,
                                             stream->_recv_aux.window, 512);
 }
 
@@ -1324,19 +1324,6 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     quicly_linklist_init(&stream->_send_aux.pending_link.default_scheduler);
 
     stream->_recv_aux.window = initial_max_stream_data_local;
-
-    /* Set the number of max ranges to be capable of handling following case:
-     * * every one of the two packets being sent are lost
-     * * average size of a STREAM frame found in a packet is >= ~512 bytes, or small STREAM frame is sent for every other stream
-     *   being opened (e.g., sending QPACK encoder/decoder stream frame for each HTTP/3 request)
-     * See also: the doc-comment on `_recv_aux.max_ranges`.
-     */
-    uint32_t fragments_minmax = (uint32_t)(stream->conn->super.ctx->transport_params.max_streams_uni +
-                                           stream->conn->super.ctx->transport_params.max_streams_bidi);
-    if (fragments_minmax < 63)
-        fragments_minmax = 63;
-    if ((stream->_recv_aux.max_ranges = initial_max_stream_data_local / 1024) < fragments_minmax)
-        stream->_recv_aux.max_ranges = fragments_minmax;
 }
 
 static void dispose_stream_properties(quicly_stream_t *stream)
@@ -2455,9 +2442,8 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
         uint64_t max_stream_data = frame->offset + frame->data.len;
         if ((int64_t)max_stream_data > stream->_send_aux.max_stream_data_sender.committed)
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
-        if (stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end < max_stream_data) {
-            uint64_t newly_received =
-                max_stream_data - stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end;
+        if (stream->recvstate.received.last->end < max_stream_data) {
+            uint64_t newly_received = max_stream_data - stream->recvstate.received.last->end;
             if (stream->conn->ingress.max_data.bytes_consumed + newly_received >
                 stream->conn->ingress.max_data.sender.committed)
                 return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
@@ -2472,8 +2458,9 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
 
     /* update recvbuf */
     size_t apply_len = frame->data.len;
-    if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin,
-                                       stream->_recv_aux.max_ranges)) != 0)
+    uint64_t max_committed = stream->stream_id >= 0 ? (uint64_t)stream->_send_aux.max_stream_data_sender.committed
+                                                    : stream->conn->super.ctx->max_crypto_bytes;
+    if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin, max_committed)) != 0)
         return ret;
 
     if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {

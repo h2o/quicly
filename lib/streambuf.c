@@ -190,10 +190,8 @@ ptls_iovec_t quicly_recvbuf_get(quicly_stream_t *stream, ptls_buffer_t *rb)
 
     if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
         avail = rb->off;
-    } else if (stream->recvstate.data_off < stream->recvstate.received.ranges[0].end) {
-        avail = stream->recvstate.received.ranges[0].end - stream->recvstate.data_off;
     } else {
-        avail = 0;
+        avail = quicly_recvstate_bytes_available(&stream->recvstate);
     }
 
     return ptls_iovec_init(rb->base, avail);
