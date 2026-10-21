@@ -40,7 +40,7 @@ void quicly_recvstate_init_closed(quicly_recvstate_t *state)
 
 void quicly_recvstate_dispose(quicly_recvstate_t *state)
 {
-    quicly_bplus_ranges_clear(&state->received);
+    quicly_bplus_ranges_dispose(&state->received);
 }
 
 quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t *off, size_t *len, int is_fin, uint64_t max_committed)
