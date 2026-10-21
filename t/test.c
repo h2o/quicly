@@ -1499,6 +1499,70 @@ static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **s
     exchange_until_idle(*client, *server);
 }
 
+static void test_cc_limited_drain_and_resume(void)
+{
+    quicly_init_cc_t *saved_init_cc = quic_ctx.egress[0].cc.init_cc;
+    quic_ctx.egress[0].cc.init_cc = &quicly_cc_reno_init;
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(client->egress.loss.sentmap.bytes_in_flight == 0);
+
+    quicly_stats_t before, stats;
+    quicly_get_stats(client, &before);
+    uint32_t mtu = client->egress.max_udp_payload_size;
+    quicly_address_t dest, src;
+    struct iovec datagrams[32];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * mtu], zeros[2 * mtu];
+    memset(zeros, 0, sizeof(zeros));
+    size_t num_datagrams = 0;
+
+    /* Fill CWND without delivering any packets yet. Each write fits in one packet, leaving no queued data when the window
+     * becomes full. Even the early packets, sent with little in flight, should contribute to growth when acknowledged. */
+    for (; client->egress.loss.sentmap.bytes_in_flight < before.cc.cwnd && num_datagrams < PTLS_ELEMENTSOF(datagrams);
+         ++num_datagrams) {
+        ok(quicly_streambuf_egress_write(stream, zeros, mtu - 100 /* leave room for QUIC headers */) == 0);
+        size_t count = 1;
+        ok(quicly_send(client, &dest, &src, datagrams + num_datagrams, &count, buf + num_datagrams * mtu, mtu) == 0);
+        ok(count == 1);
+    }
+    ok(client->egress.loss.sentmap.bytes_in_flight >= before.cc.cwnd);
+    ok(!scheduler_can_send(client));
+
+    /* Drain the flight one ACK at a time. All of it must count toward slow-start growth, including the tail acknowledged
+     * after bytes in flight fall below CWND/2. Do not call the client's send path while draining. */
+    for (size_t i = 0; i != num_datagrams; ++i) {
+        quicly_decoded_packet_t decoded;
+        ok(decode_packets(&decoded, datagrams + i, 1) == 1);
+        ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        ok(transmit(server, client) == 1);
+        quicly_get_stats(client, &stats);
+        uint64_t bytes_acked = stats.num_bytes.ack_received - before.num_bytes.ack_received;
+        ok(stats.cc.cwnd == before.cc.cwnd + bytes_acked / mtu * mtu);
+    }
+    ok(client->egress.loss.sentmap.bytes_in_flight == 0);
+    ok(stats.cc.cwnd > before.cc.cwnd);
+
+    /* Resume with enough data to grow CWND if it were incorrectly still CC-limited, but too little to fill the window. */
+    uint32_t cwnd = stats.cc.cwnd;
+    ok(quicly_streambuf_egress_write(stream, zeros, 2 * mtu) == 0);
+    ok(transmit(client, server) > 0);
+    ok(client->egress.loss.sentmap.bytes_in_flight >= 2 * mtu);
+    ok(client->egress.loss.sentmap.bytes_in_flight < cwnd / 2);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    ok(transmit(server, client) == 1);
+    quicly_get_stats(client, &stats);
+    ok(client->egress.loss.sentmap.bytes_in_flight == 0);
+    ok(stats.cc.cwnd == cwnd);
+    ok(stats.num_packets.lost == 0);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.egress[0].cc.init_cc = saved_init_cc;
+}
+
 static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, struct iovec *datagram, void *buf,
                                     size_t bufsize)
 {
@@ -3074,6 +3138,7 @@ int main(int argc, char **argv)
     subtest("select_with_ratio255", test_select_with_ratio255);
     subtest("next-packet-number", test_next_packet_number);
     subtest("address-token-codec", test_address_token_codec);
+    subtest("bplus_ranges", test_bplus_ranges);
     subtest("ranges", test_ranges);
     subtest("rate", test_rate);
     subtest("record-receipt", test_record_receipt);
@@ -3107,6 +3172,7 @@ int main(int argc, char **argv)
     subtest("frames-opening-peer-stream", test_frames_opening_peer_stream);
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
+    subtest("cc-limited-drain-and-resume", test_cc_limited_drain_and_resume);
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
     subtest("fractional-close-timeout", test_fractional_close_timeout);
     subtest("time-threshold-loss-episode", test_time_threshold_loss_episode);

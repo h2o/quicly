@@ -24,7 +24,7 @@
 
 void quicly_recvstate_init(quicly_recvstate_t *state)
 {
-    quicly_ranges_init_with_range(&state->received, 0, 0);
+    quicly_bplus_ranges_init(&state->received);
     state->data_off = 0;
     state->eos = UINT64_MAX;
     state->app_error_code = UINT64_MAX;
@@ -32,7 +32,7 @@ void quicly_recvstate_init(quicly_recvstate_t *state)
 
 void quicly_recvstate_init_closed(quicly_recvstate_t *state)
 {
-    quicly_ranges_init_with_range(&state->received, 0, 0);
+    quicly_bplus_ranges_init(&state->received);
     state->data_off = 0;
     state->eos = 0;
     state->app_error_code = UINT64_MAX;
@@ -40,10 +40,10 @@ void quicly_recvstate_init_closed(quicly_recvstate_t *state)
 
 void quicly_recvstate_dispose(quicly_recvstate_t *state)
 {
-    quicly_ranges_clear(&state->received);
+    quicly_bplus_ranges_clear(&state->received);
 }
 
-quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t *off, size_t *len, int is_fin, size_t max_ranges)
+quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t *off, size_t *len, int is_fin, uint64_t max_committed)
 {
     assert(!quicly_recvstate_transfer_complete(state));
 
@@ -52,7 +52,7 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t *off,
     if (state->eos == UINT64_MAX) {
         if (is_fin) {
             state->eos = *off + *len;
-            if (state->eos < state->received.ranges[state->received.num_ranges - 1].end)
+            if (state->eos < state->received.last->end)
                 return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
         }
     } else if (*off + *len > state->eos) {
@@ -78,11 +78,9 @@ quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t *off,
 
     /* update received range */
     if (*len != 0) {
-        int ret;
-        if ((ret = quicly_ranges_add(&state->received, *off, *off + *len)) != 0)
+        quicly_error_t ret;
+        if ((ret = quicly_bplus_ranges_add(&state->received, *off, *off + *len, max_committed)) != 0)
             return ret;
-        if (state->received.num_ranges > max_ranges)
-            return QUICLY_ERROR_STATE_EXHAUSTION;
     }
     return 0;
 }
@@ -95,7 +93,7 @@ quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_
 
     *bytes_missing = 0;
 
-    if (final_size < state->received.ranges[state->received.num_ranges - 1].end)
+    if (final_size < state->received.last->end)
         return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
 
     if (state->app_error_code == UINT64_MAX) {
@@ -104,7 +102,7 @@ quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_
             return QUICLY_TRANSPORT_ERROR_FINAL_SIZE;
         /* The sender has consumed flow control credit up to the final size; report the part of it that will never be received,
          * the rest having been accounted for as it arrived. This is done once, no byte of the stream being charged thereafter. */
-        *bytes_missing = final_size - state->received.ranges[state->received.num_ranges - 1].end;
+        *bytes_missing = final_size - state->received.last->end;
     } else {
         /* the application error code cannot change between the resets received for one stream (section 5.2 of
          * draft-ietf-quic-reliable-stream-reset) */
@@ -118,8 +116,8 @@ quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_
 
     /* Raise the reliable size to the bytes that have already been received contiguously, if that is greater; they cannot become
      * undelivered. Ranges above it are retained; see quicly_recvstate_bytes_allocated. */
-    if (state->received.ranges[0].start == 0 && reliable_size < state->received.ranges[0].end)
-        reliable_size = state->received.ranges[0].end;
+    if (state->received.first.ranges[0].start == 0 && reliable_size < state->received.first.ranges[0].end)
+        reliable_size = state->received.first.ranges[0].end;
 
     /* from here on `eos` is the offset the peer remains committed to delivering, rather than the final size; the transfer is
      * complete once the contiguous prefix reaches it, which the ranges stranded above by the reset do not hold back */

@@ -29,13 +29,13 @@ extern "C" {
 #include <assert.h>
 #include <stddef.h>
 #include "picotls.h"
-#include "quicly/ranges.h"
+#include "quicly/bplus_ranges.h"
 
 typedef struct st_quicly_recvstate_t {
     /**
      * Ranges that have been received; always non-empty. When a reset is received, the end of the ranges could be past `eos`.
      */
-    quicly_ranges_t received;
+    quicly_bplus_ranges_t received;
     /**
      * starting offset of data
      */
@@ -56,6 +56,9 @@ void quicly_recvstate_init(quicly_recvstate_t *state);
 void quicly_recvstate_init_closed(quicly_recvstate_t *state);
 void quicly_recvstate_dispose(quicly_recvstate_t *state);
 static int quicly_recvstate_transfer_complete(quicly_recvstate_t *state);
+/**
+ * Returns the number of bytes that have been received contiguously from `data_off`, up to `eos`.
+ */
 static size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state);
 /**
  * Returns the offset up to which memory has been allocated for the stream. Used for flow credit management.
@@ -63,9 +66,10 @@ static size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state);
 static uint64_t quicly_recvstate_bytes_allocated(quicly_recvstate_t *state);
 /**
  * Records that the range identified by (*off, *len) has been received. When 0 (success) is returned, the pair is narrowed to the
- * bytes that need to be written to the receive buffer.
+ * bytes that need to be written to the receive buffer. `max_committed` is the maximum offset that the peer is permitted to send;
+ * it determines the maximum number of gaps being permitted.
  */
-quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t *off, size_t *len, int is_fin, size_t max_ranges);
+quicly_error_t quicly_recvstate_update(quicly_recvstate_t *state, uint64_t *off, size_t *len, int is_fin, uint64_t max_committed);
 quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_size, uint64_t reliable_size,
                                       uint64_t app_error_code, uint64_t *bytes_missing);
 
@@ -73,19 +77,19 @@ quicly_error_t quicly_recvstate_reset(quicly_recvstate_t *state, uint64_t final_
 
 inline int quicly_recvstate_transfer_complete(quicly_recvstate_t *state)
 {
-    return state->received.ranges[0].start == 0 && state->received.ranges[0].end >= state->eos;
+    return state->received.first.ranges[0].start == 0 && state->received.first.ranges[0].end >= state->eos;
 }
 
 inline size_t quicly_recvstate_bytes_available(quicly_recvstate_t *state)
 {
-    uint64_t total = quicly_recvstate_transfer_complete(state) ? state->eos : state->received.ranges[0].end;
+    uint64_t total = quicly_recvstate_transfer_complete(state) ? state->eos : state->received.first.ranges[0].end;
     assert(state->data_off <= total);
     return total - state->data_off;
 }
 
 inline uint64_t quicly_recvstate_bytes_allocated(quicly_recvstate_t *state)
 {
-    uint64_t end = state->received.ranges[state->received.num_ranges - 1].end;
+    uint64_t end = state->received.last->end;
     return state->eos != UINT64_MAX && state->eos > end ? state->eos : end;
 }
 

@@ -29,7 +29,7 @@ static void convert_error(quicly_stream_t *stream, quicly_error_t err)
     assert(err != 0);
     if (QUICLY_ERROR_IS_QUIC_APPLICATION(err)) {
         if (quicly_stream_has_send_side(quicly_is_client(stream->conn), stream->stream_id) &&
-            quicly_sendstate_is_open(&stream->sendstate))
+            !quicly_sendstate_transfer_complete(&stream->sendstate))
             quicly_reset_stream(stream, err);
         if (quicly_stream_has_receive_side(quicly_is_client(stream->conn), stream->stream_id))
             quicly_request_stop(stream, err);
@@ -166,7 +166,13 @@ int quicly_sendbuf_write_vec(quicly_stream_t *stream, quicly_sendbuf_t *sb, quic
     sb->vecs.entries[sb->vecs.size++] = *vec;
     sb->bytes_written += vec->len;
 
-    return quicly_stream_sync_sendbuf(stream, 1);
+    int ret;
+    if ((ret = quicly_stream_sync_sendbuf(stream, 1)) != 0) {
+        /* revert, so that the vector is not retained when returning an error */
+        --sb->vecs.size;
+        sb->bytes_written -= vec->len;
+    }
+    return ret;
 }
 
 void quicly_recvbuf_shift(quicly_stream_t *stream, ptls_buffer_t *rb, size_t delta)
@@ -189,7 +195,7 @@ int quicly_recvbuf_receive(quicly_stream_t *stream, ptls_buffer_t *rb, size_t of
 {
     if (len != 0) {
         int ret;
-        if ((ret = ptls_buffer_reserve(rb, off + len - rb->off)) != 0) {
+        if (rb->off < off + len && (ret = ptls_buffer_reserve(rb, off + len - rb->off)) != 0) {
             convert_error(stream, ret);
             return -1;
         }
@@ -237,7 +243,10 @@ void quicly_streambuf_egress_emit(quicly_stream_t *stream, size_t off, void *dst
 int quicly_streambuf_egress_shutdown(quicly_stream_t *stream)
 {
     quicly_streambuf_t *sbuf = stream->data;
-    quicly_sendstate_shutdown(&stream->sendstate, sbuf->egress.bytes_written);
+    int ret;
+
+    if ((ret = quicly_sendstate_shutdown(&stream->sendstate, sbuf->egress.bytes_written)) != 0)
+        return ret;
     return quicly_stream_sync_sendbuf(stream, 1);
 }
 
