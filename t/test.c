@@ -488,6 +488,55 @@ static void test_transport_parameters(void)
     memset(&decoded, 0x55, sizeof(decoded));
     ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, dup_bytes, dup_bytes + sizeof(dup_bytes)) ==
        QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
+
+    /* reset_stream_at is recognized by either codepoint; whether only the provisional one was used is recorded */
+    static const uint8_t rsa_final_bytes[] = {0x1d, 0x00};
+    static const uint8_t rsa_provisional_bytes[] = {0xc0, 0x17, 0xf7, 0x58, 0x6d, 0x2c, 0xb5, 0x71, 0x00};
+    static const uint8_t rsa_both_bytes[] = {0x1d, 0x00, 0xc0, 0x17, 0xf7, 0x58, 0x6d, 0x2c, 0xb5, 0x71, 0x00};
+    static const uint8_t rsa_reversed_bytes[] = {0xc0, 0x17, 0xf7, 0x58, 0x6d, 0x2c, 0xb5, 0x71, 0x00, 0x1d, 0x00};
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, valid_bytes, valid_bytes + sizeof(valid_bytes)) ==
+       0);
+    ok(!decoded.reset_stream_at);
+    ok(!decoded.reset_stream_at_provisional);
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, rsa_final_bytes,
+                                              rsa_final_bytes + sizeof(rsa_final_bytes)) == 0);
+    ok(decoded.reset_stream_at);
+    ok(!decoded.reset_stream_at_provisional);
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, rsa_provisional_bytes,
+                                              rsa_provisional_bytes + sizeof(rsa_provisional_bytes)) == 0);
+    ok(decoded.reset_stream_at);
+    ok(decoded.reset_stream_at_provisional);
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, rsa_both_bytes,
+                                              rsa_both_bytes + sizeof(rsa_both_bytes)) == 0);
+    ok(decoded.reset_stream_at);
+    ok(!decoded.reset_stream_at_provisional);
+    ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, rsa_reversed_bytes,
+                                              rsa_reversed_bytes + sizeof(rsa_reversed_bytes)) == 0);
+    ok(decoded.reset_stream_at);
+    ok(!decoded.reset_stream_at_provisional);
+
+    /* only one codepoint is sent, as selected by `reset_stream_at_provisional` */
+    for (int provisional = 0; provisional < 2; ++provisional) {
+        quicly_transport_parameters_t params = quic_ctx.transport_params;
+        ptls_buffer_t buf;
+        uint8_t smallbuf[256];
+        int found_final = 0, found_provisional = 0;
+        params.reset_stream_at = 1;
+        params.reset_stream_at_provisional = provisional;
+        ptls_buffer_init(&buf, smallbuf, sizeof(smallbuf));
+        ok(quicly_encode_transport_parameter_list(&buf, &params, NULL, NULL, NULL, NULL, 0) == 0);
+        for (const uint8_t *src = buf.base, *end = buf.base + buf.off; src < end;) {
+            uint64_t id = quicly_decodev(&src, end), len = quicly_decodev(&src, end);
+            if (id == QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT)
+                found_final = len == 0;
+            if (id == QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT_PROVISIONAL)
+                found_provisional = len == 0;
+            src += len;
+        }
+        ok(found_final == !provisional);
+        ok(found_provisional == provisional);
+        ptls_buffer_dispose(&buf);
+    }
 }
 
 size_t decode_packets(quicly_decoded_packet_t *decoded, struct iovec *raw, size_t cnt)
@@ -1691,6 +1740,45 @@ static void test_frames_opening_peer_stream(void)
 
     quicly_free(client);
     quicly_free(server);
+}
+
+/**
+ * A server advertises reset_stream_at using the codepoint that the client used.
+ */
+static void test_reset_stream_at_codepoint_mirroring(void)
+{
+    quicly_transport_parameters_t orig = quic_ctx.transport_params;
+    quic_ctx.transport_params.reset_stream_at = 1;
+
+    for (int provisional = 0; provisional < 2; ++provisional) {
+        quicly_context_t client_ctx = quic_ctx;
+        client_ctx.transport_params.reset_stream_at_provisional = provisional;
+        quicly_conn_t *client, *server;
+        quicly_address_t dest, src;
+        struct iovec datagram;
+        uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+        size_t num_datagrams = 1;
+        quicly_decoded_packet_t decoded;
+
+        ok(quicly_connect(&client, &client_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
+                          NULL, NULL, NULL) == 0);
+        ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
+        ok(num_datagrams == 1);
+        ok(decode_packets(&decoded, &datagram, 1) == 1);
+        ok(quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL, NULL) == 0);
+        transmit(server, client);
+        ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+
+        ok(quicly_get_remote_transport_parameters(server)->reset_stream_at);
+        ok(quicly_get_remote_transport_parameters(server)->reset_stream_at_provisional == provisional);
+        ok(quicly_get_remote_transport_parameters(client)->reset_stream_at);
+        ok(quicly_get_remote_transport_parameters(client)->reset_stream_at_provisional == provisional);
+
+        quicly_free(client);
+        quicly_free(server);
+    }
+
+    quic_ctx.transport_params = orig;
 }
 
 static void test_fractional_close_timeout(void)
@@ -3170,6 +3258,7 @@ int main(int argc, char **argv)
     subtest("ack-for-unsent-pn", test_ack_for_unsent_pn);
     subtest("frames-for-unopened-local-stream", test_frames_for_unopened_local_stream);
     subtest("frames-opening-peer-stream", test_frames_opening_peer_stream);
+    subtest("reset-stream-at-codepoint-mirroring", test_reset_stream_at_codepoint_mirroring);
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
     subtest("cc-limited-drain-and-resume", test_cc_limited_drain_and_resume);
