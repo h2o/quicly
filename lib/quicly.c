@@ -389,6 +389,12 @@ struct st_quicly_conn_t {
          */
         uint64_t pn_path_start;
         /**
+         * ACKs for packets with PN below this value count as CC-limited. The value is UINT64_MAX while the sender is CC-limited, i.e.,
+         * after a send fills CWND, and is set to the next PN when the sender has room to send but nothing to send. See
+         * `enter_cc_limited` and `exit_cc_limited`.
+         */
+        uint64_t cc_limited_end_pn;
+        /**
          * pacer
          */
         quicly_pacer_t *pacer;
@@ -1626,6 +1632,27 @@ static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int se
 }
 
 /**
+ * Called when a send leaves bytes in flight at or above CWND. Packets that are in flight or sent from now on count as CC-limited,
+ * including those sent before CWND became full, as they are part of the flight that filled CWND. This also applies to packets sent
+ * at a low rate after the sender became app-limited, if CWND becomes full before they are acknowledged; distinguishing them would
+ * require tracking each period separately.
+ */
+static void enter_cc_limited(quicly_conn_t *conn)
+{
+    conn->egress.cc_limited_end_pn = UINT64_MAX;
+}
+
+/**
+ * Called when there is room to send but nothing to send. Packets already sent remain CC-limited (as they were sent or remained in
+ * flight while CC-limited), but those sent from now on do not, until CWND becomes full again.
+ */
+static void exit_cc_limited(quicly_conn_t *conn)
+{
+    if (conn->egress.cc_limited_end_pn == UINT64_MAX && conn->egress.loss.sentmap.bytes_in_flight < conn->egress.cc.cwnd)
+        conn->egress.cc_limited_end_pn = conn->egress.packet_number;
+}
+
+/**
  * Updates the send alarm and adjusts the delivery rate estimator. This function is called from the receive path. From the sendp
  * path, `update_send_alarm` is called directly.
  */
@@ -1636,8 +1663,10 @@ static void setup_next_send(quicly_conn_t *conn)
     update_send_alarm(conn, can_send_stream_data, 0);
 
     /* When the flow becomes application-limited due to receiving some information, stop collecting delivery rate samples. */
-    if (!can_send_stream_data)
+    if (!can_send_stream_data) {
         update_rate_limit(conn, 0, 0, 0);
+        exit_cc_limited(conn);
+    }
 }
 
 static int create_handshake_flow(quicly_conn_t *conn, size_t epoch)
@@ -2185,6 +2214,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     /* reset CC (FIXME flush sentmap and reset loss recovery) */
     conn->egress.cc.type->cc_init->cb(conn->egress.cc.type->cc_init, &conn->egress.cc, &get_egress_context(conn)->cc,
                                       conn->egress.max_udp_payload_size, conn->stash.now);
+    conn->egress.cc_limited_end_pn = 0;
 
     /* set jumpstart target */
     calc_resume_sendrate(conn, &conn->super.stats.jumpstart.prev_rate, &conn->super.stats.jumpstart.prev_rtt);
@@ -4007,11 +4037,8 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
     } else {
         packet_bytes_in_flight = 0;
     }
-    if (quicly_sentmap_is_open(&conn->egress.loss.sentmap)) {
-        int cc_limited = conn->egress.loss.sentmap.bytes_in_flight + packet_bytes_in_flight >=
-                         conn->egress.cc.cwnd / 2; /* for the rationale behind this formula, see handle_ack_frame */
-        quicly_sentmap_commit(&conn->egress.loss.sentmap, (uint16_t)packet_bytes_in_flight, cc_limited, on_promoted_path);
-    }
+    if (quicly_sentmap_is_open(&conn->egress.loss.sentmap))
+        quicly_sentmap_commit(&conn->egress.loss.sentmap, (uint16_t)packet_bytes_in_flight, on_promoted_path);
 
     if (packet_bytes_in_flight != 0) {
         assert(s->path_index == 0 && "CC governs path 0 and data is sent only on that path");
@@ -4053,7 +4080,7 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
             return ret;
         if (quicly_sentmap_allocate(&conn->egress.loss.sentmap, on_invalid_ack) == NULL)
             return PTLS_ERROR_NO_MEMORY;
-        quicly_sentmap_commit(&conn->egress.loss.sentmap, 0, 0, 0);
+        quicly_sentmap_commit(&conn->egress.loss.sentmap, 0, 0);
         ++conn->egress.packet_number;
         conn->egress.next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, conn->egress.packet_number, conn->egress.cc.cwnd,
                                                             conn->egress.max_udp_payload_size);
@@ -5881,6 +5908,11 @@ Exit:
         update_send_alarm(conn, can_send_stream_data, s->path_index == 0);
         update_rate_limit(conn, can_send_stream_data, s->num_datagrams == s->max_datagrams,
                           pacer_can_send_at(conn) > conn->stash.now);
+        if (!restrict_sending && conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd) {
+            enter_cc_limited(conn);
+        } else if (!can_send_stream_data) {
+            exit_cc_limited(conn);
+        }
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
@@ -6160,7 +6192,7 @@ static quicly_error_t enter_close(quicly_conn_t *conn, int local_is_initiating, 
         return ret;
     if (quicly_sentmap_allocate(&conn->egress.loss.sentmap, on_end_closing) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    quicly_sentmap_commit(&conn->egress.loss.sentmap, 0, 0, 0);
+    quicly_sentmap_commit(&conn->egress.loss.sentmap, 0, 0);
     ++conn->egress.packet_number;
 
     if (local_is_initiating) {
@@ -6418,12 +6450,9 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
     uint64_t largest_late_acked = UINT64_MAX;
     quicly_error_t ret;
 
-    /* The flow is considered CC-limited if the packet was sent while `inflight >= 1/2 * CNWD` or acked under the same condition.
-     * 1/2 of CWND is adopted for fairness with RFC 7661, and also provides correct increase; i.e., if an idle flow goes into
-     * CC-limited state for X round-trips then becomes idle again, all packets sent during that X round-trips will be considered as
-     * CC-limited. */
-    int cc_limited =
-        !get_egress_context(conn)->respect_app_limited || conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd / 2;
+    /* The ACK is considered CC-limited if it acknowledges any packet that was sent while CC-limited, or that was sent earlier but was
+     * in flight when the sender became CC-limited; see `enter_cc_limited`. */
+    int cc_limited = !get_egress_context(conn)->respect_app_limited;
 
     if ((ret = quicly_decode_ack_frame(&state->src, state->end, &frame, state->frame_type == QUICLY_FRAME_TYPE_ACK_ECN)) != 0)
         return ret;
@@ -6505,7 +6534,7 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
             if (sent->cc_bytes_in_flight != 0) {
                 if (conn->egress.pn_path_start <= pn_acked) {
                     bytes_acked += sent->cc_bytes_in_flight;
-                    if (sent->cc_limited)
+                    if (pn_acked < conn->egress.cc_limited_end_pn)
                         cc_limited = 1;
                 }
                 conn->super.stats.num_bytes.ack_received += sent->cc_bytes_in_flight;
