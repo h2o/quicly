@@ -150,6 +150,10 @@ struct st_quicly_pn_space_t {
      */
     uint32_t reordering_threshold;
     /**
+     * maximum amount of time (in milliseconds) to delay an ACK of an ack-eliciting packet
+     */
+    uint32_t max_ack_delay;
+    /**
      * max(acked packet number, unacked ack-eliciting packet number).
      */
     uint64_t largest_acked_unacked;
@@ -1710,6 +1714,7 @@ static struct st_quicly_pn_space_t *alloc_pn_space(size_t sz, uint32_t packet_to
         space->ecn_counts[i] = 0;
     space->packet_tolerance = packet_tolerance;
     space->reordering_threshold = 1;
+    space->max_ack_delay = QUICLY_DELAYED_ACK_TIMEOUT;
     space->largest_acked_unacked = 0;
     space->smallest_unreported_missing = 0;
     if (sz != sizeof(*space))
@@ -1881,7 +1886,7 @@ static quicly_error_t record_receipt(struct st_quicly_pn_space_t *space, uint64_
     if (ack_now) {
         *send_ack_at = received_at;
     } else if (*send_ack_at == INT64_MAX && space->unacked_count != 0) {
-        *send_ack_at = received_at + QUICLY_DELAYED_ACK_TIMEOUT;
+        *send_ack_at = received_at + space->max_ack_delay;
     }
 
     space->prior_ecn = ecn;
@@ -2567,11 +2572,9 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
                 { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACK_DELAY_EXPONENT); });
     if (QUICLY_LOCAL_MAX_ACK_DELAY != QUICLY_DEFAULT_MAX_ACK_DELAY)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_ACK_DELAY, { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MAX_ACK_DELAY); });
-    if (params->min_ack_delay_usec != UINT64_MAX) {
-        /* TODO consider the value we should advertise. */
+    if (params->min_ack_delay_usec != UINT64_MAX)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY,
-                { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MAX_ACK_DELAY * 1000 /* in microseconds */); });
-    }
+                { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_MIN_ACK_DELAY * 1000 /* in microseconds */); });
     if (params->disable_active_migration)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
     if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
@@ -7199,18 +7202,21 @@ static quicly_error_t handle_ack_frequency_frame(quicly_conn_t *conn, struct st_
         PTLS_LOG_ELEMENT_NUMBER(reordering_threshold, frame.reordering_threshold);
     });
 
-    /* Reject Request Max Ack Delay below our TP.min_ack_delay (which is at the moment equal to LOCAL_MAX_ACK_DELAY). */
-    if (frame.max_ack_delay < QUICLY_LOCAL_MAX_ACK_DELAY * 1000 || frame.max_ack_delay >= (1 << 14) * 1000)
+    /* Reject Request Max Ack Delay below our TP.min_ack_delay. */
+    if (frame.max_ack_delay < QUICLY_LOCAL_MIN_ACK_DELAY * 1000 || frame.max_ack_delay >= (1 << 14) * 1000)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
-
-    // TODO: use received frame.max_ack_delay. We currently use a constant (25 ms) and
-    // ignore the value set by our transport parameter (see max_ack_delay field comment).
 
     if (frame.sequence >= conn->ingress.ack_frequency.next_sequence) {
         conn->ingress.ack_frequency.next_sequence = frame.sequence + 1;
         conn->application->super.packet_tolerance =
             (uint32_t)(frame.packet_tolerance < QUICLY_MAX_PACKET_TOLERANCE ? frame.packet_tolerance : QUICLY_MAX_PACKET_TOLERANCE);
         conn->application->super.reordering_threshold = frame.reordering_threshold;
+        /* round down, as the clock has millisecond granularity and the ACK must not be delayed longer than requested */
+        conn->application->super.max_ack_delay = (uint32_t)(frame.max_ack_delay / 1000);
+        /* an ACK already scheduled must also be sent within the new delay */
+        if (conn->egress.send_ack_at != INT64_MAX &&
+            conn->egress.send_ack_at > conn->stash.now + conn->application->super.max_ack_delay)
+            conn->egress.send_ack_at = conn->stash.now + conn->application->super.max_ack_delay;
     }
 
     return 0;
