@@ -64,6 +64,10 @@ typedef struct st_quicly_sent_packet_t {
      * number of bytes in-flight for the packet, from the context of CC (becomes zero when deemed lost, but not when PTO fires)
      */
     uint16_t cc_bytes_in_flight;
+    /**
+     * path id on which the packet was sent
+     */
+    uint32_t path_id;
 } quicly_sent_packet_t;
 
 typedef enum en_quicly_sentmap_event_t {
@@ -115,6 +119,7 @@ struct st_quicly_sent_t {
          */
         struct {
             uint64_t start;
+            uint32_t path_id;
             union {
                 struct {
                     uint64_t start_length;
@@ -160,9 +165,26 @@ struct st_quicly_sent_t {
             uint64_t generation;
         } new_token;
         struct {
+            uint32_t path_id;
             uint64_t sequence;
         } new_connection_id;
         struct {
+            uint32_t path_id;
+            uint64_t error_code;
+        } path_abandon;
+        struct {
+            uint32_t path_id;
+            uint64_t sequence;
+        } path_status;
+        struct {
+            uint64_t max_path_id;
+        } paths_blocked;
+        struct {
+            uint32_t path_id;
+            uint64_t sequence;
+        } path_cids_blocked;
+        struct {
+            uint32_t path_id;
             uint64_t sequence;
         } retire_connection_id;
     } data;
