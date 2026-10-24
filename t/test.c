@@ -1133,6 +1133,28 @@ static void test_is_duplicate_pn(void)
     quicly_ranges_clear(&ranges);
 }
 
+static void test_record_pn(void)
+{
+    quicly_ranges_t ranges;
+    int is_out_of_order;
+    quicly_error_t ret = 0;
+
+    quicly_ranges_init(&ranges);
+
+    /* record discontiguous packet numbers 0, 2, ..., so that the number of ranges exceeds the maximum by one */
+    for (uint64_t pn = 0; pn <= QUICLY_MAX_ACK_BLOCKS * 2; pn += 2)
+        if ((ret = record_pn(&ranges, pn, &is_out_of_order)) != 0)
+            break;
+    ok(ret == 0);
+
+    /* the oldest range is dropped, and the newest ones including the one just being recorded are retained */
+    ok(ranges.num_ranges == QUICLY_MAX_ACK_BLOCKS);
+    ok(ranges.ranges[0].start == 2);
+    ok(ranges.ranges[ranges.num_ranges - 1].start == QUICLY_MAX_ACK_BLOCKS * 2);
+
+    quicly_ranges_clear(&ranges);
+}
+
 static void test_ack_frequency(void)
 {
     quicly_conn_t *client, *server;
@@ -1558,6 +1580,70 @@ static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **s
         ok(quicly_get_state(*client) == QUICLY_STATE_CONNECTED);
     ok(quicly_get_state(*server) == QUICLY_STATE_CONNECTED);
     exchange_until_idle(*client, *server);
+}
+
+static void test_cc_limited_drain_and_resume(void)
+{
+    quicly_init_cc_t *saved_init_cc = quic_ctx.egress[0].cc.init_cc;
+    quic_ctx.egress[0].cc.init_cc = &quicly_cc_reno_init;
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(client->path_spaces[0]->loss.sentmap.bytes_in_flight == 0);
+
+    quicly_stats_t before, stats;
+    quicly_get_stats(client, &before);
+    uint32_t mtu = client->path_spaces[0]->max_udp_payload_size;
+    quicly_address_t dest, src;
+    struct iovec datagrams[32];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * mtu], zeros[2 * mtu];
+    memset(zeros, 0, sizeof(zeros));
+    size_t num_datagrams = 0;
+
+    /* Fill CWND without delivering any packets yet. Each write fits in one packet, leaving no queued data when the window
+     * becomes full. Even the early packets, sent with little in flight, should contribute to growth when acknowledged. */
+    for (; client->path_spaces[0]->loss.sentmap.bytes_in_flight < before.cc.cwnd && num_datagrams < PTLS_ELEMENTSOF(datagrams);
+         ++num_datagrams) {
+        ok(quicly_streambuf_egress_write(stream, zeros, mtu - 100 /* leave room for QUIC headers */) == 0);
+        size_t count = 1;
+        ok(quicly_send(client, &dest, &src, datagrams + num_datagrams, &count, buf + num_datagrams * mtu, mtu) == 0);
+        ok(count == 1);
+    }
+    ok(client->path_spaces[0]->loss.sentmap.bytes_in_flight >= before.cc.cwnd);
+    ok(!scheduler_can_send(client));
+
+    /* Drain the flight one ACK at a time. All of it must count toward slow-start growth, including the tail acknowledged
+     * after bytes in flight fall below CWND/2. Do not call the client's send path while draining. */
+    for (size_t i = 0; i != num_datagrams; ++i) {
+        quicly_decoded_packet_t decoded;
+        ok(decode_packets(&decoded, datagrams + i, 1) == 1);
+        ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        ok(transmit(server, client) == 1);
+        quicly_get_stats(client, &stats);
+        uint64_t bytes_acked = stats.num_bytes.ack_received - before.num_bytes.ack_received;
+        ok(stats.cc.cwnd == before.cc.cwnd + bytes_acked / mtu * mtu);
+    }
+    ok(client->path_spaces[0]->loss.sentmap.bytes_in_flight == 0);
+    ok(stats.cc.cwnd > before.cc.cwnd);
+
+    /* Resume with enough data to grow CWND if it were incorrectly still CC-limited, but too little to fill the window. */
+    uint32_t cwnd = stats.cc.cwnd;
+    ok(quicly_streambuf_egress_write(stream, zeros, 2 * mtu) == 0);
+    ok(transmit(client, server) > 0);
+    ok(client->path_spaces[0]->loss.sentmap.bytes_in_flight >= 2 * mtu);
+    ok(client->path_spaces[0]->loss.sentmap.bytes_in_flight < cwnd / 2);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    ok(transmit(server, client) == 1);
+    quicly_get_stats(client, &stats);
+    ok(client->path_spaces[0]->loss.sentmap.bytes_in_flight == 0);
+    ok(stats.cc.cwnd == cwnd);
+    ok(stats.num_packets.lost == 0);
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.egress[0].cc.init_cc = saved_init_cc;
 }
 
 static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, struct iovec *datagram, void *buf,
@@ -2988,7 +3074,7 @@ static void test_multipath_state_isolation(void)
     quicly_path_space_t *other = client->path_spaces[1];
     ok(other->loss.sentmap.num_packets == 0);
     ok(quicly_sentmap_prepare(&other->loss.sentmap, 0, quic_now - 1000, QUICLY_EPOCH_1RTT) == 0);
-    quicly_sentmap_commit(&other->loss.sentmap, 1200, 0, 0);
+    quicly_sentmap_commit(&other->loss.sentmap, 1200, 0);
     other->packet_number = 2;
     other->last_retransmittable_sent_at = quic_now - 1000;
     other->loss.largest_acked_packet_plus1.per_epoch[QUICLY_EPOCH_1RTT] = 2;
@@ -3825,6 +3911,179 @@ static void test_multipath_path_loss(void)
 #include "multipath-rate.h"
 #include "multipath-egress.h"
 
+typedef struct st_cc_test_datagram_t {
+    quicly_address_t dest, src;
+    struct iovec datagram;
+    uint8_t buf[1500];
+} cc_test_datagram_t;
+
+static void cc_test_send_queued_datagram(quicly_conn_t *client, size_t path_index, cc_test_datagram_t *packet)
+{
+    size_t queued = quicly_get_num_datagram_frames_path(client, path_index);
+    ok(queued != 0);
+    /* Start round-robin at the explicitly addressed DATAGRAM, even when another path has a queued stream. */
+    client->next_send_path_index = path_index;
+    size_t count = 1;
+    uint64_t frames_before = client->super.stats.num_frames_sent.datagram;
+    packet->datagram = (struct iovec){NULL, 0};
+    ok(quicly_send(client, &packet->dest, &packet->src, &packet->datagram, &count, packet->buf, sizeof(packet->buf)) == 0);
+    ok(count == 1);
+    ok(client->super.stats.num_frames_sent.datagram == frames_before + 1);
+    ok(quicly_get_num_datagram_frames_path(client, path_index) == queued - 1);
+    ok(compare_socket_address(&packet->src.sa, &get_path(client, path_index)->address.local.sa) == 0);
+}
+
+static void cc_test_send_datagram(quicly_conn_t *client, size_t path_index, cc_test_datagram_t *packet)
+{
+    uint8_t bytes[1000] = {0};
+    ptls_iovec_t payload = ptls_iovec_init(bytes, sizeof(bytes));
+    quicly_send_datagram_frames_path(client, path_index, &payload, 1);
+    cc_test_send_queued_datagram(client, path_index, packet);
+}
+
+static void cc_test_receive_datagram(quicly_conn_t *server, cc_test_datagram_t *packet)
+{
+    if (packet->datagram.iov_len != 0) {
+        quicly_decoded_packet_t decoded;
+        ok(decode_packets(&decoded, &packet->datagram, 1) == 1);
+        ok(quicly_receive(server, &packet->dest.sa, &packet->src.sa, &decoded) == 0);
+    }
+}
+
+static void do_test_multipath_cc_limited_drain_and_resume(size_t busy_path)
+{
+    quicly_context_t original = quic_ctx;
+    int64_t saved_now = quic_now;
+    static quicly_receive_datagram_frame_t receiver = {test_queue_receive_datagram};
+    quic_ctx.transport_params.max_datagram_frame_size = 1200;
+    quic_ctx.receive_datagram_frame = &receiver;
+    quic_ctx.egress[0].cc.init_cc = &quicly_cc_reno_init;
+    quic_ctx.egress[0].cc.initcwnd_packets = 8;
+    quic_ctx.egress[0].pacing = 0;
+    quic_ctx.path_scheduler = &quicly_round_robin_path_scheduler;
+    quicly_conn_t *client, *server;
+    quicly_context_t saved = setup_multipath_regression_peers(&client, &server, 0);
+    struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(10000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(20000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    ok(quicly_open_path(client, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
+    for (size_t i = 0; i != 100; ++i) {
+        ++quic_now;
+        transmit_multipath(client, server);
+        transmit_multipath(server, client);
+    }
+    size_t idle_path = 1 - busy_path;
+    quicly_path_space_t *busy = client->path_spaces[busy_path], *idle = client->path_spaces[idle_path];
+    ok(quicly_is_path_available(client, busy_path) && quicly_is_path_available(client, idle_path));
+    ok(busy->loss.sentmap.bytes_in_flight == 0 && idle->loss.sentmap.bytes_in_flight == 0);
+    uint32_t busy_cwnd = busy->cc.cwnd, idle_cwnd = idle->cc.cwnd, mtu = busy->max_udp_payload_size;
+    uint64_t busy_acked = busy->bytes_acked, idle_acked = idle->bytes_acked;
+
+    /* The small flight straddles the other path filling its window. Neither of its packets becomes congestion-limited. */
+    cc_test_datagram_t small[2], flight[64];
+    cc_test_send_datagram(client, idle_path, &small[0]);
+    size_t num_packets = 0;
+    while (busy->loss.sentmap.bytes_in_flight < busy_cwnd && num_packets != PTLS_ELEMENTSOF(flight))
+        cc_test_send_datagram(client, busy_path, &flight[num_packets++]);
+    ok(busy->loss.sentmap.bytes_in_flight >= busy_cwnd);
+    cc_test_send_datagram(client, idle_path, &small[1]);
+    ok(idle->loss.sentmap.bytes_in_flight >= mtu && idle->loss.sentmap.bytes_in_flight < idle_cwnd / 2);
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(small); ++i) {
+        cc_test_receive_datagram(server, &small[i]);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        ok(transmit_multipath(server, client) != 0);
+        ok(idle->cc.cwnd == idle_cwnd);
+        ok(busy->cc.cwnd == busy_cwnd);
+    }
+    ok(idle->loss.sentmap.bytes_in_flight == 0 && idle->bytes_acked > idle_acked);
+
+    /* Another path's affined backlog must not keep this path congestion-limited once its flight drains. */
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(quicly_set_stream_path_affinity(stream, (uint32_t)idle_path) == 0);
+    uint8_t backlog[4096] = {0};
+    ok(quicly_streambuf_egress_write(stream, backlog, sizeof(backlog)) == 0);
+    ok(scheduler_can_send(client));
+
+    /* ACK one packet at a time. The early packets and tail must all receive slow-start credit on their own path. */
+    for (size_t i = 0; i != num_packets; ++i) {
+        cc_test_receive_datagram(server, &flight[i]);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        ok(transmit_multipath(server, client) != 0);
+        ok(busy->cc.cwnd == busy_cwnd + (busy->bytes_acked - busy_acked) / mtu * mtu);
+        ok(idle->cc.cwnd == idle_cwnd);
+    }
+    ok(busy->loss.sentmap.bytes_in_flight == 0);
+    ok(busy->cc.cwnd > busy_cwnd);
+    ok(scheduler_can_send(client));
+    busy_cwnd = busy->cc.cwnd;
+
+    /* Resume below half the window while the other path's stream remains queued. The new ACKs must not grow this window. */
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(small); ++i)
+        cc_test_send_datagram(client, busy_path, &small[i]);
+    ok(busy->loss.sentmap.bytes_in_flight >= mtu && busy->loss.sentmap.bytes_in_flight < busy_cwnd / 2);
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(small); ++i) {
+        cc_test_receive_datagram(server, &small[i]);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        ok(transmit_multipath(server, client) != 0);
+        ok(busy->cc.cwnd == busy_cwnd);
+        ok(idle->cc.cwnd == idle_cwnd);
+    }
+    ok(busy->loss.sentmap.bytes_in_flight == 0);
+    ok(scheduler_can_send(client));
+
+    /* Keep DATAGRAMs queued behind a second full window. The ACKs leave sendable work on this path until the last queued
+     * packet is emitted; a fresh small burst immediately after that must be app-limited without waiting for another ACK. */
+    num_packets = 0;
+    while (busy->loss.sentmap.bytes_in_flight < busy_cwnd && num_packets != PTLS_ELEMENTSOF(flight))
+        cc_test_send_datagram(client, busy_path, &flight[num_packets++]);
+    ok(busy->loss.sentmap.bytes_in_flight >= busy_cwnd);
+    uint8_t bytes[1000] = {0};
+    ptls_iovec_t payloads[2] = {ptls_iovec_init(bytes, sizeof(bytes)), ptls_iovec_init(bytes, sizeof(bytes))};
+    quicly_send_datagram_frames_path(client, busy_path, payloads, PTLS_ELEMENTSOF(payloads));
+    for (size_t i = 0; i != num_packets; ++i) {
+        cc_test_receive_datagram(server, &flight[i]);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        ok(transmit_multipath(server, client) != 0);
+        ok(idle->cc.cwnd == idle_cwnd);
+    }
+    ok(busy->loss.sentmap.bytes_in_flight == 0);
+    ok(busy->cc.cwnd > busy_cwnd);
+    busy_cwnd = busy->cc.cwnd;
+    cc_test_datagram_t queued[2];
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(queued); ++i)
+        cc_test_send_queued_datagram(client, busy_path, &queued[i]);
+    ok(quicly_get_num_datagram_frames_path(client, busy_path) == 0);
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(small); ++i)
+        cc_test_send_datagram(client, busy_path, &small[i]);
+    ok(busy->loss.sentmap.bytes_in_flight < busy_cwnd / 2);
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(queued); ++i) {
+        cc_test_receive_datagram(server, &queued[i]);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        ok(transmit_multipath(server, client) != 0);
+    }
+    ok(busy->cc.cwnd > busy_cwnd);
+    busy_cwnd = busy->cc.cwnd;
+    for (size_t i = 0; i != PTLS_ELEMENTSOF(small); ++i) {
+        cc_test_receive_datagram(server, &small[i]);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        ok(transmit_multipath(server, client) != 0);
+        ok(busy->cc.cwnd == busy_cwnd);
+        ok(idle->cc.cwnd == idle_cwnd);
+    }
+    ok(busy->loss.sentmap.bytes_in_flight == 0);
+    ok(scheduler_can_send(client));
+    ok(client->super.stats.num_packets.lost == 0);
+    free_multipath_regression_peers(client, server, saved);
+    quic_ctx = original;
+    quic_now = saved_now;
+}
+
+static void test_multipath_cc_limited_drain_and_resume(void)
+{
+    subtest("path-zero-busy", do_test_multipath_cc_limited_drain_and_resume, 0);
+    subtest("path-one-busy", do_test_multipath_cc_limited_drain_and_resume, 1);
+}
+
 /* Loss statistics must not depend on how many random bytes unrelated tests consumed. */
 static void test_lossy_isolated(void)
 {
@@ -3903,10 +4162,12 @@ int main(int argc, char **argv)
     subtest("select_with_ratio255", test_select_with_ratio255);
     subtest("next-packet-number", test_next_packet_number);
     subtest("address-token-codec", test_address_token_codec);
+    subtest("bplus_ranges", test_bplus_ranges);
     subtest("ranges", test_ranges);
     subtest("rate", test_rate);
     subtest("record-receipt", test_record_receipt);
     subtest("is-duplicate-pn", test_is_duplicate_pn);
+    subtest("record-pn", test_record_pn);
     subtest("frame", test_frame);
     subtest("maxsender", test_maxsender);
     subtest("pacer", test_pacer);
@@ -3942,6 +4203,8 @@ int main(int argc, char **argv)
     subtest("frames-opening-peer-stream", test_frames_opening_peer_stream);
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
+    subtest("cc-limited-drain-and-resume", test_cc_limited_drain_and_resume);
+    subtest("multipath-cc-limited-drain-and-resume", test_multipath_cc_limited_drain_and_resume);
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
     subtest("fractional-close-timeout", test_fractional_close_timeout);
     subtest("time-threshold-loss-episode", test_time_threshold_loss_episode);

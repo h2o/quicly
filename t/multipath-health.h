@@ -182,7 +182,7 @@ static uint64_t health_prepare_packet(quicly_path_space_t *ps, int ack_eliciting
     uint64_t pn = ps->packet_number++;
     ok(quicly_sentmap_prepare(&ps->loss.sentmap, pn, quic_now - 1, QUICLY_EPOCH_1RTT) == 0);
     ps->loss.sentmap._pending_packet->data.packet.path_id = ps->path_id;
-    quicly_sentmap_commit(&ps->loss.sentmap, ack_eliciting ? 100 : 0, ack_eliciting, 0);
+    quicly_sentmap_commit(&ps->loss.sentmap, ack_eliciting ? 100 : 0, 0);
     ps->last_retransmittable_sent_at = quic_now - 1;
     return pn;
 }

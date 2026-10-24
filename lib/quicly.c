@@ -321,6 +321,11 @@ typedef struct st_quicly_path_space_t {
     uint64_t packet_number;
     uint64_t next_pn_to_skip;
     uint64_t pn_path_start;
+    /**
+     * ACKs for packets with PN below this value count as CC-limited. The value is UINT64_MAX while the sender is CC-limited,
+     * and is set to the next PN when the sender has room to send but nothing to send. See `enter_cc_limited` and `exit_cc_limited`.
+     */
+    uint64_t cc_limited_end_pn;
     uint64_t key_update_pn;
     uint16_t max_udp_payload_size;
     double last_retransmittable_sent_at;
@@ -809,7 +814,6 @@ const quicly_salt_t *quicly_get_salt(uint32_t protocol_version)
         return &draft29;
     case QUICLY_PROTOCOL_VERSION_DRAFT27:
         return &draft27;
-        break;
     default:
         return NULL;
     }
@@ -893,7 +897,7 @@ static ptls_cipher_suite_t *get_aes128gcmsha256(quicly_context_t *ctx)
     ptls_cipher_suite_t **cs;
 
     for (cs = ctx->tls->cipher_suites;; ++cs) {
-        assert(cs != NULL);
+        assert(*cs != NULL);
         if ((*cs)->id == PTLS_CIPHER_SUITE_AES_128_GCM_SHA256)
             break;
     }
@@ -1092,6 +1096,7 @@ size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *pack
     packet->decrypted.pn = UINT64_MAX;
     packet->ecn = 0; /* non-ECT */
     packet->path_id = 0;
+    packet->inferior_path = 0; /* applications that know better set this explicitly after decoding */
 
     /* move the cursor to the second byte */
     src += *off + 1;
@@ -1359,7 +1364,7 @@ static int should_send_max_stream_data(quicly_stream_t *stream)
     if (stream->recvstate.eos != UINT64_MAX)
         return 0;
     return quicly_maxsender_should_send_max(&stream->_send_aux.max_stream_data_sender, stream->recvstate.data_off,
-                                            stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end,
+                                            stream->recvstate.received.last->end,
                                             stream->_recv_aux.window, 512);
 }
 
@@ -1602,19 +1607,6 @@ static void init_stream_properties(quicly_stream_t *stream, uint32_t initial_max
     quicly_linklist_init(&stream->_send_aux.pending_link.default_scheduler);
 
     stream->_recv_aux.window = initial_max_stream_data_local;
-
-    /* Set the number of max ranges to be capable of handling following case:
-     * * every one of the two packets being sent are lost
-     * * average size of a STREAM frame found in a packet is >= ~512 bytes, or small STREAM frame is sent for every other stream
-     *   being opened (e.g., sending QPACK encoder/decoder stream frame for each HTTP/3 request)
-     * See also: the doc-comment on `_recv_aux.max_ranges`.
-     */
-    uint32_t fragments_minmax = (uint32_t)(stream->conn->super.ctx->transport_params.max_streams_uni +
-                                           stream->conn->super.ctx->transport_params.max_streams_bidi);
-    if (fragments_minmax < 63)
-        fragments_minmax = 63;
-    if ((stream->_recv_aux.max_ranges = initial_max_stream_data_local / 1024) < fragments_minmax)
-        stream->_recv_aux.max_ranges = fragments_minmax;
 }
 
 static void dispose_stream_properties(quicly_stream_t *stream)
@@ -1962,6 +1954,36 @@ static void update_ratemeter(quicly_conn_t *conn, quicly_path_space_t *ps, int h
 }
 
 /**
+ * Called when a send leaves bytes in flight at or above CWND. Packets that are in flight or sent from now on count as CC-limited,
+ * including those sent before CWND became full, as they are part of the flight that filled CWND. This also applies to packets sent
+ * at a low rate after the sender became app-limited, if CWND becomes full before they are acknowledged; distinguishing them would
+ * require tracking each period separately.
+ */
+static void enter_cc_limited(quicly_path_space_t *ps)
+{
+    ps->cc_limited_end_pn = UINT64_MAX;
+}
+
+static int path_has_pending_stream(quicly_conn_t *conn, struct st_quicly_conn_path_t *path, int allow_unbound);
+
+/**
+ * Called when there is room to send but nothing to send. Packets already sent remain CC-limited (as they were sent or remained in
+ * flight while CC-limited), but those sent from now on do not, until CWND becomes full again.
+ */
+static void exit_cc_limited(quicly_conn_t *conn, quicly_path_space_t *ps, int can_send_stream_data)
+{
+    if (ps->cc_limited_end_pn != UINT64_MAX || ps->loss.sentmap.bytes_in_flight >= ps->cc.cwnd)
+        return;
+    /* Data affined to another path must not keep this path CC-limited after its flight drains. */
+    if (conn->super.remote.address_validation.validated &&
+        (path_has_sendable_datagrams(ps) ||
+         (can_send_stream_data &&
+          (!quicly_is_multipath(conn) || (ps->addrs[0] != NULL && path_has_pending_stream(conn, ps->addrs[0], 1))))))
+        return;
+    ps->cc_limited_end_pn = ps->packet_number;
+}
+
+/**
  * Updates the send alarm and adjusts the delivery rate estimator. This function is called from the receive path. From the sendp
  * path, `update_send_alarm` is called directly.
  */
@@ -1972,11 +1994,13 @@ static void setup_next_send(quicly_conn_t *conn)
     update_send_alarm(conn, can_send_stream_data, NULL);
 
     /* When the flow becomes application-limited due to receiving some information, stop collecting delivery rate samples. */
-    if (!can_send_stream_data) {
-        for (int i = 0; i < QUICLY_MAX_PATH_SPACES; ++i)
-            if (conn->path_spaces[i] != NULL &&
-                (!conn->super.remote.address_validation.validated || !path_has_sendable_datagrams(conn->path_spaces[i])))
-                update_ratemeter(conn, conn->path_spaces[i], 0, 0, 0);
+    for (int i = 0; i < QUICLY_MAX_PATH_SPACES; ++i) {
+        quicly_path_space_t *ps = conn->path_spaces[i];
+        if (ps == NULL)
+            continue;
+        if (!can_send_stream_data && (!conn->super.remote.address_validation.validated || !path_has_sendable_datagrams(ps)))
+            update_ratemeter(conn, ps, 0, 0, 0);
+        exit_cc_limited(conn, ps, can_send_stream_data);
     }
 }
 
@@ -2158,7 +2182,7 @@ static quicly_error_t record_pn(quicly_ranges_t *ranges, uint64_t pn, int *is_ou
     if ((ret = quicly_ranges_add(ranges, pn, pn + 1)) != 0)
         return ret;
     if (ranges->num_ranges > QUICLY_MAX_ACK_BLOCKS)
-        quicly_ranges_drop_by_range_indices(ranges, ranges->num_ranges - QUICLY_MAX_ACK_BLOCKS, ranges->num_ranges);
+        quicly_ranges_drop_by_range_indices(ranges, 0, ranges->num_ranges - QUICLY_MAX_ACK_BLOCKS);
 
     return 0;
 }
@@ -2450,7 +2474,6 @@ static void stringify_address(char *buf, struct sockaddr *sa)
     char *p = buf;
     uint16_t port = 0;
 
-    p = buf;
     switch (sa->sa_family) {
     case AF_INET:
         inet_ntop(AF_INET, &((struct sockaddr_in *)sa)->sin_addr, p, sizeof(LONGEST_ADDRESS_STR));
@@ -2460,11 +2483,12 @@ static void stringify_address(char *buf, struct sockaddr *sa)
     case AF_INET6:
         *p++ = '[';
         inet_ntop(AF_INET6, &((struct sockaddr_in6 *)sa)->sin6_addr, p, sizeof(LONGEST_ADDRESS_STR));
+        p += strlen(p);
         *p++ = ']';
         port = ntohs(((struct sockaddr_in *)sa)->sin_port);
         break;
     default:
-        assert("unexpected address family");
+        assert(!"unexpected address family");
         break;
     }
 
@@ -2887,6 +2911,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
     ps->cc.type->cc_init->cb(ps->cc.type->cc_init, &ps->cc, &get_egress_context(conn)->cc, ps->max_udp_payload_size,
                              conn->stash.now);
     ps->cc.conn = conn;
+    ps->cc_limited_end_pn = 0;
 
     if (ps_index == 0) {
         /* set jumpstart target */
@@ -3153,7 +3178,9 @@ static quicly_error_t reinstall_initial_encryption(quicly_conn_t *conn, quicly_e
 
     /* dispose existing context */
     dispose_cipher(&conn->initial->cipher.ingress);
+    conn->initial->cipher.ingress = (struct st_quicly_cipher_context_t){NULL};
     dispose_cipher(&conn->initial->cipher.egress);
+    conn->initial->cipher.egress = (struct st_quicly_cipher_context_t){NULL};
 
     /* setup encryption context */
     quicly_path_space_t *ps = conn->path_spaces[0];
@@ -3185,10 +3212,10 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
         uint64_t max_stream_data = frame->offset + frame->data.len;
         if ((int64_t)max_stream_data > stream->_send_aux.max_stream_data_sender.committed)
             return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
-        if (stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end < max_stream_data) {
-            uint64_t newly_received =
-                max_stream_data - stream->recvstate.received.ranges[stream->recvstate.received.num_ranges - 1].end;
-            if (stream->conn->ingress.max_data.bytes_consumed + newly_received > stream->conn->ingress.max_data.sender.committed)
+        if (stream->recvstate.received.last->end < max_stream_data) {
+            uint64_t newly_received = max_stream_data - stream->recvstate.received.last->end;
+            if (stream->conn->ingress.max_data.bytes_consumed + newly_received >
+                stream->conn->ingress.max_data.sender.committed)
                 return QUICLY_TRANSPORT_ERROR_FLOW_CONTROL;
             stream->conn->ingress.max_data.bytes_consumed += newly_received;
             /* FIXME send MAX_DATA if necessary */
@@ -3201,8 +3228,9 @@ static quicly_error_t apply_stream_frame(quicly_stream_t *stream, quicly_stream_
 
     /* update recvbuf */
     size_t apply_len = frame->data.len;
-    if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin,
-                                       stream->_recv_aux.max_ranges)) != 0)
+    uint64_t max_committed = stream->stream_id >= 0 ? (uint64_t)stream->_send_aux.max_stream_data_sender.committed
+                                                    : stream->conn->super.ctx->max_crypto_bytes;
+    if ((ret = quicly_recvstate_update(&stream->recvstate, frame->offset, &apply_len, frame->is_fin, max_committed)) != 0)
         return ret;
 
     if (apply_len != 0 || quicly_recvstate_transfer_complete(&stream->recvstate)) {
@@ -3573,7 +3601,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
         return NULL;
     ptls_log_conn_state_t log_state_override;
     ptls_t *tls;
-    quicly_conn_t *conn;
+    quicly_conn_t *conn = NULL;
 
     /* consistency checks */
     assert(remote_addr != NULL && remote_addr->sa_family != AF_UNSPEC);
@@ -3595,16 +3623,12 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
 
     if (tls == NULL)
         return NULL;
-    if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0) {
-        ptls_free(tls);
-        return NULL;
-    }
+    if (server_name != NULL && ptls_set_server_name(tls, server_name, strlen(server_name)) != 0)
+        goto Fail;
 
     /* allocate memory and start creating QUIC context */
-    if ((conn = malloc(sizeof(*conn))) == NULL) {
-        ptls_free(tls);
-        return NULL;
-    }
+    if ((conn = malloc(sizeof(*conn))) == NULL)
+        goto Fail;
     memset(conn, 0, sizeof(*conn));
     conn->super.ctx = ctx;
     conn->super.data = appdata;
@@ -3617,12 +3641,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->super.stats.num_alt_egress = conn->egress.alt_ctx != 0;
     conn->crypto.tls = tls;
     conn->super.remote.transport_params = default_transport_params;
-    if (new_path(conn, 0, 0, remote_addr, local_addr) != 0) {
-        unlock_now(conn);
-        ptls_free(tls);
-        free(conn);
-        return NULL;
-    }
+    if (new_path(conn, 0, 0, remote_addr, local_addr) != 0)
+        goto Fail;
     quicly_path_space_t *ps = conn->path_spaces[0];
     quicly_cid_plaintext_t initial_cid;
     if (local_cid != NULL) {
@@ -3664,7 +3684,8 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->super.version = protocol_version;
     quicly_linklist_init(&conn->super._default_scheduler.active);
     quicly_linklist_init(&conn->super._default_scheduler.blocked);
-    conn->streams = kh_init(quicly_stream_t);
+    if ((conn->streams = kh_init(quicly_stream_t)) == NULL)
+        goto Fail;
     quicly_maxsender_init(&conn->ingress.max_data.sender, conn->super.ctx->transport_params.max_data);
     quicly_maxsender_init(&conn->ingress.max_streams.uni, conn->super.ctx->transport_params.max_streams_uni);
     quicly_maxsender_init(&conn->ingress.max_streams.bidi, conn->super.ctx->transport_params.max_streams_bidi);
@@ -3698,6 +3719,16 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     update_open_count(conn->super.ctx, 1);
 
     return conn;
+
+Fail:
+    if (conn != NULL) {
+        unlock_now(conn);
+        if (conn->path_spaces[0] != NULL)
+            free_path_space(conn->path_spaces[0]);
+        free(conn);
+    }
+    ptls_free(tls);
+    return NULL;
 }
 
 static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t *properties, ptls_raw_extension_t *slots)
@@ -3853,6 +3884,7 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
     conn->crypto.handshake_properties.client.max_early_data_size = NULL;
     if (ret != PTLS_ERROR_IN_PROGRESS) {
         assert(ret > 0); /* no QUIC errors */
+        ptls_buffer_dispose(&buf);
         goto Exit;
     }
     write_crypto_data(conn, &buf, epoch_offsets);
@@ -4168,8 +4200,7 @@ static quicly_error_t do_on_ack_ack(quicly_conn_t *conn, const quicly_sent_packe
         space->unacked_count = 0;
         space->send_ack_at = INT64_MAX;
     } else if (space->ack_queue.num_ranges > QUICLY_MAX_ACK_BLOCKS) {
-        quicly_ranges_drop_by_range_indices(&space->ack_queue, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS,
-                                            space->ack_queue.num_ranges);
+        quicly_ranges_drop_by_range_indices(&space->ack_queue, 0, space->ack_queue.num_ranges - QUICLY_MAX_ACK_BLOCKS);
     }
 
     recalc_send_ack_at(conn);
@@ -5260,11 +5291,9 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
         packet_bytes_in_flight = 0;
     }
     if (quicly_sentmap_is_open(&ps->loss.sentmap)) {
-        int cc_limited = ps->loss.sentmap.bytes_in_flight + packet_bytes_in_flight >=
-                         ps->cc.cwnd / 2; /* for the rationale behind this formula, see handle_ack_frame */
         if (s->target.ack_eliciting)
             ps->loss.sentmap._pending_packet->data.packet.ack_eliciting = 1;
-        quicly_sentmap_commit(&ps->loss.sentmap, (uint16_t)packet_bytes_in_flight, cc_limited, on_promoted_path);
+        quicly_sentmap_commit(&ps->loss.sentmap, (uint16_t)packet_bytes_in_flight, on_promoted_path);
     }
 
     if (packet_bytes_in_flight != 0) {
@@ -5311,7 +5340,7 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
         ps->loss.sentmap._pending_packet->data.packet.path_id = path->path_id;
         if (quicly_sentmap_allocate(&ps->loss.sentmap, on_invalid_ack) == NULL)
             return PTLS_ERROR_NO_MEMORY;
-        quicly_sentmap_commit(&ps->loss.sentmap, 0, 0, 0);
+        quicly_sentmap_commit(&ps->loss.sentmap, 0, 0);
         ++ps->packet_number;
         ps->next_pn_to_skip = calc_next_pn_to_skip(conn->super.ctx->tls, ps->packet_number, ps->cc.cwnd, ps->max_udp_payload_size);
     }
@@ -5349,8 +5378,6 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         coalescible = 0;
     } else if (((*s->target.first_byte_at ^ s->current.first_byte) & QUICLY_PACKET_TYPE_BITMASK) != 0) {
         coalescible = QUICLY_PACKET_IS_LONG_HEADER(*s->target.first_byte_at);
-    } else if (s->dst_end - s->dst < min_space) {
-        coalescible = 0;
     } else {
         /* use the existing packet */
         goto TargetReady;
@@ -6437,6 +6464,9 @@ quicly_error_t quicly_retry_calc_cidpair_hash(ptls_hash_algorithm_t *sha256, ptl
     uint8_t digest[PTLS_SHA256_DIGEST_SIZE], buf[(QUICLY_MAX_CID_LEN_V1 + 1) * 2], *p = buf;
     int ret;
 
+    assert(client_cid.len <= QUICLY_MAX_CID_LEN_V1);
+    assert(server_cid.len <= QUICLY_MAX_CID_LEN_V1);
+
     *p++ = (uint8_t)client_cid.len;
     memcpy(p, client_cid.base, client_cid.len);
     p += client_cid.len;
@@ -6570,7 +6600,7 @@ static quicly_error_t send_handshake_flow(quicly_conn_t *conn, size_t epoch, qui
         return 0;
 
     /* send ACK */
-    if (space != NULL && (space->unacked_count != 0 || send_probe))
+    if (space->unacked_count != 0 || send_probe)
         if ((ret = send_ack(conn, space, 0, 0, s)) != 0)
             goto Exit;
 
@@ -7192,7 +7222,7 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 if ((ret = send_path_challenge(conn, s, 0, path->path_challenge.data)) != 0)
                     goto Exit;
                 path->path_challenge.num_sent += 1;
-                path->path_challenge.send_at = conn->stash.now + ((3 * get_egress_context(conn)->loss.default_initial_rtt)
+                path->path_challenge.send_at = conn->stash.now + ((3 * (int64_t)get_egress_context(conn)->loss.default_initial_rtt)
                                                                   << (path->path_challenge.num_sent - 1));
                 s->recalc_send_probe_at = 1;
             }
@@ -7388,7 +7418,7 @@ Exit:
         if ((s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL &&
             (quicly_is_client(conn) || !ack_only))
             s->target.full_size = 1;
-        commit_send_packet(conn, s, 0);
+        ret = commit_send_packet(conn, s, 0);
     }
     if (ret == 0) {
         /* update timers, cc and delivery rate estimator states */
@@ -7397,6 +7427,11 @@ Exit:
         update_send_alarm(conn, can_send_stream_data, send_ps);
         update_ratemeter(conn, send_ps, can_send_stream_data, s->num_datagrams == s->max_datagrams,
                          pacer_can_send_at(send_ps) > conn->stash.now);
+        if (!restrict_sending && send_ps->loss.sentmap.bytes_in_flight >= send_ps->cc.cwnd) {
+            enter_cc_limited(send_ps);
+        } else {
+            exit_cc_limited(conn, send_ps, can_send_stream_data);
+        }
         if (s->num_datagrams != 0)
             update_idle_timeout(conn, 0);
     }
@@ -7904,8 +7939,14 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     assert_consistency(conn, s.num_datagrams != 0 ? get_send_path(conn, &s)->path_space : NULL);
 
 Exit:
-    if (s.num_datagrams != 0 && s.datagram_payloads_consumed != 0)
-        consume_path_datagram_frame_payloads(get_path(conn, s.path_index), s.datagram_payloads_consumed);
+    if (s.num_datagrams != 0 && s.datagram_payloads_consumed != 0) {
+        struct st_quicly_conn_path_t *path = get_path(conn, s.path_index);
+        consume_path_datagram_frame_payloads(path, s.datagram_payloads_consumed);
+        /* do_send still saw the consumed DATAGRAMs as pending. End the CC-limited period if that was the last batch. */
+        if (ret == 0 && path->path_space->cc_limited_end_pn == UINT64_MAX &&
+            path->path_space->loss.sentmap.bytes_in_flight < path->path_space->cc.cwnd)
+            exit_cc_limited(conn, path->path_space, scheduler_can_send(conn));
+    }
     if (s.recalc_send_probe_at)
         recalc_send_probe_at(conn);
     if (s.num_datagrams != 0) {
@@ -8023,7 +8064,7 @@ static quicly_error_t enter_close(quicly_conn_t *conn, int local_is_initiating, 
         return ret;
     if (quicly_sentmap_allocate(&ps->loss.sentmap, on_end_closing) == NULL)
         return PTLS_ERROR_NO_MEMORY;
-    quicly_sentmap_commit(&ps->loss.sentmap, 0, 0, 0);
+    quicly_sentmap_commit(&ps->loss.sentmap, 0, 0);
     ++ps->packet_number;
 
     if (local_is_initiating) {
@@ -8292,7 +8333,9 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
     if (ack_ps == NULL || ack_ps->addrs[0] == NULL)
         return 0;
     struct st_quicly_conn_path_t *ack_path = ack_ps->addrs[0];
-    int cc_limited = !get_egress_context(conn)->respect_app_limited || ack_ps->loss.sentmap.bytes_in_flight >= ack_ps->cc.cwnd / 2;
+    /* The ACK is considered CC-limited if it acknowledges any packet that was sent while CC-limited, or that was sent earlier but
+     * was in flight when the sender became CC-limited; see `enter_cc_limited`. */
+    int cc_limited = !get_egress_context(conn)->respect_app_limited;
 
     /* early bail out if the peer is acking a PN that would have never been sent */
     if (frame->largest_acknowledged >= ack_ps->packet_number)
@@ -8388,6 +8431,8 @@ static quicly_error_t process_ack_frame_core(quicly_conn_t *conn, struct st_quic
             if (sent->cc_bytes_in_flight != 0) {
                 if (is_valid_pn) {
                     bytes_acked += sent->cc_bytes_in_flight;
+                    if (pn_acked < ack_ps->cc_limited_end_pn)
+                        cc_limited = 1;
                 }
                 conn->super.stats.num_bytes.ack_received += sent->cc_bytes_in_flight;
                 ack_ps->bytes_acked += sent->cc_bytes_in_flight;
@@ -8913,11 +8958,10 @@ int quicly_is_destination(quicly_conn_t *conn, struct sockaddr *dest_addr, struc
         if (is_stateless_reset(conn, decoded))
             goto Found_StatelessReset;
     } else {
-        if (compare_socket_address(&get_path(conn, 0)->address.remote.sa, src_addr) == 0)
+        if (compare_socket_address(&get_path(conn, 0)->address.remote.sa, src_addr) == 0 &&
+            (get_path(conn, 0)->address.local.sa.sa_family == AF_UNSPEC ||
+             compare_socket_address(&get_path(conn, 0)->address.local.sa, dest_addr) == 0))
             goto Found;
-        if (get_path(conn, 0)->address.local.sa.sa_family != AF_UNSPEC &&
-            compare_socket_address(&get_path(conn, 0)->address.local.sa, dest_addr) != 0)
-            return 0;
     }
 
     /* not found */
@@ -9626,6 +9670,9 @@ quicly_error_t quicly_accept(quicly_conn_t **conn, quicly_context_t *ctx, struct
         ret = PTLS_ERROR_NO_MEMORY;
         goto Exit;
     }
+    /* record that paths[0] was born on an inferior path; observational only, as the packet accepting the connection is never
+     * passed to `do_receive` and hence is counted by neither of the two counters that are updated there */
+    (*conn)->super.stats.num_paths.accepted_on_inferior_path = packet->inferior_path;
     (*conn)->super.state = QUICLY_STATE_ACCEPTING;
     quicly_set_cid(&(*conn)->super.original_dcid, packet->cid.dest.encrypted);
     if (address_token != NULL) {
@@ -9802,8 +9849,8 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         goto Exit;
     }
 
-    /* update num_bytes.received which is counted at the datagram-level */
-    if (packet->first_packet)
+    /* update num_bytes.received which is counted at the datagram-level, when the datagram is received (not when replayed) */
+    if (packet->first_packet && receive_delay < 0)
         conn->super.stats.num_bytes.received += packet->datagram_size;
 
     switch (conn->super.state) {
@@ -10040,6 +10087,12 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
         }
     }
 
+    /* A packet that arrived over an inferior path, on the active address of its path space; i.e. the 4-tuple did not
+     * change and therefore no path is opened or promoted. The counterpart for a packet that promotes the path it arrived on
+     * is bumped at the promotion site below. Replays cannot reach here, having been rejected as duplicates above. */
+    if (packet->inferior_path && path_index < QUICLY_MAX_PATH_SPACES)
+        conn->super.stats.num_packets.received_on_inferior_primary_path += 1;
+
     /* update states */
     if (conn->super.state == QUICLY_STATE_FIRSTFLIGHT)
         conn->super.state = QUICLY_STATE_CONNECTED;
@@ -10145,6 +10198,9 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
                 !get_path(conn, path_index)->probe_only) {
                 if ((ret = promote_path(conn, path_index)) != 0)
                     goto Exit;
+                /* Track promotion to an inferior address within this path's packet-number space. */
+                if (packet->inferior_path)
+                    conn->super.stats.num_paths.promoted_to_inferior_path += 1;
                 recalc_send_probe_at(conn);
             }
         }
