@@ -135,6 +135,7 @@ static void on_stop_sending(quicly_stream_t *stream, quicly_error_t err);
 static void on_receive_reset(quicly_stream_t *stream, quicly_error_t err);
 static void server_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
 static void client_on_receive(quicly_stream_t *stream, size_t off, const void *src, size_t len);
+static void client_on_receive_reset(quicly_stream_t *stream, quicly_error_t err);
 
 static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streambuf_destroy,
                                                                   quicly_streambuf_egress_shift,
@@ -147,7 +148,7 @@ static const quicly_stream_callbacks_t server_stream_callbacks = {quicly_streamb
                                                                   quicly_streambuf_egress_emit,
                                                                   on_stop_sending,
                                                                   client_on_receive,
-                                                                  on_receive_reset};
+                                                                  client_on_receive_reset};
 
 static void dump_stats(FILE *fp, quicly_conn_t *conn)
 {
@@ -371,8 +372,28 @@ static void server_on_receive(quicly_stream_t *stream, size_t off, const void *s
     send_header(stream, is_http1, 404, "text/plain; charset=utf-8");
     send_str(stream, "not found\n");
 Sent:
-    quicly_streambuf_egress_shutdown(stream);
+    if (ctx.transport_params.reset_stream_at && quicly_get_remote_transport_parameters(stream->conn)->reset_stream_at) {
+        quicly_streambuf_t *sbuf = stream->data;
+        quicly_streambuf_egress_reset(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(123), sbuf->egress.bytes_written);
+    } else {
+        quicly_streambuf_egress_shutdown(stream);
+    }
     quicly_streambuf_ingress_shift(stream, len);
+}
+
+static void client_on_receive_complete(quicly_stream_t *stream)
+{
+    struct st_stream_data_t *stream_data = stream->data;
+
+    if (stream_data->outfp != NULL)
+        fclose(stream_data->outfp);
+}
+
+static void client_on_receive_reset(quicly_stream_t *stream, quicly_error_t err)
+{
+    on_receive_reset(stream, err);
+    if (quicly_recvstate_transfer_complete(&stream->recvstate))
+        client_on_receive_complete(stream);
 }
 
 static uint64_t delivery_now(void)
@@ -421,10 +442,8 @@ static void client_on_receive(quicly_stream_t *stream, size_t off, const void *s
         quicly_streambuf_ingress_shift(stream, input.len);
     }
 
-    if (quicly_recvstate_transfer_complete(&stream->recvstate)) {
-        if (stream_data->outfp != NULL)
-            fclose(stream_data->outfp);
-    }
+    if (quicly_recvstate_transfer_complete(&stream->recvstate))
+        client_on_receive_complete(stream);
 }
 
 static quicly_error_t on_stream_open(quicly_stream_open_t *self, quicly_stream_t *stream)
@@ -740,6 +759,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
     quicly_address_t local;
     quicly_error_t ret;
     quicly_conn_t *conn = NULL;
+    int64_t exit_at = INT64_MAX;
 
     signal(SIGTERM, on_client_signal);
 
@@ -764,6 +784,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             int64_t timeout_at = conn != NULL ? quicly_get_first_timeout(conn) : INT64_MAX;
             if (enqueue_requests_at < timeout_at)
                 timeout_at = enqueue_requests_at;
+            if (exit_at < timeout_at)
+                timeout_at = exit_at;
             if (timeout_at != INT64_MAX) {
                 quicly_context_t *ctx = quicly_get_context(conn);
                 double now;
@@ -822,9 +844,12 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                         send_datagram_frame = 0;
                     }
                     if (exit_after_handshake) {
+                        /* Once the handshake is confirmed, exit after spending 100ms to deliver an ACK for HANDSHAKE_DONE,
+                         * absorbing the probes that the server might send in the meantime. */
                         quicly_stats_t stats;
-                        if (quicly_get_stats(conn, &stats) == 0 && stats.handshake_confirmed_msec != UINT64_MAX)
-                            exit(0);
+                        if (exit_at == INT64_MAX && quicly_get_stats(conn, &stats) == 0 &&
+                            stats.handshake_confirmed_msec != UINT64_MAX)
+                            exit_at = ceil(now + 100);
                     } else {
                         if (quicly_num_streams(conn) == 0) {
                             if (request_interval != 0 && client_gotsig != SIGTERM) {
@@ -862,6 +887,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                 }
             }
         }
+        if (exit_at <= now)
+            exit(0);
     }
 }
 
@@ -1305,15 +1332,15 @@ static void usage(const char *cmd)
            "                            retry_configs from the server\n"
            "  --ech-key <file>          ECH private key for each ECH config provided by\n"
            "                            --ech-config\n"
-           "  --exit-after-handshake    immediately exits once the handshake concludes,\n"
-           "                            without sending application data\n"
+           "  --exit-after-handshake    exits once the handshake concludes, without sending\n"
+           "                            application data\n"
            "  -f fraction               increases the induced ack frequency to specified\n"
            "                            fraction of CWND (default: 0)\n"
            "  -G                        enable UDP generic segmentation offload\n"
            "  -i interval               interval to reissue requests (in milliseconds)\n"
            "  --jumpstart-default <wnd> jumpstart CWND size for new connections, in packets\n"
            "  --jumpstart-max <wnd>     maximum jumpstart CWND size for resuming connections\n"
-           "  -I timeout                idle timeout (in milliseconds; default: 600,000)\n"
+           "  -I timeout                idle timeout (in milliseconds; default: 30,000)\n"
            "  -K num-packets            perform key update every num-packets packets\n"
            "  -l log-file               file to log traffic secrets\n"
            "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
@@ -1340,6 +1367,9 @@ static void usage(const char *cmd)
            "  --abba                    enables ABBA bandwidth adaptation\n"
            "  --l4s                     enables L4S; CUBACK must be used\n"
            "  --rapid-start             turns on rapid start\n"
+           "  --reliable-reset          advertise the reset_stream_at transport parameter;\n"
+           "                            when acting as a server, responses are then ended\n"
+           "                            by a reliable reset covering the whole body, not FIN\n"
            "  -S [num-speculative-ptos] number of speculative PTOs\n"
            "  -s session-file           file to load / store the session ticket\n"
            "  --sockfd fd               specifies the UDP socket to be used\n"
@@ -1675,6 +1705,7 @@ int main(int argc, char **argv)
                                              {"disregard-app-limited", no_argument, NULL, 0},
                                              {"jumpstart-default", required_argument, NULL, 0},
                                              {"jumpstart-max", required_argument, NULL, 0},
+                                             {"reliable-reset", no_argument, NULL, 0},
                                              {"max-crypto-bytes", required_argument, NULL, 0},
                                              {"no-normalize-cc-mtu", no_argument, NULL, 0},
                                              {"rapid-start", no_argument, NULL, 0},
@@ -1715,6 +1746,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "failed to parse max jumpstart size: %s\n", optarg);
                     exit(1);
                 }
+            } else if (strcmp(longopts[opt_index].name, "reliable-reset") == 0) {
+                ctx.transport_params.reset_stream_at = 1;
             } else if (strcmp(longopts[opt_index].name, "max-crypto-bytes") == 0) {
                 if (sscanf(optarg, "%" SCNu32, &ctx.max_crypto_bytes) != 1) {
                     fprintf(stderr, "failed to parse max-crypto-bytes: %s\n", optarg);
@@ -1853,6 +1886,7 @@ int main(int argc, char **argv)
                 fprintf(stderr, "failed to parse idle timeout: %s\n", optarg);
                 exit(1);
             }
+            break;
         case 'K':
             if (sscanf(optarg, "%" SCNu64, &ctx.max_packets_per_key) != 1) {
                 fprintf(stderr, "failed to parse key update interval: %s\n", optarg);
