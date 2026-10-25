@@ -3796,10 +3796,11 @@ static size_t transmit_multipath(quicly_conn_t *src, quicly_conn_t *dst)
     return transmit_multipath_with_loss(src, dst, -1);
 }
 
-static quicly_context_t setup_multipath_regression_peers(quicly_conn_t **client, quicly_conn_t **server, int disable_migration)
+static quicly_context_t setup_multipath_regression_peers_limit(quicly_conn_t **client, quicly_conn_t **server, int disable_migration,
+                                                              uint64_t max_path_id)
 {
     quicly_context_t saved = quic_ctx;
-    quic_ctx.transport_params.initial_max_path_id = 4;
+    quic_ctx.transport_params.initial_max_path_id = max_path_id;
     quic_ctx.transport_params.disable_active_migration = disable_migration;
     char key[] = "0123456789abcdef";
     quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
@@ -3808,6 +3809,11 @@ static quicly_context_t setup_multipath_regression_peers(quicly_conn_t **client,
     get_path(*client, 0)->address.local = get_path(*client, 0)->address.remote = fake_address;
     get_path(*server, 0)->address.local = get_path(*server, 0)->address.remote = fake_address;
     return saved;
+}
+
+static quicly_context_t setup_multipath_regression_peers(quicly_conn_t **client, quicly_conn_t **server, int disable_migration)
+{
+    return setup_multipath_regression_peers_limit(client, server, disable_migration, 4);
 }
 
 static void free_multipath_regression_peers(quicly_conn_t *client, quicly_conn_t *server, quicly_context_t saved)
@@ -3889,14 +3895,15 @@ static void test_multipath_active_use(void)
     quicly_conn_t *client, *server;
     quicly_path_scheduler_t *orig_path_scheduler = quic_ctx.path_scheduler;
     quic_ctx.path_scheduler = &quicly_round_robin_path_scheduler;
-    quicly_context_t saved = setup_multipath_regression_peers(&client, &server, 0);
+    quicly_context_t saved = setup_multipath_regression_peers_limit(&client, &server, 0, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
 
     /* Verify path 0 is active */
     ok(get_path(client, 0) != NULL);
 
-    /* Setup 3 additional loopback paths on client to server */
-    struct sockaddr_in remote_addrs[3], local_addrs[3];
-    for (size_t i = 0; i < 3; ++i) {
+    /* Fill the compiled path-space capacity with independently validated tuples. */
+    struct sockaddr_in remote_addrs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1],
+        local_addrs[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1];
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(remote_addrs); ++i) {
         memset(&remote_addrs[i], 0, sizeof(remote_addrs[i]));
         remote_addrs[i].sin_family = AF_INET;
         remote_addrs[i].sin_port = htons((uint16_t)(10000 + i));
@@ -3912,30 +3919,35 @@ static void test_multipath_active_use(void)
         ok(get_path(client, i + 1) != NULL);
     }
 
-    /* Exchange packets until all paths are validated */
-    for (size_t i = 0; i < 20; ++i) {
+    /* Each send services one path; allow validation and data rounds for every configured path. */
+    const size_t exchange_rounds = 5 * QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT;
+    for (size_t i = 0; i < exchange_rounds; ++i) {
         transmit_multipath(client, server);
         transmit_multipath(server, client);
     }
 
     /* Verify that all paths have been created on the server and are validated (not probe_only) */
-    for (size_t i = 0; i < 4; ++i) {
-        ok(get_path(client, i) != NULL);
-        ok(!get_path(client, i)->probe_only);
-        ok(get_path(server, i) != NULL);
-        ok(!get_path(server, i)->probe_only);
+    int all_paths_validated = 1;
+    for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; ++i) {
+        struct st_quicly_conn_path_t *client_path = get_path(client, i), *server_path = get_path(server, i);
+        ok(client_path != NULL && !client_path->probe_only);
+        ok(server_path != NULL && !server_path->probe_only);
+        if (client_path == NULL || client_path->probe_only || server_path == NULL || server_path->probe_only)
+            all_paths_validated = 0;
     }
+    if (!all_paths_validated)
+        goto Exit;
 
     /* Record the packet count on each path before sending stream data */
-    uint64_t sent_before[4];
-    for (size_t i = 0; i < 4; ++i)
+    uint64_t sent_before[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+    for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; ++i)
         sent_before[i] = get_path(client, i)->num_packets.sent;
 
     /* Send stream data */
     quicly_stream_t *stream;
     quicly_error_t ret = quicly_open_stream(client, &stream, 0);
     ok(ret == 0);
-    for (size_t i = 0; i < 20; ++i) {
+    for (size_t i = 0; i < exchange_rounds; ++i) {
         quicly_streambuf_egress_write(stream, "hello multipath test", 20);
         transmit_multipath(client, server);
         transmit_multipath(server, client);
@@ -3943,7 +3955,7 @@ static void test_multipath_active_use(void)
 
     /* Verify that additional packets were sent on all paths */
     int all_paths_used_for_data = 1;
-    for (size_t i = 0; i < 4; ++i) {
+    for (size_t i = 0; i < QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT; ++i) {
         if (get_path(client, i)->num_packets.sent <= sent_before[i]) {
             all_paths_used_for_data = 0;
         }
@@ -3955,11 +3967,13 @@ static void test_multipath_active_use(void)
     for (size_t i = 0; i < PTLS_ELEMENTSOF(established_path_ids); ++i)
         established_path_ids[i] = client->path_spaces[i]->path_id;
     size_t ignored_path_index;
-    ret = open_path(client, &ignored_path_index, 4, (struct sockaddr *)&remote_addrs[0], (struct sockaddr *)&local_addrs[0]);
+    ret = open_path(client, &ignored_path_index, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT, (struct sockaddr *)&remote_addrs[0],
+                    (struct sockaddr *)&local_addrs[0]);
     ok(ret == QUICLY_ERROR_PACKET_IGNORED);
     for (size_t i = 0; i < PTLS_ELEMENTSOF(established_path_ids); ++i)
         ok(client->path_spaces[i] != NULL && client->path_spaces[i]->path_id == established_path_ids[i]);
 
+Exit:
     free_multipath_regression_peers(client, server, saved);
     quic_ctx.path_scheduler = orig_path_scheduler;
 }
@@ -4119,16 +4133,16 @@ static void test_multipath_abandoned_cids(void)
 static void test_multipath_resource_limit(void)
 {
     quicly_conn_t *client, *server;
-    quicly_context_t saved = setup_multipath_regression_peers(&client, &server, 0);
+    quicly_context_t saved = setup_multipath_regression_peers_limit(&client, &server, 0, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
     uint8_t token[16] = {0};
     for (size_t i = 0; i != PTLS_ELEMENTSOF(client->path_spaces); ++i)
         ok(client->path_spaces[i] != NULL);
-    ok(client->super.local.max_path_id == 4);
-    deliver_multipath_cid(server, client, 0, 4, 0, 0, token);
+    ok(client->super.local.max_path_id == QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
+    deliver_multipath_cid(server, client, 0, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT, 0, 0, token);
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
-    ok(find_path_space_by_id(client, 4) == NULL);
-    ok(path_id_is_abandoned(client, 4));
-    ok(client->rejected_path_abandon[4] == QUICLY_SENDER_STATE_SEND);
+    ok(find_path_space_by_id(client, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT) == NULL);
+    ok(path_id_is_abandoned(client, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT));
+    ok(client->rejected_path_abandon[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT] == QUICLY_SENDER_STATE_SEND);
 
     /* drop the first rejection and check retransmission through the actual sentmap callback */
     quicly_address_t dest, src;
@@ -4138,7 +4152,7 @@ static void test_multipath_resource_limit(void)
     uint64_t first_pn = client->path_spaces[0]->packet_number;
     ok(quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
     ok(num_datagrams != 0);
-    ok(client->rejected_path_abandon[4] == QUICLY_SENDER_STATE_UNACKED);
+    ok(client->rejected_path_abandon[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT] == QUICLY_SENDER_STATE_UNACKED);
     quicly_sentmap_iter_t iter;
     quicly_sentmap_t *map = &client->path_spaces[0]->loss.sentmap;
     quicly_sentmap_init_iter(map, &iter);
@@ -4150,19 +4164,19 @@ static void test_multipath_resource_limit(void)
             quicly_sentmap_skip(&iter);
         }
     }
-    ok(client->rejected_path_abandon[4] == QUICLY_SENDER_STATE_SEND);
+    ok(client->rejected_path_abandon[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT] == QUICLY_SENDER_STATE_SEND);
     exchange_until_idle(client, server);
-    ok(client->rejected_path_abandon[4] == QUICLY_SENDER_STATE_ACKED);
-    ok(server->rejected_path_abandon[4] == QUICLY_SENDER_STATE_ACKED);
+    ok(client->rejected_path_abandon[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT] == QUICLY_SENDER_STATE_ACKED);
+    ok(server->rejected_path_abandon[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT] == QUICLY_SENDER_STATE_ACKED);
     ok(client->super.stats.num_frames_sent.path_abandon >= 2);
     ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
     ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
-    deliver_multipath_cid(server, client, 0, 4, 0, 0, token);
-    ok(client->rejected_path_abandon[4] == QUICLY_SENDER_STATE_ACKED);
-    ok(find_path_space_by_id(client, 4) == NULL);
+    deliver_multipath_cid(server, client, 0, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT, 0, 0, token);
+    ok(client->rejected_path_abandon[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT] == QUICLY_SENDER_STATE_ACKED);
+    ok(find_path_space_by_id(client, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT) == NULL);
 
     /* exceeding the advertised limit is still a protocol error */
-    deliver_multipath_cid(server, client, 0, 5, 0, 0, token);
+    deliver_multipath_cid(server, client, 0, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT + 1, 0, 0, token);
     ok(quicly_get_state(client) == QUICLY_STATE_CLOSING);
     free_multipath_regression_peers(client, server, saved);
 }
@@ -4668,6 +4682,12 @@ static void test_lossy_isolated(void)
 
 int main(int argc, char **argv)
 {
+    /* Let the end-to-end tests use the same capacity as the compiled library. */
+    if (argc == 2 && strcmp(argv[1], "--active-connection-id-limit") == 0) {
+        printf("%" PRIu64 "\n", quicly_spec_context.transport_params.active_connection_id_limit);
+        return 0;
+    }
+
     static ptls_iovec_t cert;
     static ptls_openssl_sign_certificate_t cert_signer;
     static ptls_context_t tlsctx = {.random_bytes = test_random_bytes,
