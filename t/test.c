@@ -3818,6 +3818,72 @@ static void free_multipath_regression_peers(quicly_conn_t *client, quicly_conn_t
     quic_ctx = saved;
 }
 
+static void test_multipath_unused_space_close_timeout(void)
+{
+    int64_t saved_now = quic_now;
+    for (int draining = 0; draining != 2; ++draining) {
+        quic_now = INT64_C(1800000000000);
+        quicly_conn_t *client, *server;
+        quicly_context_t saved = setup_multipath_regression_peers(&client, &server, 0);
+        quicly_conn_t *peers[] = {client, server};
+        for (size_t peer = 0; peer < PTLS_ELEMENTSOF(peers); ++peer) {
+            quicly_conn_t *conn = peers[peer];
+            conn->path_spaces[0]->loss.rtt.smoothed = 10;
+            conn->path_spaces[0]->loss.rtt.variance = 1;
+            size_t unused = 0;
+            for (size_t i = 1; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+                quicly_path_space_t *ps = conn->path_spaces[i];
+                if (ps == NULL)
+                    continue;
+                ok(ps->addrs[0] == NULL);
+                ps->loss.rtt.smoothed = 1000;
+                ps->loss.rtt.variance = 0;
+                ++unused;
+            }
+            ok(unused != 0);
+            double primary = get_sentmap_expiration_time(conn);
+            ok(get_max_sentmap_expiration_time(conn) == primary);
+            /* a bound slow path must still extend close retention. */
+            struct st_quicly_conn_path_t bound = {0};
+            conn->path_spaces[1]->addrs[0] = &bound;
+            ok(get_max_sentmap_expiration_time(conn) ==
+               quicly_loss_get_sentmap_expiration_time(&conn->path_spaces[1]->loss,
+                                                      conn->super.remote.transport_params.max_ack_delay));
+            conn->path_spaces[1]->addrs[0] = NULL;
+            /* the primary address slot can be empty after address recycling. */
+            conn->path_spaces[1]->addrs[1] = &bound;
+            ok(get_max_sentmap_expiration_time(conn) ==
+               quicly_loss_get_sentmap_expiration_time(&conn->path_spaces[1]->loss,
+                                                      conn->super.remote.transport_params.max_ack_delay));
+            conn->path_spaces[1]->addrs[1] = NULL;
+        }
+        quic_now_submillisec = 0.75;
+        ok(quicly_close(client, 0, "unused spaces") == 0);
+        quicly_address_t dest, src;
+        struct iovec datagram;
+        uint8_t buf[1500];
+        size_t count = 1;
+        ok(quicly_send(client, &dest, &src, &datagram, &count, buf, sizeof(buf)) == 0);
+        ok(count == 1);
+        quicly_decoded_packet_t decoded;
+        ok(decode_packets(&decoded, &datagram, 1) == 1);
+        ok(quicly_receive(server, NULL, &fake_address.sa, &decoded) == 0);
+        quicly_conn_t *conn = draining ? server : client;
+        int64_t expires_at = ceil(quic_now + quic_now_submillisec + get_sentmap_expiration_time(conn));
+        ok(quicly_get_first_timeout(conn) == expires_at);
+        quic_now_submillisec = 0;
+        quic_now = expires_at - 1;
+        count = 1;
+        ok(quicly_send(conn, &dest, &src, &datagram, &count, buf, sizeof(buf)) == 0);
+        ok(quicly_get_first_timeout(conn) == expires_at);
+        quic_now = expires_at;
+        count = 1;
+        ok(quicly_send(conn, &dest, &src, &datagram, &count, buf, sizeof(buf)) == QUICLY_ERROR_FREE_CONNECTION);
+        free_multipath_regression_peers(client, server, saved);
+    }
+    quic_now = saved_now;
+}
+
 static void test_multipath_active_use(void)
 {
     quicly_conn_t *client, *server;
@@ -4751,6 +4817,7 @@ int main(int argc, char **argv)
     subtest("multipath-delivery-rate", test_multipath_delivery_rate);
     subtest("multipath-coupled-cc", test_multipath_coupled_cc);
     subtest("multipath-key-update-delay", test_multipath_key_update_delay);
+    subtest("multipath-unused-space-close-timeout", test_multipath_unused_space_close_timeout);
     subtest("multipath-active-use", test_multipath_active_use);
     subtest("multipath-path-management", test_multipath_path_management);
     subtest("multipath-abandoned-cids", test_multipath_abandoned_cids);

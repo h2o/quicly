@@ -1009,6 +1009,14 @@ static double get_max_sentmap_expiration_time(quicly_conn_t *conn)
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
         quicly_path_space_t *ps = conn->path_spaces[i];
         if (ps != NULL) {
+            /* unused advertised path spaces have an initial RTT but no network
+             * path. retain all bound address slots, and keep path zero as the
+             * fallback before address setup completes. */
+            int bound = i == 0;
+            for (size_t a = 0; !bound && a < PTLS_ELEMENTSOF(ps->addrs); ++a)
+                bound = ps->addrs[a] != NULL;
+            if (!bound)
+                continue;
             double candidate =
                 quicly_loss_get_sentmap_expiration_time(&ps->loss, conn->super.remote.transport_params.max_ack_delay);
             if (expiration < candidate)
