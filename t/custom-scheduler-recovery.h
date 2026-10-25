@@ -380,11 +380,16 @@ static void test_custom_recovery_health(void)
     ok(destroy_path_state(f.client, candidate) == 0);
     ok(destroy_path_state(f.client, 1) == 0);
     ok(quicly_get_path_health(f.client, 1, &h) == -1);
+    uint32_t fresh_path_id = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(f.client->path_spaces); ++i)
+        if (f.client->path_spaces[i] != NULL && f.client->path_spaces[i]->path_id >= fresh_path_id)
+            fresh_path_id = f.client->path_spaces[i]->path_id + 1;
+    ok(fresh_path_id <= f.client->super.local.max_path_id);
     lock_now(f.client, 1);
-    ok(open_path(f.client, &reused, 4, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
+    ok(open_path(f.client, &reused, fresh_path_id, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
     unlock_now(f.client);
     ok(reused == 1);
-    ok(quicly_get_path_health(f.client, reused, &h) == 0 && h.path_index == 1 && h.path_id == 4);
+    ok(quicly_get_path_health(f.client, reused, &h) == 0 && h.path_index == 1 && h.path_id == fresh_path_id);
     ok(!h.abandoned && h.probe_only && h.pto_count == 0 && !h.rtt_is_sampled && !h.peer_is_backup);
     custom_recovery_free(&f);
 }
