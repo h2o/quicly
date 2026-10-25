@@ -4538,6 +4538,7 @@ static void do_test_multipath_cc_limited_drain_and_resume(size_t busy_path)
     quicly_context_t original = quic_ctx;
     int64_t saved_now = quic_now;
     static quicly_receive_datagram_frame_t receiver = {test_queue_receive_datagram};
+    quic_ctx.max_datagram_frame_payloads = 2;
     quic_ctx.transport_params.max_datagram_frame_size = 1200;
     quic_ctx.receive_datagram_frame = &receiver;
     quic_ctx.egress[0].cc.init_cc = &quicly_cc_reno_init;

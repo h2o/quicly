@@ -295,8 +295,10 @@ struct st_quicly_conn_path_t {
     uint64_t dcid;
     uint32_t path_id;
     struct {
-        ptls_iovec_t payloads[64];
+        ptls_iovec_t *entries;
         size_t count;
+        size_t head;
+        size_t capacity;
     } datagram_frame_payloads;
 };
 
@@ -941,22 +943,33 @@ static void dispose_cipher(struct st_quicly_cipher_context_t *ctx)
 
 static void clear_path_datagram_frame_payloads(struct st_quicly_conn_path_t *path)
 {
-    for (size_t i = 0; i != path->datagram_frame_payloads.count; ++i) {
-        free(path->datagram_frame_payloads.payloads[i].base);
-        path->datagram_frame_payloads.payloads[i] = ptls_iovec_init(NULL, 0);
+    if (path->datagram_frame_payloads.entries != NULL) {
+        for (size_t i = 0; i != path->datagram_frame_payloads.count; ++i) {
+            size_t idx = (path->datagram_frame_payloads.head + i) % path->datagram_frame_payloads.capacity;
+            free(path->datagram_frame_payloads.entries[idx].base);
+        }
+        free(path->datagram_frame_payloads.entries);
+        path->datagram_frame_payloads.entries = NULL;
     }
     path->datagram_frame_payloads.count = 0;
+    path->datagram_frame_payloads.head = 0;
+    path->datagram_frame_payloads.capacity = 0;
 }
 
 static void consume_path_datagram_frame_payloads(struct st_quicly_conn_path_t *path, size_t consumed)
 {
     assert(consumed <= path->datagram_frame_payloads.count);
-    for (size_t i = 0; i != consumed; ++i)
-        free(path->datagram_frame_payloads.payloads[i].base);
-    size_t remaining = path->datagram_frame_payloads.count - consumed;
-    memmove(path->datagram_frame_payloads.payloads, path->datagram_frame_payloads.payloads + consumed,
-            remaining * sizeof(path->datagram_frame_payloads.payloads[0]));
-    path->datagram_frame_payloads.count = remaining;
+    for (size_t i = 0; i != consumed; ++i) {
+        size_t idx = (path->datagram_frame_payloads.head + i) % path->datagram_frame_payloads.capacity;
+        free(path->datagram_frame_payloads.entries[idx].base);
+        path->datagram_frame_payloads.entries[idx] = ptls_iovec_init(NULL, 0);
+    }
+    if (path->datagram_frame_payloads.capacity != 0)
+        path->datagram_frame_payloads.head =
+            (path->datagram_frame_payloads.head + consumed) % path->datagram_frame_payloads.capacity;
+    path->datagram_frame_payloads.count -= consumed;
+    if (path->datagram_frame_payloads.count == 0)
+        path->datagram_frame_payloads.head = 0;
 }
 
 /**
@@ -7326,7 +7339,8 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
              * * Does not notify the application that the frame was dropped internally. */
             if (!s->maintenance_only && send_ps->health.state != QUICLY_PATH_SUSPECT && should_send_datagram_frame(conn, path)) {
                 for (size_t i = s->datagram_payloads_consumed; i != path->datagram_frame_payloads.count; ++i) {
-                    ptls_iovec_t *payload = path->datagram_frame_payloads.payloads + i;
+                    size_t slot = (path->datagram_frame_payloads.head + i) % path->datagram_frame_payloads.capacity;
+                    ptls_iovec_t *payload = path->datagram_frame_payloads.entries + slot;
                     size_t required_space = quicly_datagram_frame_capacity(*payload);
                     if ((ret = do_allocate_frame(conn, s, required_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
                         goto Exit;
@@ -7495,17 +7509,35 @@ Exit:
 
 void quicly_send_datagram_frames_path(quicly_conn_t *conn, size_t path_index, ptls_iovec_t *datagrams, size_t num_datagrams)
 {
-    if (path_index >= QUICLY_MAX_PATH_INDICES || get_path(conn, path_index) == NULL || get_path(conn, path_index)->abandoned)
+    if (num_datagrams == 0 || path_index >= QUICLY_MAX_PATH_INDICES || get_path(conn, path_index) == NULL ||
+        get_path(conn, path_index)->abandoned)
         return;
     struct st_quicly_conn_path_t *path = get_path(conn, path_index);
+
+    if (path->datagram_frame_payloads.entries == NULL) {
+        size_t capacity = conn->super.ctx->max_datagram_frame_payloads != 0
+                              ? conn->super.ctx->max_datagram_frame_payloads
+                              : QUICLY_DEFAULT_MAX_DATAGRAM_FRAME_PAYLOADS;
+        if (capacity == 0 || capacity > SIZE_MAX / sizeof(path->datagram_frame_payloads.entries[0]))
+            return;
+        if ((path->datagram_frame_payloads.entries = malloc(sizeof(path->datagram_frame_payloads.entries[0]) * capacity)) == NULL)
+            return;
+        path->datagram_frame_payloads.capacity = capacity;
+        path->datagram_frame_payloads.head = 0;
+        path->datagram_frame_payloads.count = 0;
+    }
+
     for (size_t i = 0; i != num_datagrams; ++i) {
-        if (path->datagram_frame_payloads.count == PTLS_ELEMENTSOF(path->datagram_frame_payloads.payloads))
+        if (path->datagram_frame_payloads.count == path->datagram_frame_payloads.capacity)
             break;
         void *copied;
         if ((copied = malloc(datagrams[i].len)) == NULL)
             break;
         memcpy(copied, datagrams[i].base, datagrams[i].len);
-        path->datagram_frame_payloads.payloads[path->datagram_frame_payloads.count++] = ptls_iovec_init(copied, datagrams[i].len);
+        size_t slot =
+            (path->datagram_frame_payloads.head + path->datagram_frame_payloads.count) % path->datagram_frame_payloads.capacity;
+        path->datagram_frame_payloads.entries[slot] = ptls_iovec_init(copied, datagrams[i].len);
+        ++path->datagram_frame_payloads.count;
     }
 }
 
@@ -7520,6 +7552,17 @@ size_t quicly_get_num_datagram_frames_path(quicly_conn_t *conn, size_t path_inde
     if (path_index >= QUICLY_MAX_PATH_INDICES || get_path(conn, path_index) == NULL)
         return 0;
     return get_path(conn, path_index)->datagram_frame_payloads.count;
+}
+
+size_t quicly_get_max_datagram_frames_path(quicly_conn_t *conn, size_t path_index)
+{
+    if (path_index >= QUICLY_MAX_PATH_INDICES || get_path(conn, path_index) == NULL)
+        return 0;
+    struct st_quicly_conn_path_t *path = get_path(conn, path_index);
+    if (path->datagram_frame_payloads.capacity != 0)
+        return path->datagram_frame_payloads.capacity;
+    return conn->super.ctx->max_datagram_frame_payloads != 0 ? conn->super.ctx->max_datagram_frame_payloads
+                                                             : QUICLY_DEFAULT_MAX_DATAGRAM_FRAME_PAYLOADS;
 }
 
 int quicly_has_datagram_frames(quicly_conn_t *conn)

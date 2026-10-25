@@ -503,6 +503,10 @@ struct st_quicly_context_t {
      * recovery requires ACKs of two separately sent, fresh ack-eliciting packets. set before creating connections.
      */
     unsigned multipath_failover_pto_threshold;
+    /**
+     * maximum number of DATAGRAM frame payloads that can be queued per path (0 uses default)
+     */
+    size_t max_datagram_frame_payloads;
 };
 
 /**
@@ -1779,6 +1783,8 @@ static int quicly_stream_is_self_initiated(quicly_stream_t *stream);
 void quicly_send_datagram_frames(quicly_conn_t *conn, ptls_iovec_t *datagrams, size_t num_datagrams);
 /** Returns the number of locally queued DATAGRAM frames, not delivery or ACK status. */
 size_t quicly_get_num_datagram_frames_path(quicly_conn_t *conn, size_t path_index);
+/** Returns the maximum number of DATAGRAM frames that can be queued on the path. */
+size_t quicly_get_max_datagram_frames_path(quicly_conn_t *conn, size_t path_index);
 /**
  * queues DATAGRAM frames on the specified path. built-in schedulers honor this placement even on a backup or a path with repeated
  * PTOs; physical eligibility, validation, congestion, pacing, and SUSPECT health still gate transmission.

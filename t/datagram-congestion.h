@@ -121,6 +121,7 @@ static void test_datagram_cubic_progress(void)
 {
     int64_t saved_now = quic_now;
     quicly_context_t saved_ctx = quic_ctx;
+    quic_ctx.max_datagram_frame_payloads = 64;
     static quicly_receive_datagram_frame_t receiver = {test_queue_receive_datagram};
     quic_ctx.transport_params.max_datagram_frame_size = 1200;
     quic_ctx.receive_datagram_frame = &receiver;
