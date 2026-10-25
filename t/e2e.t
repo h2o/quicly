@@ -69,10 +69,18 @@ subtest "hello" => sub {
 
     # check if the client receives extra connection IDs
     subtest "initial-ncid" => sub {
+        open my $limit_fh, "-|", "$ENV{BINARY_DIR}/test.t", "--active-connection-id-limit"
+            or die "failed to query compiled connection ID limit:$!";
+        my $active_connection_id_limit = do { local $/; <$limit_fh> } // "";
+        close $limit_fh
+            or die "failed to query compiled connection ID limit:$?";
+        chomp $active_connection_id_limit;
+        die "invalid compiled connection ID limit:$active_connection_id_limit"
+            unless $active_connection_id_limit =~ /\A[1-9][0-9]*\z/ && $active_connection_id_limit >= 2;
         my $events = slurp_file("$tempdir/events");
         complex $events, sub {
             my @seen;
-            my @expected = (0, 1, 1, 1); # expecting to see sequence=1,2,3 as we set active_connection_id_limit to 4
+            my @expected = (0, (1) x ($active_connection_id_limit - 1)); # sequence 0 is delivered during the handshake
             foreach (split(/\n/)) {
                 if ( /"type":"new_connection_id_receive",.*"sequence":([0-9]+),/ ) {
                     # $1 contains sequence number
