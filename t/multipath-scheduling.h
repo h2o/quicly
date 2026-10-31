@@ -1,0 +1,160 @@
+static quicly_context_t setup_multipath_scheduling_peers(quicly_conn_t **client, quicly_conn_t **server,
+                                                         quicly_path_scheduler_t *scheduler)
+{
+    quicly_context_t saved = setup_multipath_regression_peers(client, server, 0);
+    quic_ctx.path_scheduler = scheduler;
+    open_multipath_test_path(*client);
+    multipath_run(*client, *server, 100, -1, -1);
+    ok(quicly_is_path_available(*client, 1));
+    /* ask the client to reserve path 1 for backup use */
+    ok(quicly_set_path_status(*server, 1, 1) == 0);
+    multipath_run(*server, *client, 100, -1, -1);
+    ok((*client)->path_spaces[1]->is_backup);
+    return saved;
+}
+
+static size_t multipath_received_length(quicly_conn_t *conn, quicly_stream_id_t stream_id)
+{
+    quicly_stream_t *stream = quicly_get_stream(conn, stream_id);
+    return stream != NULL ? quicly_streambuf_ingress_get(stream).len : 0;
+}
+
+static void reset_preceding_stream_on_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
+{
+    quicly_stream_t *preceding = quicly_get_stream(stream->conn, stream->stream_id - 4);
+    if (preceding != NULL && quicly_sendstate_eos_type(&preceding->sendstate) != QUICLY_SENDSTATE_EOS_TYPE_RESET)
+        quicly_reset_stream(preceding, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0));
+    quicly_streambuf_egress_emit(stream, off, dst, len, wrote_all);
+}
+
+static void test_multipath_scheduler_callback_reset(void)
+{
+    quicly_path_scheduler_t *schedulers[] = {&quicly_default_path_scheduler, &quicly_round_robin_path_scheduler};
+    for (size_t n = 0; n < PTLS_ELEMENTSOF(schedulers); ++n) {
+        int64_t saved_now = quic_now;
+        quicly_conn_t *client, *server;
+        quicly_context_t saved = setup_multipath_scheduling_peers(&client, &server, schedulers[n]);
+        quicly_stream_callbacks_t callbacks = stream_callbacks;
+        callbacks.on_destroy = quicly_streambuf_destroy;
+        callbacks.on_send_emit = reset_preceding_stream_on_emit;
+        quicly_stream_t *pinned, *ordinary;
+        ok(quicly_open_stream(client, &pinned, 0) == 0);
+        ok(quicly_open_stream(client, &ordinary, 0) == 0);
+        pinned->callbacks = ordinary->callbacks = &callbacks;
+        ok(quicly_set_stream_path_affinity(pinned, 1) == 0);
+        ok(quicly_streambuf_egress_write(pinned, "pinned", 6) == 0);
+        ok(quicly_streambuf_egress_write(ordinary, "ordinary", 8) == 0);
+
+        /* skip the pinned stream on path zero, then unlink it inside the next stream's send callback */
+        client->next_send_path_index = 0;
+        transmit_multipath(client, server);
+        ok(quicly_sendstate_eos_type(&pinned->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET);
+        ok(!quicly_linklist_is_linked(&pinned->_send_aux.pending_link.default_scheduler));
+        ok(multipath_received_length(server, ordinary->stream_id) == 8);
+        free_multipath_regression_peers(client, server, saved);
+        quic_now = saved_now;
+    }
+}
+
+static void test_multipath_backup_affinity(void)
+{
+    quicly_path_scheduler_t *schedulers[] = {&quicly_default_path_scheduler, &quicly_round_robin_path_scheduler};
+    for (size_t n = 0; n < PTLS_ELEMENTSOF(schedulers); ++n) {
+        int64_t saved_now = quic_now;
+        quicly_conn_t *client, *server;
+        quicly_context_t saved = setup_multipath_scheduling_peers(&client, &server, schedulers[n]);
+        quicly_stream_t *pinned, *ordinary;
+        ok(quicly_open_stream(client, &pinned, 0) == 0);
+        ok(quicly_open_stream(client, &ordinary, 0) == 0);
+        ok(quicly_set_stream_path_affinity(pinned, 1) == 0);
+        uint8_t data[5000];
+        memset(data, 0x5a, sizeof(data));
+        ok(quicly_streambuf_egress_write(pinned, data, sizeof(data)) == 0);
+        ok(quicly_streambuf_egress_write(ordinary, data, sizeof(data)) == 0);
+        uint32_t cwnd = client->path_spaces[0]->cc.cwnd;
+        client->path_spaces[0]->cc.cwnd = 0;
+        multipath_run(client, server, 100, -1, -1);
+        ok(multipath_received_length(server, pinned->stream_id) == sizeof(data));
+        /* congestion alone must not promote a backup or leak unbound streams onto it */
+        ok(multipath_received_length(server, ordinary->stream_id) == 0);
+        ok(client->path_spaces[1]->is_backup);
+        client->path_spaces[0]->cc.cwnd = cwnd;
+        multipath_run(client, server, 100, -1, -1);
+        ok(multipath_received_length(server, ordinary->stream_id) == sizeof(data));
+        /* a writable primary must not cause a busy loop when only a blocked, backup-bound stream has pending data */
+        ok(quicly_streambuf_egress_write(pinned, data, sizeof(data)) == 0);
+        cwnd = client->path_spaces[1]->cc.cwnd;
+        client->path_spaces[1]->cc.cwnd = 0;
+        ok(quicly_get_first_timeout(client) > quic_now);
+        client->path_spaces[1]->cc.cwnd = cwnd;
+        multipath_run(client, server, 100, -1, -1);
+        ok(multipath_received_length(server, pinned->stream_id) == 2 * sizeof(data));
+        free_multipath_regression_peers(client, server, saved);
+        quic_now = saved_now;
+    }
+}
+
+static void test_multipath_backup_failover(void)
+{
+    quicly_path_scheduler_t *schedulers[] = {&quicly_default_path_scheduler, &quicly_round_robin_path_scheduler};
+    for (size_t n = 0; n < PTLS_ELEMENTSOF(schedulers); ++n) {
+        int64_t saved_now = quic_now;
+        quicly_conn_t *client, *server;
+        quicly_context_t saved = setup_multipath_scheduling_peers(&client, &server, schedulers[n]);
+        quicly_stream_t *stream;
+        ok(quicly_open_stream(client, &stream, 0) == 0);
+        uint8_t data[8000];
+        for (size_t i = 0; i < sizeof(data); ++i)
+            data[i] = (uint8_t)i;
+        ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
+        /* blackhole the primary without deleting it or manually declaring its packets lost */
+        for (size_t i = 0; i < 3000 && multipath_received_length(server, stream->stream_id) != sizeof(data); ++i)
+            multipath_round(client, server, 0, 0);
+        ok(multipath_received_length(server, stream->stream_id) == sizeof(data));
+        quicly_stream_t *received = quicly_get_stream(server, stream->stream_id);
+        if (received != NULL && quicly_streambuf_ingress_get(received).len == sizeof(data))
+            ok(memcmp(quicly_streambuf_ingress_get(received).base, data, sizeof(data)) == 0);
+        ok(!get_path(client, 0)->abandoned);
+        ok(client->path_spaces[0]->loss.pto_count >= 2);
+        ok(client->path_spaces[1]->is_backup);
+        /* restore connectivity. recovery probes must still run on the excluded path */
+        for (size_t i = 0; i < 3000 && client->path_spaces[0]->loss.pto_count != 0; ++i)
+            multipath_round(client, server, -1, -1);
+        ok(client->path_spaces[0]->loss.pto_count == 0);
+        multipath_run(client, server, 100, -1, -1);
+        uint64_t primary_before = get_path(client, 0)->num_packets.bytes_sent;
+        uint64_t backup_before = get_path(client, 1)->num_packets.bytes_sent;
+        ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
+        multipath_run(client, server, 100, -1, -1);
+        ok(multipath_received_length(server, stream->stream_id) == 2 * sizeof(data));
+        ok(get_path(client, 0)->num_packets.bytes_sent > primary_before + sizeof(data));
+        ok(get_path(client, 1)->num_packets.bytes_sent == backup_before);
+        free_multipath_regression_peers(client, server, saved);
+        quic_now = saved_now;
+    }
+}
+
+static void test_multipath_backup_transient_loss(void)
+{
+    quicly_path_scheduler_t *schedulers[] = {&quicly_default_path_scheduler, &quicly_round_robin_path_scheduler};
+    for (size_t n = 0; n < PTLS_ELEMENTSOF(schedulers); ++n) {
+        int64_t saved_now = quic_now;
+        quicly_conn_t *client, *server;
+        quicly_context_t saved = setup_multipath_scheduling_peers(&client, &server, schedulers[n]);
+        quicly_stream_t *stream;
+        ok(quicly_open_stream(client, &stream, 0) == 0);
+        uint8_t data[1000];
+        memset(data, 0xa5, sizeof(data));
+        ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
+        uint64_t backup_before = get_path(client, 1)->num_packets.bytes_sent;
+        for (size_t i = 0; i < 1000 && client->path_spaces[0]->loss.pto_count <= 0; ++i)
+            multipath_round(client, server, 0, 0);
+        ok(client->path_spaces[0]->loss.pto_count == 1);
+        ok(get_path(client, 1)->num_packets.bytes_sent == backup_before);
+        for (size_t i = 0; i < 1000 && multipath_received_length(server, stream->stream_id) != sizeof(data); ++i)
+            multipath_round(client, server, -1, -1);
+        ok(multipath_received_length(server, stream->stream_id) == sizeof(data));
+        free_multipath_regression_peers(client, server, saved);
+        quic_now = saved_now;
+    }
+}
