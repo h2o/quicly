@@ -76,6 +76,106 @@ static void test_multipath_unopened_abandoned_status(void)
     quic_now = saved_now;
 }
 
+/* Losing the signal must not tie its reliable delivery to the abandoned path's retention timer. */
+static void test_multipath_abandon_retention(void)
+{
+    for (uint32_t path_id = 0; path_id < 2; ++path_id) {
+        custom_recovery_fixture_t f;
+        custom_recovery_setup(&f);
+        uint64_t error_code = PTLS_QUICINT_MAX - path_id;
+        ok(quicly_abandon_path(f.client, path_id, error_code) == 0);
+        ok(custom_recovery_transmit(f.client, f.server, 3, 1) == 1);
+        ok(f.client->path_spaces[path_id]->path_abandon.sender == QUICLY_SENDER_STATE_UNACKED);
+        uint64_t before = f.client->super.stats.num_frames_sent.path_abandon;
+        lock_now(f.client, 0);
+        int64_t deadline = abandoned_path_expires_at(f.client, get_path(f.client, path_id));
+        unlock_now(f.client);
+        quic_now = deadline;
+        custom_recovery_transmit(f.client, f.server, 3, 1);
+        for (size_t i = 0; i < 3000; ++i)
+            custom_recovery_round(&f, 3, 1);
+        if (path_id != 0) {
+            ok(find_path_space_by_id(f.client, path_id) == NULL);
+            ok(f.client->retired_path_abandon != NULL && f.client->retired_path_abandon->error_code == error_code);
+        } else {
+            ok(get_path(f.client, 0)->abandoned_at == INT64_MAX);
+            ok(f.client->retired_path_abandon == NULL);
+        }
+        ok(f.client->super.stats.num_frames_sent.path_abandon > before);
+        /* Restore connectivity: the same error code reaches the peer, and ACK releases the retained message. */
+        for (size_t i = 0; i < 5000 && !path_id_is_abandoned(f.server, path_id); ++i)
+            custom_recovery_round(&f, 0, 1);
+        ok(path_id_is_abandoned(f.server, path_id));
+        quicly_path_space_t *peer_ps = find_path_space_by_id(f.server, path_id);
+        ok(peer_ps != NULL && peer_ps->path_abandon.error_code == error_code);
+        for (size_t i = 0; i < 100; ++i)
+            custom_recovery_round(&f, 0, 1);
+        ok(f.client->retired_path_abandon == NULL);
+        if (path_id == 0)
+            ok(f.client->path_spaces[0]->path_abandon.sender == QUICLY_SENDER_STATE_ACKED);
+        ok(quicly_get_state(f.client) == QUICLY_STATE_CONNECTED);
+        ok(quicly_get_state(f.server) == QUICLY_STATE_CONNECTED);
+        custom_recovery_free(&f);
+    }
+}
+
+static void abandon_update_packet(quicly_sentmap_t *map, uint64_t pn, quicly_sentmap_event_t event)
+{
+    quicly_sentmap_iter_t iter;
+    quicly_sentmap_init_iter(map, &iter);
+    const quicly_sent_packet_t *packet;
+    while ((packet = quicly_sentmap_get(&iter))->packet_number != UINT64_MAX) {
+        if (packet->packet_number == pn) {
+            ok(quicly_sentmap_update(map, &iter, event) == 0);
+            return;
+        }
+        quicly_sentmap_skip(&iter);
+    }
+    ok(!"PATH_ABANDON packet missing from sentmap");
+}
+
+static void test_multipath_abandon_late_ack(void)
+{
+    custom_recovery_fixture_t f;
+    custom_recovery_setup(&f);
+    ok(f.client->retired_path_abandon == NULL);
+    ok(quicly_abandon_path(f.client, 1, QUICLY_PATH_ABANDON_ERROR_APPLICATION) == 0);
+    uint64_t first_pn = f.client->path_spaces[0]->packet_number;
+    ok(custom_recovery_transmit(f.client, f.server, 3, 1) == 1);
+    lock_now(f.client, 0);
+    ok(expire_abandoned_path_state(f.client, 1) == 0);
+    unlock_now(f.client);
+    ok(f.client->path_spaces[1] == NULL);
+    ok(f.client->retired_path_abandon != NULL && f.client->retired_path_abandon->sender == QUICLY_SENDER_STATE_UNACKED);
+    quicly_sentmap_t *map = &f.client->path_spaces[0]->loss.sentmap;
+    abandon_update_packet(map, first_pn, QUICLY_SENTMAP_EVENT_LOST);
+    ok(f.client->retired_path_abandon->sender == QUICLY_SENDER_STATE_SEND);
+    uint64_t retry_pn = f.client->path_spaces[0]->packet_number;
+    ok(custom_recovery_transmit(f.client, f.server, 3, 1) == 1);
+    ok(f.client->retired_path_abandon->sender == QUICLY_SENDER_STATE_UNACKED);
+
+    /* A second, unsent abandonment exercises SEND retention and unlinking an interior record. */
+    lock_now(f.client, 0);
+    ok(new_path(f.client, 2, 2, &fake_address.sa, &fake_address.sa) == 0);
+    unlock_now(f.client);
+    ok(quicly_abandon_path(f.client, 2, QUICLY_PATH_ABANDON_ERROR_UNSTABLE_OR_POOR) == 0);
+    lock_now(f.client, 0);
+    ok(expire_abandoned_path_state(f.client, 2) == 0);
+    ok(alloc_path_space(f.client, 1, 5) == 0);
+    unlock_now(f.client);
+    ok(f.client->retired_path_abandon->path_id == 2 && f.client->retired_path_abandon->next->path_id == 1);
+    ok(f.client->retired_path_abandon->sender == QUICLY_SENDER_STATE_SEND);
+    /* ACK the original after loss, retransmission, owner deletion, and slot reuse. */
+    abandon_update_packet(map, first_pn, QUICLY_SENTMAP_EVENT_ACKED);
+    ok(f.client->retired_path_abandon->path_id == 2 && f.client->retired_path_abandon->next == NULL);
+    abandon_update_packet(map, retry_pn, QUICLY_SENTMAP_EVENT_LOST);
+    abandon_update_packet(map, retry_pn, QUICLY_SENTMAP_EVENT_ACKED);
+    ok(f.client->path_spaces[1]->path_id == 5 && f.client->path_spaces[1]->path_abandon.sender == QUICLY_SENDER_STATE_NONE);
+    ok(f.client->retired_path_abandon->path_id == 2 && f.client->retired_path_abandon->sender == QUICLY_SENDER_STATE_SEND);
+    /* Teardown must release an outstanding record as well as records completed by ACK. */
+    custom_recovery_free(&f);
+}
+
 /* Also runnable in isolation under LeakSanitizer: unlike traffic-statistics fixtures, every owned buffer is released. */
 static void test_multipath_lifecycle_cleanup(void)
 {
@@ -118,9 +218,9 @@ static void test_multipath_lifecycle_cleanup(void)
             quic_now = expires;
             unlock_now(client);
             lock_now(client, 0);
-            expire_abandoned_path_state(client, 1);
+            ok(expire_abandoned_path_state(client, 1) == 0);
             if (get_path(client, candidate) != NULL)
-                expire_abandoned_path_state(client, candidate);
+                ok(expire_abandoned_path_state(client, candidate) == 0);
             unlock_now(client);
             ok(client->path_spaces[1] == NULL);
             ok(path_id_is_abandoned(client, path_id));

@@ -91,7 +91,7 @@ static void test_multipath_fractional_timing(void)
     uint64_t pn = ps->packet_number++;
     ok(quicly_sentmap_prepare(&ps->loss.sentmap, pn, client->stash.now_double, QUICLY_EPOCH_1RTT) == 0);
     ps->loss.sentmap._pending_packet->data.packet.path_id = ps->path_id;
-    quicly_sentmap_commit(&ps->loss.sentmap, 1200, 1, 0);
+    quicly_sentmap_commit(&ps->loss.sentmap, 1200, 0);
     ps->last_retransmittable_sent_at = client->stash.now_double;
     ok(ps->last_retransmittable_sent_at == quic_now + 0.125);
     unlock_now(client);
