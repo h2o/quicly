@@ -5,7 +5,7 @@ static void rate_test_ack(quicly_conn_t *conn, size_t path_index, uint16_t bytes
     uint64_t pn = ps->packet_number++;
     ok(quicly_sentmap_prepare(&ps->loss.sentmap, pn, quic_now - 1, QUICLY_EPOCH_1RTT) == 0);
     ps->loss.sentmap._pending_packet->data.packet.path_id = ps->path_id;
-    quicly_sentmap_commit(&ps->loss.sentmap, bytes, 1, 0);
+    quicly_sentmap_commit(&ps->loss.sentmap, bytes, 0);
     ps->last_retransmittable_sent_at = quic_now - 1;
     quicly_ack_frame_t ack = {.largest_acknowledged = pn, .smallest_acknowledged = pn, .ack_block_lengths = {1}};
     struct st_quicly_handle_payload_state_t state = {.epoch = QUICLY_EPOCH_1RTT};
