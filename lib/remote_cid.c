@@ -93,7 +93,6 @@ static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint64_t sequenc
         return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
     }
 
-    set->cids[slot_to_use].sequence = sequence;
     quicly_set_cid(&set->cids[slot_to_use].cid, ptls_iovec_init(cid, cid_len));
     memcpy(set->cids[slot_to_use].stateless_reset_token, srt, QUICLY_STATELESS_RESET_TOKEN_LEN);
     set->cids[slot_to_use].state = QUICLY_REMOTE_CID_AVAILABLE;
