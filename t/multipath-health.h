@@ -19,20 +19,9 @@ static void health_setup_with_policy(quicly_conn_t **client, quicly_conn_t **ser
     quic_ctx.transport_params.initial_max_path_id = 4;
     quic_ctx.multipath_failover_pto_threshold = threshold;
     quic_ctx.path_scheduler = &quicly_round_robin_path_scheduler;
-    char key[] = "0123456789abcdef";
-    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
-                                                              ptls_iovec_init(key, strlen(key)));
-    test_setup_connected_peers(client, server);
-    get_path(*client, 0)->address.local = get_path(*client, 0)->address.remote = fake_address;
-    get_path(*server, 0)->address.local = get_path(*server, 0)->address.remote = fake_address;
-    struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(10000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(20000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-    ok(quicly_open_path(*client, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
-    for (size_t i = 0; i < 100; ++i) {
-        ++quic_now;
-        transmit_multipath(*client, *server);
-        transmit_multipath(*server, *client);
-    }
+    setup_multipath_regression_peers(client, server, 0);
+    open_multipath_test_path(*client);
+    multipath_run(*client, *server, 100, -1, -1);
     ok(get_path(*client, 1)->path_challenge.send_at == INT64_MAX);
     ok(!get_path(*client, 1)->probe_only);
 }
@@ -67,9 +56,7 @@ static void test_multipath_automatic_failover_with_scheduler(quicly_path_schedul
         /* keep fresh data ready across PTO */
         ok(quicly_streambuf_egress_write(stream, data, 1000) == 0);
         offered += 1000;
-        ++quic_now;
-        transmit_multipath_with_loss(client, server, 20000);
-        transmit_multipath(server, client);
+        multipath_round(client, server, 20000, -1);
         received = quicly_get_stream(server, stream->stream_id);
         if (received != NULL && quicly_streambuf_ingress_get(received).len >= sizeof(data))
             break;
@@ -90,11 +77,7 @@ static void test_multipath_automatic_failover_with_scheduler(quicly_path_schedul
     /* probes must remain bounded by PTO backoff */
     uint64_t packets_before = get_path(client, 1)->num_packets.sent;
     int pto_before = client->path_spaces[1]->loss.pto_count;
-    for (size_t i = 0; i < 5000; ++i) {
-        ++quic_now;
-        transmit_multipath_with_loss(client, server, 20000);
-        transmit_multipath(server, client);
-    }
+    multipath_run(client, server, 5000, 20000, -1);
     ok(get_path(client, 1)->num_packets.sent - packets_before <= 20);
     ok(client->path_spaces[1]->loss.pto_count > pto_before);
     ok(client->path_spaces[1]->health.state == QUICLY_PATH_SUSPECT);
@@ -109,23 +92,14 @@ static void test_multipath_automatic_failover_with_scheduler(quicly_path_schedul
     for (recovered_after = 0; recovered_after < 20000; ++recovered_after) {
         ok(quicly_streambuf_egress_write(stream, data, 1000) == 0);
         offered += 1000;
-        ++quic_now;
-        transmit_multipath(client, server);
-        transmit_multipath(server, client);
+        multipath_round(client, server, -1, -1);
         if (client->path_spaces[1]->health.state == QUICLY_PATH_USABLE)
             break;
     }
     ok(recovered_after < 20000);
-    for (size_t i = 0; i < 1000; ++i) {
-        ++quic_now;
-        transmit_multipath(client, server);
-        transmit_multipath(server, client);
-    }
+    multipath_run(client, server, 1000, -1, -1);
     ok(quicly_streambuf_ingress_get(received).len == offered);
-    quicly_free(client);
-    quicly_free(server);
-    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
-    quic_ctx = saved;
+    free_multipath_regression_peers(client, server, saved);
     quic_now = saved_now;
 }
 
@@ -160,9 +134,7 @@ static void test_multipath_failover_disabled(void)
     ok(transmit_multipath_with_loss(client, server, 20000) == 0);
     for (size_t elapsed = 0; elapsed < 1000; ++elapsed) {
         ok(quicly_streambuf_egress_write(stream, data, 1000) == 0);
-        ++quic_now;
-        transmit_multipath_with_loss(client, server, 20000);
-        transmit_multipath(server, client);
+        multipath_round(client, server, 20000, -1);
     }
     quicly_stream_t *received = quicly_get_stream(server, stream->stream_id);
     /* normal bounded PTO retransmission still advances the early prefix without opting into full-flight failover */
@@ -170,10 +142,7 @@ static void test_multipath_failover_disabled(void)
     quicly_path_health_t stats;
     ok(quicly_get_path_health(client, 1, &stats) == 0);
     ok(stats.state == QUICLY_PATH_USABLE);
-    quicly_free(client);
-    quicly_free(server);
-    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
-    quic_ctx = saved;
+    free_multipath_regression_peers(client, server, saved);
     quic_now = saved_now;
 }
 
@@ -253,10 +222,7 @@ static void test_multipath_health_progress(void)
     ok(other->health.last_ack_at == alternate_progress);
     client->egress.alt_ctx = saved_egress;
     unlock_now(client);
-    quicly_free(client);
-    quicly_free(server);
-    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
-    quic_ctx = saved;
+    free_multipath_regression_peers(client, server, saved);
     quic_now = saved_now;
 }
 
@@ -287,11 +253,7 @@ static void test_multipath_idle_health_recovery(void)
     /* there is no application data and the custom scheduler avoids this path;
      * maintenance must still probe, with PTO backoff while the path is down */
     uint64_t packets_before = get_path(client, 1)->num_packets.sent;
-    for (size_t i = 0; i < 1000; ++i) {
-        ++quic_now;
-        transmit_multipath_with_loss(client, server, 20000);
-        transmit_multipath(server, client);
-    }
+    multipath_run(client, server, 1000, 20000, -1);
     uint64_t probes = get_path(client, 1)->num_packets.sent - packets_before;
     ok(probes > 0 && probes <= 20);
     ok(bad->health.state == QUICLY_PATH_SUSPECT);
@@ -299,17 +261,12 @@ static void test_multipath_idle_health_recovery(void)
 
     int recovering = 0;
     for (size_t i = 0; i < 5000 && bad->health.state != QUICLY_PATH_USABLE; ++i) {
-        ++quic_now;
-        transmit_multipath(client, server);
-        transmit_multipath(server, client);
+        multipath_round(client, server, -1, -1);
         recovering |= bad->health.state == QUICLY_PATH_RECOVERING;
     }
     ok(recovering);
     ok(bad->health.state == QUICLY_PATH_USABLE);
-    quicly_free(client);
-    quicly_free(server);
-    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
-    quic_ctx = saved;
+    free_multipath_regression_peers(client, server, saved);
     quic_now = saved_now;
 }
 
@@ -327,11 +284,7 @@ static void test_multipath_suspect_affinity(void)
     ok(quicly_streambuf_egress_write(affine, data, sizeof(data)) == 0);
     ok(quicly_streambuf_egress_write(mobile, data, sizeof(data)) == 0);
     client->next_send_path_index = 1;
-    for (size_t i = 0; i < 1000; ++i) {
-        ++quic_now;
-        transmit_multipath_with_loss(client, server, 20000);
-        transmit_multipath(server, client);
-    }
+    multipath_run(client, server, 1000, 20000, -1);
     ok(client->path_spaces[1]->health.state == QUICLY_PATH_SUSPECT);
     quicly_stream_t *received = quicly_get_stream(server, affine->stream_id);
     ok(received == NULL || quicly_streambuf_ingress_get(received).len == 0);
@@ -341,19 +294,14 @@ static void test_multipath_suspect_affinity(void)
     ok(quicly_get_first_timeout(client) > quic_now);
     /* affine stream resumes after recovery */
     for (size_t i = 0; i < 5000; ++i) {
-        ++quic_now;
-        transmit_multipath(client, server);
-        transmit_multipath(server, client);
+        multipath_round(client, server, -1, -1);
         received = quicly_get_stream(server, affine->stream_id);
         if (received != NULL && quicly_streambuf_ingress_get(received).len == sizeof(data))
             break;
     }
     ok(received != NULL && quicly_streambuf_ingress_get(received).len == sizeof(data));
     ok(affine->affinity_path_id == 1);
-    quicly_free(client);
-    quicly_free(server);
-    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
-    quic_ctx = saved;
+    free_multipath_regression_peers(client, server, saved);
     quic_now = saved_now;
 }
 
@@ -461,10 +409,7 @@ static void test_multipath_health_rtt_matrix(void)
                 free(queue);
                 queue = next;
             }
-            quicly_free(client);
-            quicly_free(server);
-            quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
-            quic_ctx = saved;
+            free_multipath_regression_peers(client, server, saved);
             quic_now = saved_now;
         }
     }

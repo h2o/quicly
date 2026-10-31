@@ -3,22 +3,12 @@ static quicly_context_t setup_multipath_scheduling_peers(quicly_conn_t **client,
 {
     quicly_context_t saved = setup_multipath_regression_peers(client, server, 0);
     quic_ctx.path_scheduler = scheduler;
-    struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(10000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(20000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-    ok(quicly_open_path(*client, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
-    for (size_t i = 0; i < 100; ++i) {
-        ++quic_now;
-        transmit_multipath(*client, *server);
-        transmit_multipath(*server, *client);
-    }
+    open_multipath_test_path(*client);
+    multipath_run(*client, *server, 100, -1, -1);
     ok(quicly_is_path_available(*client, 1));
     /* ask the client to reserve path 1 for backup use */
     ok(quicly_set_path_status(*server, 1, 1) == 0);
-    for (size_t i = 0; i < 100; ++i) {
-        ++quic_now;
-        transmit_multipath(*server, *client);
-        transmit_multipath(*client, *server);
-    }
+    multipath_run(*server, *client, 100, -1, -1);
     ok((*client)->path_spaces[1]->is_backup);
     return saved;
 }
@@ -32,7 +22,7 @@ static size_t multipath_received_length(quicly_conn_t *conn, quicly_stream_id_t 
 static void reset_preceding_stream_on_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
 {
     quicly_stream_t *preceding = quicly_get_stream(stream->conn, stream->stream_id - 4);
-    if (preceding != NULL && preceding->_send_aux.reset_stream.sender_state == QUICLY_SENDER_STATE_NONE)
+    if (preceding != NULL && quicly_sendstate_eos_type(&preceding->sendstate) != QUICLY_SENDSTATE_EOS_TYPE_RESET)
         quicly_reset_stream(preceding, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0));
     quicly_streambuf_egress_emit(stream, off, dst, len, wrote_all);
 }
@@ -58,7 +48,7 @@ static void test_multipath_scheduler_callback_reset(void)
         /* skip the pinned stream on path zero, then unlink it inside the next stream's send callback */
         client->next_send_path_index = 0;
         transmit_multipath(client, server);
-        ok(pinned->_send_aux.reset_stream.sender_state != QUICLY_SENDER_STATE_NONE);
+        ok(quicly_sendstate_eos_type(&pinned->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET);
         ok(!quicly_linklist_is_linked(&pinned->_send_aux.pending_link.default_scheduler));
         ok(multipath_received_length(server, ordinary->stream_id) == 8);
         free_multipath_regression_peers(client, server, saved);
@@ -83,21 +73,13 @@ static void test_multipath_backup_affinity(void)
         ok(quicly_streambuf_egress_write(ordinary, data, sizeof(data)) == 0);
         uint32_t cwnd = client->path_spaces[0]->cc.cwnd;
         client->path_spaces[0]->cc.cwnd = 0;
-        for (size_t i = 0; i < 100; ++i) {
-            ++quic_now;
-            transmit_multipath(client, server);
-            transmit_multipath(server, client);
-        }
+        multipath_run(client, server, 100, -1, -1);
         ok(multipath_received_length(server, pinned->stream_id) == sizeof(data));
         /* congestion alone must not promote a backup or leak unbound streams onto it */
         ok(multipath_received_length(server, ordinary->stream_id) == 0);
         ok(client->path_spaces[1]->is_backup);
         client->path_spaces[0]->cc.cwnd = cwnd;
-        for (size_t i = 0; i < 100; ++i) {
-            ++quic_now;
-            transmit_multipath(client, server);
-            transmit_multipath(server, client);
-        }
+        multipath_run(client, server, 100, -1, -1);
         ok(multipath_received_length(server, ordinary->stream_id) == sizeof(data));
         /* a writable primary must not cause a busy loop when only a blocked, backup-bound stream has pending data */
         ok(quicly_streambuf_egress_write(pinned, data, sizeof(data)) == 0);
@@ -105,11 +87,7 @@ static void test_multipath_backup_affinity(void)
         client->path_spaces[1]->cc.cwnd = 0;
         ok(quicly_get_first_timeout(client) > quic_now);
         client->path_spaces[1]->cc.cwnd = cwnd;
-        for (size_t i = 0; i < 100; ++i) {
-            ++quic_now;
-            transmit_multipath(client, server);
-            transmit_multipath(server, client);
-        }
+        multipath_run(client, server, 100, -1, -1);
         ok(multipath_received_length(server, pinned->stream_id) == 2 * sizeof(data));
         free_multipath_regression_peers(client, server, saved);
         quic_now = saved_now;
@@ -130,11 +108,8 @@ static void test_multipath_backup_failover(void)
             data[i] = (uint8_t)i;
         ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
         /* blackhole the primary without deleting it or manually declaring its packets lost */
-        for (size_t i = 0; i < 3000 && multipath_received_length(server, stream->stream_id) != sizeof(data); ++i) {
-            ++quic_now;
-            transmit_multipath_with_loss(client, server, 0);
-            transmit_multipath_with_loss(server, client, 0);
-        }
+        for (size_t i = 0; i < 3000 && multipath_received_length(server, stream->stream_id) != sizeof(data); ++i)
+            multipath_round(client, server, 0, 0);
         ok(multipath_received_length(server, stream->stream_id) == sizeof(data));
         quicly_stream_t *received = quicly_get_stream(server, stream->stream_id);
         if (received != NULL && quicly_streambuf_ingress_get(received).len == sizeof(data))
@@ -143,25 +118,14 @@ static void test_multipath_backup_failover(void)
         ok(client->path_spaces[0]->loss.pto_count >= 2);
         ok(client->path_spaces[1]->is_backup);
         /* restore connectivity. recovery probes must still run on the excluded path */
-        for (size_t i = 0; i < 3000 && client->path_spaces[0]->loss.pto_count != 0; ++i) {
-            ++quic_now;
-            transmit_multipath(client, server);
-            transmit_multipath(server, client);
-        }
+        for (size_t i = 0; i < 3000 && client->path_spaces[0]->loss.pto_count != 0; ++i)
+            multipath_round(client, server, -1, -1);
         ok(client->path_spaces[0]->loss.pto_count == 0);
-        for (size_t i = 0; i < 100; ++i) {
-            ++quic_now;
-            transmit_multipath(client, server);
-            transmit_multipath(server, client);
-        }
+        multipath_run(client, server, 100, -1, -1);
         uint64_t primary_before = get_path(client, 0)->num_packets.bytes_sent;
         uint64_t backup_before = get_path(client, 1)->num_packets.bytes_sent;
         ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
-        for (size_t i = 0; i < 100; ++i) {
-            ++quic_now;
-            transmit_multipath(client, server);
-            transmit_multipath(server, client);
-        }
+        multipath_run(client, server, 100, -1, -1);
         ok(multipath_received_length(server, stream->stream_id) == 2 * sizeof(data));
         ok(get_path(client, 0)->num_packets.bytes_sent > primary_before + sizeof(data));
         ok(get_path(client, 1)->num_packets.bytes_sent == backup_before);
@@ -183,18 +147,12 @@ static void test_multipath_backup_transient_loss(void)
         memset(data, 0xa5, sizeof(data));
         ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
         uint64_t backup_before = get_path(client, 1)->num_packets.bytes_sent;
-        for (size_t i = 0; i < 1000 && client->path_spaces[0]->loss.pto_count <= 0; ++i) {
-            ++quic_now;
-            transmit_multipath_with_loss(client, server, 0);
-            transmit_multipath_with_loss(server, client, 0);
-        }
+        for (size_t i = 0; i < 1000 && client->path_spaces[0]->loss.pto_count <= 0; ++i)
+            multipath_round(client, server, 0, 0);
         ok(client->path_spaces[0]->loss.pto_count == 1);
         ok(get_path(client, 1)->num_packets.bytes_sent == backup_before);
-        for (size_t i = 0; i < 1000 && multipath_received_length(server, stream->stream_id) != sizeof(data); ++i) {
-            ++quic_now;
-            transmit_multipath(client, server);
-            transmit_multipath(server, client);
-        }
+        for (size_t i = 0; i < 1000 && multipath_received_length(server, stream->stream_id) != sizeof(data); ++i)
+            multipath_round(client, server, -1, -1);
         ok(multipath_received_length(server, stream->stream_id) == sizeof(data));
         free_multipath_regression_peers(client, server, saved);
         quic_now = saved_now;

@@ -7,22 +7,11 @@ static void test_multipath_pacing(void)
     quic_ctx.transport_params.initial_max_path_id = 4;
     quic_ctx.egress[0].pacing = 1;
     quic_ctx.path_scheduler = &quicly_round_robin_path_scheduler;
-    char cid_key[] = "0123456789abcdef";
-    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_quiclb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
-                                                              ptls_iovec_init(cid_key, strlen(cid_key)));
-    ok(quic_ctx.cid_encryptor != NULL);
     quicly_conn_t *client, *server;
-    test_setup_connected_peers(&client, &server);
-    get_path(client, 0)->address.local = get_path(client, 0)->address.remote = fake_address;
-    get_path(server, 0)->address.local = get_path(server, 0)->address.remote = fake_address;
-    struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(10000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-    struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(20000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
-    ok(quicly_open_path(client, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
-    for (size_t i = 0; i < 100; ++i) {
-        ++quic_now;
-        transmit_multipath(client, server);
-        transmit_multipath(server, client);
-    }
+    setup_multipath_regression_peers(&client, &server, 0);
+    ok(quic_ctx.cid_encryptor != NULL);
+    open_multipath_test_path(client);
+    multipath_run(client, server, 100, -1, -1);
     uint64_t sent_before[2];
     for (size_t i = 0; i < 2; ++i) {
         quicly_path_space_t *ps = client->path_spaces[i];
@@ -59,9 +48,7 @@ static void test_multipath_pacing(void)
     transmit_multipath(server, client);
     quicly_stream_t *received = NULL;
     for (size_t i = 0; i < 5000; ++i) {
-        ++quic_now;
-        transmit_multipath(client, server);
-        transmit_multipath(server, client);
+        multipath_round(client, server, -1, -1);
         received = quicly_get_stream(server, stream->stream_id);
         if (received != NULL && quicly_streambuf_ingress_get(received).len == sizeof(data))
             break;
@@ -73,9 +60,6 @@ static void test_multipath_pacing(void)
         if (bytes.len == sizeof(data))
             ok(memcmp(bytes.base, data, sizeof(data)) == 0);
     }
-    quicly_free(client);
-    quicly_free(server);
-    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
-    quic_ctx = saved_ctx;
+    free_multipath_regression_peers(client, server, saved_ctx);
     quic_now = saved_now;
 }
