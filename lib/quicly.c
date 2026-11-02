@@ -985,6 +985,14 @@ static quicly_error_t on_invalid_ack(quicly_sentmap_t *map, const quicly_sent_pa
     return 0;
 }
 
+/**
+ * callback of a sentmap entry that has been allocated but carries nothing (e.g., a frame being dropped after allocating the entry)
+ */
+static quicly_error_t on_ack_noop(quicly_sentmap_t *map, const quicly_sent_packet_t *packet, int acked, quicly_sent_t *sent)
+{
+    return 0;
+}
+
 static uint64_t calc_next_pn_to_skip(ptls_context_t *tlsctx, uint64_t next_pn, uint32_t cwnd, uint64_t mtu)
 {
     static __thread struct {
@@ -4693,7 +4701,8 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
     if (stream->conn->super.state >= QUICLY_STATE_CLOSING) {
         return QUICLY_ERROR_IS_CLOSING;
     } else if (quicly_sendstate_eos_type(&stream->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET) {
-        /* the application may reset the stream from within the callback; if it did, the partially built STREAM frame dropped */
+        /* the application may reset the stream from within the callback; if it did, the partially built STREAM frame is dropped. */
+        sent->acked = on_ack_noop;
         return 0;
     }
     assert(len != 0);
