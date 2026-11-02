@@ -2770,6 +2770,72 @@ static void test_stop_sending_after_reset(int application_reset)
     quicly_free(server);
 }
 
+static void reset_in_on_send_emit_emit(quicly_stream_t *stream, size_t off, void *dst, size_t *len, int *wrote_all)
+{
+    /* act like an application failing to read the payload (e.g., pread(2) returning short as the file shrank) */
+    *len = 0;
+    *wrote_all = 1;
+    quicly_reset_stream(stream, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1));
+}
+
+/**
+ * When the application resets the stream from within `on_send_emit`, the sentmap entry that has been allocated for the STREAM frame
+ * must not be left uninitialized, as it is handled by `on_ack_stream` when the packet is acked or deemed lost.
+ */
+static void test_reset_in_on_send_emit(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_stream_t *stream;
+    quicly_stream_callbacks_t callbacks = stream_callbacks;
+    callbacks.on_send_emit = reset_in_on_send_emit_emit;
+
+    test_setup_connected_peers(&client, &server);
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    stream->callbacks = &callbacks;
+    ok(quicly_streambuf_egress_write(stream, "hello", 5) == 0);
+
+    /* fill the unused slots of the sentmap with stale entries of the stream, each carrying an inverted range, so that the test
+     * reliably detects use of the entry being left uninitialized */
+    struct st_quicly_sent_block_t *tail = client->egress.loss.sentmap.tail;
+    ok(tail != NULL && tail->next_insert_at < PTLS_ELEMENTSOF(tail->entries) - 4);
+    if (tail != NULL) {
+        for (size_t i = tail->next_insert_at; i < PTLS_ELEMENTSOF(tail->entries); ++i) {
+            tail->entries[i].acked = on_ack_stream;
+            tail->entries[i].data.stream.stream_id = stream->stream_id;
+            tail->entries[i].data.stream.args.start = 10;
+            tail->entries[i].data.stream.args.end = 5;
+            tail->entries[i].data.stream.args.eos_type = QUICLY_SENDSTATE_EOS_TYPE_NONE;
+        }
+    }
+
+    /* send; the application resets the stream while the STREAM frame is being built */
+    transmit(client, server);
+    ok(quicly_sendstate_eos_type(&stream->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET);
+
+    /* the entry allocated for the dropped STREAM frame is a no-op, and the entries of the stream that are in flight carry valid
+     * ranges */
+    size_t num_noop_entries = 0;
+    for (struct st_quicly_sent_block_t *block = client->egress.loss.sentmap.head; block != NULL; block = block->next) {
+        for (size_t i = 0; i < block->next_insert_at; ++i) {
+            quicly_sent_t *sent = block->entries + i;
+            if (sent->acked == on_ack_noop) {
+                ++num_noop_entries;
+            } else if (sent->acked == on_ack_stream && sent->data.stream.stream_id == stream->stream_id) {
+                ok(sent->data.stream.args.start <= sent->data.stream.args.end);
+            }
+        }
+    }
+    ok(num_noop_entries == 1);
+
+    /* receive ACK; the client used to trip on the inverted range, then complete the transfer */
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+    ok(quicly_sendstate_transfer_complete(&stream->sendstate));
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_stop_sending_after_fin(int fin_state)
 {
     /* STOP_SENDING(id=0, error=11) */
@@ -3247,6 +3313,7 @@ int main(int argc, char **argv)
     subtest("reset-stream-completing-null-cb", test_reset_completing_transfer, 0, 0, 1);
     subtest("stop-sending-after-reset", test_stop_sending_after_reset, 1);
     subtest("stop-sending-repeated", test_stop_sending_after_reset, 0);
+    subtest("reset-in-on-send-emit", test_reset_in_on_send_emit);
     subtest("stop-sending-before-fin", test_stop_sending_after_fin, QUICLY_SENDSTATE_EOS_STATE_UNSENT);
     subtest("stop-sending-after-fin", test_stop_sending_after_fin, QUICLY_SENDSTATE_EOS_STATE_INFLIGHT);
     subtest("stop-sending-after-fin-acked", test_stop_sending_after_fin, QUICLY_SENDSTATE_EOS_STATE_DELIVERED);
