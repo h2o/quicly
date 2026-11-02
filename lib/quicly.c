@@ -3798,11 +3798,11 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         return conn->egress.send_ack_at;
 
-    if (should_send_datagram_frame(conn))
-        return 0;
-
     uint64_t amp_window = calc_amplification_limit_allowance(conn);
     int64_t at = conn->idle_timeout.at, pacer_at = pacer_can_send_at(conn);
+
+    if (amp_window > 0 && should_send_datagram_frame(conn))
+        return 0;
 
     /* reduce at to the moment pacer provides credit, if we are not CC-limited and there's something to be sent over CC */
     if (pacer_at < at && calc_send_window(conn, 0, amp_window, UINT64_MAX, 0) > 0) {
@@ -4149,9 +4149,20 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
     } else {
         if (s->num_datagrams >= s->max_datagrams)
             return QUICLY_ERROR_SENDBUF_FULL;
-        /* note: send_window (ssize_t) can become negative; see doc-comment */
-        if (frame_type == ALLOCATE_FRAME_TYPE_ACK_ELICITING && s->send_window <= 0)
-            return QUICLY_ERROR_SENDBUF_FULL;
+        switch (frame_type) {
+        case ALLOCATE_FRAME_TYPE_ACK_ELICITING:
+            /* note: send_window (ssize_t) can become negative; see doc-comment */
+            if (s->send_window <= 0)
+                return QUICLY_ERROR_SENDBUF_FULL;
+            break;
+        case ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC:
+            /* DATAGRAM frames are exempt from CC but are still capped by the anti-amplification limit */
+            if (calc_amplification_limit_allowance(conn) == 0)
+                return QUICLY_ERROR_SENDBUF_FULL;
+            break;
+        default:
+            break;
+        }
         if (s->payload_buf.end - s->payload_buf.datagram < conn->egress.max_udp_payload_size)
             return QUICLY_ERROR_SENDBUF_FULL;
         s->target.cipher = s->current.cipher;
