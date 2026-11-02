@@ -1629,6 +1629,57 @@ static void test_ack_for_unsent_pn(void)
     quicly_free(server);
 }
 
+/* Queues `num_frames` DATAGRAM frames of 1000 bytes each, and returns the number of datagrams the server sends. */
+static size_t datagram_frame_amplification_send(quicly_conn_t *server, size_t num_frames)
+{
+    quicly_address_t dest, src;
+    struct iovec datagrams[8];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size], payload[1000] = {0};
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+
+    for (size_t i = 0; i != num_frames; ++i)
+        quicly_send_datagram_frames(server, &(ptls_iovec_t){payload, sizeof(payload)}, 1);
+    ok(quicly_send(server, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    return num_datagrams;
+}
+
+/* DATAGRAM frames are not congestion controlled, but a server that has not validated the client's address stops sending them once
+ * the anti-amplification limit is reached. */
+static void test_datagram_frame_amplification_limit(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_address_t dest, src;
+    struct iovec datagram;
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+    quicly_decoded_packet_t decoded;
+    size_t num_datagrams = 1;
+
+    /* the client's Initial reaches the server, but nothing the server sends is delivered back, so the address stays unvalidated */
+    ok(quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                      NULL, NULL) == 0);
+    ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(decode_packets(&decoded, &datagram, 1) == 1);
+    ok(quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL, NULL) == 0);
+    uint64_t budget = server->super.stats.num_bytes.received * quic_ctx.pre_validation_amplification_limit;
+
+    /* Without the limit, each round would emit another datagram. As is the case with frames subject to the send window, the limit
+     * is exceeded by no more than one datagram. */
+    for (size_t i = 0; i != 16; ++i)
+        num_datagrams = datagram_frame_amplification_send(server, 1);
+    ok(num_datagrams == 0);
+    ok(server->super.stats.num_bytes.sent <= budget + server->egress.max_udp_payload_size);
+
+    /* A datagram is started as long as some allowance remains, but the second frame, which needs another datagram, is not sent (the
+     * number of bytes sent is overwritten to set the remaining allowance). */
+    uint64_t num_frames_sent = server->super.stats.num_frames_sent.datagram;
+    server->super.stats.num_bytes.sent = budget - 500;
+    ok(datagram_frame_amplification_send(server, 2) == 1);
+    ok(server->super.stats.num_frames_sent.datagram == num_frames_sent + 1);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static quicly_error_t test_handle_stream_level_frame(quicly_conn_t *conn,
                                                      quicly_error_t (*handler)(quicly_conn_t *,
                                                                                struct st_quicly_handle_payload_state_t *),
@@ -3217,6 +3268,7 @@ int main(int argc, char **argv)
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);
     subtest("ack-for-unsent-pn", test_ack_for_unsent_pn);
+    subtest("datagram-frame-amplification-limit", test_datagram_frame_amplification_limit);
     subtest("frames-for-unopened-local-stream", test_frames_for_unopened_local_stream);
     subtest("frames-opening-peer-stream", test_frames_opening_peer_stream);
     subtest("ack-frequency", test_ack_frequency);
