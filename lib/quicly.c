@@ -5685,7 +5685,8 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     /* Handle handshake timeouts opportunistically: this deadline is not included in quicly_get_first_timeout, so we rely on
      * PTO or other events to reach this check. */
     if ((conn->initial != NULL || conn->handshake != NULL) &&
-        conn->created_at + (double)conn->super.ctx->handshake_timeout_rtt_multiplier * conn->egress.loss.rtt.smoothed <=
+        conn->created_at + (double)conn->super.ctx->handshake_timeout_rtt_multiplier *
+                               (conn->egress.loss.rtt.smoothed >= 1 ? conn->egress.loss.rtt.smoothed : 1) <=
             conn->stash.now) {
         QUICLY_PROBE(HANDSHAKE_TIMEOUT, conn, conn->stash.now, conn->stash.now - conn->created_at,
                      (uint32_t)conn->egress.loss.rtt.smoothed);
