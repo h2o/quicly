@@ -2962,30 +2962,149 @@ static void test_fin_below_received(void)
 }
 
 /**
- * A FIN-only STREAM frame arriving ahead of the data charges the connection-level credit up to the final size; the data or a
- * RESET_STREAM arriving afterwards must not charge the same bytes again.
+ * Returns if the connection-level ingress credit charged is `expected`, and is what has been returned plus what each stream still
+ * holds in memory.
  */
-static void test_fin_only_before_data(int is_reset)
+static int ingress_credit_is_correct(quicly_conn_t *conn, uint64_t expected)
 {
-    /* STREAM(id=0, off=10, len=0, FIN), then STREAM(id=0, len=10) or RESET_STREAM(id=0, error=0, final=10) */
-    static const uint8_t fin[] = {0x0f, 0x00, 0x0a, 0x00};
-    static const uint8_t data[] = {0x0a, 0x00, 0x0a, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
-    static const uint8_t reset[] = {0x04, 0x00, 0x00, 0x0a};
-    quicly_conn_t *client, *server;
+    uint64_t held = 0;
+    quicly_stream_t *stream;
 
+    kh_foreach_value(conn->streams, stream, {
+        if (stream->stream_id >= 0)
+            held += quicly_recvstate_bytes_allocated(&stream->recvstate) - stream->recvstate.data_off;
+    });
+
+    return conn->ingress.max_data.bytes_consumed == expected &&
+           conn->ingress.max_data.bytes_consumed == conn->ingress.max_data.bytes_shifted + held;
+}
+
+#define INGRESS_CREDIT_NUM_EVENTS 16
+#define INGRESS_CREDIT_MAX_EVENTS 5
+
+static uint8_t *encode_stream_frame(uint8_t *dst, quicly_stream_id_t stream_id, uint64_t off, const char *data, size_t len,
+                                    int is_fin)
+{
+    *dst++ = QUICLY_FRAME_TYPE_STREAM_BASE | QUICLY_FRAME_TYPE_STREAM_BIT_OFF | QUICLY_FRAME_TYPE_STREAM_BIT_LEN |
+             (is_fin ? QUICLY_FRAME_TYPE_STREAM_BIT_FIN : 0);
+    dst = quicly_encodev(dst, stream_id);
+    dst = quicly_encodev(dst, off);
+    dst = quicly_encodev(dst, len);
+    memcpy(dst, data, len);
+    return dst + len;
+}
+
+/**
+ * Applies one of the events enumerated by `test_ingress_credit_exhaustive` to a stream of 3 bytes. Returns if successful.
+ * `credit_used` is updated to the connection-level credit that the stream uses as defined by RFC 9000 Section 4.5; i.e., the final
+ * size if known, otherwise the largest offset received.
+ */
+static int apply_ingress_credit_event(quicly_conn_t *conn, quicly_stream_id_t stream_id, size_t event, uint64_t *credit_used)
+{
+    uint8_t frame[32], *dst = frame;
+    uint64_t used;
+
+    switch (event) {
+    case 0: /* RESET_STREAM */
+    case 1:
+    case 2:
+    case 3: /* RESET_STREAM_AT of Reliable Size 1 to 3 */
+        dst = quicly_encode_reset_stream_frame(dst, stream_id, 11, 3, event);
+        used = 3;
+        break;
+    case 4:
+    case 5: {
+        /* the application consumes one byte, or all the bytes available */
+        quicly_stream_t *stream;
+        size_t avail;
+        if ((stream = quicly_get_stream(conn, stream_id)) != NULL && (avail = quicly_streambuf_ingress_get(stream).len) != 0)
+            quicly_streambuf_ingress_shift(stream, event == 4 ? 1 : avail);
+        return 1;
+    }
+    default: {
+        /* STREAM frames of each range, with and without FIN */
+        static const struct {
+            uint8_t off, end, is_fin;
+        } streams[] = {{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}, {0, 3, 1}, {1, 3, 1}, {2, 3, 1}, {3, 3, 1}};
+        PTLS_BUILD_ASSERT(6 + PTLS_ELEMENTSOF(streams) == INGRESS_CREDIT_NUM_EVENTS);
+        assert(event - 6 < PTLS_ELEMENTSOF(streams));
+        uint8_t off = streams[event - 6].off, end = streams[event - 6].end;
+        dst = encode_stream_frame(dst, stream_id, off, &"xyz"[off], end - off, streams[event - 6].is_fin);
+        used = end;
+    } break;
+    }
+
+    if (*credit_used < used)
+        *credit_used = used;
+    return inject_frames(conn, frame, dst - frame) == 0;
+}
+
+/**
+ * Applies every sequence of up to INGRESS_CREDIT_MAX_EVENTS events to a unidirectional stream of 3 bytes, the events being the
+ * STREAM frames of each range with and without FIN, the FIN-only STREAM frame, RESET_STREAM, RESET_STREAM_AT of each non-zero
+ * Reliable Size, and the application consuming one or all the bytes available. The stream being unidirectional, quicly destroys it
+ * once all the bytes up to the end of the stream (or to the Reliable Size) are received; if that has not happened after the events,
+ * a STREAM frame carrying all the bytes and the FIN is applied to make it happen. After each event, and after the stream is
+ * destroyed, the connection-level credit charged is checked against the value defined by RFC 9000 Section 4.5, and against what has
+ * been returned plus what the streams still hold. Streams being independent of each other, this covers the credit accounting of any
+ * mix of streams up to that length, without relying on chance.
+ */
+static void test_ingress_credit_exhaustive(void)
+{
+    quicly_transport_parameters_t orig = quic_ctx.transport_params;
+    quicly_stream_callbacks_t callbacks = stream_callbacks;
+    quicly_conn_t *client, *server;
+    quicly_stream_id_t stream_id = 2; /* client-initiated unidirectional */
+    uint64_t num_sequences = 0, credit_used_by_previous = 0;
+    int failed = 0;
+
+    callbacks.on_destroy = quicly_streambuf_destroy; /* the default one leaks the buffer, which matters with this many streams */
+
+    /* nothing is sent by the server, hence the limits are set high enough to cover all the sequences */
+    quic_ctx.transport_params.reset_stream_at = 1;
+    quic_ctx.transport_params.max_streams_uni = 1 << 24;
+    quic_ctx.transport_params.max_data = 1 << 30;
     test_setup_connected_peers(&client, &server);
 
-    ok(inject_frames(server, fin, sizeof(fin)) == 0);
-    ok(server->ingress.max_data.bytes_consumed == 10);
-    if (is_reset) {
-        ok(inject_frames(server, reset, sizeof(reset)) == 0);
-    } else {
-        ok(inject_frames(server, data, sizeof(data)) == 0);
+    for (size_t len = 1; len <= INGRESS_CREDIT_MAX_EVENTS; ++len) {
+        uint64_t count = 1;
+        for (size_t i = 0; i < len; ++i)
+            count *= INGRESS_CREDIT_NUM_EVENTS;
+        for (uint64_t seq = 0; seq < count; ++seq, stream_id += 4, ++num_sequences) {
+            quicly_stream_t *stream;
+            uint64_t credit_used = 0;
+            if (quicly_get_or_open_stream(server, stream_id, &stream) != 0 || stream == NULL)
+                goto Fail;
+            stream->callbacks = &callbacks;
+            for (uint64_t i = 0, events = seq; i < len; ++i, events /= INGRESS_CREDIT_NUM_EVENTS) {
+                if (!apply_ingress_credit_event(server, stream_id, events % INGRESS_CREDIT_NUM_EVENTS, &credit_used) ||
+                    !ingress_credit_is_correct(server, credit_used_by_previous + credit_used))
+                    goto Fail;
+            }
+            if (quicly_get_stream(server, stream_id) != NULL) {
+                if (!apply_ingress_credit_event(server, stream_id, 12 /* STREAM(off=0, len=3, FIN) */, &credit_used))
+                    goto Fail;
+                if (quicly_get_stream(server, stream_id) != NULL ||
+                    !ingress_credit_is_correct(server, credit_used_by_previous + credit_used))
+                    goto Fail;
+            }
+            credit_used_by_previous += credit_used;
+            continue;
+        Fail:
+            /* stop here, as the connection might have been left in a state that taints the subsequent sequences */
+            note("failed at length %zu, sequence %" PRIu64, len, seq);
+            failed = 1;
+            goto Exit;
+        }
     }
-    ok(server->ingress.max_data.bytes_consumed == 10);
+
+Exit:
+    ok(!failed);
+    note("%" PRIu64 " sequences", num_sequences);
 
     quicly_free(client);
     quicly_free(server);
+    quic_ctx.transport_params = orig;
 }
 
 /**
@@ -3385,8 +3504,7 @@ int main(int argc, char **argv)
     subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
     subtest("fin-below-received", test_fin_below_received);
-    subtest("fin-only-before-data", test_fin_only_before_data, 0);
-    subtest("fin-only-before-reset", test_fin_only_before_data, 1);
+    subtest("ingress-credit-exhaustive", test_ingress_credit_exhaustive);
     subtest("reset-stream-at-completing", test_reset_completing_transfer, 3, 1, 0);
     subtest("reset-stream-at-zero-completing", test_reset_completing_transfer, 0, 1, 0);
     subtest("reset-stream-completing", test_reset_completing_transfer, 0, 0, 0);
