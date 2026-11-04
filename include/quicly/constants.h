@@ -33,6 +33,7 @@ extern "C" {
 #define QUICLY_DELAYED_ACK_TIMEOUT 25   /* milliseconds */
 #define QUICLY_DEFAULT_MAX_ACK_DELAY 25 /* milliseconds */
 #define QUICLY_LOCAL_MAX_ACK_DELAY 25   /* milliseconds */
+#define QUICLY_LOCAL_MIN_ACK_DELAY 1    /* milliseconds; the granularity of the clock */
 #define QUICLY_DEFAULT_ACK_DELAY_EXPONENT 3
 #define QUICLY_LOCAL_ACK_DELAY_EXPONENT 3
 #define QUICLY_MIN_INITIAL_DCID_LEN 8
