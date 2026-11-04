@@ -304,7 +304,8 @@ struct st_quicly_context_t {
      * Maximum size of packets that we are willing to send when path-specific information is unavailable. As a
      * path-specific optimization, quicly acting as a server sets this value to `min(remote.tp.max_udp_payload_size,
      * max(local.tp.max_udp_payload_size, max_size_of_incoming_datagrams)` when it receives the Transport Parameters
-     * from the client.
+     * from the client. Regardless of the role, the value is capped by `remote.tp.max_udp_payload_size` once the Transport
+     * Parameters of the peer are received.
      */
     uint16_t initial_egress_max_udp_payload_size;
     /**

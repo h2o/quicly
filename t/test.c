@@ -1457,6 +1457,60 @@ static void test_l4s_transfer(void)
     quicly_free(server);
 }
 
+/**
+ * A client must not send datagrams larger than the max_udp_payload_size TP of the server (RFC 9000 Section 18.2), even if its
+ * `initial_egress_max_udp_payload_size` is larger.
+ */
+static void test_client_respects_server_max_udp_payload_size(void)
+{
+    quicly_context_t client_ctx = quic_ctx, server_ctx = quic_ctx;
+    client_ctx.initial_egress_max_udp_payload_size = 8192;
+    client_ctx.transport_params.max_udp_payload_size = 8192;
+    server_ctx.transport_params.max_udp_payload_size = 1280;
+
+    quicly_conn_t *client, *server;
+    quicly_address_t dest, src;
+    struct iovec datagrams[16];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 8192];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 4];
+    size_t num_datagrams;
+
+    ok(quicly_connect(&client, &client_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                      NULL, NULL) == 0);
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(num_datagrams == 1);
+    /* the Initial is padded to the configured size */
+    ok(datagrams[0].iov_len == 8192);
+    ok(decode_packets(decoded, datagrams, num_datagrams) == 1);
+    ok(quicly_accept(&server, &server_ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL) == 0);
+    ok(server->egress.max_udp_payload_size == 1280);
+    ok(transmit(server, client) > 0);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(client->egress.max_udp_payload_size == 1280);
+    exchange_until_idle(client, server);
+
+    /* send a burst of 1-RTT packets and check their sizes */
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    uint8_t data[20000] = {0};
+    ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
+    quic_now += 10;
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(num_datagrams >= 2);
+    for (size_t i = 0; i != num_datagrams; ++i) {
+        if (i + 1 < num_datagrams) {
+            ok(datagrams[i].iov_len == 1280);
+        } else {
+            ok(datagrams[i].iov_len <= 1280);
+        }
+    }
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_resume_sendrate(void)
 {
     quicly_conn_t conn = {0};
@@ -3357,6 +3411,7 @@ int main(int argc, char **argv)
     subtest("l4s-context", test_l4s_context);
     subtest("l4s-feedback", test_l4s_feedback);
     subtest("l4s-transfer", test_l4s_transfer);
+    subtest("client-respects-server-max-udp-payload-size", test_client_respects_server_max_udp_payload_size);
     subtest("resume-sendrate", test_resume_sendrate);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);

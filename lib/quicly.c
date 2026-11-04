@@ -3047,6 +3047,10 @@ static int client_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     conn->super.remote.transport_params = params;
     ack_frequency_set_next_update_at(conn);
 
+    /* do not send datagrams larger than what the server is willing to receive (RFC 9000 Section 18.2) */
+    if (conn->egress.max_udp_payload_size > conn->super.remote.transport_params.max_udp_payload_size)
+        conn->egress.max_udp_payload_size = conn->super.remote.transport_params.max_udp_payload_size;
+
 Exit:
     return compress_handshake_result(ret);
 }
