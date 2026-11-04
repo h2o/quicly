@@ -2962,6 +2962,33 @@ static void test_fin_below_received(void)
 }
 
 /**
+ * A FIN-only STREAM frame arriving ahead of the data charges the connection-level credit up to the final size; the data or a
+ * RESET_STREAM arriving afterwards must not charge the same bytes again.
+ */
+static void test_fin_only_before_data(int is_reset)
+{
+    /* STREAM(id=0, off=10, len=0, FIN), then STREAM(id=0, len=10) or RESET_STREAM(id=0, error=0, final=10) */
+    static const uint8_t fin[] = {0x0f, 0x00, 0x0a, 0x00};
+    static const uint8_t data[] = {0x0a, 0x00, 0x0a, '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+    static const uint8_t reset[] = {0x04, 0x00, 0x00, 0x0a};
+    quicly_conn_t *client, *server;
+
+    test_setup_connected_peers(&client, &server);
+
+    ok(inject_frames(server, fin, sizeof(fin)) == 0);
+    ok(server->ingress.max_data.bytes_consumed == 10);
+    if (is_reset) {
+        ok(inject_frames(server, reset, sizeof(reset)) == 0);
+    } else {
+        ok(inject_frames(server, data, sizeof(data)) == 0);
+    }
+    ok(server->ingress.max_data.bytes_consumed == 10);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
+/**
  * A reset that completes the transfer by itself, all bytes below its Reliable Size having been received, ends the stream through
  * `on_receive` if the Reliable Size is non-zero, or if `on_receive_reset` is NULL; otherwise through `on_receive_reset`.
  */
@@ -3358,6 +3385,8 @@ int main(int argc, char **argv)
     subtest("reset-stream-at-gap-above", test_reset_stream_at_gap_above);
     subtest("reset-stream-at-after-fin", test_reset_stream_at_after_fin);
     subtest("fin-below-received", test_fin_below_received);
+    subtest("fin-only-before-data", test_fin_only_before_data, 0);
+    subtest("fin-only-before-reset", test_fin_only_before_data, 1);
     subtest("reset-stream-at-completing", test_reset_completing_transfer, 3, 1, 0);
     subtest("reset-stream-at-zero-completing", test_reset_completing_transfer, 0, 1, 0);
     subtest("reset-stream-completing", test_reset_completing_transfer, 0, 0, 0);
