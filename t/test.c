@@ -1511,6 +1511,43 @@ static void test_client_respects_server_max_udp_payload_size(void)
     quicly_free(server);
 }
 
+/**
+ * Long header packets carrying more than 16383 bytes need a Length field longer than 2 bytes.
+ */
+static void test_long_header_large_datagram(void)
+{
+    quicly_context_t ctx = quic_ctx;
+    ctx.initial_egress_max_udp_payload_size = 32768;
+    ctx.transport_params.max_udp_payload_size = 32768;
+
+    quicly_conn_t *client, *server;
+    quicly_address_t dest, src;
+    struct iovec datagrams[4];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 32768];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 4];
+    size_t num_datagrams;
+
+    ok(quicly_connect(&client, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                      NULL) == 0);
+    num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(num_datagrams == 1);
+    ok(datagrams[0].iov_len == 32768);
+    ok(decode_packets(decoded, datagrams, num_datagrams) == 1);
+    ok(decoded[0].octets.len == 32768);
+    ok(quicly_accept(&server, &ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL) == 0);
+    ok(server->egress.max_udp_payload_size == 32768);
+    ok(transmit(server, client) > 0);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    exchange_until_idle(client, server);
+    ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
+    ok(quicly_connection_is_ready(client));
+    ok(client->egress.max_udp_payload_size == 32768);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_resume_sendrate(void)
 {
     quicly_conn_t conn = {0};
@@ -3412,6 +3449,7 @@ int main(int argc, char **argv)
     subtest("l4s-feedback", test_l4s_feedback);
     subtest("l4s-transfer", test_l4s_transfer);
     subtest("client-respects-server-max-udp-payload-size", test_client_respects_server_max_udp_payload_size);
+    subtest("long-header-large-datagram", test_long_header_large_datagram);
     subtest("resume-sendrate", test_resume_sendrate);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);

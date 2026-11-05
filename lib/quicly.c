@@ -3924,6 +3924,10 @@ struct st_quicly_send_context_t {
          * if the target datagram should be padded to full size
          */
         uint8_t full_size : 1;
+        /**
+         * if the Length field of the target long header packet is encoded using 4 bytes rather than 2
+         */
+        uint8_t long_length_field : 1;
     } target;
     /**
      * output buffer into which list of datagrams is written
@@ -3981,6 +3985,9 @@ struct st_quicly_send_context_t {
     unsigned recalc_send_probe_at : 1;
 };
 
+#define QUICLY_LONG_HEADER_LENGTH_MAX_2BYTES 16383
+#define QUICLY_LONG_HEADER_LENGTH_MAX_4BYTES 1073741823
+
 static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_context_t *s, int coalesced)
 {
     size_t datagram_size, packet_bytes_in_flight;
@@ -4003,10 +4010,15 @@ static quicly_error_t commit_send_packet(quicly_conn_t *conn, quicly_send_contex
 
     /* encode packet size, packet number, key-phase */
     if (QUICLY_PACKET_IS_LONG_HEADER(*s->target.first_byte_at)) {
-        uint16_t length = s->dst - s->dst_payload_from + s->target.cipher->aead->algo->tag_size + QUICLY_SEND_PN_SIZE;
-        /* length is always 2 bytes, see _do_prepare_packet */
-        length |= 0x4000;
-        quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE - 2, length);
+        size_t length = s->dst - s->dst_payload_from + s->target.cipher->aead->algo->tag_size + QUICLY_SEND_PN_SIZE;
+        /* the size of the Length field has been determined by do_allocate_frame */
+        if (s->target.long_length_field) {
+            assert(length <= QUICLY_LONG_HEADER_LENGTH_MAX_4BYTES);
+            quicly_encode32(s->dst_payload_from - QUICLY_SEND_PN_SIZE - 4, (uint32_t)length | 0x80000000);
+        } else {
+            assert(length <= QUICLY_LONG_HEADER_LENGTH_MAX_2BYTES);
+            quicly_encode16(s->dst_payload_from - QUICLY_SEND_PN_SIZE - 2, (uint16_t)length | 0x4000);
+        }
         switch (*s->target.first_byte_at & QUICLY_PACKET_TYPE_BITMASK) {
         case QUICLY_PACKET_TYPE_INITIAL:
             conn->super.stats.num_packets.initial_sent++;
@@ -4138,7 +4150,10 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
             size_t overhead = 1 /* type */ + s->dcid->len + QUICLY_SEND_PN_SIZE + s->current.cipher->aead->algo->tag_size;
             if (QUICLY_PACKET_IS_LONG_HEADER(s->current.first_byte))
                 overhead += 4 /* version */ + 1 /* cidl */ + s->dcid->len + conn->super.local.long_header_src_cid.len +
-                            (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL) /* token_length == 0 */ + 2 /* length */;
+                            (s->current.first_byte == QUICLY_PACKET_TYPE_INITIAL) /* token_length == 0 */ +
+                            (s->dst_end - s->dst + s->target.cipher->aead->algo->tag_size > QUICLY_LONG_HEADER_LENGTH_MAX_2BYTES
+                                 ? 4
+                                 : 2) /* length */;
             size_t packet_min_space = QUICLY_MAX_PN_SIZE - QUICLY_SEND_PN_SIZE;
             if (packet_min_space < min_space)
                 packet_min_space = min_space;
@@ -4209,9 +4224,15 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
                 s->dst += conn->token.len;
             }
         }
-        /* payload length is filled laterwards (see commit_send_packet) */
-        *s->dst++ = 0;
-        *s->dst++ = 0;
+        /* payload length is filled laterwards (see commit_send_packet); use 4 bytes only if the packet might not fit in 2 bytes */
+        s->target.long_length_field = s->dst_end - (s->dst + 2) > QUICLY_LONG_HEADER_LENGTH_MAX_2BYTES;
+        if (s->target.long_length_field) {
+            memset(s->dst, 0, 4);
+            s->dst += 4;
+        } else {
+            *s->dst++ = 0;
+            *s->dst++ = 0;
+        }
     } else {
         s->dst = emit_cid(s->dst, s->dcid);
     }
