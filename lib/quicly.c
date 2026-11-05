@@ -6047,6 +6047,9 @@ static quicly_error_t do_send_closed(quicly_conn_t *conn, quicly_send_context_t 
             if ((ret = send_connection_close(conn, epoch, s)) != 0)
                 goto Exit;
         }
+        /* datagrams sent by the client that carry Initial packets are padded to full size (RFC 9000 Section 14.1) */
+        if (quicly_is_client(conn) && (s->payload_buf.datagram[0] & QUICLY_PACKET_TYPE_BITMASK) == QUICLY_PACKET_TYPE_INITIAL)
+            s->target.full_size = 1;
         if ((ret = commit_send_packet(conn, s, 0)) != 0)
             goto Exit;
     }
