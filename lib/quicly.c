@@ -6026,14 +6026,12 @@ static quicly_error_t do_send_closed(quicly_conn_t *conn, quicly_send_context_t 
     if ((ret = init_acks_iter(conn, &iter)) != 0)
         goto Exit;
 
-    /* check if the connection can be closed now (after 3 pto) */
-    if (conn->super.state == QUICLY_STATE_DRAINING ||
-        conn->super.stats.num_frames_sent.transport_close + conn->super.stats.num_frames_sent.application_close != 0) {
-        if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX) {
-            assert(quicly_num_streams(conn) == 0);
-            ret = QUICLY_ERROR_FREE_CONNECTION;
-            goto Exit;
-        }
+    /* check if the connection can be closed now (after 3 pto); if that happens before sending CONNECTION_CLOSE, the frame is not
+     * sent, as if it were lost */
+    if (quicly_sentmap_get(&iter)->packet_number == UINT64_MAX) {
+        destroy_all_streams(conn, 0, 0);
+        ret = QUICLY_ERROR_FREE_CONNECTION;
+        goto Exit;
     }
 
     if (conn->super.state == QUICLY_STATE_CLOSING && conn->egress.send_ack_at <= conn->stash.now) {
