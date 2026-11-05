@@ -4576,9 +4576,12 @@ static inline void adjust_stream_frame_layout(uint8_t **dst, uint8_t *const dst_
     size_t space_left = (dst_end - *dst) - *len, len_of_len = quicly_encodev_capacity(*len);
 
     if (**frame_at == QUICLY_FRAME_TYPE_CRYPTO) {
-        /* CRYPTO frame: adjust payload length to make space for the length field, if necessary. */
+        /* CRYPTO frame: adjust payload length to make space for the length field, if necessary. The payload is shortened to the
+         * largest length that fits in the space along with its length field. */
         if (space_left < len_of_len) {
-            *len = dst_end - *dst - len_of_len;
+            size_t space = dst_end - *dst;
+            *len = space - quicly_encodev_capacity(space - 1);
+            len_of_len = quicly_encodev_capacity(*len);
             *wrote_all = 0;
         }
     } else {
