@@ -278,6 +278,45 @@ static void test_adjust_stream_frame_layout(void)
 #undef TEST
 }
 
+/**
+ * When a CRYPTO frame is shortened to make room for the length field, the length field must be sized for the shortened length,
+ * and the payload must be the largest that fits in the space.
+ */
+static void test_adjust_crypto_frame_layout(void)
+{
+    /* minimum, both sides of the boundary of 1-byte and 2-byte length fields, and a large frame */
+    static const size_t capacities[] = {2, 64, 65, 1200};
+    static const size_t expected_lens[] = {1, 63, 63, 1198};
+    static uint8_t buf[2 + 1200], expected[1200];
+
+    for (size_t i = 0; i < sizeof(expected); ++i)
+        expected[i] = (uint8_t)(i * 7 + 1);
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(capacities); ++i) {
+        size_t capacity = capacities[i];
+        /* CRYPTO frame at offset zero, with payload filling all the space being available */
+        buf[0] = QUICLY_FRAME_TYPE_CRYPTO;
+        buf[1] = 0;
+        memcpy(buf + 2, expected, capacity);
+        uint8_t *dst = buf + 2, *const dst_end = buf + 2 + capacity, *frame_at = buf;
+        size_t len = capacity;
+        int wrote_all = 1;
+        adjust_stream_frame_layout(&dst, dst_end, &len, &wrote_all, &frame_at);
+
+        ok(dst <= dst_end);
+        ok(!wrote_all);
+        ok(frame_at == buf);
+        ok(len == expected_lens[i]);
+        const uint8_t *src = buf + 1; /* skip the frame type */
+        quicly_stream_frame_t frame;
+        ok(quicly_decode_crypto_frame(&src, dst, &frame) == 0);
+        ok(src == dst);
+        ok(frame.offset == 0);
+        ok(frame.data.len == len);
+        ok(memcmp(frame.data.base, expected, len) == 0);
+    }
+}
+
 static void get_now_cb(quicly_now_t *self, double *now)
 {
     *now = quic_now + quic_now_submillisec;
@@ -3342,6 +3381,7 @@ int main(int argc, char **argv)
     subtest("sentmap", test_sentmap);
     subtest("loss", test_loss);
     subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
+    subtest("adjust-crypto-frame-layout", test_adjust_crypto_frame_layout);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
