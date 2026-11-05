@@ -278,6 +278,40 @@ static void test_adjust_stream_frame_layout(void)
 #undef TEST
 }
 
+/**
+ * When a CRYPTO frame is shortened to make room for the length field, the length field must retain its size even if the shortened
+ * length can be encoded in fewer bytes.
+ */
+static void test_adjust_crypto_frame_layout_varint_boundary(void)
+{
+    static const size_t capacities[] = {63, 64, 65, 66, 67, 16383, 16384, 16385, 16386, 16387, 16388, 16389};
+    static uint8_t buf[2 + 16389], expected[16389];
+
+    for (size_t i = 0; i < sizeof(expected); ++i)
+        expected[i] = (uint8_t)(i * 7 + 1);
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(capacities); ++i) {
+        size_t capacity = capacities[i];
+        /* CRYPTO frame at offset zero, with payload filling all the space being available */
+        buf[0] = QUICLY_FRAME_TYPE_CRYPTO;
+        buf[1] = 0;
+        memcpy(buf + 2, expected, capacity);
+        uint8_t *dst = buf + 2, *const dst_end = buf + 2 + capacity, *frame_at = buf;
+        size_t len = capacity;
+        int wrote_all = 1;
+        adjust_stream_frame_layout(&dst, dst_end, &len, &wrote_all, &frame_at);
+
+        ok(dst == dst_end);
+        ok(!wrote_all);
+        ok(frame_at == buf);
+        const uint8_t *src = buf + 2;
+        uint64_t decoded_len = quicly_decodev(&src, dst_end);
+        ok(decoded_len == len);
+        ok(src + len == dst_end);
+        ok(memcmp(src, expected, len) == 0);
+    }
+}
+
 static void get_now_cb(quicly_now_t *self, double *now)
 {
     *now = quic_now + quic_now_submillisec;
@@ -1546,6 +1580,58 @@ static void test_long_header_large_datagram(void)
 
     quicly_free(client);
     quicly_free(server);
+}
+
+/**
+ * Runs handshakes using datagram sizes around the boundary where the Length field of long header packets and the length field of
+ * CRYPTO frames switch from 2-byte to 4-byte varints.
+ */
+static void test_handshake_around_16k(void)
+{
+    for (int expand = 0; expand <= 1; ++expand) {
+        for (uint16_t size = 16370; size <= 16440; ++size) {
+            quicly_context_t ctx = quic_ctx;
+            ctx.initial_egress_max_udp_payload_size = size;
+            ctx.transport_params.max_udp_payload_size = size;
+            ctx.expand_client_hello = expand;
+
+            quicly_conn_t *client = NULL, *server = NULL;
+            quicly_address_t dest, src;
+            struct iovec datagrams[4];
+            static uint8_t buf[PTLS_ELEMENTSOF(datagrams) * 16440];
+            quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 4];
+            size_t num_datagrams = PTLS_ELEMENTSOF(datagrams), num_decoded;
+            int success = 0;
+
+            if (quicly_connect(&client, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
+                               NULL, NULL, NULL) != 0)
+                goto Done;
+            if (quicly_send(client, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf)) != 0 || num_datagrams != 1 ||
+                datagrams[0].iov_len != size)
+                goto Done;
+            if ((num_decoded = decode_packets(decoded, datagrams, num_datagrams)) == 0)
+                goto Done;
+            if (quicly_accept(&server, &ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL) != 0)
+                goto Done;
+            for (size_t i = 1; i < num_decoded; ++i)
+                quicly_receive(server, NULL, &fake_address.sa, decoded + i);
+            for (int round = 0; round < 4; ++round) {
+                transmit(server, client);
+                transmit(client, server);
+            }
+            success = quicly_get_state(client) == QUICLY_STATE_CONNECTED && quicly_connection_is_ready(client) &&
+                      quicly_get_state(server) == QUICLY_STATE_CONNECTED && quicly_connection_is_ready(server);
+
+        Done:
+            if (!success)
+                note("handshake failed; size=%u, expand_client_hello=%d", (unsigned)size, expand);
+            ok(success);
+            if (server != NULL)
+                quicly_free(server);
+            if (client != NULL)
+                quicly_free(client);
+        }
+    }
 }
 
 static void test_resume_sendrate(void)
@@ -3433,6 +3519,7 @@ int main(int argc, char **argv)
     subtest("sentmap", test_sentmap);
     subtest("loss", test_loss);
     subtest("adjust-stream-frame-layout", test_adjust_stream_frame_layout);
+    subtest("adjust-crypto-frame-layout-varint-boundary", test_adjust_crypto_frame_layout_varint_boundary);
     subtest("test-vector", test_vector);
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
@@ -3450,6 +3537,7 @@ int main(int argc, char **argv)
     subtest("l4s-transfer", test_l4s_transfer);
     subtest("client-respects-server-max-udp-payload-size", test_client_respects_server_max_udp_payload_size);
     subtest("long-header-large-datagram", test_long_header_large_datagram);
+    subtest("handshake-around-16k", test_handshake_around_16k);
     subtest("resume-sendrate", test_resume_sendrate);
     subtest("jumpstart-cwnd", test_jumpstart_cwnd);
     subtest("jumpstart", test_jumpstart);

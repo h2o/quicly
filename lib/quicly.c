@@ -4622,10 +4622,24 @@ static inline void adjust_stream_frame_layout(uint8_t **dst, uint8_t *const dst_
         **frame_at |= QUICLY_FRAME_TYPE_STREAM_BIT_LEN;
     }
 
-    /* insert length before payload of `*len` bytes */
+    /* Insert length before payload of `*len` bytes. The length is encoded using `len_of_len` bytes, which might be larger than
+     * necessary if `*len` has been reduced above (RFC 9000 Section 16 permits non-minimal encoding). */
     memmove(*dst + len_of_len, *dst, *len);
-    *dst = quicly_encodev(*dst, *len);
-    *dst += *len;
+    switch (len_of_len) {
+    case 1:
+        **dst = (uint8_t)*len;
+        break;
+    case 2:
+        quicly_encode16(*dst, (uint16_t)(0x4000 | *len));
+        break;
+    case 4:
+        quicly_encode32(*dst, (uint32_t)(0x80000000 | *len));
+        break;
+    default:
+        assert(!"unexpected length of length");
+        break;
+    }
+    *dst += len_of_len + *len;
 }
 
 quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t *s)
