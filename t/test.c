@@ -1667,6 +1667,29 @@ static void test_stats_cc_limited(void)
     quicly_free(server);
 }
 
+static void test_stats_pacing_rate(void)
+{
+    quicly_stats_t stats;
+
+    for (int pacing = 0; pacing != 2; ++pacing) {
+        quicly_context_t ctx = quic_ctx;
+        ctx.egress[0].pacing = pacing;
+        quicly_conn_t *conn;
+        ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                          NULL) == 0);
+        quicly_get_stats(conn, &stats);
+        if (pacing) {
+            ok(stats.pacing_rate != 0);
+            ok(stats.pacing_rate == (uint64_t)calc_pacer_send_rate(conn) * 1000);
+            /* the multiplier in effect (2x or 3x during slow start) is applied */
+            ok(stats.pacing_rate > (uint64_t)quicly_pacer_calc_send_rate(1024, stats.cc.cwnd, stats.rtt.smoothed) * 1000);
+        } else {
+            ok(stats.pacing_rate == 0);
+        }
+        quicly_free(conn);
+    }
+}
+
 static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, struct iovec *datagram, void *buf,
                                     size_t bufsize)
 {
@@ -3571,6 +3594,7 @@ int main(int argc, char **argv)
     subtest("cc", test_cc);
     subtest("cc-limited-drain-and-resume", test_cc_limited_drain_and_resume);
     subtest("stats-cc-limited", test_stats_cc_limited);
+    subtest("stats-pacing-rate", test_stats_pacing_rate);
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
     subtest("fractional-close-timeout", test_fractional_close_timeout);
     subtest("time-threshold-loss-episode", test_time_threshold_loss_episode);

@@ -579,6 +579,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 static quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, const char *reason_phrase);
 static quicly_error_t handle_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, ptls_iovec_t reason_phrase);
 static quicly_error_t discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
+static uint32_t calc_pacer_send_rate(quicly_conn_t *conn);
 
 quicly_cid_plaintext_t quicly_cid_plaintext_invalid = {.node_id = UINT64_MAX, .thread_id = 0xffffff};
 
@@ -1533,6 +1534,7 @@ quicly_error_t quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
         stats->cc.exit_slow_start_at -= conn->created_at;
     }
     quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate);
+    stats->pacing_rate = conn->egress.pacer != NULL ? (uint64_t)calc_pacer_send_rate(conn) * 1000 : 0;
     stats->cc_limited.current = quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter);
     stats->cc_limited.total_msec = conn->egress.cc_limited.total;
     if (stats->cc_limited.current) {
