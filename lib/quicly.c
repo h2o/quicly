@@ -6411,6 +6411,8 @@ static quicly_error_t handle_stream_frame(quicly_conn_t *conn, struct st_quicly_
     if ((ret = quicly_decode_stream_frame(state->frame_type, &state->src, state->end, &frame)) != 0)
         return ret;
     QUICLY_PROBE(QUICTRACE_RECV_STREAM, conn, conn->stash.now, frame.stream_id, frame.offset, frame.data.len, (int)frame.is_fin);
+    if (!quicly_stream_has_receive_side(quicly_is_client(conn), frame.stream_id))
+        return QUICLY_TRANSPORT_ERROR_STREAM_STATE;
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
     return apply_stream_frame(stream, &frame);
@@ -6445,6 +6447,8 @@ static quicly_error_t handle_reset_stream_frame(quicly_conn_t *conn, struct st_q
         break;
     }
 
+    if (!quicly_stream_has_receive_side(quicly_is_client(conn), frame.stream_id))
+        return QUICLY_TRANSPORT_ERROR_STREAM_STATE;
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
@@ -6944,6 +6948,8 @@ static quicly_error_t handle_stop_sending_frame(quicly_conn_t *conn, struct st_q
         PTLS_LOG_ELEMENT_NUMBER(error_code, frame.app_error_code);
     });
 
+    if (!quicly_stream_has_send_side(quicly_is_client(conn), frame.stream_id))
+        return QUICLY_TRANSPORT_ERROR_STREAM_STATE;
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
 
