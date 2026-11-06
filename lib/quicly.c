@@ -4691,8 +4691,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
     }
 
     /* Write payload, adjusting len to actual size. Note that `on_send_emit` might fail (e.g., when underlying pread(2) fails), in
-     * which case the application will either close the connection immediately or reset the stream. If that happens, we return
-     * immediately without updating state. */
+     * which case the application resets the stream. If that happens, we return immediately without updating state. */
     assert(len != 0);
     size_t emit_off = (size_t)(off - stream->sendstate.acked.ranges[0].end);
     QUICLY_PROBE(STREAM_ON_SEND_EMIT, stream->conn, stream->conn->stash.now, stream, emit_off, len);
@@ -4702,9 +4701,7 @@ quicly_error_t quicly_send_stream(quicly_stream_t *stream, quicly_send_context_t
         PTLS_LOG_ELEMENT_NUMBER(capacity, len);
     });
     stream->callbacks->on_send_emit(stream, emit_off, dst, &len, &wrote_all);
-    if (stream->conn->super.state >= QUICLY_STATE_CLOSING) {
-        return QUICLY_ERROR_IS_CLOSING;
-    } else if (quicly_sendstate_eos_type(&stream->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET) {
+    if (quicly_sendstate_eos_type(&stream->sendstate) == QUICLY_SENDSTATE_EOS_TYPE_RESET) {
         /* the application may reset the stream from within the callback; if it did, the partially built STREAM frame is dropped. */
         sent->acked = on_ack_noop;
         return 0;
