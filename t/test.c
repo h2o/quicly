@@ -1770,19 +1770,20 @@ static void test_datagram_frame_amplification_limit(void)
     ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
     ok(decode_packets(&decoded, &datagram, 1) == 1);
     ok(quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL, NULL) == 0);
-    uint64_t budget = server->super.stats.num_bytes.received * quic_ctx.pre_validation_amplification_limit;
+    struct st_quicly_conn_path_t *path = get_path(server, 0);
+    uint64_t budget = path->bytes_received * quic_ctx.pre_validation_amplification_limit;
 
     /* Without the limit, each round would emit another datagram. As is the case with frames subject to the send window, the limit
      * is exceeded by no more than one datagram. */
     for (size_t i = 0; i != 16; ++i)
         num_datagrams = datagram_frame_amplification_send(server, 1);
     ok(num_datagrams == 0);
-    ok(server->super.stats.num_bytes.sent <= budget + server->egress.max_udp_payload_size);
+    ok(path->bytes_sent <= budget + server->path_spaces[0]->max_udp_payload_size);
 
     /* A datagram is started as long as some allowance remains, but the second frame, which needs another datagram, is not sent (the
      * number of bytes sent is overwritten to set the remaining allowance). */
     uint64_t num_frames_sent = server->super.stats.num_frames_sent.datagram;
-    server->super.stats.num_bytes.sent = budget - 500;
+    path->bytes_sent = budget - 500;
     ok(datagram_frame_amplification_send(server, 2) == 1);
     ok(server->super.stats.num_frames_sent.datagram == num_frames_sent + 1);
 
@@ -2960,7 +2961,7 @@ static void test_reset_in_on_send_emit(void)
 
     /* fill the unused slots of the sentmap with stale entries of the stream, each carrying an inverted range, so that the test
      * reliably detects use of the entry being left uninitialized */
-    struct st_quicly_sent_block_t *tail = client->egress.loss.sentmap.tail;
+    struct st_quicly_sent_block_t *tail = client->path_spaces[0]->loss.sentmap.tail;
     ok(tail != NULL && tail->next_insert_at < PTLS_ELEMENTSOF(tail->entries) - 4);
     if (tail != NULL) {
         for (size_t i = tail->next_insert_at; i < PTLS_ELEMENTSOF(tail->entries); ++i) {
@@ -2979,7 +2980,7 @@ static void test_reset_in_on_send_emit(void)
     /* the entry allocated for the dropped STREAM frame is a no-op, and the entries of the stream that are in flight carry valid
      * ranges */
     size_t num_noop_entries = 0;
-    for (struct st_quicly_sent_block_t *block = client->egress.loss.sentmap.head; block != NULL; block = block->next) {
+    for (struct st_quicly_sent_block_t *block = client->path_spaces[0]->loss.sentmap.head; block != NULL; block = block->next) {
         for (size_t i = 0; i < block->next_insert_at; ++i) {
             quicly_sent_t *sent = block->entries + i;
             if (sent->acked == on_ack_noop) {
