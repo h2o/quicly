@@ -56,9 +56,13 @@ typedef struct st_quicly_cid_plaintext_t {
      */
     uint32_t path_id : 8;
     /**
+     * sequence number of the CID for the path
+     */
+    uint32_t sequence : 8;
+    /**
      * for intra-node routing
      */
-    uint32_t thread_id : 24;
+    uint32_t thread_id : 16;
     /**
      * for inter-node routing; available only when using a 16-byte cipher to encrypt CIDs, otherwise set to zero.
      */
