@@ -20,8 +20,6 @@
  * IN THE SOFTWARE.
  */
 #include <assert.h>
-#include <inttypes.h>
-#include <stdio.h>
 #include <string.h>
 #include "quicly/constants.h"
 #include "quicly/remote_cid.h"
@@ -46,7 +44,7 @@ void quicly_remote_cid_init_set(quicly_remote_cid_set_t *set, ptls_iovec_t *init
             .sequence = i,
         };
 
-    set->_largest_sequence_expected = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1;
+    set->_largest_sequence_expected = QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT - 1;
     memset(&set->retired, 0, sizeof(set->retired));
 }
 
@@ -88,7 +86,7 @@ static quicly_error_t do_register(quicly_remote_cid_set_t *set, uint64_t sequenc
     }
 
     if (slot_to_use == SIZE_MAX) {
-        if (sequence + QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT <= set->_largest_sequence_expected)
+        if (sequence + QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT <= set->_largest_sequence_expected)
             return 0;
         return QUICLY_TRANSPORT_ERROR_CONNECTION_ID_LIMIT;
     }
