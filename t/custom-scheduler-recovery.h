@@ -200,7 +200,7 @@ static void test_custom_recovery_blackhole(void)
             ok(memcmp(quicly_streambuf_ingress_get(received).base, initial, sizeof(initial)) == 0);
         if (sustained)
             ok(appended > 0); /* prefix advanced while the producer was still publishing. */
-        quicly_path_health_t health;
+        quicly_path_health_t health = {0};
         ok(quicly_get_path_health(f.client, 0, &health) == 0);
         ok(health.pto_count >= 2 && !health.abandoned);
         ok(f.server_policy.maintenance_packets != 0); /* ACKs must escape the blackholed primary. */
@@ -230,7 +230,7 @@ static void test_custom_recovery_eligibility(void)
     custom_recovery_transmit(f.client, f.server, 1, 16);
     ok(quicly_streambuf_egress_write(ordinary, bytes, sizeof(bytes)) == 0);
     int64_t until = quic_now + f.bound;
-    quicly_path_health_t health;
+    quicly_path_health_t health = {0};
     do {
         custom_recovery_round(&f, 1, 16);
         ok(quicly_get_path_health(f.client, 0, &health) == 0);
@@ -311,7 +311,7 @@ static void test_custom_recovery_data_policy(void)
         custom_recovery_round(&f, 2, 1);
     quicly_stats_t before, after;
     quicly_get_stats(f.client, &before);
-    quicly_path_health_t health;
+    quicly_path_health_t health = {0};
     do {
         custom_recovery_round(&f, 2, 1);
         ok(quicly_get_path_health(f.client, 1, &health) == 0);
@@ -330,7 +330,7 @@ static void test_custom_recovery_health(void)
 {
     custom_recovery_fixture_t f;
     custom_recovery_setup(&f);
-    quicly_path_health_t h;
+    quicly_path_health_t h = {0};
     quicly_rtt_init(&f.client->path_spaces[1]->loss.rtt, &quic_ctx.egress[0].loss, 17);
     ok(quicly_get_path_health(f.client, 1, &h) == 0);
     ok(h.path_index == 1 && h.path_id == 1 && h.peer_is_backup && h.validated && !h.probe_only && !h.abandoned);

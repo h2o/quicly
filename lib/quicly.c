@@ -338,6 +338,8 @@ typedef struct st_quicly_path_space_t {
     quicly_local_cid_set_t local_cid_set;
     quicly_remote_cid_set_t remote_cid_set;
     uint8_t is_backup : 1;
+    uint8_t peer_status_known : 1;
+    uint64_t peer_status_seq;
     uint64_t ecn_acked_counts[3];
     struct {
         quicly_sender_state_t sender;
@@ -349,6 +351,10 @@ typedef struct st_quicly_path_space_t {
         uint8_t is_backup : 1;
         uint8_t has_value : 1;
     } path_status;
+    struct {
+        quicly_sender_state_t sender;
+        uint64_t sequence;
+    } path_cids_blocked;
     /* address tuples list */
     struct st_quicly_conn_path_t *addrs[QUICLY_MAX_PATH_ADDRESSES];
     /* back-pointer to connection */
@@ -385,15 +391,10 @@ struct st_quicly_conn_t {
     struct _st_quicly_conn_public_t super;
     quicly_path_space_t *path_spaces[QUICLY_MAX_PATH_SPACES];
     uint32_t abandoned_paths_mask[8];
-    /* bounded retransmission state for resource-limit rejections that cannot allocate a path space */
-    uint8_t rejected_path_abandon[QUICLY_MAX_PATH_ID + 1];
     struct st_quicly_retired_path_abandon_t *retired_path_abandon;
     quicly_address_t peer_handshake_address;
-    struct {
-        uint64_t sequence[QUICLY_MAX_PATH_ID + 1];
-        uint32_t known_mask[8];
-        uint32_t backup_mask[8];
-    } path_status;
+    /* number of open streams with path affinity set */
+    size_t num_affined_streams;
     /* next path id to use for issuing connection ids */
     uint32_t next_path_id;
     /**
@@ -525,11 +526,6 @@ struct st_quicly_conn_t {
             quicly_sender_state_t sender;
             uint64_t max_path_id;
         } paths_blocked;
-        struct {
-            quicly_sender_state_t sender;
-            uint32_t path_id;
-            uint64_t sequence;
-        } path_cids_blocked;
         /**
          * bit vector indicating if there's any pending crypto data (the insignificant 4 bits), or other non-stream data
          */
@@ -715,12 +711,36 @@ static int path_id_is_abandoned(quicly_conn_t *conn, uint32_t path_id)
     return (conn->abandoned_paths_mask[path_id / 32] & ((uint32_t)1 << (path_id % 32))) != 0;
 }
 
-static void reject_path_for_resource_limit(quicly_conn_t *conn, uint32_t path_id)
+static quicly_error_t enqueue_retired_path_abandon(quicly_conn_t *conn, uint32_t path_id, uint64_t error_code,
+                                                   quicly_sender_state_t sender)
+{
+    for (struct st_quicly_retired_path_abandon_t *p = conn->retired_path_abandon; p != NULL; p = p->next) {
+        if (p->path_id == path_id)
+            return 0;
+    }
+    struct st_quicly_retired_path_abandon_t *pending = malloc(sizeof(*pending));
+    if (pending == NULL)
+        return PTLS_ERROR_NO_MEMORY;
+    *pending = (struct st_quicly_retired_path_abandon_t){
+        .next = conn->retired_path_abandon,
+        .error_code = error_code,
+        .path_id = path_id,
+        .sender = sender,
+    };
+    conn->retired_path_abandon = pending;
+    return 0;
+}
+
+static quicly_error_t reject_path_for_resource_limit(quicly_conn_t *conn, uint32_t path_id)
 {
     assert(path_id <= QUICLY_MAX_PATH_ID);
+    quicly_error_t ret = enqueue_retired_path_abandon(conn, path_id, QUICLY_PATH_ABANDON_ERROR_RESOURCE_LIMIT,
+                                                      QUICLY_SENDER_STATE_SEND);
+    if (ret != 0)
+        return ret;
     conn->abandoned_paths_mask[path_id / 32] |= (uint32_t)1 << (path_id % 32);
-    conn->rejected_path_abandon[path_id] = QUICLY_SENDER_STATE_SEND;
     conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    return 0;
 }
 
 int quicly_is_multipath(quicly_conn_t *conn)
@@ -1019,11 +1039,6 @@ static int needs_cid_auth(quicly_conn_t *conn)
     }
 }
 
-static double get_sentmap_expiration_time(quicly_conn_t *conn)
-{
-    return quicly_loss_get_sentmap_expiration_time(&conn->path_spaces[0]->loss, conn->super.remote.transport_params.max_ack_delay);
-}
-
 static double get_max_sentmap_expiration_time(quicly_conn_t *conn)
 {
     double expiration = 0;
@@ -1108,7 +1123,7 @@ static int is_l4s(quicly_conn_t *conn)
 static void ack_frequency_set_next_update_at(quicly_conn_t *conn)
 {
     if (conn->super.remote.transport_params.min_ack_delay_usec != UINT64_MAX)
-        conn->egress.ack_frequency.update_at = ceil(conn->stash.now_double + get_sentmap_expiration_time(conn));
+        conn->egress.ack_frequency.update_at = ceil(conn->stash.now_double + get_max_sentmap_expiration_time(conn));
 }
 
 size_t quicly_decode_packet(quicly_context_t *ctx, quicly_decoded_packet_t *packet, const uint8_t *datagram, size_t datagram_size,
@@ -1475,10 +1490,12 @@ static size_t local_cid_size(const quicly_conn_t *conn)
  */
 static void dissociate_cid(quicly_conn_t *conn, uint32_t path_id, uint64_t sequence)
 {
-    for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-        struct st_quicly_conn_path_t *path = get_path(conn, i);
-        if (path != NULL && path->dcid == sequence && path->path_id == path_id)
-            path->dcid = UINT64_MAX;
+    quicly_path_space_t *ps = find_path_space_by_id(conn, path_id);
+    if (ps == NULL)
+        return;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(ps->addrs); ++i) {
+        if (ps->addrs[i] != NULL && ps->addrs[i]->dcid == sequence)
+            ps->addrs[i]->dcid = UINT64_MAX;
     }
 }
 
@@ -1752,6 +1769,10 @@ static void destroy_stream(quicly_stream_t *stream, quicly_error_t err)
         size_t epoch = -(1 + stream->stream_id);
         stream->conn->egress.pending_flows &= ~(uint8_t)(1 << epoch);
     } else {
+        if (stream->affinity_path_id != UINT32_MAX) {
+            assert(conn->num_affined_streams > 0);
+            --conn->num_affined_streams;
+        }
         struct st_quicly_conn_streamgroup_state_t *group = get_streamgroup_state(conn, stream->stream_id);
         --group->num_streams;
     }
@@ -2552,9 +2573,6 @@ static quicly_error_t alloc_path_space(quicly_conn_t *conn, size_t path_index, u
     ps->health.last_ack_at = INT64_MIN;
     quicly_ratemeter_init(&ps->ratemeter);
     ps->try_jumpstart = 1;
-    if ((conn->path_status.known_mask[path_id / 32] & ((uint32_t)1 << (path_id % 32))) != 0) {
-        ps->is_backup = (conn->path_status.backup_mask[path_id / 32] & ((uint32_t)1 << (path_id % 32))) != 0;
-    }
 
     if (path_index > 0) {
         quicly_cid_plaintext_t new_cid = {
@@ -2572,7 +2590,7 @@ static quicly_error_t alloc_path_space(quicly_conn_t *conn, size_t path_index, u
                 .state = QUICLY_REMOTE_CID_UNAVAILABLE,
                 .sequence = i,
             };
-        ps->remote_cid_set._largest_sequence_expected = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT - 1;
+        ps->remote_cid_set._largest_sequence_expected = QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT - 1;
 
         uint32_t packet_tolerance =
             conn->application != NULL ? conn->application->super.packet_tolerance : QUICLY_DEFAULT_PACKET_TOLERANCE;
@@ -2625,22 +2643,12 @@ static quicly_error_t alloc_peer_path_space(quicly_conn_t *conn, uint32_t path_i
 {
     *ps = NULL;
     size_t slot = find_free_path_space_slot(conn);
-    if (slot == SIZE_MAX) {
-        reject_path_for_resource_limit(conn, path_id);
-        return 0;
-    }
+    if (slot == SIZE_MAX)
+        return reject_path_for_resource_limit(conn, path_id);
     quicly_error_t ret = alloc_path_space(conn, slot, path_id);
     if (ret == 0)
         *ps = conn->path_spaces[slot];
     return ret;
-}
-
-static inline void set_path(quicly_conn_t *conn, size_t path_index, struct st_quicly_conn_path_t *path)
-{
-    size_t ps_index, cand_index;
-    decode_flat_path_index(path_index, &ps_index, &cand_index);
-    if (conn->path_spaces[ps_index] != NULL)
-        conn->path_spaces[ps_index]->addrs[cand_index] = path;
 }
 
 static inline size_t encode_flat_path_index(size_t ps_index, size_t cand_index)
@@ -2761,10 +2769,15 @@ static int retire_all_remote_cids(quicly_conn_t *conn, quicly_path_space_t *ps)
 
 static void clear_stream_affinity_to_path(quicly_conn_t *conn, uint32_t path_id)
 {
+    if (conn->num_affined_streams == 0)
+        return;
     quicly_stream_t *stream;
     kh_foreach_value(conn->streams, stream, {
-        if (stream->affinity_path_id == path_id)
+        if (stream->affinity_path_id == path_id) {
             stream->affinity_path_id = UINT32_MAX;
+            assert(conn->num_affined_streams > 0);
+            --conn->num_affined_streams;
+        }
     });
 }
 
@@ -2778,8 +2791,8 @@ static int destroy_path_state(quicly_conn_t *conn, size_t path_index)
     size_t ps_index, cand_index;
     decode_flat_path_index(path_index, &ps_index, &cand_index);
 
-    /* Preserve a pending PATH_ABANDON before releasing the last address. Allocation failure leaves the path intact so
-     * retention cleanup can be retried; resource-limit rejections continue to use their allocation-free sender array. */
+    /* preserve a pending PATH_ABANDON before releasing the last address; allocation failure leaves the path intact so
+     * retention cleanup can be retried */
     if (quicly_is_multipath(conn) &&
         (ps->path_abandon.sender == QUICLY_SENDER_STATE_SEND || ps->path_abandon.sender == QUICLY_SENDER_STATE_UNACKED)) {
         int is_last = 1;
@@ -2787,14 +2800,10 @@ static int destroy_path_state(quicly_conn_t *conn, size_t path_index)
             if (i != cand_index && ps->addrs[i] != NULL)
                 is_last = 0;
         if (is_last) {
-            struct st_quicly_retired_path_abandon_t *pending = malloc(sizeof(*pending));
-            if (pending == NULL)
-                return PTLS_ERROR_NO_MEMORY;
-            *pending = (struct st_quicly_retired_path_abandon_t){.next = conn->retired_path_abandon,
-                                                                 .error_code = ps->path_abandon.error_code,
-                                                                 .path_id = ps->path_id,
-                                                                 .sender = ps->path_abandon.sender};
-            conn->retired_path_abandon = pending;
+            quicly_error_t ret = enqueue_retired_path_abandon(conn, ps->path_id, ps->path_abandon.error_code,
+                                                              ps->path_abandon.sender);
+            if (ret != 0)
+                return ret;
         }
     }
 
@@ -2813,10 +2822,11 @@ static int destroy_path_state(quicly_conn_t *conn, size_t path_index)
             free_path_space(ps);
             conn->path_spaces[ps_index] = NULL;
             recalc_send_ack_at(conn);
-            if (conn->super.local.max_path_id < QUICLY_MAX_PATH_ID)
+            if (conn->super.ctx->transport_params.initial_max_path_id > 0 && conn->super.local.max_path_id < QUICLY_MAX_PATH_ID) {
                 conn->super.local.max_path_id++;
-            conn->egress.max_path_id = QUICLY_SENDER_STATE_SEND;
-            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+                conn->egress.max_path_id = QUICLY_SENDER_STATE_SEND;
+                conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+            }
         }
     }
 
@@ -2959,21 +2969,22 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
 
     size_t ps_index, cand_index;
     decode_flat_path_index(path_index, &ps_index, &cand_index);
-    size_t active_idx = ps_index;
+    assert(ps_index < QUICLY_MAX_PATH_SPACES && cand_index != 0);
     quicly_path_space_t *ps = conn->path_spaces[ps_index];
+    assert(ps != NULL && ps->addrs[cand_index] != NULL);
 
     /* Requeue frames on the new address while retaining the old flight's congestion accounting until ACK or loss. */
     if ((ret = update_path_sentmap(conn, ps, QUICLY_SENTMAP_EVENT_PTO, ~0u, NULL, 0)) != 0)
         goto Exit;
 
-    struct st_quicly_conn_path_t *old_active = get_path(conn, active_idx);
-    set_path(conn, active_idx, get_path(conn, path_index));
-    set_path(conn, path_index, NULL);
+    struct st_quicly_conn_path_t *old_active = ps->addrs[0];
+    ps->addrs[0] = ps->addrs[cand_index];
+    ps->addrs[cand_index] = NULL;
     if (old_active != NULL) {
-        get_path(conn, active_idx)->path_id = old_active->path_id;
+        ps->addrs[0]->path_id = old_active->path_id;
     }
 
-    assert(get_path(conn, active_idx)->path_space == conn->path_spaces[ps_index]);
+    assert(ps->addrs[0]->path_space == ps);
     conn->super.stats.num_paths.promoted += 1;
 
     /* reset CC */
@@ -3092,14 +3103,20 @@ static void recalc_send_probe_at(quicly_conn_t *conn)
 {
     conn->egress.send_probe_at = INT64_MAX;
 
-    for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-        if (get_path(conn, i) == NULL || get_path(conn, i)->abandoned)
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+        quicly_path_space_t *ps = conn->path_spaces[p];
+        if (ps == NULL)
             continue;
-        if (conn->egress.send_probe_at > get_path(conn, i)->path_challenge.send_at)
-            conn->egress.send_probe_at = get_path(conn, i)->path_challenge.send_at;
-        if (get_path(conn, i)->path_response.send_) {
-            conn->egress.send_probe_at = 0;
-            break;
+        for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+            struct st_quicly_conn_path_t *path = ps->addrs[a];
+            if (path == NULL || path->abandoned)
+                continue;
+            if (conn->egress.send_probe_at > path->path_challenge.send_at)
+                conn->egress.send_probe_at = path->path_challenge.send_at;
+            if (path->path_response.send_) {
+                conn->egress.send_probe_at = 0;
+                return;
+            }
         }
     }
 }
@@ -4077,13 +4094,7 @@ static void xor_path_id_iv(ptls_aead_context_t *aead, uint32_t path_id)
 {
     uint8_t path_id_bytes[PTLS_MAX_IV_SIZE] = {0};
     assert(12 <= aead->algo->iv_size && aead->algo->iv_size <= sizeof(path_id_bytes));
-    size_t off = aead->algo->iv_size - 12;
-
-    path_id_bytes[off] = (path_id >> 24) & 0xff;
-    path_id_bytes[off + 1] = (path_id >> 16) & 0xff;
-    path_id_bytes[off + 2] = (path_id >> 8) & 0xff;
-    path_id_bytes[off + 3] = path_id & 0xff;
-
+    quicly_encode32(path_id_bytes + aead->algo->iv_size - 12, path_id);
     ptls_aead_xor_iv(aead, path_id_bytes, aead->algo->iv_size);
 }
 
@@ -4555,10 +4566,10 @@ static quicly_error_t on_ack_path_cids_blocked(quicly_sentmap_t *map, const quic
                                                quicly_sent_t *sent)
 {
     quicly_conn_t *conn = get_conn_from_sentmap(map, packet);
-    if (conn->egress.path_cids_blocked.path_id != sent->data.path_cids_blocked.path_id ||
-        conn->egress.path_cids_blocked.sequence != sent->data.path_cids_blocked.sequence)
+    quicly_path_space_t *ps = find_path_space_by_id(conn, sent->data.path_cids_blocked.path_id);
+    if (ps == NULL || ps->path_cids_blocked.sequence != sent->data.path_cids_blocked.sequence)
         return 0;
-    conn->egress.path_cids_blocked.sender = on_ack_control(conn, packet, acked, conn->egress.path_cids_blocked.sender);
+    ps->path_cids_blocked.sender = on_ack_control(conn, packet, acked, ps->path_cids_blocked.sender);
     return 0;
 }
 
@@ -4579,11 +4590,7 @@ static quicly_error_t on_ack_path_abandon(quicly_sentmap_t *map, const quicly_se
             }
             return 0;
         }
-        /* Late ACK/loss callbacks after a record was removed are harmless. Path IDs are never reused. */
-        uint8_t *sender = &conn->rejected_path_abandon[sent->data.path_abandon.path_id];
-        if (*sender == QUICLY_SENDER_STATE_NONE)
-            return 0;
-        *sender = on_ack_control(conn, packet, acked, *sender);
+        /* late ACK/loss callbacks after a record was removed are harmless; path IDs are never reused */
         return 0;
     }
     ps->path_abandon.sender = on_ack_control(conn, packet, acked, ps->path_abandon.sender);
@@ -4936,17 +4943,27 @@ static int uses_builtin_path_scheduler(quicly_conn_t *conn)
 static unsigned preferred_path_rank(quicly_conn_t *conn)
 {
     unsigned rank = UINT_MAX;
-    for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-        struct st_quicly_conn_path_t *path = get_path(conn, i);
-        if (quicly_is_path_available(conn, i) && application_path_is_eligible(conn, i) && !path->probe_only &&
-            path_scheduling_rank(path) < rank)
-            rank = path_scheduling_rank(path);
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+        quicly_path_space_t *ps = conn->path_spaces[p];
+        if (ps == NULL)
+            continue;
+        for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+            struct st_quicly_conn_path_t *path = ps->addrs[a];
+            if (path == NULL)
+                continue;
+            size_t i = encode_flat_path_index(p, a);
+            if (quicly_is_path_available(conn, i) && application_path_is_eligible(conn, i) && !path->probe_only &&
+                path_scheduling_rank(path) < rank)
+                rank = path_scheduling_rank(path);
+        }
     }
     return rank;
 }
 
 static int path_has_pending_stream(quicly_conn_t *conn, struct st_quicly_conn_path_t *path, int allow_unbound)
 {
+    if (conn->num_affined_streams == 0)
+        return allow_unbound ? scheduler_can_send(conn) : 0;
     int at_stream_level = conn->egress.max_data.sent < conn->egress.max_data.permitted;
     if (conn->super.ctx->stream_scheduler == &quicly_default_stream_scheduler) {
         quicly_linklist_t *lists[2] = {&conn->super._default_scheduler.active,
@@ -4987,50 +5004,56 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     }
     int can_return_ack = 0, scheduler_ready = -1;
     unsigned preferred_rank = quicly_is_multipath(conn) ? preferred_path_rank(conn) : 0;
-    for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-        struct st_quicly_conn_path_t *path = get_path(conn, i);
-        if (path == NULL)
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+        quicly_path_space_t *ps = conn->path_spaces[p];
+        if (ps == NULL)
             continue;
-        if (path->abandoned) {
-            int64_t cleanup_at = abandoned_path_expires_at(conn, path);
-            if (cleanup_at < at)
-                at = cleanup_at;
-            continue;
+        for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+            struct st_quicly_conn_path_t *path = ps->addrs[a];
+            if (path == NULL)
+                continue;
+            size_t i = encode_flat_path_index(p, a);
+            if (path->abandoned) {
+                int64_t cleanup_at = abandoned_path_expires_at(conn, path);
+                if (cleanup_at < at)
+                    at = cleanup_at;
+                continue;
+            }
+            /* Recovery bookkeeping remains due even when the address cannot emit a probe. */
+            if ((quicly_is_multipath(conn) || has_application_path_eligibility(conn) ||
+                 (a == 0 && path_has_usable_dcid(path) && calc_amplification_limit_allowance(conn, path) != 0)) &&
+                !is_point5rtt_with_no_handshake_data_to_send(conn) && ps->loss.alarm_at < at)
+                at = ps->loss.alarm_at;
+            uint64_t allowance = path_send_allowance(conn, i);
+            if (allowance == 0)
+                continue;
+            if (allowance >= path_validation_minimum(conn, path) && path_validation_at(path) < at)
+                at = path_validation_at(path);
+            if (allowance < path_packet_minimum(conn, path))
+                continue;
+            if (!path->probe_only || i == 0)
+                can_return_ack = 1;
+            int64_t pacer_at = path_ordinary_send_at(conn, path);
+            if (pacer_at >= at)
+                continue;
+            if (path_has_pending_control(conn, path)) {
+                at = pacer_at;
+                continue;
+            }
+            if (!application_path_can_send_data(conn, i))
+                continue;
+            if (should_send_datagram_frame(conn, path)) {
+                at = pacer_at;
+                continue;
+            }
+            if (scheduler_ready == -1)
+                scheduler_ready = scheduler_can_send(conn);
+            if (scheduler_ready &&
+                (!quicly_is_multipath(conn) ||
+                 path_has_pending_stream(conn, path,
+                                         !uses_builtin_path_scheduler(conn) || path_scheduling_rank(path) == preferred_rank)))
+                at = pacer_at;
         }
-        /* Recovery bookkeeping remains due even when the address cannot emit a probe. */
-        if ((quicly_is_multipath(conn) || has_application_path_eligibility(conn) ||
-             (i < QUICLY_MAX_PATH_SPACES && path_has_usable_dcid(path) && calc_amplification_limit_allowance(conn, path) != 0)) &&
-            !is_point5rtt_with_no_handshake_data_to_send(conn) && path->path_space->loss.alarm_at < at)
-            at = path->path_space->loss.alarm_at;
-        uint64_t allowance = path_send_allowance(conn, i);
-        if (allowance == 0)
-            continue;
-        if (allowance >= path_validation_minimum(conn, path) && path_validation_at(path) < at)
-            at = path_validation_at(path);
-        if (allowance < path_packet_minimum(conn, path))
-            continue;
-        if (!path->probe_only || i == 0)
-            can_return_ack = 1;
-        int64_t pacer_at = path_ordinary_send_at(conn, path);
-        if (pacer_at >= at)
-            continue;
-        if (path_has_pending_control(conn, path)) {
-            at = pacer_at;
-            continue;
-        }
-        if (!application_path_can_send_data(conn, i))
-            continue;
-        if (should_send_datagram_frame(conn, path)) {
-            at = pacer_at;
-            continue;
-        }
-        if (scheduler_ready == -1)
-            scheduler_ready = scheduler_can_send(conn);
-        if (scheduler_ready &&
-            (!quicly_is_multipath(conn) ||
-             path_has_pending_stream(conn, path,
-                                     !uses_builtin_path_scheduler(conn) || path_scheduling_rank(path) == preferred_rank)))
-            at = pacer_at;
     }
     /* ACKs for unavailable or abandoned paths can still be returned on an eligible path. if none exists, retain the ACK state
      * and wait for the application's eligibility-change wakeup, a recovery deadline, or connection expiration */
@@ -5096,13 +5119,11 @@ static int setup_path_dcid(quicly_conn_t *conn, size_t path_index)
 
 static void schedule_path_cids_blocked(quicly_conn_t *conn, quicly_path_space_t *ps)
 {
-    uint64_t sequence = ps->remote_cid_set._largest_sequence_expected + 1 - QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT;
+    uint64_t sequence = ps->remote_cid_set._largest_sequence_expected + 1 - QUICLY_REMOTE_ACTIVE_CONNECTION_ID_LIMIT;
 
-    if (conn->egress.path_cids_blocked.sender == QUICLY_SENDER_STATE_NONE ||
-        conn->egress.path_cids_blocked.path_id != ps->path_id || conn->egress.path_cids_blocked.sequence != sequence) {
-        conn->egress.path_cids_blocked.sender = QUICLY_SENDER_STATE_SEND;
-        conn->egress.path_cids_blocked.path_id = ps->path_id;
-        conn->egress.path_cids_blocked.sequence = sequence;
+    if (ps->path_cids_blocked.sender == QUICLY_SENDER_STATE_NONE || ps->path_cids_blocked.sequence != sequence) {
+        ps->path_cids_blocked.sender = QUICLY_SENDER_STATE_SEND;
+        ps->path_cids_blocked.sequence = sequence;
     }
     conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
 }
@@ -5119,14 +5140,13 @@ static void schedule_path_open_blocked(quicly_conn_t *conn)
         if (ps != NULL && ps->addrs[0] != NULL)
             continue;
 
-        if (ps != NULL) {
-            schedule_path_cids_blocked(conn, ps);
-        } else {
-            conn->egress.path_cids_blocked.sender = QUICLY_SENDER_STATE_SEND;
-            conn->egress.path_cids_blocked.path_id = path_id;
-            conn->egress.path_cids_blocked.sequence = 0;
-            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        if (ps == NULL) {
+            size_t slot = find_free_path_space_slot(conn);
+            if (slot != SIZE_MAX && alloc_path_space(conn, slot, path_id) == 0)
+                ps = conn->path_spaces[slot];
         }
+        if (ps != NULL)
+            schedule_path_cids_blocked(conn, ps);
         return;
     }
 
@@ -5546,7 +5566,7 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         if ((ret = quicly_sentmap_prepare(&ps->loss.sentmap, ps->packet_number, conn->stash.now_double, ack_epoch)) != 0)
             return ret;
         ps->loss.sentmap._pending_packet->data.packet.path_id = path->path_id;
-        /* adjust ack-frequency */
+        /* any sending path can refresh the connection-wide ACK policy, including after path zero is abandoned */
         if (frame_type == ALLOCATE_FRAME_TYPE_ACK_ELICITING && conn->stash.now >= conn->egress.ack_frequency.update_at &&
             s->dst_end - s->dst >= QUICLY_ACK_FREQUENCY_FRAME_CAPACITY + min_space) {
             assert(conn->super.remote.transport_params.min_ack_delay_usec != UINT64_MAX);
@@ -6281,22 +6301,22 @@ static quicly_error_t send_paths_blocked(quicly_conn_t *conn, quicly_send_contex
 
 static quicly_error_t send_path_cids_blocked(quicly_conn_t *conn, quicly_send_context_t *s)
 {
-    if (conn->egress.path_cids_blocked.sender != QUICLY_SENDER_STATE_SEND)
-        return 0;
-
-    quicly_sent_t *sent;
-    size_t capacity = quicly_encodev_capacity(QUICLY_FRAME_TYPE_PATH_CIDS_BLOCKED) +
-                      quicly_encodev_capacity(conn->egress.path_cids_blocked.path_id) +
-                      quicly_encodev_capacity(conn->egress.path_cids_blocked.sequence);
-    quicly_error_t ret;
-    if ((ret = allocate_ack_eliciting_frame(conn, s, capacity, &sent, on_ack_path_cids_blocked)) != 0)
-        return ret;
-    sent->data.path_cids_blocked.path_id = conn->egress.path_cids_blocked.path_id;
-    sent->data.path_cids_blocked.sequence = conn->egress.path_cids_blocked.sequence;
-    s->dst = quicly_encode_path_cids_blocked_frame(s->dst, conn->egress.path_cids_blocked.path_id,
-                                                   conn->egress.path_cids_blocked.sequence);
-    conn->egress.path_cids_blocked.sender = QUICLY_SENDER_STATE_UNACKED;
-    ++conn->super.stats.num_frames_sent.path_cids_blocked;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(conn->path_spaces); ++i) {
+        quicly_path_space_t *ps = conn->path_spaces[i];
+        if (ps == NULL || ps->path_cids_blocked.sender != QUICLY_SENDER_STATE_SEND || path_id_is_abandoned(conn, ps->path_id))
+            continue;
+        quicly_sent_t *sent;
+        size_t capacity = quicly_encodev_capacity(QUICLY_FRAME_TYPE_PATH_CIDS_BLOCKED) + quicly_encodev_capacity(ps->path_id) +
+                          quicly_encodev_capacity(ps->path_cids_blocked.sequence);
+        quicly_error_t ret;
+        if ((ret = allocate_ack_eliciting_frame(conn, s, capacity, &sent, on_ack_path_cids_blocked)) != 0)
+            return ret;
+        sent->data.path_cids_blocked.path_id = ps->path_id;
+        sent->data.path_cids_blocked.sequence = ps->path_cids_blocked.sequence;
+        s->dst = quicly_encode_path_cids_blocked_frame(s->dst, ps->path_id, ps->path_cids_blocked.sequence);
+        ps->path_cids_blocked.sender = QUICLY_SENDER_STATE_UNACKED;
+        ++conn->super.stats.num_frames_sent.path_cids_blocked;
+    }
     return 0;
 }
 
@@ -7102,22 +7122,13 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
         ps->path_abandon.sender = QUICLY_SENDER_STATE_UNACKED;
     }
 
-    /* Retention expiry reclaims transport resources independently of reliable PATH_ABANDON delivery. */
+    /* retention expiry and resource-limit rejections outlive path-space slots */
     for (struct st_quicly_retired_path_abandon_t *pending = conn->retired_path_abandon; pending != NULL; pending = pending->next) {
         if (pending->sender != QUICLY_SENDER_STATE_SEND)
             continue;
         if ((ret = send_path_abandon(conn, s, pending->path_id, pending->error_code)) != 0)
             return ret;
         pending->sender = QUICLY_SENDER_STATE_UNACKED;
-    }
-
-    /* Rejected paths have no path space, but their PATH_ABANDON still needs reliable delivery. */
-    for (uint32_t path_id = 0; path_id <= conn->super.local.max_path_id; ++path_id) {
-        if (conn->rejected_path_abandon[path_id] != QUICLY_SENDER_STATE_SEND)
-            continue;
-        if ((ret = send_path_abandon(conn, s, path_id, QUICLY_PATH_ABANDON_ERROR_RESOURCE_LIMIT)) != 0)
-            return ret;
-        conn->rejected_path_abandon[path_id] = QUICLY_SENDER_STATE_UNACKED;
     }
 
     /* DATA_BLOCKED */
@@ -7743,44 +7754,62 @@ quicly_error_t quicly_send_path_maintenance(quicly_conn_t *conn, quicly_send_con
 
     /* Probe paths even when the data scheduler avoids them, so an ACK can restore their eligibility. */
     if (!is_point5rtt_with_no_handshake_data_to_send(conn)) {
-        for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-            struct st_quicly_conn_path_t *path = get_path(conn, i);
-            if (path == NULL || path->path_space->loss.alarm_at > conn->stash.now)
+        for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+            quicly_path_space_t *ps = conn->path_spaces[p];
+            if (ps == NULL || ps->loss.alarm_at > conn->stash.now)
                 continue;
-            if ((ret = send_path_control(conn, s, i)) != 0 || s->num_datagrams != 0)
-                goto Exit;
+            for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+                if (ps->addrs[a] == NULL)
+                    continue;
+                if ((ret = send_path_control(conn, s, encode_flat_path_index(p, a))) != 0 || s->num_datagrams != 0)
+                    goto Exit;
+            }
         }
     }
 
     /* Prefer the receiving path for ACKs. ACK-only traffic cannot detect a blackholed alternative via PTO. */
-    for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-        struct st_quicly_conn_path_t *path = get_path(conn, i);
-        if (path == NULL)
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+        quicly_path_space_t *ps = conn->path_spaces[p];
+        if (ps == NULL)
             continue;
-        struct st_quicly_pn_space_t *pn = path->path_space->pn_space;
+        struct st_quicly_pn_space_t *pn = ps->pn_space;
         if (pn == NULL || pn->unacked_count == 0 || pn->send_ack_at > conn->stash.now)
             continue;
-        if ((ret = send_path_control(conn, s, i)) != 0 || s->num_datagrams != 0)
-            goto Exit;
-    }
-
-    /* If the receiving path cannot send, return its ACKs on another open path. */
-    if (any_ack_due) {
-        for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-            if (get_path(conn, i) == NULL)
+        for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+            if (ps->addrs[a] == NULL)
                 continue;
-            if ((ret = send_path_control(conn, s, i)) != 0 || s->num_datagrams != 0)
+            if ((ret = send_path_control(conn, s, encode_flat_path_index(p, a))) != 0 || s->num_datagrams != 0)
                 goto Exit;
         }
     }
 
+    /* If the receiving path cannot send, return its ACKs on another open path. */
+    if (any_ack_due) {
+        for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+            quicly_path_space_t *ps = conn->path_spaces[p];
+            if (ps == NULL)
+                continue;
+            for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+                if (ps->addrs[a] == NULL)
+                    continue;
+                if ((ret = send_path_control(conn, s, encode_flat_path_index(p, a))) != 0 || s->num_datagrams != 0)
+                    goto Exit;
+            }
+        }
+    }
+
     /* Protocol control remains serviceable when the application's data-readiness hook rejects every path. */
-    for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-        struct st_quicly_conn_path_t *path = get_path(conn, i);
-        if (path == NULL || !path_has_pending_control(conn, path) || path_ordinary_send_at(conn, path) > conn->stash.now)
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+        quicly_path_space_t *ps = conn->path_spaces[p];
+        if (ps == NULL)
             continue;
-        if ((ret = send_path_control(conn, s, i)) != 0 || s->num_datagrams != 0)
-            goto Exit;
+        for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+            struct st_quicly_conn_path_t *path = ps->addrs[a];
+            if (path == NULL || !path_has_pending_control(conn, path) || path_ordinary_send_at(conn, path) > conn->stash.now)
+                continue;
+            if ((ret = send_path_control(conn, s, encode_flat_path_index(p, a))) != 0 || s->num_datagrams != 0)
+                goto Exit;
+        }
     }
 
 Exit:
@@ -7981,11 +8010,18 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     }
 
     /* Retention and deadline reporting use the same per-path three-PTO deadline. */
-    for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-        struct st_quicly_conn_path_t *path = get_path(conn, i);
-        if (path != NULL && abandoned_path_expires_at(conn, path) <= conn->stash.now &&
-            (ret = expire_abandoned_path_state(conn, i)) != 0)
-            goto Exit;
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces); ++p) {
+        quicly_path_space_t *ps = conn->path_spaces[p];
+        if (ps == NULL)
+            continue;
+        for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+            struct st_quicly_conn_path_t *path = ps->addrs[a];
+            if (path != NULL && abandoned_path_expires_at(conn, path) <= conn->stash.now &&
+                (ret = expire_abandoned_path_state(conn, encode_flat_path_index(p, a))) != 0)
+                goto Exit;
+            if (conn->path_spaces[p] == NULL)
+                break;
+        }
     }
 
     /* Advertise CID starvation on every otherwise-active multipath path. The signal itself can be carried on any path that still
@@ -9316,20 +9352,18 @@ static quicly_error_t handle_path_status_frame(quicly_conn_t *conn, struct st_qu
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     if (path_id_is_abandoned(conn, (uint32_t)path_id))
         return 0;
-    uint32_t bit = (uint32_t)1 << (path_id % 32);
-    if ((conn->path_status.known_mask[path_id / 32] & bit) != 0 && seq <= conn->path_status.sequence[path_id])
-        return 0;
-    conn->path_status.known_mask[path_id / 32] |= bit;
-    conn->path_status.sequence[path_id] = seq;
-    if (state->frame_type == QUICLY_FRAME_TYPE_PATH_STATUS_BACKUP)
-        conn->path_status.backup_mask[path_id / 32] |= bit;
-    else
-        conn->path_status.backup_mask[path_id / 32] &= ~bit;
 
     quicly_path_space_t *ps = find_path_space_by_id(conn, (uint32_t)path_id);
-    if (ps != NULL) {
-        ps->is_backup = state->frame_type == QUICLY_FRAME_TYPE_PATH_STATUS_BACKUP;
+    if (ps == NULL) {
+        quicly_error_t ret = alloc_peer_path_space(conn, (uint32_t)path_id, &ps);
+        if (ret != 0 || ps == NULL)
+            return ret;
     }
+    if (ps->peer_status_known && seq <= ps->peer_status_seq)
+        return 0;
+    ps->peer_status_known = 1;
+    ps->peer_status_seq = seq;
+    ps->is_backup = state->frame_type == QUICLY_FRAME_TYPE_PATH_STATUS_BACKUP;
 
     return 0;
 }
@@ -9394,8 +9428,8 @@ static quicly_error_t handle_path_new_connection_id_frame(quicly_conn_t *conn, s
     }
     if ((ret = register_remote_cid(conn, ps, &frame)) != 0)
         return ret;
-    if (conn->egress.path_cids_blocked.path_id == path_id && frame.sequence >= conn->egress.path_cids_blocked.sequence)
-        conn->egress.path_cids_blocked.sender = QUICLY_SENDER_STATE_NONE;
+    if (frame.sequence >= ps->path_cids_blocked.sequence)
+        ps->path_cids_blocked.sender = QUICLY_SENDER_STATE_NONE;
 
     return 0;
 }
@@ -10039,11 +10073,18 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
     int use_cid_path_id = quicly_is_multipath(conn) && !QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0]);
     if (use_cid_path_id)
         cid_path_id = packet->cid.dest.plaintext.path_id;
-    for (path_index = 0; path_index < QUICLY_MAX_PATH_INDICES; ++path_index) {
-        struct st_quicly_conn_path_t *candidate = get_path(conn, path_index);
-        if (candidate != NULL && (!use_cid_path_id || candidate->path_id == cid_path_id) &&
-            path_matches_address(candidate, src_addr, dest_addr))
-            break;
+    path_index = QUICLY_MAX_PATH_INDICES;
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces) && path_index == QUICLY_MAX_PATH_INDICES; ++p) {
+        quicly_path_space_t *ps = conn->path_spaces[p];
+        if (ps == NULL || (use_cid_path_id && ps->path_id != cid_path_id))
+            continue;
+        for (size_t a = 0; a < PTLS_ELEMENTSOF(ps->addrs); ++a) {
+            struct st_quicly_conn_path_t *candidate = ps->addrs[a];
+            if (candidate != NULL && path_matches_address(candidate, src_addr, dest_addr)) {
+                path_index = encode_flat_path_index(p, a);
+                break;
+            }
+        }
     }
     if (path_index != 0 && !quicly_is_client(conn) &&
         (QUICLY_PACKET_IS_LONG_HEADER(packet->octets.base[0]) || !conn->super.remote.address_validation.validated)) {
@@ -10575,6 +10616,12 @@ int quicly_set_stream_path_affinity(quicly_stream_t *stream, uint32_t path_id)
         quicly_path_space_t *ps = find_path_space_by_id(stream->conn, path_id);
         if (!quicly_is_multipath(stream->conn) || ps == NULL || ps->addrs[0] == NULL || ps->addrs[0]->abandoned)
             return -1;
+    }
+    if (stream->affinity_path_id == UINT32_MAX && path_id != UINT32_MAX) {
+        ++stream->conn->num_affined_streams;
+    } else if (stream->affinity_path_id != UINT32_MAX && path_id == UINT32_MAX) {
+        assert(stream->conn->num_affined_streams > 0);
+        --stream->conn->num_affined_streams;
     }
     stream->affinity_path_id = path_id;
     return 0;
@@ -11150,11 +11197,15 @@ quicly_error_t quicly_abandon_path(quicly_conn_t *conn, uint32_t path_id, uint64
     /* Once marked abandoned, this path cannot carry its own PATH_ABANDON. Require another usable path so the mandatory signal is
      * not stranded; callers closing the only path should close the connection instead. */
     int has_other_path = 0;
-    for (size_t i = 0; i < QUICLY_MAX_PATH_INDICES; ++i) {
-        struct st_quicly_conn_path_t *candidate = get_path(conn, i);
-        if (candidate != NULL && candidate->path_id != path_id && path_can_send_packet(conn, i)) {
-            has_other_path = 1;
-            break;
+    for (size_t p = 0; p < PTLS_ELEMENTSOF(conn->path_spaces) && !has_other_path; ++p) {
+        quicly_path_space_t *other_ps = conn->path_spaces[p];
+        if (other_ps == NULL || other_ps->path_id == path_id)
+            continue;
+        for (size_t a = 0; a < PTLS_ELEMENTSOF(other_ps->addrs); ++a) {
+            if (other_ps->addrs[a] != NULL && path_can_send_packet(conn, encode_flat_path_index(p, a))) {
+                has_other_path = 1;
+                break;
+            }
         }
     }
     if (!has_other_path)

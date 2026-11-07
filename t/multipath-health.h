@@ -64,7 +64,7 @@ static void test_multipath_automatic_failover_with_scheduler(quicly_path_schedul
     ok(elapsed < 5000);
     ok(get_path(client, 1) != NULL && !get_path(client, 1)->abandoned);
     ok(client->path_spaces[1]->health.state == QUICLY_PATH_SUSPECT);
-    quicly_path_health_t stats;
+    quicly_path_health_t stats = {0};
     ok(quicly_get_path_health(client, 1, &stats) == 0);
     ok(stats.state == QUICLY_PATH_SUSPECT);
     ok(received != NULL);
@@ -139,7 +139,7 @@ static void test_multipath_failover_disabled(void)
     quicly_stream_t *received = quicly_get_stream(server, stream->stream_id);
     /* normal bounded PTO retransmission still advances the early prefix without opting into full-flight failover */
     ok(received != NULL && quicly_streambuf_ingress_get(received).len > 0);
-    quicly_path_health_t stats;
+    quicly_path_health_t stats = {0};
     ok(quicly_get_path_health(client, 1, &stats) == 0);
     ok(stats.state == QUICLY_PATH_USABLE);
     free_multipath_regression_peers(client, server, saved);
