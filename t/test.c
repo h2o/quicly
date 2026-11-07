@@ -3597,7 +3597,7 @@ static void test_pto_with_backup_path_probe(void)
     num_decoded = decode_packets(decoded, datagrams, num_datagrams);
     for (size_t i = 0; i != num_decoded; ++i)
         ok(quicly_receive(server, NULL, (void *)&newaddr, decoded + i) == 0);
-    ok(server->paths[1] != NULL);
+    ok(server->path_spaces[0]->addrs[1] != NULL);
     ok(server->egress.loss.alarm_at <= quic_now);
     int8_t pto_count = server->egress.loss.pto_count;
 
@@ -4416,6 +4416,33 @@ static void test_multipath_ack_frequency_after_abandon(void)
     open_multipath_test_path(client);
     multipath_run(client, server, 30, -1, -1);
     ok(get_path(client, 1) != NULL && !get_path(client, 1)->probe_only);
+
+    /* sending on a path without loss episodes must still emit a due update from an eligible path */
+    client->path_spaces[0]->cc.num_loss_episodes = QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE;
+    client->path_spaces[0]->cc.cwnd = 9 * client->path_spaces[0]->max_udp_payload_size;
+    client->path_spaces[1]->cc.num_loss_episodes = 0;
+    client->egress.ack_frequency.update_at = 0;
+    uint64_t ack_frequency_before = client->super.stats.num_frames_sent.ack_frequency;
+    quicly_stream_t *stream;
+    const char payload[] = "probe";
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+    ok(quicly_set_stream_path_affinity(stream, 1) == 0);
+    ok(quicly_streambuf_egress_write(stream, payload, sizeof(payload) - 1) == 0);
+    multipath_run(client, server, 10, -1, -1);
+    ok(client->super.stats.num_frames_sent.ack_frequency > ack_frequency_before);
+    ok(server->path_spaces[1]->pn_space->packet_tolerance == 9);
+
+    /* when multiple active paths qualify, use the conservative minimum tolerance */
+    client->path_spaces[1]->cc.num_loss_episodes = QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE;
+    client->path_spaces[1]->cc.cwnd = 6 * client->path_spaces[1]->max_udp_payload_size;
+    client->egress.ack_frequency.update_at = 0;
+    ack_frequency_before = client->super.stats.num_frames_sent.ack_frequency;
+    ok(quicly_streambuf_egress_write(stream, payload, sizeof(payload) - 1) == 0);
+    multipath_run(client, server, 10, -1, -1);
+    ok(client->super.stats.num_frames_sent.ack_frequency > ack_frequency_before);
+    ok(server->path_spaces[0]->pn_space->packet_tolerance == 6);
+    ok(server->path_spaces[1]->pn_space->packet_tolerance == 6);
+
     ok(quicly_abandon_path(client, 0, QUICLY_PATH_ABANDON_ERROR_APPLICATION) == 0);
     multipath_run(client, server, 10, -1, -1);
     ok(get_path(client, 0)->abandoned);
@@ -4425,9 +4452,7 @@ static void test_multipath_ack_frequency_after_abandon(void)
     client->path_spaces[1]->cc.num_loss_episodes = QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE;
     client->path_spaces[1]->cc.cwnd = 8 * client->path_spaces[1]->max_udp_payload_size;
     client->egress.ack_frequency.update_at = 0;
-    uint64_t ack_frequency_before = client->super.stats.num_frames_sent.ack_frequency;
-    quicly_stream_t *stream;
-    const char payload[] = "probe";
+    ack_frequency_before = client->super.stats.num_frames_sent.ack_frequency;
     ok(quicly_open_stream(client, &stream, 0) == 0);
     ok(quicly_streambuf_egress_write(stream, payload, sizeof(payload) - 1) == 0);
     multipath_run(client, server, 10, -1, -1);

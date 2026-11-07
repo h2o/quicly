@@ -5570,17 +5570,30 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
         if (frame_type == ALLOCATE_FRAME_TYPE_ACK_ELICITING && conn->stash.now >= conn->egress.ack_frequency.update_at &&
             s->dst_end - s->dst >= QUICLY_ACK_FREQUENCY_FRAME_CAPACITY + min_space) {
             assert(conn->super.remote.transport_params.min_ack_delay_usec != UINT64_MAX);
-            if (ps->cc.num_loss_episodes >= QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE && conn->initial == NULL &&
-                conn->handshake == NULL) {
-                uint32_t fraction_of_cwnd = (uint32_t)((uint64_t)ps->cc.cwnd * conn->super.ctx->ack_frequency / 1024);
-                if (fraction_of_cwnd >= ps->max_udp_payload_size * 3) {
-                    uint32_t packet_tolerance = fraction_of_cwnd / ps->max_udp_payload_size;
-                    if (packet_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
-                        packet_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
+            if (conn->initial == NULL && conn->handshake == NULL) {
+                uint32_t packet_tolerance = UINT32_MAX;
+                uint64_t reordering_threshold = 0;
+                size_t limit = quicly_is_multipath(conn) ? PTLS_ELEMENTSOF(conn->path_spaces) : 1;
+                for (size_t i = 0; i < limit; ++i) {
+                    quicly_path_space_t *cand_ps = conn->path_spaces[i];
+                    if (cand_ps == NULL || cand_ps->addrs[0] == NULL || cand_ps->addrs[0]->abandoned ||
+                        cand_ps->addrs[0]->probe_only || cand_ps->cc.num_loss_episodes < QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE)
+                        continue;
+                    uint32_t fraction_of_cwnd = (uint32_t)((uint64_t)cand_ps->cc.cwnd * conn->super.ctx->ack_frequency / 1024);
+                    if (fraction_of_cwnd >= cand_ps->max_udp_payload_size * 3) {
+                        uint32_t cand_tolerance = fraction_of_cwnd / cand_ps->max_udp_payload_size;
+                        if (cand_tolerance > QUICLY_MAX_PACKET_TOLERANCE)
+                            cand_tolerance = QUICLY_MAX_PACKET_TOLERANCE;
+                        if (cand_tolerance < packet_tolerance)
+                            packet_tolerance = cand_tolerance;
+                        if (cand_ps->loss.thresholds.use_packet_based)
+                            reordering_threshold = QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD;
+                    }
+                }
+                if (packet_tolerance != UINT32_MAX) {
                     /* TODO: Discuss (and possibly test) the strategy for choosing max_ack_delay; note the chosen value should be
                      * passed to quicly_loss_detect_loss too. */
                     uint64_t max_ack_delay = conn->super.remote.transport_params.max_ack_delay * 1000;
-                    uint64_t reordering_threshold = ps->loss.thresholds.use_packet_based ? QUICLY_LOSS_DEFAULT_PACKET_THRESHOLD : 0;
                     /* TODO: Adjust the max_ack_delay we use for loss recovery to be consistent with this value */
                     s->dst = quicly_encode_ack_frequency_frame(s->dst, conn->egress.ack_frequency.sequence++, packet_tolerance,
                                                                max_ack_delay, reordering_threshold);
@@ -5594,7 +5607,8 @@ static quicly_error_t do_allocate_frame(quicly_conn_t *conn, quicly_send_context
 TargetReady:
     if (frame_type == ALLOCATE_FRAME_TYPE_ACK_ELICITING) {
         s->target.ack_eliciting = 1;
-        ps->last_retransmittable_sent_at = conn->stash.now_double;
+        if (get_send_path(conn, s) == ps->addrs[0])
+            ps->last_retransmittable_sent_at = conn->stash.now_double;
     }
     return 0;
 }
@@ -7247,7 +7261,8 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
     size_t min_packets_to_send = 0, orig_bytes_inflight = 0;
     quicly_error_t ret = 0;
 
-    if ((ret = service_path_loss_alarm(conn, send_ps, &min_packets_to_send, &restrict_sending)) != 0)
+    if (path == send_ps->addrs[0] &&
+        (ret = service_path_loss_alarm(conn, send_ps, &min_packets_to_send, &restrict_sending)) != 0)
         goto Exit;
     if (restrict_sending)
         s->preferred_rank_cached = 0;
@@ -7372,8 +7387,10 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                     size_t required_space = quicly_datagram_frame_capacity(*payload);
                     /* drop frames larger than what the peer accepts, including all frames if the peer does not support DATAGRAM
                      * frames (RFC 9221 Section 3) */
-                    if (required_space > conn->super.remote.transport_params.max_datagram_frame_size)
+                    if (required_space > conn->super.remote.transport_params.max_datagram_frame_size) {
+                        ++s->datagram_payloads_consumed;
                         continue;
+                    }
                     if ((ret = do_allocate_frame(conn, s, required_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
                         goto Exit;
                     if (s->dst_end - s->dst >= required_space) {
@@ -7525,7 +7542,7 @@ Exit:
         /* update timers, cc and delivery rate estimator states */
         recalc_send_ack_at(conn);
         int can_send_stream_data = scheduler_can_send(conn);
-        update_send_alarm(conn, can_send_stream_data, send_ps);
+        update_send_alarm(conn, can_send_stream_data, path == send_ps->addrs[0] ? send_ps : NULL);
         update_ratemeter(conn, send_ps, can_send_stream_data, s->num_datagrams == s->max_datagrams,
                          pacer_can_send_at(send_ps) > conn->stash.now);
         if (!restrict_sending && send_ps->loss.sentmap.bytes_in_flight >= send_ps->cc.cwnd) {
@@ -8090,7 +8107,10 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
         ret = 0;
     }
 
-    assert_consistency(conn, s.num_datagrams != 0 ? get_send_path(conn, &s)->path_space : NULL);
+    assert_consistency(conn, s.num_datagrams != 0 &&
+                                     get_send_path(conn, &s) == get_send_path(conn, &s)->path_space->addrs[0]
+                                 ? get_send_path(conn, &s)->path_space
+                                 : NULL);
 
 Exit:
     if (s.num_datagrams != 0 && s.datagram_payloads_consumed != 0) {
@@ -9550,7 +9570,7 @@ static quicly_error_t handle_new_connection_id_frame(quicly_conn_t *conn, struct
 
     /* An endpoint that is sending packets with a zero-length Destination Connection ID MUST treat receipt of a NEW_CONNECTION_ID
      * frame as a connection error of type PROTOCOL_VIOLATION. (19.15) */
-    if (conn->super.remote.cid_set.cids[0].cid.len == 0)
+    if (conn->path_spaces[0]->remote_cid_set.cids[0].cid.len == 0)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     if ((ret = quicly_decode_new_connection_id_frame(&state->src, state->end, &frame)) != 0)
