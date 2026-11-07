@@ -743,6 +743,20 @@ typedef struct st_quicly_stats_t {
      */
     quicly_rate_t delivery_rate;
     /**
+     * Rate at which the pacer currently allows packets to be sent, in bytes/second; i.e., CWND multiplied by the pacing multiplier
+     * in effect, divided by smoothed RTT. This is a ceiling imposed by the pacer, not a measured rate. Zero if pacing is disabled.
+     */
+    uint64_t pacing_rate;
+    /**
+     * Whether the sender is limited by CWND, the pacer, or the size of the send batch rather than by the application (i.e., the
+     * condition under which delivery rate samples are collected), and the cumulative time spent in that state in milliseconds,
+     * including the ongoing period.
+     */
+    struct {
+        uint64_t total_msec;
+        int current;
+    } cc_limited;
+    /**
      * largest number of packets contained in the sentmap
      */
     size_t num_sentmap_packets_largest;
@@ -881,6 +895,9 @@ typedef struct st_quicly_stats_t {
     apply(delivery_rate.latest, "delivery-rate.latest")                                                                            \
     apply(delivery_rate.smoothed, "delivery-rate.smoothed")                                                                        \
     apply(delivery_rate.stdev, "delivery-rate.stdev")                                                                              \
+    apply(pacing_rate, "pacing-rate")                                                                                              \
+    apply(cc_limited.total_msec, "cc-limited.total-msec")                                                                          \
+    apply(cc_limited.current, "cc-limited.current")                                                                                \
     apply(num_sentmap_packets_largest, "num-sentmap-packets-largest")
 
 #define QUICLY_STATS_FOREACH(apply)                                                                                                \
