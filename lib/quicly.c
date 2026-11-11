@@ -8970,6 +8970,7 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
 {
     const uint8_t *src = _src, *end = src + *len;
     uint64_t offending_frame_type;
+    int received_record = 0;
     quicly_error_t ret = 0;
 
     *len = 0;
@@ -8989,6 +8990,7 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
         }
         if (end - payload < payload_len)
             break;
+        received_record = 1;
         /* process frames */
         size_t epoch = conn->super.stats.num_frames_received.qx_transport_parameters == 0 ? QUICLY_EPOCH_ON_STREAMS_TP
                                                                                           : QUICLY_EPOCH_ON_STREAMS_OTHER;
@@ -9009,7 +9011,9 @@ quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *_src, size_t
     if (conn->super.state >= QUICLY_STATE_CLOSING)
         *len = end - (const uint8_t *)_src;
 
-    update_idle_timeout(conn, 1);
+    /* the idle timer is reset each time a record is completely received */
+    if (received_record)
+        update_idle_timeout(conn, 1);
     unlock_now(conn);
 
     return ret;

@@ -3901,6 +3901,36 @@ static void test_qmux_pong_once(void)
     quic_ctx.transport_params.max_data = orig_max_data;
 }
 
+static void test_qmux_idle_timeout_on_receive(void)
+{
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    quicly_error_t ret;
+
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+    int64_t idle_at = quicly_get_first_timeout(sc);
+    ok(quic_now < idle_at && idle_at < INT64_MAX);
+
+    /* partial record does not reset the idle timer */
+    quic_now += 10;
+    uint8_t record[] = {2, QUICLY_FRAME_TYPE_PADDING, QUICLY_FRAME_TYPE_PADDING};
+    size_t len = 2;
+    ret = quicly_qmux_receive(sc, record, &len);
+    ok(ret == 0);
+    ok(len == 0);
+    ok(quicly_get_first_timeout(sc) == idle_at);
+
+    /* complete record does */
+    len = sizeof(record);
+    ret = quicly_qmux_receive(sc, record, &len);
+    ok(ret == 0);
+    ok(len == sizeof(record));
+    ok(quicly_get_first_timeout(sc) == idle_at + 10);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -3965,6 +3995,7 @@ static void test_qmux(void)
     subtest("prohibited-frames", test_qmux_prohibited_frames);
     subtest("discard-after-close", test_qmux_discard_after_close);
     subtest("pong-once", test_qmux_pong_once);
+    subtest("idle-timeout-on-receive", test_qmux_idle_timeout_on_receive);
 
     quic_ctx = orig_ctx;
 }
