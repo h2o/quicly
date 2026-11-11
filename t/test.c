@@ -3850,6 +3850,57 @@ static void test_qmux_discard_after_close(void)
     quicly_free(sc);
 }
 
+static void test_qmux_pong_once(void)
+{
+    static const uint8_t data[900];
+    uint64_t orig_max_data = quic_ctx.transport_params.max_data;
+    quicly_conn_t *cc, *sc;
+    quicly_stream_t *cs, *ss;
+    quicly_stats_t stats;
+    quicly_error_t ret;
+
+    /* use a small connection-level window so that consuming stream data triggers the emission of MAX_DATA */
+    quic_ctx.transport_params.max_data = 1000;
+    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
+    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* receive QX_PING, send QX_PONG (which is not delivered to `cc`, as quicly does not send QX_PING) */
+    uint8_t ping_record[] = {9, 0xf4, 0x8c, 0x67, 0x52, 0x9e, 0xf8, 0xc7, 0xbd, 11 /* seq = 11 */};
+    size_t len = sizeof(ping_record);
+    ret = quicly_qmux_receive(sc, ping_record, &len);
+    ok(ret == 0);
+    uint8_t buf[16384];
+    len = sizeof(buf);
+    ret = quicly_qmux_send(sc, buf, &len);
+    ok(ret == 0);
+    ret = quicly_get_stats(sc, &stats);
+    ok(ret == 0);
+    ok(stats.num_frames_sent.qx_pong == 1);
+
+    /* send MAX_DATA, which should not be accompanied by another QX_PONG */
+    ret = quicly_open_stream(cc, &cs, 0);
+    ok(ret == 0);
+    ret = quicly_streambuf_egress_write(cs, data, sizeof(data));
+    ok(ret == 0);
+    qmux_transmit(cc, sc);
+    ss = quicly_get_stream(sc, cs->stream_id);
+    ok(ss != NULL);
+    quicly_streambuf_ingress_shift(ss, quicly_streambuf_ingress_get(ss).len);
+    len = sizeof(buf);
+    ret = quicly_qmux_send(sc, buf, &len);
+    ok(ret == 0);
+    ret = quicly_get_stats(sc, &stats);
+    ok(ret == 0);
+    ok(stats.num_frames_sent.max_data == 1);
+    ok(stats.num_frames_sent.qx_pong == 1);
+
+    quicly_free(cc);
+    quicly_free(sc);
+    quic_ctx.transport_params.max_data = orig_max_data;
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -3913,6 +3964,7 @@ static void test_qmux(void)
     subtest("stream-order", test_qmux_stream_order);
     subtest("prohibited-frames", test_qmux_prohibited_frames);
     subtest("discard-after-close", test_qmux_discard_after_close);
+    subtest("pong-once", test_qmux_pong_once);
 
     quic_ctx = orig_ctx;
 }
