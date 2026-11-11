@@ -3591,6 +3591,43 @@ static void test_qmux_ping(void)
     quicly_free(sc);
 }
 
+static void test_qmux_small_buffer(void)
+{
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* schedule a QX_PONG, which requires a record of 2 + 8 + 1 bytes */
+    uint8_t ping_record[] = {9, 0xf4, 0x8c, 0x67, 0x52, 0x9e, 0xf8, 0xc7, 0xbd, 11 /* seq = 11 */};
+    size_t len = sizeof(ping_record);
+    quicly_error_t ret = quicly_qmux_receive(sc, ping_record, &len);
+    ok(ret == 0);
+
+    /* offer a buffer too small for the record; nothing should be written to or beyond it */
+    uint8_t buf[64];
+    memset(buf, 0xee, sizeof(buf));
+    len = 6;
+    ret = quicly_qmux_send(sc, buf, &len);
+    ok(ret == 0);
+    ok(len == 0);
+    size_t i;
+    for (i = 0; i < sizeof(buf); ++i)
+        if (buf[i] != 0xee)
+            break;
+    ok(i == sizeof(buf));
+
+    /* the frame is sent once there is enough space */
+    len = sizeof(buf);
+    ret = quicly_qmux_send(sc, buf, &len);
+    ok(ret == 0);
+    ok(len == 2 + 8 + 1);
+    ok(memcmp(buf, "\x40\x09\xf4\x8c\x67\x52\x9e\xf8\xc7\xbe\x0b", 2 + 8 + 1) == 0);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -3648,6 +3685,7 @@ static void test_qmux(void)
     subtest("no-tp", test_qmux_notp);
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
+    subtest("small-buffer", test_qmux_small_buffer);
 
     quic_ctx = orig_ctx;
 }
