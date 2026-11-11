@@ -6591,6 +6591,9 @@ static quicly_error_t handle_stream_frame(quicly_conn_t *conn, struct st_quicly_
         return QUICLY_TRANSPORT_ERROR_STREAM_STATE;
     if ((ret = quicly_get_or_open_stream(conn, frame.stream_id, &stream)) != 0 || stream == NULL)
         return ret;
+    /* in QMux, each STREAM frame carries the payload immediately following that of the previous one */
+    if (quicly_is_qmux(conn) && frame.offset != stream->recvstate.received.first.ranges[0].end)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     return apply_stream_frame(stream, &frame);
 }
 
