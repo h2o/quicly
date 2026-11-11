@@ -4932,6 +4932,12 @@ UpdateState:
     sent->data.stream.args.end = off + len;
     sent->data.stream.args.eos_type = is_fin ? QUICLY_SENDSTATE_EOS_TYPE_FIN : QUICLY_SENDSTATE_EOS_TYPE_NONE;
 
+    /* In QMux, acknowledge the frame now unless it ends the stream, so that the stream is rescheduled before the scheduler decides
+     * whether the stream has more to send. The ack of a frame ending the stream is delayed as usual, as it might destroy the
+     * stream. */
+    if (quicly_is_qmux(stream->conn) && !is_fin && (ret = qmux_call_acked(stream->conn, s)) != 0)
+        return ret;
+
     return 0;
 }
 

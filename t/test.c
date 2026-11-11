@@ -3657,6 +3657,46 @@ static void test_qmux_multi_record(void)
     quicly_free(sc);
 }
 
+static void test_qmux_reset_stream_at(void)
+{
+    static const char data[100] = "hello";
+    quicly_conn_t *cc, *sc;
+    quicly_stream_t *cs, *ss;
+    quicly_error_t ret;
+
+    uint8_t orig_reset_stream_at = quic_ctx.transport_params.reset_stream_at;
+    quic_ctx.transport_params.reset_stream_at = 1;
+    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
+    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* RESET_STREAM_AT is sent in the same call as the STREAM frame carrying the data below the reliable size */
+    ret = quicly_open_stream(cc, &cs, 0);
+    ok(ret == 0);
+    ret = quicly_streambuf_egress_write(cs, data, sizeof(data));
+    ok(ret == 0);
+    ret = quicly_set_reset_stream_at(cs, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7), 50);
+    ok(ret == 0);
+    qmux_transmit(cc, sc);
+    quicly_stats_t stats;
+    ret = quicly_get_stats(cc, &stats);
+    ok(ret == 0);
+    ok(stats.num_frames_sent.reset_stream_at == 1);
+
+    ss = quicly_get_stream(sc, cs->stream_id);
+    ok(ss != NULL);
+    test_streambuf_t *ssbuf = ss->data;
+    ok(ssbuf->super.ingress.off == 50);
+    ok(memcmp(ssbuf->super.ingress.base, data, 50) == 0);
+    ok(ssbuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7));
+
+    quicly_free(cc);
+    quicly_free(sc);
+    quic_ctx.transport_params.reset_stream_at = orig_reset_stream_at;
+}
+
 static void test_qmux_stream_order(void)
 {
     /* STREAM frames of stream 0 carrying 5 bytes, at offsets 0 and 5, with LEN and OFF bits set */
@@ -3995,6 +4035,7 @@ static void test_qmux(void)
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
     subtest("multi-record", test_qmux_multi_record);
+    subtest("reset-stream-at", test_qmux_reset_stream_at);
     subtest("stream-order", test_qmux_stream_order);
     subtest("prohibited-frames", test_qmux_prohibited_frames);
     subtest("discard-after-close", test_qmux_discard_after_close);
