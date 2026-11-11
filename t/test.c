@@ -3808,6 +3808,48 @@ static void test_qmux_prohibited_frames(void)
     }
 }
 
+static void test_qmux_discard_after_close(void)
+{
+    /* record carrying a STREAM frame of stream 0 */
+    static const uint8_t stream_record[] = {8, 0x0a, 0, 5, 'h', 'e', 'l', 'l', 'o'};
+    quicly_conn_t *cc, *sc;
+    quicly_error_t ret;
+    size_t len;
+
+    /* data received after the local endpoint initiates the close */
+    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
+    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+    ret = quicly_close(sc, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(0), "");
+    ok(ret == 0);
+    len = sizeof(stream_record);
+    ret = quicly_qmux_receive(sc, stream_record, &len);
+    ok(ret == 0);
+    ok(len == sizeof(stream_record));
+    ok(quicly_get_stream(sc, 0) == NULL);
+    quicly_free(cc);
+    quicly_free(sc);
+
+    /* data received in the same input as, but after, CONNECTION_CLOSE */
+    memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
+    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
+    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+    uint8_t input[5 + sizeof(stream_record)] = {4, QUICLY_FRAME_TYPE_TRANSPORT_CLOSE, 0 /* error code */, 0 /* frame type */,
+                                                0 /* reason phrase length */};
+    memcpy(input + 5, stream_record, sizeof(stream_record));
+    len = sizeof(input);
+    ret = quicly_qmux_receive(sc, input, &len);
+    ok(ret == QUICLY_ERROR_IS_CLOSING);
+    ok(len == sizeof(input));
+    ok(quicly_get_state(sc) == QUICLY_STATE_DRAINING);
+    ok(quicly_get_stream(sc, 0) == NULL);
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -3870,6 +3912,7 @@ static void test_qmux(void)
     subtest("reset-stream-at", test_qmux_reset_stream_at);
     subtest("stream-order", test_qmux_stream_order);
     subtest("prohibited-frames", test_qmux_prohibited_frames);
+    subtest("discard-after-close", test_qmux_discard_after_close);
 
     quic_ctx = orig_ctx;
 }
