@@ -5705,7 +5705,8 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
         conn->super.stats.num_initial_handshake_exceeded++;
         goto CloseNow;
     }
-    if (conn->egress.loss.alarm_at <= conn->stash.now) {
+    /* loss recovery runs only on the primary path, as the packets being sent in response are sent only on that path */
+    if (s->path_index == 0 && conn->egress.loss.alarm_at <= conn->stash.now) {
         if ((ret = quicly_loss_on_alarm(&conn->egress.loss, conn->stash.now, conn->super.remote.transport_params.max_ack_delay,
                                         conn->initial == NULL && conn->handshake == NULL, &min_packets_to_send, &restrict_sending,
                                         on_loss_detected_by_alarm)) != 0)
