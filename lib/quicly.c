@@ -2834,8 +2834,11 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                 }
                 params->max_ack_delay = (uint16_t)v;
             });
-            DECODE_TP_V1(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
-                if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
+            DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MIN_ACK_DELAY, {
+                /* QMux ignores the transport parameters of the extensions not specified for QMux */
+                if (qmux) {
+                    src = end;
+                } else if ((params->min_ack_delay_usec = ptls_decode_quicint(&src, end)) == UINT64_MAX) {
                     ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
                     goto Exit;
                 }

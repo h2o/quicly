@@ -3942,6 +3942,18 @@ static void test_qmux_max_record_size_tp(void)
        QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
 }
 
+static void test_qmux_min_ack_delay_tp(void)
+{
+    /* min_ack_delay (0xff04de1b) of 1000 */
+    static const uint8_t tp[] = {0xc0, 0x00, 0x00, 0x00, 0xff, 0x04, 0xde, 0x1b, 0x02, 0x43, 0xe8};
+    quicly_transport_parameters_t params;
+
+    ok(quicly_decode_transport_parameter_list(&params, 0, NULL, NULL, NULL, NULL, tp, tp + sizeof(tp)) == 0);
+    ok(params.min_ack_delay_usec == 1000);
+    ok(quicly_decode_transport_parameter_list(&params, 1, NULL, NULL, NULL, NULL, tp, tp + sizeof(tp)) == 0);
+    ok(params.min_ack_delay_usec == UINT64_MAX);
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -4008,6 +4020,7 @@ static void test_qmux(void)
     subtest("pong-once", test_qmux_pong_once);
     subtest("idle-timeout-on-receive", test_qmux_idle_timeout_on_receive);
     subtest("max-record-size-tp", test_qmux_max_record_size_tp);
+    subtest("min-ack-delay-tp", test_qmux_min_ack_delay_tp);
 
     quic_ctx = orig_ctx;
 }
