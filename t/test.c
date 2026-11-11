@@ -3954,6 +3954,17 @@ static void test_qmux_min_ack_delay_tp(void)
     ok(params.min_ack_delay_usec == UINT64_MAX);
 }
 
+static void test_qmux_preferred_address_tp(void)
+{
+    /* preferred_address (13), which quicly ignores on QUIC v1 */
+    static const uint8_t tp[] = {0x0d, 0x01, 0x00};
+    quicly_transport_parameters_t params;
+
+    ok(quicly_decode_transport_parameter_list(&params, 0, NULL, NULL, NULL, NULL, tp, tp + sizeof(tp)) == 0);
+    ok(quicly_decode_transport_parameter_list(&params, 1, NULL, NULL, NULL, NULL, tp, tp + sizeof(tp)) ==
+       QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -4021,6 +4032,7 @@ static void test_qmux(void)
     subtest("idle-timeout-on-receive", test_qmux_idle_timeout_on_receive);
     subtest("max-record-size-tp", test_qmux_max_record_size_tp);
     subtest("min-ack-delay-tp", test_qmux_min_ack_delay_tp);
+    subtest("preferred-address-tp", test_qmux_preferred_address_tp);
 
     quic_ctx = orig_ctx;
 }
