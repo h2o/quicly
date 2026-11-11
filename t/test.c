@@ -3697,6 +3697,38 @@ static void test_qmux_reset_stream_at(void)
     quic_ctx.transport_params.reset_stream_at = orig_reset_stream_at;
 }
 
+static void do_test_qmux_open_before_tp(int uni)
+{
+    /* the peer permits only the type of the stream being opened before its transport parameters are received */
+    quicly_context_t client_ctx = quic_ctx;
+    client_ctx.transport_params.max_streams_uni = uni ? 3 : 0;
+    client_ctx.transport_params.max_streams_bidi = uni ? 0 : 3;
+    quicly_conn_t *cc = quicly_qmux_new(&client_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    quicly_stream_t *stream;
+    quicly_error_t ret;
+
+    ret = quicly_open_stream(sc, &stream, uni);
+    ok(ret == 0);
+    ret = quicly_streambuf_egress_write(stream, "hello", 5);
+    ok(ret == 0);
+
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+    qmux_transmit(sc, cc);
+
+    quicly_stream_t *peer_stream = quicly_get_stream(cc, stream->stream_id);
+    ok(peer_stream != NULL && ((quicly_streambuf_t *)peer_stream->data)->ingress.off == 5);
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
+static void test_qmux_open_before_tp(void)
+{
+    subtest("uni", do_test_qmux_open_before_tp, 1);
+    subtest("bidi", do_test_qmux_open_before_tp, 0);
+}
+
 static void test_qmux_stream_order(void)
 {
     /* STREAM frames of stream 0 carrying 5 bytes, at offsets 0 and 5, with LEN and OFF bits set */
@@ -4036,6 +4068,7 @@ static void test_qmux(void)
     subtest("ping", test_qmux_ping);
     subtest("multi-record", test_qmux_multi_record);
     subtest("reset-stream-at", test_qmux_reset_stream_at);
+    subtest("open-before-tp", test_qmux_open_before_tp);
     subtest("stream-order", test_qmux_stream_order);
     subtest("prohibited-frames", test_qmux_prohibited_frames);
     subtest("discard-after-close", test_qmux_discard_after_close);
