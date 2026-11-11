@@ -3628,6 +3628,87 @@ static void test_qmux_small_buffer(void)
     quicly_free(sc);
 }
 
+static void test_qmux_multi_record(void)
+{
+    static uint8_t data[40000], buf[65536];
+    quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    quicly_stream_t *cs, *ss;
+    quicly_error_t ret;
+
+    for (size_t i = 0; i < sizeof(data); ++i)
+        data[i] = (uint8_t)i;
+
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* write a stream that needs multiple records, then send all of them using one call */
+    ret = quicly_open_stream(cc, &cs, 0);
+    ok(ret == 0);
+    ret = quicly_streambuf_egress_write(cs, data, sizeof(data));
+    ok(ret == 0);
+    ret = quicly_streambuf_egress_shutdown(cs);
+    ok(ret == 0);
+    size_t len = sizeof(buf);
+    ret = quicly_qmux_send(cc, buf, &len);
+    ok(ret == 0);
+    ok(len > sizeof(data));
+
+    /* receive */
+    size_t consumed = len;
+    ret = quicly_qmux_receive(sc, buf, &consumed);
+    ok(ret == 0);
+    ok(consumed == len);
+    ss = quicly_get_stream(sc, cs->stream_id);
+    ok(ss != NULL);
+    quicly_streambuf_t *ssbuf = ss->data;
+    ok(ssbuf->ingress.off == sizeof(data));
+    ok(memcmp(ssbuf->ingress.base, data, sizeof(data)) == 0);
+    ok(quicly_recvstate_transfer_complete(&ss->recvstate));
+
+    quicly_free(cc);
+    quicly_free(sc);
+}
+
+static void test_qmux_reset_stream_at(void)
+{
+    static const char data[100] = "hello";
+    quicly_conn_t *cc, *sc;
+    quicly_stream_t *cs, *ss;
+    quicly_error_t ret;
+
+    uint8_t orig_reset_stream_at = quic_ctx.transport_params.reset_stream_at;
+    quic_ctx.transport_params.reset_stream_at = 1;
+    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
+    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* RESET_STREAM_AT is sent in the same call as the STREAM frame carrying the data below the reliable size */
+    ret = quicly_open_stream(cc, &cs, 0);
+    ok(ret == 0);
+    ret = quicly_streambuf_egress_write(cs, data, sizeof(data));
+    ok(ret == 0);
+    ret = quicly_set_reset_stream_at(cs, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7), 50);
+    ok(ret == 0);
+    qmux_transmit(cc, sc);
+    quicly_stats_t stats;
+    ret = quicly_get_stats(cc, &stats);
+    ok(ret == 0);
+    ok(stats.num_frames_sent.reset_stream_at == 1);
+
+    ss = quicly_get_stream(sc, cs->stream_id);
+    ok(ss != NULL);
+    test_streambuf_t *ssbuf = ss->data;
+    ok(ssbuf->super.ingress.off == 50);
+    ok(memcmp(ssbuf->super.ingress.base, data, 50) == 0);
+    ok(ssbuf->error_received.reset_on_receive == QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(7));
+
+    quicly_free(cc);
+    quicly_free(sc);
+    quic_ctx.transport_params.reset_stream_at = orig_reset_stream_at;
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -3686,6 +3767,8 @@ static void test_qmux(void)
     subtest("unknown-frame", test_qmux_unkown_frame);
     subtest("ping", test_qmux_ping);
     subtest("small-buffer", test_qmux_small_buffer);
+    subtest("multi-record", test_qmux_multi_record);
+    subtest("reset-stream-at", test_qmux_reset_stream_at);
 
     quic_ctx = orig_ctx;
 }
