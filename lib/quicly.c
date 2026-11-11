@@ -8974,8 +8974,13 @@ quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize)
         uint64_t error_code, frame_type;
         const char *reason_phrase;
         determine_connection_close_payload(conn, 0, &error_code, &frame_type, &reason_phrase);
-        if ((ret = do_allocate_qmux_frame(conn, &s, quicly_close_frame_capacity(error_code, frame_type, reason_phrase))) != 0 ||
-            (ret = do_send_connection_close(conn, &s, error_code, frame_type, reason_phrase)) != 0)
+        if ((ret = do_allocate_qmux_frame(conn, &s, quicly_close_frame_capacity(error_code, frame_type, reason_phrase))) != 0) {
+            /* if QX_TRANSPORT_PARAMETERS has been written, send it now and CONNECTION_CLOSE in the next invocation */
+            if (ret == QUICLY_ERROR_SENDBUF_FULL && (s.dst != NULL || s.payload_buf.datagram != (uint8_t *)buf))
+                ret = 0;
+            goto Exit;
+        }
+        if ((ret = do_send_connection_close(conn, &s, error_code, frame_type, reason_phrase)) != 0)
             goto Exit;
         conn->super.state = QUICLY_STATE_DRAINING;
     } break;

@@ -4014,6 +4014,46 @@ static void test_qmux_datagram(void)
     quic_ctx = orig_ctx;
 }
 
+static void test_qmux_close_before_tp(void)
+{
+    static char reason[201];
+    quicly_conn_t *conn = quicly_qmux_new(&quic_ctx, 1, NULL);
+    quicly_error_t ret;
+
+    /* close before sending anything, with a reason phrase long enough to not fit in the space left after QX_TRANSPORT_PARAMETERS */
+    memset(reason, 'r', sizeof(reason) - 1);
+    ret = quicly_close(conn, QUICLY_ERROR_FROM_APPLICATION_ERROR_CODE(1), reason);
+    ok(ret == 0);
+
+    /* QX_TRANSPORT_PARAMETERS is sent first */
+    uint8_t buf[16384];
+    size_t len = 150;
+    ret = quicly_qmux_send(conn, buf, &len);
+    ok(ret == 0);
+    const uint8_t *src = buf, *end = buf + len;
+    uint64_t reclen = ptls_decode_quicint(&src, end);
+    ok(reclen == end - src);
+    ok(ptls_decode_quicint(&src, end) == QUICLY_FRAME_TYPE_QX_TRANSPORT_PARAMETERS);
+    src += ptls_decode_quicint(&src, end);
+    ok(src == end);
+
+    /* then CONNECTION_CLOSE */
+    len = sizeof(buf);
+    ret = quicly_qmux_send(conn, buf, &len);
+    ok(ret == 0);
+    src = buf;
+    end = buf + len;
+    reclen = ptls_decode_quicint(&src, end);
+    ok(reclen == end - src);
+    ok(ptls_decode_quicint(&src, end) == QUICLY_FRAME_TYPE_APPLICATION_CLOSE);
+
+    len = sizeof(buf);
+    ret = quicly_qmux_send(conn, buf, &len);
+    ok(ret == QUICLY_ERROR_FREE_CONNECTION);
+
+    quicly_free(conn);
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -4083,6 +4123,7 @@ static void test_qmux(void)
     subtest("min-ack-delay-tp", test_qmux_min_ack_delay_tp);
     subtest("preferred-address-tp", test_qmux_preferred_address_tp);
     subtest("datagram", test_qmux_datagram);
+    subtest("close-before-tp", test_qmux_close_before_tp);
 
     quic_ctx = orig_ctx;
 }
