@@ -3965,6 +3965,55 @@ static void test_qmux_preferred_address_tp(void)
        QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER);
 }
 
+static struct {
+    size_t count;
+    uint8_t last[16];
+    size_t last_len;
+} test_qmux_datagrams_received;
+
+static void test_qmux_on_datagram(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
+{
+    ++test_qmux_datagrams_received.count;
+    test_qmux_datagrams_received.last_len =
+        payload.len < sizeof(test_qmux_datagrams_received.last) ? payload.len : sizeof(test_qmux_datagrams_received.last);
+    memcpy(test_qmux_datagrams_received.last, payload.base, test_qmux_datagrams_received.last_len);
+}
+
+static void test_qmux_datagram(void)
+{
+    static uint8_t too_large[16382];
+    quicly_receive_datagram_frame_t on_datagram = {test_qmux_on_datagram};
+    quicly_context_t orig_ctx = quic_ctx;
+    quicly_conn_t *cc, *sc;
+
+    quic_ctx.receive_datagram_frame = &on_datagram;
+    quic_ctx.transport_params.max_datagram_frame_size = 65535;
+    memset(&test_qmux_datagrams_received, 0, sizeof(test_qmux_datagrams_received));
+
+    cc = quicly_qmux_new(&quic_ctx, 1, NULL);
+    sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+    qmux_transmit(sc, cc);
+    qmux_transmit(cc, sc);
+
+    /* a datagram that does not fit into a QMux record is dropped, while the one that follows is sent */
+    ptls_iovec_t datagrams[] = {ptls_iovec_init(too_large, sizeof(too_large)), ptls_iovec_init("hello", 5)};
+    quicly_send_datagram_frames(cc, datagrams, PTLS_ELEMENTSOF(datagrams));
+    ok(quicly_get_first_timeout(cc) <= quic_now);
+    qmux_transmit(cc, sc);
+    ok(test_qmux_datagrams_received.count == 1);
+    ok(test_qmux_datagrams_received.last_len == 5);
+    ok(memcmp(test_qmux_datagrams_received.last, "hello", 5) == 0);
+
+    /* the queue is cleared once sent */
+    ok(quicly_get_first_timeout(cc) > quic_now);
+    qmux_transmit(cc, sc);
+    ok(test_qmux_datagrams_received.count == 1);
+
+    quicly_free(cc);
+    quicly_free(sc);
+    quic_ctx = orig_ctx;
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -4033,6 +4082,7 @@ static void test_qmux(void)
     subtest("max-record-size-tp", test_qmux_max_record_size_tp);
     subtest("min-ack-delay-tp", test_qmux_min_ack_delay_tp);
     subtest("preferred-address-tp", test_qmux_preferred_address_tp);
+    subtest("datagram", test_qmux_datagram);
 
     quic_ctx = orig_ctx;
 }
