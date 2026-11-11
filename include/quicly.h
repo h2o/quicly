@@ -1725,14 +1725,13 @@ extern const quicly_stream_callbacks_t quicly_stream_noop_callbacks;
  */
 quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appdata);
 /**
- * Writes QMux records to the given buffer.
- * @param [in,out] bufsize  Upon entry, the size of the buffer. Upon return, number of bytes being written to the buffer.
- * @return 0 if successful. QUICLY_ERROR_SENDBUF_FULL if the buffer is too small to contain the frame that has to be sent first
- *         (QX_TRANSPORT_PARAMETERS or CONNECTION_CLOSE), in which case nothing is written. QUICLY_ERROR_FREE_CONNECTION once the
- *         connection is closed; i.e., after CONNECTION_CLOSE is sent or received, or when the idle timeout expires (in which
- *         case no frames are sent). Upon QUICLY_ERROR_FREE_CONNECTION, the application frees the connection, gracefully shuts
- *         down the sending side of the underlying transport, and then waits for the peer to shut down its sending side,
- *         discarding any data being received (draft-ietf-quic-qmux-02 Section 7.2).
+ * Writes a QMux record to the given buffer.
+ * @param [in,out] bufsize  Upon entry, the size of the buffer, which must be at least 16384 bytes. Upon return, number of bytes
+ *                          being written to the buffer.
+ * @return 0 if successful. QUICLY_ERROR_FREE_CONNECTION once the connection is closed; i.e., after CONNECTION_CLOSE is sent or
+ * received, or when the idle timeout expires (in which case no frames are sent). Upon QUICLY_ERROR_FREE_CONNECTION, the application
+ * frees the connection, gracefully shuts down the sending side of the underlying transport, and then waits for the peer to shut
+ * down its sending side, discarding any data being received (draft-ietf-quic-qmux-02 Section 7.2).
  */
 quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize);
 /**
