@@ -3774,6 +3774,38 @@ static void test_qmux_stream_order(void)
     quicly_free(sc);
 }
 
+static void test_qmux_prohibited_frames(void)
+{
+    static const struct {
+        uint8_t bytes[9];
+        size_t len;
+        uint64_t expected_error;
+    } cases[] = {
+        {{QUICLY_FRAME_TYPE_PING}, 1, QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_FRAME_ENCODING)},
+        {{QUICLY_FRAME_TYPE_ACK, 0, 0, 0, 0}, 5, QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_FRAME_ENCODING)},
+        {{QUICLY_FRAME_TYPE_CRYPTO, 0, 1, 0}, 4, QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_FRAME_ENCODING)},
+        {{QUICLY_FRAME_TYPE_NEW_TOKEN, 1, 0}, 3, QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_FRAME_ENCODING)},
+        {{QUICLY_FRAME_TYPE_RETIRE_CONNECTION_ID, 0}, 2, QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_FRAME_ENCODING)},
+        {{QUICLY_FRAME_TYPE_PATH_CHALLENGE, 0, 0, 0, 0, 0, 0, 0, 0}, 9,
+         QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_FRAME_ENCODING)},
+        {{QUICLY_FRAME_TYPE_HANDSHAKE_DONE}, 1, QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_FRAME_ENCODING)},
+        /* extension frame not defined for QMux */
+        {{QUICLY_FRAME_TYPE_IMMEDIATE_ACK}, 1, QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_FRAME_ENCODING)},
+        /* QX_TRANSPORT_PARAMETERS other than as the first frame, carrying an empty list */
+        {{0xff, 0x51, 0x53, 0x30, 0x0d, 0x0a, 0x0d, 0x0a, 0}, 9,
+         QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION)},
+    };
+
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(cases); ++i) {
+        quicly_conn_t *cc = quicly_qmux_new(&quic_ctx, 1, NULL), *sc = quicly_qmux_new(&quic_ctx, 0, NULL);
+        qmux_transmit(sc, cc);
+        qmux_transmit(cc, sc);
+        ok(qmux_inject_and_get_close_error(sc, cases[i].bytes, cases[i].len) == cases[i].expected_error);
+        quicly_free(cc);
+        quicly_free(sc);
+    }
+}
+
 static void test_qmux_unkown_frame(void)
 {
     memset(&test_qmux_closed_by_remote, 0, sizeof(test_qmux_closed_by_remote));
@@ -3835,6 +3867,7 @@ static void test_qmux(void)
     subtest("multi-record", test_qmux_multi_record);
     subtest("reset-stream-at", test_qmux_reset_stream_at);
     subtest("stream-order", test_qmux_stream_order);
+    subtest("prohibited-frames", test_qmux_prohibited_frames);
 
     quic_ctx = orig_ctx;
 }

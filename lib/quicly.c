@@ -7550,6 +7550,10 @@ static quicly_error_t handle_qx_transport_parameters_frame(quicly_conn_t *conn, 
     uint64_t len;
     quicly_error_t ret;
 
+    /* QX_TRANSPORT_PARAMETERS is permitted only as the first frame */
+    if (state->epoch != QUICLY_EPOCH_ON_STREAMS_TP)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+
     if ((len = quicly_decodev(&state->src, state->end)) == UINT64_MAX || state->end - state->src < len)
         return QUICLY_TRANSPORT_ERROR_FRAME_ENCODING;
     if ((ret = quicly_decode_transport_parameter_list(&conn->super.remote.transport_params, 1, NULL, NULL, NULL, NULL, state->src,
@@ -7694,7 +7698,7 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t _epoch, size_t 
         FRAME( ACK_FREQUENCY           , ack_frequency            ,  0 ,  0 ,  0 ,  1 ,   0 ,   0 ,             1 ,       0 ),
         FRAME( QX_PING                 , qx_ping                  ,  0 ,  0 ,  0 ,  0 ,   0 ,   1 ,             1 ,       0 ),
         FRAME( QX_PONG                 , qx_pong                  ,  0 ,  0 ,  0 ,  0 ,   0 ,   1 ,             1 ,       0 ),
-        FRAME( QX_TRANSPORT_PARAMETERS , qx_transport_parameters  ,  0 ,  0 ,  0 ,  0 ,   1 ,   0 ,             1 ,       0 ),
+        FRAME( QX_TRANSPORT_PARAMETERS , qx_transport_parameters  ,  0 ,  0 ,  0 ,  0 ,   1 ,   1 ,             1 ,       0 ),
         /*   +-------------------------+--------------------------+----+----+----+----+-----+-----+---------------+---------+ */
 #undef FRAME
         {UINT64_MAX},
@@ -7731,7 +7735,10 @@ static quicly_error_t handle_payload(quicly_conn_t *conn, size_t _epoch, size_t 
         }
         /* check if frame is allowed, then process */
         if ((frame_handler->permitted_epochs & (1 << state.epoch)) == 0) {
-            ret = QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
+            /* In QMux, frames not usable after the first frame are treated as unknown frames, while the first frame being anything
+             * other than QX_TRANSPORT_PARAMETERS is a protocol violation. */
+            ret = state.epoch == QUICLY_EPOCH_ON_STREAMS_OTHER ? QUICLY_TRANSPORT_ERROR_FRAME_ENCODING
+                                                               : QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
             break;
         }
         ++*(uint64_t *)((uint8_t *)conn + frame_handler->counter_offset);
