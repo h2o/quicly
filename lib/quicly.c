@@ -2865,10 +2865,15 @@ quicly_error_t quicly_decode_transport_parameter_list(quicly_transport_parameter
                 params->max_datagram_frame_size = (uint16_t)v;
             });
             DECODE_TP(QUICLY_TRANSPORT_PARAMETER_ID_MAX_RECORD_SIZE, {
-                uint64_t v;
-                if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX || v < QUICLY_QMUX_MAX_RECORD_SIZE) {
-                    ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
-                    goto Exit;
+                /* specific to QMux; QUIC v1 ignores it as an unknown transport parameter */
+                if (qmux) {
+                    uint64_t v;
+                    if ((v = ptls_decode_quicint(&src, end)) == UINT64_MAX || v < QUICLY_QMUX_MAX_RECORD_SIZE) {
+                        ret = QUICLY_TRANSPORT_ERROR_TRANSPORT_PARAMETER;
+                        goto Exit;
+                    }
+                } else {
+                    src = end;
                 }
             });
             /* skip unknown extension */
