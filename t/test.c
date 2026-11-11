@@ -3577,10 +3577,8 @@ static void test_qmux_notp(void)
     uint64_t close_frame_type = ptls_decode_quicint(&src, end);
     ok(close_frame_type == QUICLY_FRAME_TYPE_TRANSPORT_CLOSE);
     uint64_t close_error_code = ptls_decode_quicint(&src, end);
-    ok(close_error_code ==
-       QUICLY_ERROR_GET_ERROR_CODE(
-           QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION)); /* draft-ietf-qmux-01 says TRANSPORT_PARAMETER_ERROR but use of
-                                                           PROTOCOL_VIOLATION is always allowed as an alternative */
+    /* draft-ietf-quic-qmux-02 Section 4.2 */
+    ok(close_error_code == QUICLY_ERROR_GET_ERROR_CODE(QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION));
     uint64_t close_frame = ptls_decode_quicint(&src, end);
     ok(close_frame == QUICLY_FRAME_TYPE_DATA_BLOCKED);
 

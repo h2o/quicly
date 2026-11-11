@@ -1727,11 +1727,24 @@ quicly_conn_t *quicly_qmux_new(quicly_context_t *ctx, int is_client, void *appda
 /**
  * Writes QMux records to the given buffer.
  * @param [in,out] bufsize  Upon entry, the size of the buffer. Upon return, number of bytes being written to the buffer.
+ * @return 0 if successful. QUICLY_ERROR_SENDBUF_FULL if the buffer is too small to contain the frame that has to be sent first
+ *         (QX_TRANSPORT_PARAMETERS or CONNECTION_CLOSE), in which case nothing is written. QUICLY_ERROR_FREE_CONNECTION once the
+ *         connection is closed; i.e., after CONNECTION_CLOSE is sent or received, or when the idle timeout expires (in which
+ *         case no frames are sent). Upon QUICLY_ERROR_FREE_CONNECTION, the application frees the connection, gracefully shuts
+ *         down the sending side of the underlying transport, and then waits for the peer to shut down its sending side,
+ *         discarding any data being received (draft-ietf-quic-qmux-02 Section 7.2).
  */
 quicly_error_t quicly_qmux_send(quicly_conn_t *conn, void *buf, size_t *bufsize);
 /**
- * Reads QMux records in a given buffer and processes them.
- * @param [in,out] len  Upon entry, the size of the input. Upon return, the number of bytes being read out.
+ * Reads QMux records in a given buffer and processes them. When the peer gracefully shuts down its sending side of the
+ * underlying transport, the application is expected to shut down its sending side as well, either without sending anything or
+ * after sending CONNECTION_CLOSE by calling `quicly_close` followed by `quicly_qmux_send` (draft-ietf-quic-qmux-02 Section 7.3).
+ * @param [in,out] len  Upon entry, the size of the input. Upon return, the number of bytes being read out. A record that is only
+ *                      partially contained in the input is not read out, and has to be supplied again along with the rest of the
+ *                      record. Once the connection is closing, the entire input is read out and discarded.
+ * @return 0 if successful, including when the input contains errors, in which case the connection enters the closing state and
+ *         CONNECTION_CLOSE is sent by the subsequent call to `quicly_qmux_send`. QUICLY_ERROR_IS_CLOSING if CONNECTION_CLOSE has
+ *         been received.
  */
 quicly_error_t quicly_qmux_receive(quicly_conn_t *conn, const void *src, size_t *len);
 
