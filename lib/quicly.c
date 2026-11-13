@@ -5594,7 +5594,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
             quicly_linklist_is_linked(&conn->egress.pending_streams.blocked.uni))
             conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
         /* send the first resumption token using the 0.5 RTT window */
-        if (!quicly_is_client(conn) && conn->super.ctx->generate_resumption_token != NULL) {
+        if (!quicly_is_client(conn)) {
             quicly_error_t ret64 = quicly_send_resumption_token(conn);
             assert(ret64 == 0);
         }
@@ -6237,6 +6237,9 @@ size_t quicly_send_stateless_reset(quicly_context_t *ctx, const void *src_cid, v
 quicly_error_t quicly_send_resumption_token(quicly_conn_t *conn)
 {
     assert(!quicly_is_client(conn));
+
+    if (conn->super.ctx->generate_resumption_token == NULL)
+        return 0;
 
     if (conn->super.state <= QUICLY_STATE_CONNECTED) {
         ++conn->egress.new_token.generation;

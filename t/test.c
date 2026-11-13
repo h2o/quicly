@@ -2275,6 +2275,28 @@ static void test_retransmit(void)
     quic_ctx.generate_resumption_token = NULL;
 }
 
+/**
+ * Tests that requesting a resumption token is a no-op when the context has no `generate_resumption_token` callback.
+ */
+static void test_send_resumption_token_without_generator(void)
+{
+    quicly_conn_t *client, *server;
+    quicly_stats_t stats;
+
+    ok(quic_ctx.generate_resumption_token == NULL);
+    test_setup_connected_peers(&client, &server);
+
+    ok(quicly_send_resumption_token(server) == 0);
+    exchange_until_idle(client, server);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
+    quicly_get_stats(server, &stats);
+    ok(stats.num_frames_sent.new_token == 0);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
 static void test_retransmit_max_stream_data_lower_window(void)
 {
     uint64_t max_stream_data_orig = quic_ctx.transport_params.max_stream_data.bidi_remote;
@@ -3640,6 +3662,7 @@ int main(int argc, char **argv)
     subtest("time-threshold-loss-in-recovery", test_time_threshold_loss_in_recovery);
 
     subtest("retransmit", test_retransmit);
+    subtest("send-resumption-token-without-generator", test_send_resumption_token_without_generator);
     subtest("retransmit-max-stream-data-lower-window", test_retransmit_max_stream_data_lower_window);
     subtest("stream-credit-growth", test_stream_credit_growth);
     subtest("data-credit-growth", test_data_credit_growth);
