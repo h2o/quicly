@@ -456,6 +456,14 @@ struct st_quicly_conn_t {
          * delivery rate estimator
          */
         quicly_ratemeter_t ratemeter;
+        /**
+         * Time spent in the state where the delivery rate estimator considers the sender as CC-limited (see `update_rate_limit`).
+         * `since` is valid only while `quicly_ratemeter_is_cc_limited` returns true.
+         */
+        struct {
+            int64_t since;
+            uint64_t total;
+        } cc_limited;
     } egress;
     /**
      * close reason
@@ -571,6 +579,7 @@ static int update_traffic_key_cb(ptls_update_traffic_key_t *self, ptls_t *tls, i
 static quicly_error_t initiate_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, const char *reason_phrase);
 static quicly_error_t handle_close(quicly_conn_t *conn, quicly_error_t err, uint64_t frame_type, ptls_iovec_t reason_phrase);
 static quicly_error_t discard_sentmap_by_epoch(quicly_conn_t *conn, unsigned ack_epochs);
+static uint32_t calc_pacer_send_rate(quicly_conn_t *conn);
 
 quicly_cid_plaintext_t quicly_cid_plaintext_invalid = {.node_id = UINT64_MAX, .thread_id = 0xffffff};
 
@@ -1525,6 +1534,15 @@ quicly_error_t quicly_get_stats(quicly_conn_t *conn, quicly_stats_t *stats)
         stats->cc.exit_slow_start_at -= conn->created_at;
     }
     quicly_ratemeter_report(&conn->egress.ratemeter, &stats->delivery_rate);
+    stats->pacing_rate = conn->egress.pacer != NULL ? (uint64_t)calc_pacer_send_rate(conn) * 1000 : 0;
+    stats->cc_limited.current = quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter);
+    stats->cc_limited.total_msec = conn->egress.cc_limited.total;
+    if (stats->cc_limited.current) {
+        lock_now(conn, 1);
+        if (conn->stash.now > conn->egress.cc_limited.since)
+            stats->cc_limited.total_msec += conn->stash.now - conn->egress.cc_limited.since;
+        unlock_now(conn);
+    }
     stats->num_sentmap_packets_largest = conn->egress.loss.sentmap.num_packets_largest;
 
     return 0;
@@ -1613,6 +1631,16 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int
                              use_loss_time);
 }
 
+/**
+ * Adds the time spent in the ongoing CC-limited period (if any) to `egress.cc_limited.total`. Called before the ratemeter leaves
+ * the CC-limited state.
+ */
+static void end_cc_limited_period(quicly_conn_t *conn)
+{
+    if (quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter))
+        conn->egress.cc_limited.total += conn->stash.now - conn->egress.cc_limited.since;
+}
+
 static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int sendbuf_full, int pacer_limited)
 {
     has_sendable_data = has_sendable_data && conn->super.remote.address_validation.validated;
@@ -1622,9 +1650,11 @@ static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int se
     if (quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter) != is_ratemeter_limited) {
         if (is_ratemeter_limited) {
             quicly_ratemeter_enter_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
+            conn->egress.cc_limited.since = conn->stash.now;
             QUICLY_PROBE(ENTER_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
             QUICLY_LOG_CONN(enter_cc_limited, conn, { PTLS_LOG_ELEMENT_NUMBER(pn, conn->egress.packet_number); });
         } else {
+            end_cc_limited_period(conn);
             quicly_ratemeter_exit_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
             QUICLY_PROBE(EXIT_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
             QUICLY_LOG_CONN(exit_cc_limited, conn, { PTLS_LOG_ELEMENT_NUMBER(pn, conn->egress.packet_number); });
@@ -2237,6 +2267,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
                         : get_egress_context(conn)->loss.default_initial_rtt);
 
     /* reset ratemeter */
+    end_cc_limited_period(conn);
     quicly_ratemeter_init(&conn->egress.ratemeter);
 
     /* remember PN when the path was promoted */

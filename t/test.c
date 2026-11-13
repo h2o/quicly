@@ -1624,6 +1624,72 @@ static void test_cc_limited_drain_and_resume(void)
     quic_ctx.egress[0].cc.init_cc = saved_init_cc;
 }
 
+static void test_stats_cc_limited(void)
+{
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(client, &stream, 0) == 0);
+
+    quicly_stats_t stats;
+    quicly_get_stats(client, &stats);
+    ok(!stats.cc_limited.current);
+    ok(stats.cc_limited.total_msec == 0);
+
+    /* write more than CWND; the sender becomes CC-limited */
+    static uint8_t zeros[1000000];
+    ok(quicly_streambuf_egress_write(stream, zeros, stats.cc.cwnd * 4) == 0);
+    ok(transmit(client, server) > 0);
+    quicly_get_stats(client, &stats);
+    ok(stats.cc_limited.current);
+    ok(stats.cc_limited.total_msec == 0);
+
+    /* the ongoing period is included */
+    quic_now += 10;
+    quicly_get_stats(client, &stats);
+    ok(stats.cc_limited.current);
+    ok(stats.cc_limited.total_msec == 10);
+
+    /* once all data is sent and acknowledged, the sender is app-limited, and the total stops advancing */
+    exchange_until_idle(client, server);
+    quicly_get_stats(client, &stats);
+    ok(!stats.cc_limited.current);
+    uint64_t total = stats.cc_limited.total_msec;
+    ok(total >= 10);
+    quic_now += 100;
+    ok(quicly_streambuf_egress_write(stream, zeros, 1) == 0);
+    exchange_until_idle(client, server);
+    quicly_get_stats(client, &stats);
+    ok(!stats.cc_limited.current);
+    ok(stats.cc_limited.total_msec == total);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
+static void test_stats_pacing_rate(void)
+{
+    quicly_stats_t stats;
+
+    for (int pacing = 0; pacing != 2; ++pacing) {
+        quicly_context_t ctx = quic_ctx;
+        ctx.egress[0].pacing = pacing;
+        quicly_conn_t *conn;
+        ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                          NULL) == 0);
+        quicly_get_stats(conn, &stats);
+        if (pacing) {
+            ok(stats.pacing_rate != 0);
+            ok(stats.pacing_rate == (uint64_t)calc_pacer_send_rate(conn) * 1000);
+            /* the multiplier in effect (2x or 3x during slow start) is applied */
+            ok(stats.pacing_rate > (uint64_t)quicly_pacer_calc_send_rate(1024, stats.cc.cwnd, stats.rtt.smoothed) * 1000);
+        } else {
+            ok(stats.pacing_rate == 0);
+        }
+        quicly_free(conn);
+    }
+}
+
 static void test_setup_send_context(quicly_conn_t *conn, quicly_send_context_t *s, struct iovec *datagram, void *buf,
                                     size_t bufsize)
 {
@@ -3532,6 +3598,7 @@ static void test_stats_foreach_field(size_t off, size_t size)
         GAP(loss_thresholds.time_based_percentile, cc.cwnd),
         GAP(cc.ssthresh, cc.cwnd_initial),
         GAP(cc.cwnd_exiting_slow_start, cc.exit_slow_start_at),
+        GAP(cc_limited.current, num_sentmap_packets_largest),
 #undef GAP
         SIZE_MAX};
     for (size_t i = 0; gaps[i] != SIZE_MAX; i += 2) {
@@ -3656,6 +3723,8 @@ int main(int argc, char **argv)
     subtest("ack-frequency", test_ack_frequency);
     subtest("cc", test_cc);
     subtest("cc-limited-drain-and-resume", test_cc_limited_drain_and_resume);
+    subtest("stats-cc-limited", test_stats_cc_limited);
+    subtest("stats-pacing-rate", test_stats_pacing_rate);
     subtest("fractional-rtt-measurement", test_fractional_rtt_measurement);
     subtest("fractional-close-timeout", test_fractional_close_timeout);
     subtest("time-threshold-loss-episode", test_time_threshold_loss_episode);
