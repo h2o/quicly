@@ -7240,7 +7240,10 @@ static quicly_error_t handle_new_connection_id_frame(quicly_conn_t *conn, struct
     quicly_new_connection_id_frame_t frame;
     quicly_error_t ret;
 
-    /* TODO: return error when using zero-length CID */
+    /* An endpoint that is sending packets with a zero-length Destination Connection ID MUST treat receipt of a NEW_CONNECTION_ID
+     * frame as a connection error of type PROTOCOL_VIOLATION. (19.15) */
+    if (conn->super.remote.cid_set.cids[0].cid.len == 0)
+        return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     if ((ret = quicly_decode_new_connection_id_frame(&state->src, state->end, &frame)) != 0)
         return ret;
