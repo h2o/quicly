@@ -6234,6 +6234,9 @@ quicly_error_t quicly_send_resumption_token(quicly_conn_t *conn)
 {
     assert(!quicly_is_client(conn));
 
+    if (conn->super.ctx->generate_resumption_token == NULL)
+        return 0;
+
     if (conn->super.state <= QUICLY_STATE_CONNECTED) {
         ++conn->egress.new_token.generation;
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_NEW_TOKEN_BIT;
