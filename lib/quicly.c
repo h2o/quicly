@@ -5830,6 +5830,10 @@ static quicly_error_t do_send(quicly_conn_t *conn, quicly_send_context_t *s)
                 for (size_t i = 0; i != conn->egress.datagram_frame_payloads.count; ++i) {
                     ptls_iovec_t *payload = conn->egress.datagram_frame_payloads.payloads + i;
                     size_t required_space = quicly_datagram_frame_capacity(*payload);
+                    /* drop frames larger than what the peer accepts, including all frames if the peer does not support DATAGRAM
+                     * frames (RFC 9221 Section 3) */
+                    if (required_space > conn->super.remote.transport_params.max_datagram_frame_size)
+                        continue;
                     if ((ret = do_allocate_frame(conn, s, required_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING_NO_CC)) != 0)
                         goto Exit;
                     if (s->dst_end - s->dst >= required_space) {

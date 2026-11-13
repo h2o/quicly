@@ -1682,6 +1682,15 @@ static size_t datagram_frame_amplification_send(quicly_conn_t *server, size_t nu
     return num_datagrams;
 }
 
+static size_t num_datagram_frames_received;
+
+static void on_receive_datagram_frame(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
+{
+    ++num_datagram_frames_received;
+}
+
+static quicly_receive_datagram_frame_t receive_datagram_frame = {on_receive_datagram_frame};
+
 /* DATAGRAM frames are not congestion controlled, but a server that has not validated the client's address stops sending them once
  * the anti-amplification limit is reached. */
 static void test_datagram_frame_amplification_limit(void)
@@ -1692,6 +1701,9 @@ static void test_datagram_frame_amplification_limit(void)
     uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
     quicly_decoded_packet_t decoded;
     size_t num_datagrams = 1;
+
+    quic_ctx.transport_params.max_datagram_frame_size = UINT16_MAX;
+    quic_ctx.receive_datagram_frame = &receive_datagram_frame;
 
     /* the client's Initial reaches the server, but nothing the server sends is delivered back, so the address stays unvalidated */
     ok(quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
@@ -1717,6 +1729,42 @@ static void test_datagram_frame_amplification_limit(void)
 
     quicly_free(client);
     quicly_free(server);
+    quic_ctx.transport_params.max_datagram_frame_size = 0;
+    quic_ctx.receive_datagram_frame = NULL;
+}
+
+/* DATAGRAM frames larger than the max_datagram_frame_size transport parameter of the peer are not sent, as are all DATAGRAM frames
+ * when the peer does not send the transport parameter (RFC 9221 Section 3). */
+static void test_datagram_frame_max_size(void)
+{
+    static uint8_t payload[1000];
+    quicly_conn_t *client, *server;
+
+    /* the peer does not support DATAGRAM frames */
+    test_setup_connected_peers(&client, &server);
+    quicly_send_datagram_frames(server, &(ptls_iovec_t){payload, 1}, 1);
+    transmit(server, client);
+    ok(server->super.stats.num_frames_sent.datagram == 0);
+    quicly_free(client);
+    quicly_free(server);
+
+    /* the peer accepts frames up to 1000 bytes, which carry up to 997 bytes of payload (1-byte type and 2-byte length) */
+    quic_ctx.transport_params.max_datagram_frame_size = 1000;
+    quic_ctx.receive_datagram_frame = &receive_datagram_frame;
+    num_datagram_frames_received = 0;
+    test_setup_connected_peers(&client, &server);
+    quicly_send_datagram_frames(server, &(ptls_iovec_t){payload, 997}, 1);
+    transmit(server, client);
+    ok(server->super.stats.num_frames_sent.datagram == 1);
+    ok(num_datagram_frames_received == 1);
+    quicly_send_datagram_frames(server, &(ptls_iovec_t){payload, 998}, 1);
+    transmit(server, client);
+    ok(server->super.stats.num_frames_sent.datagram == 1);
+    ok(num_datagram_frames_received == 1);
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.transport_params.max_datagram_frame_size = 0;
+    quic_ctx.receive_datagram_frame = NULL;
 }
 
 static quicly_error_t test_handle_stream_level_frame(quicly_conn_t *conn,
@@ -3580,6 +3628,7 @@ int main(int argc, char **argv)
     subtest("jumpstart", test_jumpstart);
     subtest("ack-for-unsent-pn", test_ack_for_unsent_pn);
     subtest("datagram-frame-amplification-limit", test_datagram_frame_amplification_limit);
+    subtest("datagram-frame-max-size", test_datagram_frame_max_size);
     subtest("frames-for-unopened-local-stream", test_frames_for_unopened_local_stream);
     subtest("frames-opening-peer-stream", test_frames_opening_peer_stream);
     subtest("ack-frequency", test_ack_frequency);
