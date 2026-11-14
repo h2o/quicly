@@ -3585,10 +3585,10 @@ static void test_pto_with_backup_path_probe(void)
     num_datagrams = PTLS_ELEMENTSOF(datagrams);
     ok(quicly_send(server, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
     ok(num_datagrams == 1);
-    ok(server->egress.loss.alarm_at != INT64_MAX);
+    ok(server->path_spaces[0]->loss.alarm_at != INT64_MAX);
 
     /* when the loss timer fires, a packet from a new client address arrives, scheduling a PATH_CHALLENGE on a backup path */
-    quic_now = server->egress.loss.alarm_at;
+    quic_now = server->path_spaces[0]->loss.alarm_at;
     ok(quicly_open_stream(client, &stream, 0) == 0);
     ok(quicly_streambuf_egress_write(stream, "a", 1) == 0);
     num_datagrams = PTLS_ELEMENTSOF(datagrams);
@@ -3598,24 +3598,24 @@ static void test_pto_with_backup_path_probe(void)
     for (size_t i = 0; i != num_decoded; ++i)
         ok(quicly_receive(server, NULL, (void *)&newaddr, decoded + i) == 0);
     ok(server->path_spaces[0]->addrs[1] != NULL);
-    ok(server->egress.loss.alarm_at <= quic_now);
-    int8_t pto_count = server->egress.loss.pto_count;
+    ok(server->path_spaces[0]->loss.alarm_at <= quic_now);
+    int8_t pto_count = server->path_spaces[0]->loss.pto_count;
 
     /* server sends a PATH_CHALLENGE on the backup path, without consuming the loss timer */
     num_datagrams = PTLS_ELEMENTSOF(datagrams);
     ok(quicly_send(server, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
     ok(num_datagrams == 1);
     ok(compare_socket_address(&destaddr.sa, (void *)&newaddr) == 0);
-    ok(server->egress.loss.pto_count == pto_count);
-    ok(server->egress.loss.alarm_at <= quic_now);
+    ok(server->path_spaces[0]->loss.pto_count == pto_count);
+    ok(server->path_spaces[0]->loss.alarm_at <= quic_now);
 
     /* then, sends the PTO probe on the primary path */
     num_datagrams = PTLS_ELEMENTSOF(datagrams);
     ok(quicly_send(server, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
     ok(num_datagrams != 0);
     ok(compare_socket_address(&destaddr.sa, &fake_address.sa) == 0);
-    ok(server->egress.loss.pto_count != pto_count);
-    ok(quic_now < server->egress.loss.alarm_at);
+    ok(server->path_spaces[0]->loss.pto_count != pto_count);
+    ok(quic_now < server->path_spaces[0]->loss.alarm_at);
 
     quicly_free(client);
     quicly_free(server);
