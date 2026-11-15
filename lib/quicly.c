@@ -391,7 +391,6 @@ struct st_quicly_conn_t {
     uint32_t abandoned_paths_mask[8];
     struct st_quicly_retired_path_abandon_t *retired_path_abandon;
     quicly_address_t peer_handshake_address;
-    quicly_address_t local_handshake_address;
     /* number of open streams with path affinity set */
     size_t num_affined_streams;
     /**
@@ -1450,6 +1449,19 @@ void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
     release_ingress_credit(stream->conn, bytes_released);
     if (should_send_max_stream_data(stream))
         sched_stream_control(stream);
+}
+
+/* calculate the active_connection_id_limit we advertise and enforce locally */
+static size_t local_active_cid_limit(const quicly_context_t *ctx)
+{
+    PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT >= QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT);
+
+    uint64_t limit = ctx->transport_params.active_connection_id_limit;
+    if (limit == 0 || limit > QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT)
+        return QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT;
+    if (limit < QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT)
+        return QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT;
+    return (size_t)limit;
 }
 
 /**
@@ -2571,12 +2583,13 @@ static quicly_error_t alloc_path_space(quicly_conn_t *conn, size_t path_index, u
         quicly_local_cid_init_set(&ps->local_cid_set, conn->super.ctx->cid_encryptor, &new_cid);
         ps->local_cid_set.cids[0].state = QUICLY_LOCAL_CID_STATE_PENDING;
 
+        size_t cid_limit = local_active_cid_limit(conn->super.ctx);
         for (size_t i = 0; i < PTLS_ELEMENTSOF(ps->remote_cid_set.cids); i++)
             ps->remote_cid_set.cids[i] = (quicly_remote_cid_t){
                 .state = QUICLY_REMOTE_CID_UNAVAILABLE,
-                .sequence = i,
+                .sequence = i < cid_limit ? i : UINT64_MAX,
             };
-        ps->remote_cid_set._largest_sequence_expected = PTLS_ELEMENTSOF(ps->remote_cid_set.cids) - 1;
+        ps->remote_cid_set._largest_sequence_expected = cid_limit - 1;
 
         uint32_t packet_tolerance =
             conn->application != NULL ? conn->application->super.packet_tolerance : QUICLY_DEFAULT_PACKET_TOLERANCE;
@@ -3443,9 +3456,17 @@ int quicly_encode_transport_parameter_list(ptls_buffer_t *buf, const quicly_tran
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_DISABLE_ACTIVE_MIGRATION, {});
     if (params->reset_stream_at)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_RESET_STREAM_AT, {});
-    if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
-        PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
-                { ptls_buffer_push_quicint(buf, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT); });
+    {
+        uint64_t active_cid_limit =
+            params->active_connection_id_limit != 0 ? params->active_connection_id_limit : QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT;
+        if (active_cid_limit < QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT) {
+            ret = PTLS_ERROR_LIBRARY;
+            goto Exit;
+        }
+        if (active_cid_limit != QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT)
+            PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
+                    { ptls_buffer_push_quicint(buf, active_cid_limit); });
+    }
     if (params->max_datagram_frame_size != 0)
         PUSH_TP(buf, QUICLY_TRANSPORT_PARAMETER_ID_MAX_DATAGRAM_FRAME_SIZE,
                 { ptls_buffer_push_quicint(buf, params->max_datagram_frame_size); });
@@ -3761,7 +3782,6 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
     conn->super.data = appdata;
     conn->egress.alt_ctx = select_with_ratio255(ctx->alt_egress_ratio, QUICLY_NUM_ALT_EGRESS, ctx->tls->random_bytes);
     set_address(&conn->peer_handshake_address, remote_addr);
-    set_address(&conn->local_handshake_address, local_addr);
     lock_now(conn, 0);
     conn->created_at = conn->stash.now;
     conn->super.stats.handshake_confirmed_msec = UINT64_MAX;
@@ -3789,7 +3809,11 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
             remote_cid_val = ptls_iovec_init(remote_cid_buf, sizeof(remote_cid_buf));
             remote_cid = &remote_cid_val;
         }
+        size_t cid_limit = local_active_cid_limit(ctx);
         quicly_remote_cid_init_set(&ps->remote_cid_set, remote_cid, ctx->tls->random_bytes);
+        ps->remote_cid_set._largest_sequence_expected = cid_limit - 1;
+        for (size_t i = cid_limit; i < PTLS_ELEMENTSOF(ps->remote_cid_set.cids); ++i)
+            ps->remote_cid_set.cids[i].sequence = UINT64_MAX;
         conn->super.remote.cid_set = ps->remote_cid_set;
     }
     assert(get_path(conn, 0)->dcid == 0 && ps->remote_cid_set.cids[0].sequence == 0 &&
@@ -3999,6 +4023,7 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     {
         quicly_transport_parameters_t local_params = conn->super.ctx->transport_params;
+        local_params.active_connection_id_limit = local_active_cid_limit(conn->super.ctx);
         if (version_is_draft(conn->super.version)) {
             local_params.enable_multipath = 0;
             local_params.initial_max_path_id = 0;
@@ -4114,6 +4139,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     assert(ps->local_cid_set.cids[0].sequence == 0 && "make sure that local_cid is in expected state before sending SRT");
     {
         quicly_transport_parameters_t local_params = conn->super.ctx->transport_params;
+        local_params.active_connection_id_limit = local_active_cid_limit(conn->super.ctx);
         if (version_is_draft(conn->super.version)) {
             local_params.enable_multipath = 0;
             local_params.initial_max_path_id = 0;
@@ -5187,7 +5213,7 @@ static int setup_path_dcid(quicly_conn_t *conn, size_t path_index)
 
 static void schedule_path_cids_blocked(quicly_conn_t *conn, quicly_path_space_t *ps)
 {
-    uint64_t sequence = ps->remote_cid_set._largest_sequence_expected + 1 - PTLS_ELEMENTSOF(ps->remote_cid_set.cids);
+    uint64_t sequence = ps->remote_cid_set._largest_sequence_expected + 1 - local_active_cid_limit(conn->super.ctx);
 
     if (ps->path_cids_blocked.sender == QUICLY_SENDER_STATE_NONE || ps->path_cids_blocked.sequence != sequence) {
         ps->path_cids_blocked.sender = QUICLY_SENDER_STATE_SEND;
@@ -11045,7 +11071,7 @@ int quicly_build_session_ticket_auth_data(ptls_buffer_t *auth_data, const quicly
 
     ptls_buffer_push_block(auth_data, -1, {
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_ACTIVE_CONNECTION_ID_LIMIT,
-                { ptls_buffer_push_quicint(auth_data, ctx->transport_params.active_connection_id_limit); });
+                { ptls_buffer_push_quicint(auth_data, local_active_cid_limit(ctx)); });
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_DATA,
                 { ptls_buffer_push_quicint(auth_data, ctx->transport_params.max_data); });
         PUSH_TP(QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_STREAM_DATA_BIDI_LOCAL,
@@ -11188,13 +11214,8 @@ quicly_error_t quicly_open_path(quicly_conn_t *conn, struct sockaddr *remote_add
     if (!quicly_is_client(conn) || conn->application == NULL || !conn->application->one_rtt_writable || remote_addr == NULL)
         return QUICLY_ERROR_PACKET_IGNORED;
     if (conn->super.remote.transport_params.disable_active_migration &&
-        compare_socket_address(remote_addr, &conn->peer_handshake_address.sa) == 0) {
-        struct sockaddr *hs_local = conn->local_handshake_address.sa.sa_family != AF_UNSPEC ? &conn->local_handshake_address.sa
-                                                                                            : &get_path(conn, 0)->address.local.sa;
-        if (local_addr == NULL || local_addr->sa_family == AF_UNSPEC || hs_local->sa_family == AF_UNSPEC ||
-            compare_socket_address(local_addr, hs_local) != 0)
-            return QUICLY_ERROR_PACKET_IGNORED;
-    }
+        compare_socket_address(remote_addr, &conn->peer_handshake_address.sa) == 0)
+        return QUICLY_ERROR_PACKET_IGNORED;
     size_t path_index;
     lock_now(conn, 1);
     quicly_error_t ret = open_path(conn, &path_index, UINT32_MAX, remote_addr, local_addr);

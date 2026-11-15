@@ -127,6 +127,7 @@ static void test_multipath_remote_cid(void)
 
 void test_received_cid(void)
 {
+    PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT >= 4);
     quicly_remote_cid_set_t set;
 
 #define TEST_SET(largest_expected, ...)                                                                                            \
@@ -136,7 +137,7 @@ void test_received_cid(void)
             uint64_t seq;                                                                                                          \
             quicly_remote_cid_state_t state;                                                                                       \
         } expected[] = {__VA_ARGS__};                                                                                              \
-        PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(expected) == QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);                                   \
+        PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(expected) == 4);                                                                         \
         for (size_t i = 0; i < PTLS_ELEMENTSOF(expected); ++i) {                                                                   \
             ok(set.cids[i].state == expected[i].state);                                                                            \
             ok(set.cids[i].sequence == expected[i].seq);                                                                           \
@@ -161,6 +162,10 @@ void test_received_cid(void)
     subtest("multipath-remote-cid", test_multipath_remote_cid);
 
     quicly_remote_cid_init_set(&set, NULL, quic_ctx.tls->random_bytes);
+    /* keep this four-CID fixture independent of the configured storage capacity */
+    set._largest_sequence_expected = 3;
+    for (size_t i = 4; i < PTLS_ELEMENTSOF(set.cids); ++i)
+        set.cids[i].sequence = UINT64_MAX;
 
     /* fill CIDs */
     for (int i = 1; i < 4; i++) {
@@ -242,6 +247,7 @@ void test_received_cid(void)
     TEST_RETIRED(0, 2, 4, 1, 3, 6, 7, 5);
 
     /* too many outstanding CIDs in retire queue */
+    set.retired.count = PTLS_ELEMENTSOF(set.retired.cids);
     ok(quicly_remote_cid_register(&set, 11, cids[11], CID_LEN, srts[11], 9) == QUICLY_ERROR_STATE_EXHAUSTION);
 
     /* pretend as if RCID frames carrying the retired ones were sent and that all have been acked */

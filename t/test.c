@@ -539,6 +539,64 @@ static void test_transport_parameters(void)
     ok(decoded.active_connection_id_limit == QUICLY_DEFAULT_ACTIVE_CONNECTION_ID_LIMIT);
     ok(!decoded.disable_active_migration);
 
+    { /* preserve remembered peer limits and clamp local handshake/ticket limits to storage capacity */
+        quicly_transport_parameters_t invalid_params = quicly_spec_context.transport_params;
+        invalid_params.active_connection_id_limit = 1;
+        ptls_buffer_t invalid_buf;
+        ptls_buffer_init(&invalid_buf, "", 0);
+        ok(quicly_encode_transport_parameter_list(&invalid_buf, &invalid_params, NULL, NULL, NULL, NULL, 0) == PTLS_ERROR_LIBRARY);
+        ptls_buffer_dispose(&invalid_buf);
+
+        const uint64_t configured_limits[] = {QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
+                                              QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
+                                              0,
+                                              1,
+                                              2,
+                                              QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT + 4};
+        const uint64_t expected_peer_limits[] = {QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
+                                                 QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
+                                                 QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
+                                                 0,
+                                                 2,
+                                                 QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT + 4};
+        const uint64_t expected_local_limits[] = {QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
+                                                  QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
+                                                  QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
+                                                  QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT,
+                                                  2,
+                                                  QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT};
+        ptls_buffer_t auth_data[PTLS_ELEMENTSOF(configured_limits)];
+
+        for (size_t i = 0; i != PTLS_ELEMENTSOF(configured_limits); ++i) {
+            quicly_context_t ctx = i == 1 ? quicly_performant_context : quicly_spec_context;
+            if (i >= 2)
+                ctx.transport_params.active_connection_id_limit = configured_limits[i];
+            ptls_buffer_init(&auth_data[i], "", 0);
+
+            if (expected_peer_limits[i] != 0) {
+                ptls_buffer_t encoded;
+                ptls_buffer_init(&encoded, "", 0);
+                ok(quicly_encode_transport_parameter_list(&encoded, &ctx.transport_params, NULL, NULL, NULL, NULL, 0) == 0);
+                ok(quicly_decode_transport_parameter_list(&decoded, NULL, NULL, NULL, NULL, encoded.base,
+                                                          encoded.base + encoded.off) == 0);
+                ok(decoded.active_connection_id_limit == expected_peer_limits[i]);
+                ptls_buffer_dispose(&encoded);
+            }
+
+            ok(quicly_build_session_ticket_auth_data(&auth_data[i], &ctx) == 0);
+            const uint8_t *src = auth_data[i].base, *end = src + auth_data[i].off;
+            uint64_t len = quicly_decodev(&src, end);
+            ok(len == end - src);
+            quicly_transport_parameters_t authenticated;
+            ok(quicly_decode_transport_parameter_list(&authenticated, NULL, NULL, NULL, NULL, src, end) == 0);
+            ok(authenticated.active_connection_id_limit == expected_local_limits[i]);
+        }
+        if (QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT != 2)
+            ok(auth_data[4].off != auth_data[5].off || memcmp(auth_data[4].base, auth_data[5].base, auth_data[4].off) != 0);
+        for (size_t i = 0; i != PTLS_ELEMENTSOF(auth_data); ++i)
+            ptls_buffer_dispose(&auth_data[i]);
+    }
+
     { /* zero initial_max_path_id still advertises multipath support */
         static const uint8_t zero_path_limit[] = {QUICLY_TRANSPORT_PARAMETER_ID_INITIAL_MAX_PATH_ID, 1, 0};
         memset(&decoded, 0x55, sizeof(decoded));
@@ -4693,6 +4751,25 @@ static void test_multipath_resource_limit(void)
     deliver_multipath_cid(server, client, 0, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT + 1, 0, 0, token);
     ok(quicly_get_state(client) == QUICLY_STATE_CLOSING);
     free_multipath_regression_peers(client, server, saved);
+
+    /* runtime active_connection_id_limit narrows path CID windows and clamps oversized values to storage capacity */
+    saved = quic_ctx;
+    quic_ctx.transport_params.active_connection_id_limit = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT + 4;
+    quicly_context_t mp_saved = setup_multipath_regression_peers_limit(&client, &server, 0, 1);
+    ok(client->super.remote.transport_params.active_connection_id_limit == QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
+    ok(server->super.remote.transport_params.active_connection_id_limit == QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
+    free_multipath_regression_peers(client, server, mp_saved);
+
+    quic_ctx.transport_params.active_connection_id_limit = 2;
+    mp_saved = setup_multipath_regression_peers_limit(&client, &server, 0, 1);
+    ok(client->super.remote.transport_params.active_connection_id_limit == 2);
+    ok(server->super.remote.transport_params.active_connection_id_limit == 2);
+    schedule_path_cids_blocked(client, client->path_spaces[1]);
+    ok(client->path_spaces[1]->path_cids_blocked.sequence == 0);
+    deliver_multipath_cid(server, client, 0, 0, 2, 1, token);
+    ok(quicly_get_state(client) == QUICLY_STATE_CLOSING);
+    free_multipath_regression_peers(client, server, mp_saved);
+    quic_ctx = saved;
 }
 
 static void test_multipath_disable_migration(void)
@@ -4703,6 +4780,9 @@ static void test_multipath_disable_migration(void)
     local.sin_port = htons(12345);
     alternate.sin_port = htons(23456);
     ok(client->super.remote.transport_params.disable_active_migration);
+    /* the handshake destination is restricted even when reusing the original local address */
+    ok(quicly_open_path(client, &fake_address.sa, &fake_address.sa) == QUICLY_ERROR_PACKET_IGNORED);
+    ok(get_path(client, 1) == NULL);
     ok(quicly_open_path(client, &fake_address.sa, (struct sockaddr *)&local) == QUICLY_ERROR_PACKET_IGNORED);
     ok(get_path(client, 1) == NULL);
     ok(quicly_open_path(client, (struct sockaddr *)&alternate, (struct sockaddr *)&local) == 0);
@@ -5318,6 +5398,11 @@ static void test_lossy_isolated(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--active-connection-id-limit") == 0) {
+        printf("%" PRIu64 "\n", quicly_spec_context.transport_params.active_connection_id_limit);
+        return 0;
+    }
+
     static ptls_iovec_t cert;
     static ptls_openssl_sign_certificate_t cert_signer;
     static ptls_context_t tlsctx = {.random_bytes = test_random_bytes,

@@ -40,7 +40,7 @@ extern "C" {
 /**
  * how many CIDs is quicly willing to manage at the same time?
  * this value is used in two ways:
- * - active_connection_id_limit transport parameter advertised to the remote peer
+ * - default active_connection_id_limit transport parameter advertised to the remote peer
  * - maximum number of connection IDs we issue to the remote peer at a moment
  */
 #ifndef QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT

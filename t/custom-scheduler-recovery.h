@@ -377,6 +377,8 @@ static void test_custom_recovery_health(void)
     ok(quicly_get_path_stats(f.client, 1, &h) == 0 && h.abandoned && h.path_id == 1);
     ok(destroy_path_state(f.client, candidate) == 0);
     ok(destroy_path_state(f.client, 1) == 0);
+    /* direct teardown bypasses quicly_send's replenishment after a whole path space expires */
+    replenish_local_max_path_id(f.client);
     ok(quicly_get_path_stats(f.client, 1, &h) == -1);
     uint32_t fresh_path_id = 0;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(f.client->path_spaces); ++i)
