@@ -360,10 +360,7 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, double last_
         r->alarm_at = _t;                                                                                                          \
     } while (0)
 
-    /* Recalculating another path's alarm (or processing an ACK) must leave an
-     * overdue deadline due. Moving it to now+1 on every scheduler scan can
-     * postpone PTO forever. Only the serviced path needs a future deadline to
-     * avoid immediately repeating a send attempt that made no progress. */
+    /* only advance overdue alarm on the serviced path; leave other paths due */
 
     /* time-threshold loss detection */
     if (r->loss_time != INT64_MAX && use_loss_time) {

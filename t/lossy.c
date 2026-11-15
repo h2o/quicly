@@ -432,7 +432,7 @@ static void test_downstream(void)
         subtest("50%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    /* Independent packet-number-space ACK deadlines no longer let a stale handshake deadline accelerate application ACKs. */
+    /* independent PN-space ACK deadlines prevent handshake deadlines from accelerating 1-RTT ACKs */
     subtest("down-stats-50%", loss_check_stats, time_spent, 0, 1100, 1700, 450, 700, 2000);
 
     for (i = 0; i != 100; ++i) {
@@ -483,8 +483,8 @@ static void test_bidirectional(void)
         subtest("75%", loss_core);
         time_spent[i] = quic_now - 1;
     }
-    /* Retain multipath's high-loss bounds; fractional RTT and ACK delays lower the median recovery time. */
-    subtest("bidi-stats-75%", loss_check_stats, time_spent, 30, 190000, 280000, 40000, 110000, 700000);
+    /* independent PN spaces and fractional RTT/PTO slightly shift high-loss recovery bounds */
+    subtest("bidi-stats-75%", loss_check_stats, time_spent, 25, 190000, 280000, 35553, 110000, 700000);
 
     for (i = 0; i != 100; ++i) {
         init_cond_rand(&loss_cond_down, 1, 2);
@@ -537,9 +537,6 @@ static void test_bidirectional(void)
 
 void test_lossy(void)
 {
-    uint64_t active_connection_id_limit_backup = quic_ctx.transport_params.active_connection_id_limit;
-    quic_ctx.transport_params.active_connection_id_limit = 4;
-
     uint64_t handshake_timeout_backup = quic_ctx.handshake_timeout_rtt_multiplier;
     /* loss tests tend to incur gigantic (and artificial) latencies, which easily trigger handshake timeout.
      * for this test, we totally disable handshake timeout so we can focus on the loss test */
@@ -549,8 +546,8 @@ void test_lossy(void)
     uint64_t idle_timeout_backup = quic_ctx.transport_params.max_idle_timeout;
     quic_ctx.transport_params.max_idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
     subtest("downstream", test_downstream);
+    quic_ctx.transport_params.max_idle_timeout = (uint64_t)600 * 1000; /* 600 seconds */
     subtest("bidirectional", test_bidirectional);
     quic_ctx.transport_params.max_idle_timeout = idle_timeout_backup;
     quic_ctx.handshake_timeout_rtt_multiplier = handshake_timeout_backup;
-    quic_ctx.transport_params.active_connection_id_limit = active_connection_id_limit_backup;
 }

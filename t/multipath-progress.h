@@ -3,10 +3,10 @@ static void test_multipath_tuple_lifecycle(void)
 {
     quicly_conn_t *client, *server;
     quicly_context_t saved = setup_multipath_regression_peers(&client, &server, 0);
-    /* The server's Initial replaces the client's original destination CID in path zero's live set. */
+    /* server initial replaces client original DCID in path 0's live set */
     quicly_cid_t *server_cid = &server->super.local.long_header_src_cid;
     ok(quicly_cid_is_equal(quicly_get_remote_cid(client), ptls_iovec_init(server_cid->cid, server_cid->len)));
-    /* Multipath's zero-length CID prohibition must inspect the live set, not the initial compatibility snapshot. */
+    /* multipath zero-length CID prohibition inspects the live set, not initial snapshot */
     uint8_t cid_len = client->path_spaces[0]->remote_cid_set.cids[0].cid.len;
     client->path_spaces[0]->remote_cid_set.cids[0].cid.len = 0;
     ok(apply_remote_transport_params(client) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
@@ -47,7 +47,7 @@ static void test_multipath_unopened_abandoned_status(void)
     ok(ps != NULL && ps->addrs[0] == NULL);
     ok(quicly_set_path_status(client, 1, 1) == 0);
 
-    /* Receive abandonment before the path has an address, while a local status update is queued. */
+    /* receive abandonment before path has an address while local status update is queued */
     quicly_send_context_t s;
     struct iovec datagram;
     uint8_t buf[1500];
@@ -76,7 +76,7 @@ static void test_multipath_unopened_abandoned_status(void)
     quic_now = saved_now;
 }
 
-/* Losing the signal must not tie its reliable delivery to the abandoned path's retention timer. */
+/* losing PATH_ABANDON must not tie reliable delivery to the abandoned path's retention timer */
 static void test_multipath_abandon_retention(void)
 {
     for (uint32_t path_id = 0; path_id < 2; ++path_id) {
@@ -102,7 +102,7 @@ static void test_multipath_abandon_retention(void)
             ok(f.client->retired_path_abandon == NULL);
         }
         ok(f.client->super.stats.num_frames_sent.path_abandon > before);
-        /* Restore connectivity: the same error code reaches the peer, and ACK releases the retained message. */
+        /* restore connectivity: error code reaches peer and ACK frees retained record */
         for (size_t i = 0; i < 5000 && !path_id_is_abandoned(f.server, path_id); ++i)
             custom_recovery_round(&f, 0, 1);
         ok(path_id_is_abandoned(f.server, path_id));
@@ -154,7 +154,7 @@ static void test_multipath_abandon_late_ack(void)
     ok(custom_recovery_transmit(f.client, f.server, 3, 1) == 1);
     ok(f.client->retired_path_abandon->sender == QUICLY_SENDER_STATE_UNACKED);
 
-    /* A second, unsent abandonment exercises SEND retention and unlinking an interior record. */
+    /* second unsent abandonment exercises SEND retention and unlinking interior record */
     lock_now(f.client, 0);
     ok(new_path(f.client, 2, 2, &fake_address.sa, &fake_address.sa) == 0);
     unlock_now(f.client);
@@ -165,18 +165,18 @@ static void test_multipath_abandon_late_ack(void)
     unlock_now(f.client);
     ok(f.client->retired_path_abandon->path_id == 2 && f.client->retired_path_abandon->next->path_id == 1);
     ok(f.client->retired_path_abandon->sender == QUICLY_SENDER_STATE_SEND);
-    /* ACK the original after loss, retransmission, owner deletion, and slot reuse. */
+    /* ACK original after loss, retransmission, owner deletion, and slot reuse */
     abandon_update_packet(map, first_pn, QUICLY_SENTMAP_EVENT_ACKED);
     ok(f.client->retired_path_abandon->path_id == 2 && f.client->retired_path_abandon->next == NULL);
     abandon_update_packet(map, retry_pn, QUICLY_SENTMAP_EVENT_LOST);
     abandon_update_packet(map, retry_pn, QUICLY_SENTMAP_EVENT_ACKED);
     ok(f.client->path_spaces[1]->path_id == 5 && f.client->path_spaces[1]->path_abandon.sender == QUICLY_SENDER_STATE_NONE);
     ok(f.client->retired_path_abandon->path_id == 2 && f.client->retired_path_abandon->sender == QUICLY_SENDER_STATE_SEND);
-    /* Teardown must release an outstanding record as well as records completed by ACK. */
+    /* teardown releases outstanding records as well as ACK-completed records */
     custom_recovery_free(&f);
 }
 
-/* Also runnable in isolation under LeakSanitizer: unlike traffic-statistics fixtures, every owned buffer is released. */
+/* runnable in isolation under ASan/LSan: every owned buffer is released */
 static void test_multipath_lifecycle_cleanup(void)
 {
     quicly_context_t original = quic_ctx;
@@ -396,8 +396,7 @@ static void test_multipath_small_rebinding(void)
     custom_recovery_fixture_t f;
     custom_recovery_setup(&f);
     /* rebinding needs an unused peer-issued CID in addition to amplification credit */
-    ok(quicly_local_cid_set_size(&f.client->path_spaces[1]->local_cid_set, 2));
-    f.client->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    ok(quicly_local_cid_get_size(&f.client->path_spaces[1]->local_cid_set) >= 2);
     for (size_t i = 0; i < 100; ++i)
         custom_recovery_round(&f, 0, 1);
     f.client_policy.data = 2;
@@ -442,8 +441,6 @@ static void test_multipath_validation_retry_limit(void)
     for (size_t mode = 0; mode < 3; ++mode) {
         custom_recovery_fixture_t f;
         custom_recovery_setup(&f);
-        quicly_local_cid_set_size(&f.server->path_spaces[0]->local_cid_set, QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
-        f.server->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
         for (size_t i = 0; i < 100; ++i)
             custom_recovery_round(&f, 0, 1);
         struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(30000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};

@@ -115,19 +115,20 @@ struct st_quicly_sent_t {
     union {
         quicly_sent_packet_t packet;
         /**
-         * ACK frame. Represents up to 8 ack ranges. If not full, `additional` list is terminated by .gap = 0.
+         * ACK frame. Represents up to 6 ack ranges. If not full, `additional` list is terminated by .gap = 0.
          */
         struct {
             uint64_t start;
-            uint32_t path_id;
             union {
                 struct {
                     uint64_t start_length;
-                    struct st_quicly_sent_ack_additional_t additional[4];
+                    uint32_t path_id;
+                    struct st_quicly_sent_ack_additional_t additional[2];
                 } ranges64;
                 struct {
+                    uint32_t path_id;
                     uint8_t start_length;
-                    struct st_quicly_sent_ack_additional_t additional[7];
+                    struct st_quicly_sent_ack_additional_t additional[5];
                 } ranges8;
             };
         } ack;
@@ -176,6 +177,9 @@ struct st_quicly_sent_t {
             uint32_t path_id;
             uint64_t sequence;
         } path_status;
+        struct {
+            uint64_t max_path_id;
+        } max_path_id;
         struct {
             uint64_t max_path_id;
         } paths_blocked;
@@ -310,6 +314,7 @@ quicly_error_t quicly_sentmap__type_packet(quicly_sentmap_t *map, const quicly_s
 
 inline void quicly_sentmap_init(quicly_sentmap_t *map)
 {
+    PTLS_BUILD_ASSERT(sizeof(struct st_quicly_sent_t) <= 32);
     *map = (quicly_sentmap_t){NULL};
 }
 

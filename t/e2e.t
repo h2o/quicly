@@ -69,18 +69,10 @@ subtest "hello" => sub {
 
     # check if the client receives extra connection IDs
     subtest "initial-ncid" => sub {
-        open my $limit_fh, "-|", "$ENV{BINARY_DIR}/test.t", "--active-connection-id-limit"
-            or die "failed to query compiled connection ID limit:$!";
-        my $active_connection_id_limit = do { local $/; <$limit_fh> } // "";
-        close $limit_fh
-            or die "failed to query compiled connection ID limit:$?";
-        chomp $active_connection_id_limit;
-        die "invalid compiled connection ID limit:$active_connection_id_limit"
-            unless $active_connection_id_limit =~ /\A[1-9][0-9]*\z/ && $active_connection_id_limit >= 2;
         my $events = slurp_file("$tempdir/events");
         complex $events, sub {
             my @seen;
-            my @expected = (0, (1) x ($active_connection_id_limit - 1)); # sequence 0 is delivered during the handshake
+            my @expected = (0, 1, 1, 1); # expecting to see sequence=1,2,3 as we set active_connection_id_limit to 4
             foreach (split(/\n/)) {
                 if ( /"type":"new_connection_id_receive",.*"sequence":([0-9]+),/ ) {
                     # $1 contains sequence number
@@ -423,10 +415,10 @@ subtest "path-migration" => sub {
                 $cid1 eq $cid_probe;
             };
         };
-        # check that CC is in slow start (num-loss-episodes == 0 means CC was reset by path migration)
+        # check that packets are lost (or deemed lost), but that CC is in slow start
         complex $server_output, sub {
-            /num-loss-episodes:\s*(\d+)/ and $1 == 0;
-        }, "cc-in-slow-start";
+            /packets-lost:\s*(\d+).*num-loss-episodes:\s*(\d+)/ and $1 >= 2 and $2 == 0;
+        }, "packets-lost-but-cc-in-slow-start";
 
     };
     subtest "without-cid" => sub {
@@ -461,7 +453,7 @@ subtest "slow-start" => sub {
             my $elapsed = time - $start_at;
             diag $elapsed;
             cmp_ok $rt_min * 0.1, '<=', $elapsed, "RT >= $rt_min";
-            cmp_ok $rt_max * 0.1 + 0.5, '>=', $elapsed, "RT <= $rt_max (plus scheduling tolerance)";
+            cmp_ok $rt_max * 0.1, '>=', $elapsed, "RT <= $rt_max";
         };
     };
 
@@ -744,6 +736,14 @@ subtest "huge-CID" => sub {
 
     sleep 1;
     ok(!$server->is_dead);
+};
+
+subtest "multipath-negotiation" => sub {
+    my $guard = spawn_server("--initial-max-path-id", "3");
+    my $resp = `$cli --initial-max-path-id 3 -e $tempdir/mp-events -p /12 127.0.0.1 $port 2> /dev/null`;
+    is $resp, "hello world\n";
+    my $events = slurp_file("$tempdir/mp-events");
+    like $events, qr/"num-frames-sent\.path_new_connection_id":[1-9]/, "PATH_NEW_CONNECTION_ID frames sent";
 };
 
 done_testing;

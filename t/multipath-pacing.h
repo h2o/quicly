@@ -1,5 +1,4 @@
-/* Pacing must limit a large send window independently on each path and
- * expose a wakeup that lets queued reliable data make progress. */
+/* pacing limits a large send window independently per path and exposes a progress wakeup */
 static void test_multipath_pacing(void)
 {
     int64_t saved_now = quic_now;
@@ -17,9 +16,7 @@ static void test_multipath_pacing(void)
         quicly_path_space_t *ps = client->path_spaces[i];
         ok(quicly_is_path_available(client, i));
         ok(ps->pacer != NULL);
-        /* A large cwnd removes congestion-window exhaustion as a possible
-         * reason for the bounded first burst. The deliberately high RTT makes
-         * the pacer's ten-packet burst allowance dominate its rate window. */
+        /* large cwnd and high RTT make the pacer's ten-packet burst dominate */
         ps->cc.cwnd = 1024 * 1024;
         ps->loss.rtt.latest = ps->loss.rtt.smoothed = 20000;
         quicly_pacer_reset(ps->pacer);
@@ -32,7 +29,7 @@ static void test_multipath_pacing(void)
     for (size_t i = 0; i < sizeof(data); ++i)
         data[i] = (uint8_t)(i * 13 + i / 29);
     ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
-    /* Leave ACKs pending at the receiver, and keep time fixed. */
+    /* leave ACKs pending at the receiver and keep time fixed */
     for (size_t i = 0; i < 32; ++i)
         transmit_multipath(client, server);
     for (size_t i = 0; i < 2; ++i) {

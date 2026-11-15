@@ -1,4 +1,4 @@
-/* Exercise the ACK handler, not only the standalone rate estimator. */
+/* exercise the ACK handler, not only the standalone rate estimator */
 static void rate_test_ack(quicly_conn_t *conn, size_t path_index, uint16_t bytes)
 {
     quicly_path_space_t *ps = conn->path_spaces[path_index];
@@ -11,7 +11,7 @@ static void rate_test_ack(quicly_conn_t *conn, size_t path_index, uint16_t bytes
     struct st_quicly_handle_payload_state_t state = {.epoch = QUICLY_EPOCH_1RTT};
     lock_now(conn, 0);
     ok(process_ack_frame_core(conn, &state, ps->path_id, &ack) == 0);
-    /* Duplicate ACKs must not add bytes to either rate estimate. */
+    /* duplicate ACKs must not add bytes to either rate estimate */
     ok(process_ack_frame_core(conn, &state, ps->path_id, &ack) == 0);
     unlock_now(conn);
 }
@@ -42,8 +42,7 @@ static void test_multipath_delivery_rate(void)
     rate_test_ack(client, 0, 1000);
     rate_test_ack(client, 1, 200);
 
-    /* Replace path one's address while its first rate sample is in progress.
-     * Its address counters restart, but its packet-number-space total must not. */
+    /* replace path 1's address mid-sample; address counters restart while PN-space total persists */
     size_t candidate = encode_flat_path_index(1, 1);
     remote.sin_port = htons(12346);
     ok(new_path(client, candidate, 1, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
@@ -59,7 +58,7 @@ static void test_multipath_delivery_rate(void)
 
     for (int step = 1; step <= 5; ++step) {
         quic_now += 10;
-        /* Interleave the smaller path's ACKs between the larger path's samples. */
+        /* interleave the smaller path's ACKs between the larger path's samples */
         rate_test_ack(client, 1, 200);
         rate_test_ack(client, 0, 1000);
         for (size_t p = 0; p != 2; ++p) {
@@ -70,8 +69,7 @@ static void test_multipath_delivery_rate(void)
             ok(rate.stdev == 0);
         }
     }
-    /* Both partial and completed samples stay path-local; public legacy stats
-     * report path zero, while the connection byte total still covers all paths. */
+    /* samples stay path-local; legacy stats report path 0 while connection byte total spans all paths */
     ok(client->super.stats.num_bytes.ack_received - initial_acked == 6 * 1200);
     ok(get_path(client, 1)->num_packets.bytes_acked == 5 * 200);
     quicly_rate_t public_rate;

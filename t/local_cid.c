@@ -198,8 +198,8 @@ void test_local_cid(void)
     /* try to exhaust CID */
     size_t num_retired = 7;
     uint64_t seq_to_retire = 7;
-    while (num_retired < QUICLY_MAX_PATH_ID) {
-        if (seq_to_retire == QUICLY_MAX_PATH_ID - 1) {
+    while (num_retired < QUICLY_MAX_CID_SEQUENCE) {
+        if (seq_to_retire == QUICLY_MAX_CID_SEQUENCE - 1) {
             /* this is the maximum CID we can generate -- after retiring it, there should be no CID to send */
             ok(quicly_local_cid_retire(&set, seq_to_retire, &has_pending) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
         } else {
@@ -209,6 +209,15 @@ void test_local_cid(void)
         num_retired++;
         seq_to_retire++;
     }
+
+    /* alternate paths may retire their final CID without closing the connection */
+    quicly_cid_plaintext_t alt_plaintext = {.path_id = 1};
+    quicly_local_cid_set_t alt_set;
+    quicly_local_cid_init_set(&alt_set, &test_encryptor, &alt_plaintext);
+    ok(quicly_local_cid_set_size(&alt_set, NUM_CIDS) != 0);
+    for (uint64_t seq = 0; seq < QUICLY_MAX_CID_SEQUENCE; ++seq)
+        ok(quicly_local_cid_retire(&alt_set, seq, &has_pending) == 0);
+    ok(!has_pending);
 
     /* create a set with a NULL CID encryptor */
     quicly_local_cid_set_t empty_set;

@@ -1,4 +1,4 @@
-/* Queue pressure and partial sends exercise real packets, without retransmitting DATAGRAMs. */
+/* queue pressure and partial sends exercise real packets without retransmitting DATAGRAMs */
 static void test_queue_receive_datagram(quicly_receive_datagram_frame_t *self, quicly_conn_t *conn, ptls_iovec_t payload)
 {
     (void)self;
@@ -36,7 +36,7 @@ static void test_datagram_queue_partial_send(void)
     ok(count > 0 && count < capacity);
     ok(quicly_get_num_datagram_frames_path(client, 0) == capacity - count);
     ok(client->super.stats.num_frames_sent.datagram - frames == count);
-    /* Only the freed slots can be refilled. Closing also frees the unsent suffix. */
+    /* only freed slots can be refilled; closing also frees the unsent suffix */
     for (size_t i = 0; i < count; ++i)
         quicly_send_datagram_frames(client, &payload, 1);
     ok(quicly_get_num_datagram_frames_path(client, 0) == capacity);
@@ -66,7 +66,7 @@ static void test_datagram_queue_capacity(size_t capacity)
         quicly_send_datagram_frames_path(&conn, 0, &payload, 1);
     }
     ok(quicly_get_num_datagram_frames_path(&conn, 0) == capacity);
-    /* Refill a freed slot and check the copied payloads stay in FIFO order after wrapping. */
+    /* refill a freed slot and check copied payloads stay in FIFO order after wrapping */
     consume_path_datagram_frame_payloads(&path, 1);
     uint8_t value = (uint8_t)capacity;
     ptls_iovec_t payload = ptls_iovec_init(&value, 1);
@@ -103,7 +103,7 @@ static void test_datagram_queue_overflow(void)
         ok(path.datagram_frame_payloads.entries == NULL && quicly_get_num_datagram_frames_path(&conn, 0) == 0);
         clear_path_datagram_frame_payloads(&path);
     }
-    /* Rejected capacities must leave the queue usable after correcting the configuration. */
+    /* rejected capacities must leave the queue usable after correcting config */
     ctx.max_datagram_frame_payloads = 2;
     quicly_send_datagram_frames_path(&conn, 0, payloads, PTLS_ELEMENTSOF(payloads));
     ok(quicly_get_num_datagram_frames_path(&conn, 0) == PTLS_ELEMENTSOF(payloads));
@@ -125,8 +125,7 @@ static void test_sparse_datagram_queues(void)
     quicly_path_space_t ps = {0};
     struct st_quicly_conn_path_t path = {0};
     ok(!quicly_has_datagram_frames(&conn));
-    /* Holes and the highest candidate index must not hide queued work.
-     * Abandoned paths retain their queues until the normal cleanup runs. */
+    /* holes and highest candidate index must not hide queued work */
     for (size_t i = 0; i < PTLS_ELEMENTSOF(conn.path_spaces); ++i) {
         conn.path_spaces[i] = &ps;
         for (size_t j = 0; j < PTLS_ELEMENTSOF(ps.addrs); ++j) {
