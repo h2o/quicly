@@ -46,7 +46,6 @@ const quicly_context_t quicly_spec_context = {
             .max_streams_bidi = 100,
             .max_streams_uni = 0,
             .max_udp_payload_size = DEFAULT_MAX_UDP_PAYLOAD_SIZE,
-            .active_connection_id_limit = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
         },
     .max_packets_per_key = DEFAULT_MAX_PACKETS_PER_KEY,
     .max_crypto_bytes = DEFAULT_MAX_CRYPTO_BYTES,
@@ -89,7 +88,6 @@ const quicly_context_t quicly_performant_context = {
             .max_streams_bidi = 100,
             .max_streams_uni = 0,
             .max_udp_payload_size = DEFAULT_MAX_UDP_PAYLOAD_SIZE,
-            .active_connection_id_limit = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT,
         },
     .max_packets_per_key = DEFAULT_MAX_PACKETS_PER_KEY,
     .max_crypto_bytes = DEFAULT_MAX_CRYPTO_BYTES,
@@ -367,7 +365,7 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
         if (quicly_stream_can_send(stream, 1))
             link_stream(sched, stream, conn_is_blocked);
 
-        /* on_send_emit can reset other streams and unlink their nodes, so restart from the stable list head. */
+        /* restart from head as on_send_emit may unlink other streams */
         node = sched->active.next;
     }
 

@@ -35,8 +35,7 @@ static void do_test_datagram_congestion_accounting(void)
     ok(send_ok && emitted < 100 && bytes_in_flight <= cwnd + ps->max_udp_payload_size);
     ok(client->super.stats.num_frames_sent.datagram - frames_before == emitted);
     ok(quicly_get_num_datagram_frames_path(client, 0) == 1);
-    /* A queued DATAGRAM behind a full window is congestion-limited, even when
-     * there are no sendable STREAM bytes. CUBIC must keep its clock running. */
+    /* queued DATAGRAM behind a full window is CC-limited for CUBIC */
     ok(quicly_ratemeter_is_cc_limited(&client->path_spaces[0]->ratemeter));
     if (ps->cc.type == &quicly_cc_type_cubic)
         ok(ps->cc.state.pico.cubic.cc_limited);
@@ -86,7 +85,7 @@ static void test_datagram_congestion_path_isolation(void)
     quicly_ratemeter_init(&ps.ratemeter);
     ps.loss.sentmap.bytes_in_flight = ps.cc.cwnd;
 
-    /* Work on a different path must not start this path's growth clock. */
+    /* work on a different path must not start this path's growth clock */
     other_path.datagram_frame_payloads.count = 1;
     update_ratemeter(&conn, &ps, 0, 0, 0);
     ok(!quicly_ratemeter_is_cc_limited(&ps.ratemeter));
@@ -96,7 +95,7 @@ static void test_datagram_congestion_path_isolation(void)
     ok(quicly_ratemeter_is_cc_limited(&ps.ratemeter));
     ok(ps.cc.state.pico.cubic.cc_limited);
 
-    /* Queued data on an unvalidated or abandoned address cannot be sent. */
+    /* queued data on an unvalidated or abandoned address cannot be sent */
     path.probe_only = 1;
     update_ratemeter(&conn, &ps, 0, 0, 0);
     ok(!ps.cc.state.pico.cubic.cc_limited);
@@ -131,8 +130,7 @@ static void test_datagram_cubic_progress(void)
     ok(get_egress_context(client)->respect_app_limited);
     quicly_cc_t *cc = &client->path_spaces[0]->cc;
     uint32_t initial = 2 * client->path_spaces[0]->max_udp_payload_size;
-    /* Start congestion avoidance at the minimum window, as after a loss
-     * episode. A continuously backlogged, loss-free DATAGRAM flow must grow. */
+    /* start congestion avoidance at the minimum window; backlogged DATAGRAM flow must grow */
     cc->cwnd = cc->ssthresh = initial;
     cc->state.pico.cubic.w_est = initial;
     cc->state.pico.cubic.cwnd_prior = initial;

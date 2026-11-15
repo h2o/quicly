@@ -104,8 +104,7 @@ void quicly_ratemeter_enter_cc_limited(quicly_ratemeter_t *meter, uint64_t pn);
 void quicly_ratemeter_exit_cc_limited(quicly_ratemeter_t *meter, uint64_t pn);
 /**
  * Given three values, update the estimation.
- * @param bytes_acked  cumulative ACKed congestion-controlled bytes for the packet number space being measured.
- *                     The counter must remain monotonic across address replacement and exclude other paths' ACKs.
+ * @param bytes_acked  cumulative ACKed congestion-controlled bytes for the PN space being measured (monotonic per space)
  */
 void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, int64_t now, uint64_t bytes_acked, uint64_t pn);
 /**

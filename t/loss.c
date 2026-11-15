@@ -234,7 +234,7 @@ static void test_overdue_alarm(void)
     int64_t deadline = loss.alarm_at;
     ok(deadline > 100);
 
-    /* ACK processing and sends on other paths must not indefinitely defer PTO. */
+    /* ACK processing and sends on other paths must not indefinitely defer PTO */
     for (int i = 0; i != 4; ++i) {
         int64_t at = deadline + i * 25;
         quicly_loss_update_alarm(&loss, at, 100, 1, 1, 0, 1, 0, 1);
@@ -243,7 +243,7 @@ static void test_overdue_alarm(void)
     quicly_loss_update_alarm(&loss, deadline + 100, 100, 1, 1, 0, 1, 1, 1);
     ok(loss.alarm_at > deadline + 100);
 
-    /* The same rule applies to time-threshold loss detection. */
+    /* same rule applies to time-threshold loss detection */
     loss.loss_time = deadline;
     quicly_loss_update_alarm(&loss, deadline + 101, 100, 1, 1, 0, 1, 0, 1);
     ok(loss.alarm_at <= deadline + 101);

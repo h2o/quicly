@@ -26,8 +26,8 @@ static quicly_error_t custom_recovery_send_data(quicly_path_scheduler_t *self, q
     quicly_error_t ret;
     /* the application chooses its own order. health is a fact, not an imposed backup policy. */
     size_t first = policy->preferred;
-    quicly_path_health_t health;
-    if (quicly_get_path_health(conn, first, &health) == 0 && health.pto_count >= 2)
+    quicly_path_stats_t health;
+    if (quicly_get_path_stats(conn, first, &health) == 0 && health.pto_count >= 2)
         first ^= 1;
     for (size_t n = 0; n < 2; ++n) {
         size_t index = first ^ n;
@@ -200,15 +200,15 @@ static void test_custom_recovery_blackhole(void)
             ok(memcmp(quicly_streambuf_ingress_get(received).base, initial, sizeof(initial)) == 0);
         if (sustained)
             ok(appended > 0); /* prefix advanced while the producer was still publishing. */
-        quicly_path_health_t health = {0};
-        ok(quicly_get_path_health(f.client, 0, &health) == 0);
+        quicly_path_stats_t health = {0};
+        ok(quicly_get_path_stats(f.client, 0, &health) == 0);
         ok(health.pto_count >= 2 && !health.abandoned);
         ok(f.server_policy.maintenance_packets != 0); /* ACKs must escape the blackholed primary. */
         f.client_policy.data = 2;                     /* keep data off path zero even after connectivity returns. */
         until = quic_now + f.bound;
         do {
             custom_recovery_round(&f, 0, 1); /* one-datagram budgets must also permit recovery probes. */
-            ok(quicly_get_path_health(f.client, 0, &health) == 0);
+            ok(quicly_get_path_stats(f.client, 0, &health) == 0);
         } while (quic_now < until && health.pto_count != 0);
         ok(health.pto_count == 0);
         ok(f.client_policy.maintenance_packets != 0);
@@ -230,10 +230,10 @@ static void test_custom_recovery_eligibility(void)
     custom_recovery_transmit(f.client, f.server, 1, 16);
     ok(quicly_streambuf_egress_write(ordinary, bytes, sizeof(bytes)) == 0);
     int64_t until = quic_now + f.bound;
-    quicly_path_health_t health = {0};
+    quicly_path_stats_t health = {0};
     do {
         custom_recovery_round(&f, 1, 16);
-        ok(quicly_get_path_health(f.client, 0, &health) == 0);
+        ok(quicly_get_path_stats(f.client, 0, &health) == 0);
     } while (quic_now < until &&
              (health.pto_count < 2 || multipath_received_length(f.server, ordinary->stream_id) < sizeof(bytes)));
     ok(health.pto_count >= 2);
@@ -294,8 +294,8 @@ static void test_custom_recovery_data_policy(void)
     ok(quicly_get_num_datagram_frames_path(f.client, 1) == queued);
     for (size_t i = 0; i < 100; ++i)
         custom_recovery_round(&f, 0, 1);
-    quicly_path_health_t peer_status;
-    ok(quicly_get_path_health(f.server, 1, &peer_status) == 0 && peer_status.peer_is_backup);
+    quicly_path_stats_t peer_status;
+    ok(quicly_get_path_stats(f.server, 1, &peer_status) == 0 && peer_status.peer_is_backup);
     ok(quicly_get_first_timeout(f.client) > quic_now);
     /* deliberately prefer the peer's backup for unbound data: custom policy is not forced to use built-in ranking. */
     f.client_policy.data = 2;
@@ -311,10 +311,10 @@ static void test_custom_recovery_data_policy(void)
         custom_recovery_round(&f, 2, 1);
     quicly_stats_t before, after;
     quicly_get_stats(f.client, &before);
-    quicly_path_health_t health = {0};
+    quicly_path_stats_t health = {0};
     do {
         custom_recovery_round(&f, 2, 1);
-        ok(quicly_get_path_health(f.client, 1, &health) == 0);
+        ok(quicly_get_path_stats(f.client, 1, &health) == 0);
     } while (quic_now < until && health.pto_count < 2);
     ok(health.pto_count >= 2);
     for (size_t i = 0; i < 100; ++i)
@@ -330,25 +330,23 @@ static void test_custom_recovery_health(void)
 {
     custom_recovery_fixture_t f;
     custom_recovery_setup(&f);
-    quicly_path_health_t h = {0};
+    quicly_path_stats_t h = {0};
     quicly_rtt_init(&f.client->path_spaces[1]->loss.rtt, &quic_ctx.egress[0].loss, 17);
-    ok(quicly_get_path_health(f.client, 1, &h) == 0);
+    ok(quicly_get_path_stats(f.client, 1, &h) == 0);
     ok(h.path_index == 1 && h.path_id == 1 && h.peer_is_backup && h.validated && !h.probe_only && !h.abandoned);
-    ok(!h.rtt_is_sampled && h.rtt_smoothed == 17);
+    ok(h.rtt.latest == 0 && h.rtt.smoothed == 17);
     float samples[] = {0.25f, 0.625f};
     for (size_t i = 0; i < PTLS_ELEMENTSOF(samples); ++i) {
         quicly_rtt_init(&f.client->path_spaces[1]->loss.rtt, &quic_ctx.egress[0].loss, 17);
         quicly_rtt_update(&f.client->path_spaces[1]->loss.rtt, samples[i], 0, quic_now);
         f.client->path_spaces[1]->loss.pto_count = i == 0 ? -1 : 2;
-        ok(quicly_get_path_health(f.client, 1, &h) == 0);
-        ok(h.rtt_is_sampled && fabsf(h.rtt_smoothed - samples[i]) < 0.00001f);
+        ok(quicly_get_path_stats(f.client, 1, &h) == 0);
+        ok(h.rtt.latest != 0 && fabsf(h.rtt.smoothed - samples[i]) < 0.00001f);
         ok(h.pto_count == (i == 0 ? -1 : 2));
-        quicly_path_stats_t legacy;
-        ok(quicly_get_path_stats(f.client, 1, &legacy) == 0 && legacy.rtt_smoothed == 0);
     }
-    quicly_path_health_t saved = h;
-    ok(quicly_get_path_health(f.client, SIZE_MAX, &h) == -1 && memcmp(&h, &saved, sizeof(h)) == 0);
-    ok(quicly_get_path_health(f.client, 3, &h) == -1 && memcmp(&h, &saved, sizeof(h)) == 0);
+    quicly_path_stats_t saved = h;
+    ok(quicly_get_path_stats(f.client, SIZE_MAX, &h) == -1 && memcmp(&h, &saved, sizeof(h)) == 0);
+    ok(quicly_get_path_stats(f.client, 3, &h) == -1 && memcmp(&h, &saved, sizeof(h)) == 0);
     /* address candidates have distinct local indices but share their wire path's recovery state. */
     struct sockaddr_in remote = {.sin_family = AF_INET, .sin_port = htons(30000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
     struct sockaddr_in local = {.sin_family = AF_INET, .sin_port = htons(40000), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
@@ -357,29 +355,29 @@ static void test_custom_recovery_health(void)
     ok(open_path(f.client, &candidate, 1, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
     unlock_now(f.client);
     ok(candidate != 1);
-    ok(quicly_get_path_health(f.client, candidate, &h) == 0);
+    ok(quicly_get_path_stats(f.client, candidate, &h) == 0);
     ok(h.path_index == candidate && h.path_id == 1 && h.probe_only && !h.validated);
-    ok(h.pto_count == saved.pto_count && h.rtt_smoothed == saved.rtt_smoothed && h.peer_is_backup);
+    ok(h.pto_count == saved.pto_count && h.rtt.smoothed == saved.rtt.smoothed && h.peer_is_backup);
     ok(delete_path(f.client, candidate) == 0);
-    ok(quicly_get_path_health(f.client, candidate, &h) == 0 && h.abandoned);
+    ok(quicly_get_path_stats(f.client, candidate, &h) == 0 && h.abandoned);
     ok(destroy_path_state(f.client, candidate) == 0);
-    ok(quicly_get_path_health(f.client, candidate, &h) == -1);
+    ok(quicly_get_path_stats(f.client, candidate, &h) == -1);
     size_t reused;
     lock_now(f.client, 1);
     ok(open_path(f.client, &reused, 0, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
     unlock_now(f.client);
-    ok(quicly_get_path_health(f.client, reused, &h) == 0 && h.path_id == 0 && h.path_index != h.path_id);
+    ok(quicly_get_path_stats(f.client, reused, &h) == 0 && h.path_id == 0 && h.path_index != h.path_id);
     /* reuse the original candidate slot with its original path ID; stale abandonment must not leak into the snapshot. */
     lock_now(f.client, 1);
     ok(open_path(f.client, &reused, 1, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
     unlock_now(f.client);
     ok(reused == candidate);
-    ok(quicly_get_path_health(f.client, reused, &h) == 0 && !h.abandoned && h.probe_only && h.path_id == 1);
+    ok(quicly_get_path_stats(f.client, reused, &h) == 0 && !h.abandoned && h.probe_only && h.path_id == 1);
     ok(quicly_abandon_path(f.client, 1, QUICLY_PATH_ABANDON_ERROR_APPLICATION) == 0);
-    ok(quicly_get_path_health(f.client, 1, &h) == 0 && h.abandoned && h.path_id == 1);
+    ok(quicly_get_path_stats(f.client, 1, &h) == 0 && h.abandoned && h.path_id == 1);
     ok(destroy_path_state(f.client, candidate) == 0);
     ok(destroy_path_state(f.client, 1) == 0);
-    ok(quicly_get_path_health(f.client, 1, &h) == -1);
+    ok(quicly_get_path_stats(f.client, 1, &h) == -1);
     uint32_t fresh_path_id = 0;
     for (size_t i = 0; i < PTLS_ELEMENTSOF(f.client->path_spaces); ++i)
         if (f.client->path_spaces[i] != NULL && f.client->path_spaces[i]->path_id >= fresh_path_id)
@@ -389,8 +387,8 @@ static void test_custom_recovery_health(void)
     ok(open_path(f.client, &reused, fresh_path_id, (struct sockaddr *)&remote, (struct sockaddr *)&local) == 0);
     unlock_now(f.client);
     ok(reused == 1);
-    ok(quicly_get_path_health(f.client, reused, &h) == 0 && h.path_index == 1 && h.path_id == fresh_path_id);
-    ok(!h.abandoned && h.probe_only && h.pto_count == 0 && !h.rtt_is_sampled && !h.peer_is_backup);
+    ok(quicly_get_path_stats(f.client, reused, &h) == 0 && h.path_index == 1 && h.path_id == fresh_path_id);
+    ok(!h.abandoned && h.probe_only && h.pto_count == 0 && h.rtt.latest == 0 && !h.peer_is_backup);
     custom_recovery_free(&f);
 }
 

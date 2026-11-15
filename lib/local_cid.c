@@ -31,7 +31,7 @@ static int has_pending(quicly_local_cid_set_t *set)
  */
 static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
 {
-    if (set->_encryptor == NULL || set->plaintext.sequence >= QUICLY_MAX_PATH_ID)
+    if (set->_encryptor == NULL || set->plaintext.sequence >= QUICLY_MAX_CID_SEQUENCE)
         return 0;
 
     set->cids[idx].sequence = set->plaintext.sequence;
@@ -196,8 +196,8 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
         return 0;
     }
 
-    /* it is a protocol violation for the remote peer to retire the only CID that is available to it */
-    if (becomes_empty && (set->_size > 1 || set->_encryptor == NULL || set->plaintext.sequence >= QUICLY_MAX_PATH_ID))
+    /* peer must not retire the only CID on path 0 */
+    if (becomes_empty && set->plaintext.path_id == 0)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     /* retire given CID */
@@ -256,7 +256,7 @@ int quicly_local_cid_rotate(quicly_local_cid_set_t *set, int *exhausted)
 
     /* replace all or nothing; once there are not enough CID sequence numbers, there will never be, as `sequence` never decreases while the
      * number of CIDs in use decreases only when `sequence` reaches the maximum */
-    if (set->plaintext.sequence + num_cids > QUICLY_MAX_PATH_ID) {
+    if (set->plaintext.sequence + num_cids > QUICLY_MAX_CID_SEQUENCE) {
         *exhausted = 1;
         return 0;
     }

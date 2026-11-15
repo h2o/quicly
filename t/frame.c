@@ -186,9 +186,122 @@ static void test_mozquic(void)
     quicly_decode_stream_frame(type_flags, &p, p + 9, &frame);
 }
 
+static void test_multipath_frames(void)
+{
+    uint8_t buf[256], *end;
+    const uint8_t *src;
+
+    { /* MAX_PATH_ID */
+        quicly_max_path_id_frame_t frame = {0};
+        end = quicly_encode_max_path_id_frame(buf, 0x1234);
+        ok((size_t)(end - buf) == quicly_max_path_id_frame_capacity(0x1234));
+        src = buf + 2;
+        ok(quicly_decode_max_path_id_frame(&src, end, &frame) == 0 && src == end && frame.max_path_id == 0x1234);
+        src = buf + 2;
+        ok(quicly_decode_max_path_id_frame(&src, end - 1, &frame) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    }
+
+    { /* PATHS_BLOCKED */
+        quicly_paths_blocked_frame_t frame = {0};
+        end = quicly_encode_paths_blocked_frame(buf, 7);
+        ok((size_t)(end - buf) == quicly_paths_blocked_frame_capacity(7));
+        src = buf + 2;
+        ok(quicly_decode_paths_blocked_frame(&src, end, &frame) == 0 && src == end && frame.max_path_id == 7);
+        src = buf + 2;
+        ok(quicly_decode_paths_blocked_frame(&src, buf + 2, &frame) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    }
+
+    { /* PATH_CIDS_BLOCKED */
+        quicly_path_cids_blocked_frame_t frame = {0};
+        end = quicly_encode_path_cids_blocked_frame(buf, 3, 42);
+        ok((size_t)(end - buf) == quicly_path_cids_blocked_frame_capacity(3, 42));
+        src = buf + 2;
+        ok(quicly_decode_path_cids_blocked_frame(&src, end, &frame) == 0 && src == end);
+        ok(frame.path_id == 3 && frame.next_sequence == 42);
+        src = buf + 2;
+        ok(quicly_decode_path_cids_blocked_frame(&src, end - 1, &frame) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    }
+
+    { /* PATH_STATUS_AVAILABLE and PATH_STATUS_BACKUP */
+        for (int is_backup = 0; is_backup < 2; ++is_backup) {
+            quicly_path_status_frame_t frame = {0};
+            end = quicly_encode_path_status_frame(buf, is_backup, 2, 99);
+            ok((size_t)(end - buf) == quicly_path_status_frame_capacity(is_backup, 2, 99));
+            src = buf;
+            uint64_t type = ptls_decode_quicint(&src, end);
+            ok(type == (is_backup ? QUICLY_FRAME_TYPE_PATH_STATUS_BACKUP : QUICLY_FRAME_TYPE_PATH_STATUS_AVAILABLE));
+            ok(quicly_decode_path_status_frame(&src, end, &frame) == 0 && src == end);
+            ok(frame.path_id == 2 && frame.sequence == 99);
+            src = buf + 2;
+            ok(quicly_decode_path_status_frame(&src, end - 1, &frame) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+        }
+    }
+
+    { /* PATH_ABANDON */
+        quicly_path_abandon_frame_t frame = {0};
+        end = quicly_encode_path_abandon_frame(buf, 5, QUICLY_PATH_ABANDON_ERROR_UNSTABLE_OR_POOR);
+        ok((size_t)(end - buf) == quicly_path_abandon_frame_capacity(5, QUICLY_PATH_ABANDON_ERROR_UNSTABLE_OR_POOR));
+        src = buf + 2;
+        ok(quicly_decode_path_abandon_frame(&src, end, &frame) == 0 && src == end);
+        ok(frame.path_id == 5 && frame.error_code == QUICLY_PATH_ABANDON_ERROR_UNSTABLE_OR_POOR);
+        src = buf + 2;
+        ok(quicly_decode_path_abandon_frame(&src, end - 1, &frame) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    }
+
+    { /* PATH_NEW_CONNECTION_ID */
+        static const uint8_t cid[8] = {1, 2, 3, 4, 5, 6, 7, 8}, srt[16] = {9, 8, 7, 6};
+        quicly_path_new_connection_id_frame_t frame = {0};
+        end = quicly_encode_path_new_connection_id_frame(buf, 2, 4, 1, cid, sizeof(cid), srt);
+        ok((size_t)(end - buf) == quicly_path_new_connection_id_frame_capacity(2, 4, 1, sizeof(cid)));
+        src = buf + 2;
+        ok(quicly_decode_path_new_connection_id_frame(&src, end, &frame) == 0 && src == end);
+        ok(frame.path_id == 2 && frame.base.sequence == 4 && frame.base.retire_prior_to == 1);
+        ok(frame.base.cid.len == sizeof(cid) && memcmp(frame.base.cid.base, cid, sizeof(cid)) == 0);
+        ok(memcmp(frame.base.stateless_reset_token, srt, sizeof(srt)) == 0);
+        src = buf + 2;
+        ok(quicly_decode_path_new_connection_id_frame(&src, end - 1, &frame) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    }
+
+    { /* PATH_RETIRE_CONNECTION_ID */
+        quicly_path_retire_connection_id_frame_t frame = {0};
+        end = quicly_encode_path_retire_connection_id_frame(buf, 1, 12);
+        ok((size_t)(end - buf) == quicly_path_retire_connection_id_frame_capacity(1, 12));
+        src = buf + 2;
+        ok(quicly_decode_path_retire_connection_id_frame(&src, end, &frame) == 0 && src == end);
+        ok(frame.path_id == 1 && frame.sequence == 12);
+        src = buf + 2;
+        ok(quicly_decode_path_retire_connection_id_frame(&src, end - 1, &frame) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+    }
+
+    { /* PATH_ACK and PATH_ACK_ECN */
+        quicly_ranges_t ranges;
+        uint64_t zero_ecn[3] = {0}, ecn_counts[3] = {10, 20, 30};
+        uint64_t path_id;
+        quicly_ack_frame_t ack;
+        quicly_ranges_init(&ranges);
+        quicly_ranges_add(&ranges, 5, 8);
+        for (int is_ecn = 0; is_ecn < 2; ++is_ecn) {
+            end = quicly_encode_path_ack_frame(buf, buf + sizeof(buf), 3, &ranges, is_ecn ? ecn_counts : zero_ecn, 15);
+            ok(end != NULL);
+            src = buf;
+            uint64_t type = ptls_decode_quicint(&src, end);
+            ok(type == (is_ecn ? QUICLY_FRAME_TYPE_PATH_ACK_ECN : QUICLY_FRAME_TYPE_PATH_ACK));
+            ok(quicly_decode_path_ack_frame(&src, end, &path_id, &ack, is_ecn) == 0 && src == end);
+            ok(path_id == 3 && ack.largest_acknowledged == 7 && ack.smallest_acknowledged == 5 && ack.ack_delay == 15);
+            if (is_ecn)
+                ok(ack.ecn_counts[0] == 10 && ack.ecn_counts[1] == 20 && ack.ecn_counts[2] == 30);
+            src = buf;
+            (void)ptls_decode_quicint(&src, end);
+            ok(quicly_decode_path_ack_frame(&src, end - 1, &path_id, &ack, is_ecn) == QUICLY_TRANSPORT_ERROR_FRAME_ENCODING);
+        }
+        quicly_ranges_clear(&ranges);
+    }
+}
+
 void test_frame(void)
 {
     subtest("ack-decode", test_ack_decode);
     subtest("ack-encode", test_ack_encode);
+    subtest("multipath-frames", test_multipath_frames);
     subtest("mozquic", test_mozquic);
 }

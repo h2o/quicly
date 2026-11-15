@@ -760,6 +760,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
     quicly_error_t ret;
     quicly_conn_t *conn = NULL;
     int64_t exit_at = INT64_MAX;
+    int close_called = 0;
 
     signal(SIGTERM, on_client_signal);
 
@@ -858,7 +859,6 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                                     enqueue_requests_at = ceil(now + request_interval);
                                 }
                             } else {
-                                static int close_called;
                                 if (!close_called) {
                                     dump_stats(stderr, conn);
                                     quicly_close(conn, 0, "");
@@ -874,7 +874,8 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             ret = send_pending(fd, conn);
             if (ret != 0) {
                 ech_save_retry_configs();
-                dump_stats(stderr, conn);
+                if (!close_called)
+                    dump_stats(stderr, conn);
                 quicly_free(conn);
                 conn = NULL;
                 if (delivery_stats)
@@ -1341,6 +1342,7 @@ static void usage(const char *cmd)
            "  --jumpstart-default <wnd> jumpstart CWND size for new connections, in packets\n"
            "  --jumpstart-max <wnd>     maximum jumpstart CWND size for resuming connections\n"
            "  -I timeout                idle timeout (in milliseconds; default: 30,000)\n"
+           "  --initial-max-path-id <N> enable multipath (RFC 10069) with specified max path ID\n"
            "  -K num-packets            perform key update every num-packets packets\n"
            "  -l log-file               file to log traffic secrets\n"
            "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
@@ -1767,11 +1769,14 @@ int main(int argc, char **argv)
             } else if (strcmp(longopts[opt_index].name, "exit-after-handshake") == 0) {
                 exit_after_handshake = 1;
             } else if (strcmp(longopts[opt_index].name, "initial-max-path-id") == 0) {
-                if (sscanf(optarg, "%" SCNu64, &ctx.transport_params.initial_max_path_id) != 1 ||
-                    ctx.transport_params.initial_max_path_id > QUICLY_MAX_PATH_ID) {
+                char *endptr;
+                errno = 0;
+                unsigned long long val = strtoull(optarg, &endptr, 10);
+                if (*optarg < '0' || *optarg > '9' || *endptr != '\0' || errno == ERANGE || val > QUICLY_MAX_PATH_ID) {
                     fprintf(stderr, "failed to parse initial-max-path-id: %s\n", optarg);
                     exit(1);
                 }
+                ctx.transport_params.initial_max_path_id = val;
                 ctx.transport_params.enable_multipath = 1;
             } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
                 return cmd_calc_initial_secret(optarg);
