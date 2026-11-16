@@ -155,6 +155,56 @@ static void simple_http(void)
     ok(quicly_num_streams(server) == 0);
 }
 
+/* `num_packets.ack_received_in_flight` counts the acknowledged packets that carried in-flight bytes, i.e. the ones whose bytes are
+ * in `num_bytes.ack_received`, whereas `num_packets.ack_received` also counts ACK-only packets. */
+static void test_ack_received_in_flight(void)
+{
+    const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
+    quicly_stream_t *client_stream, *server_stream;
+    quicly_stats_t before, mid, after;
+    quicly_error_t ret;
+
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, req, 4);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+
+    /* the server sends an ACK-only packet */
+    quicly_get_stats(server, &before);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+    quicly_get_stats(server, &mid);
+    ok(mid.num_packets.sent == before.num_packets.sent + 1);
+    ok(mid.num_bytes.sent > before.num_bytes.sent);
+
+    /* then a packet carrying stream data; the client's ACK covers both */
+    quicly_streambuf_egress_write(client_stream, req + 4, strlen(req) - 4);
+    quicly_streambuf_egress_shutdown(client_stream);
+    transmit(client, server);
+    quicly_streambuf_egress_write(server_stream, resp, strlen(resp));
+    quicly_streambuf_egress_shutdown(server_stream);
+    transmit(server, client);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(client, server);
+    quicly_get_stats(server, &after);
+
+    ok(after.num_packets.ack_received - before.num_packets.ack_received == 2);
+    ok(after.num_packets.ack_received_in_flight - before.num_packets.ack_received_in_flight == 1);
+    ok(after.num_bytes.ack_received > before.num_bytes.ack_received);
+
+    /* let both sides close the stream, so that the following tests start from a clean state */
+    for (int i = 0; i < 3; ++i) {
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(server, client);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(client, server);
+    }
+    ok(quicly_num_streams(client) == 0);
+    ok(quicly_num_streams(server) == 0);
+}
+
 static void test_reset_then_close(void)
 {
     quicly_stream_t *client_stream, *server_stream;
@@ -1107,6 +1157,7 @@ void test_simple(void)
 
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
+    subtest("ack-received-in-flight", test_ack_received_in_flight);
     subtest("reset-then-close", test_reset_then_close);
     subtest("send-then-close", test_send_then_close);
     subtest("reset-after-close", test_reset_after_close);
