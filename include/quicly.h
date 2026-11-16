@@ -166,6 +166,46 @@ QUICLY_CALLBACK_TYPE(void, update_open_count, ssize_t delta);
  * is complete.
  */
 QUICLY_CALLBACK_TYPE(void, async_handshake, ptls_t *tls);
+/**
+ * The events that drive the delivery rate estimator of a connection (see quicly/rate.h). Except for
+ * `QUICLY_RATEMETER_EVENT_RESET`, each is reported before the estimator handles it, so that the estimator passed alongside shows
+ * its state prior to the event.
+ */
+typedef enum en_quicly_ratemeter_event_type_t {
+    /**
+     * the estimator has been reset, as a new path has been promoted; reported after the reset
+     */
+    QUICLY_RATEMETER_EVENT_RESET,
+    /**
+     * the sender becomes CC-limited, from packet number `pn` on
+     */
+    QUICLY_RATEMETER_EVENT_ENTER_CC_LIMITED,
+    /**
+     * the sender stops being CC-limited, from packet number `pn` on
+     */
+    QUICLY_RATEMETER_EVENT_EXIT_CC_LIMITED,
+    /**
+     * an ACK frame newly acknowledged packets; `pn` and `sent_at` are those of the largest newly acknowledged packet, and
+     * `bytes_acked` is `num_bytes.ack_received` after the frame has been processed
+     */
+    QUICLY_RATEMETER_EVENT_ACK,
+} quicly_ratemeter_event_type_t;
+/**
+ * An event of the delivery rate estimator; see `quicly_ratemeter_event_type_t`. Fields that do not apply to the type are zero.
+ */
+typedef struct st_quicly_ratemeter_event_t {
+    quicly_ratemeter_event_type_t type;
+    int64_t now;
+    uint64_t pn;
+    uint64_t bytes_acked;
+    double sent_at;
+} quicly_ratemeter_event_t;
+/**
+ * Lets an application observe the events that drive the delivery rate estimator, e.g., to run an estimator of its own over them.
+ * Called synchronously, as often as once per ACK frame; it must not call back into the connection.
+ */
+QUICLY_CALLBACK_TYPE(void, on_ratemeter_event, quicly_conn_t *conn, const quicly_ratemeter_event_t *event,
+                     const quicly_ratemeter_t *meter);
 
 /**
  * crypto offload API
@@ -396,6 +436,10 @@ struct st_quicly_context_t {
      *
      */
     quicly_async_handshake_t *async_handshake;
+    /**
+     * optional callback for observing the events of the delivery rate estimator
+     */
+    quicly_on_ratemeter_event_t *on_ratemeter_event;
     /**
      * expand client hello so that it does not fit into one datagram
      */

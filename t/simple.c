@@ -155,6 +155,99 @@ static void simple_http(void)
     ok(quicly_num_streams(server) == 0);
 }
 
+static struct {
+    quicly_conn_t *conn;
+    size_t num_ack, num_enter, num_exit, num_violations;
+    uint64_t last_bytes_acked;
+} ratemeter_events;
+
+static void on_ratemeter_event(quicly_on_ratemeter_event_t *self, quicly_conn_t *conn, const quicly_ratemeter_event_t *event,
+                               const quicly_ratemeter_t *meter)
+{
+    if (conn != ratemeter_events.conn)
+        return;
+    /* each event is reported before the estimator handles it */
+    int cc_limited = quicly_ratemeter_is_cc_limited((quicly_ratemeter_t *)meter);
+    if (event->now != quic_now)
+        ++ratemeter_events.num_violations;
+    switch (event->type) {
+    case QUICLY_RATEMETER_EVENT_ENTER_CC_LIMITED:
+        ++ratemeter_events.num_enter;
+        if (cc_limited)
+            ++ratemeter_events.num_violations;
+        break;
+    case QUICLY_RATEMETER_EVENT_EXIT_CC_LIMITED:
+        ++ratemeter_events.num_exit;
+        if (!cc_limited)
+            ++ratemeter_events.num_violations;
+        break;
+    case QUICLY_RATEMETER_EVENT_ACK:
+        ++ratemeter_events.num_ack;
+        if (event->bytes_acked < ratemeter_events.last_bytes_acked || event->sent_at > quic_now)
+            ++ratemeter_events.num_violations;
+        ratemeter_events.last_bytes_acked = event->bytes_acked;
+        break;
+    default:
+        ++ratemeter_events.num_violations;
+        break;
+    }
+}
+
+static void test_ratemeter_event(void)
+{
+    static quicly_on_ratemeter_event_t cb = {on_ratemeter_event};
+    const char *req = "GET / HTTP/1.0\r\n\r\n";
+    static char resp[256 * 1024];
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *client_streambuf;
+    quicly_stats_t stats;
+    quicly_error_t ret;
+
+    memset(resp, 'a', sizeof(resp));
+    memset(&ratemeter_events, 0, sizeof(ratemeter_events));
+    ratemeter_events.conn = server;
+    quic_ctx.on_ratemeter_event = &cb;
+
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    client_streambuf = client_stream->data;
+    quicly_streambuf_egress_write(client_stream, req, strlen(req));
+    quicly_streambuf_egress_shutdown(client_stream);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+
+    /* a response that takes many round trips, so that the server becomes CC-limited */
+    quicly_streambuf_egress_write(server_stream, resp, sizeof(resp));
+    quicly_streambuf_egress_shutdown(server_stream);
+    for (int i = 0; i < 1000 && client_streambuf->super.ingress.off < sizeof(resp); ++i) {
+        quic_now += 1;
+        transmit(server, client);
+        quic_now += 1;
+        transmit(client, server);
+    }
+    ok(client_streambuf->super.ingress.off == sizeof(resp));
+
+    quic_ctx.on_ratemeter_event = NULL;
+
+    ok(ratemeter_events.num_violations == 0);
+    ok(ratemeter_events.num_ack != 0);
+    ok(ratemeter_events.num_enter != 0);
+    ok(ratemeter_events.num_enter - ratemeter_events.num_exit <= 1);
+    quicly_get_stats(server, &stats);
+    ok(ratemeter_events.last_bytes_acked == stats.num_bytes.ack_received);
+
+    /* let both sides close the stream, so that the following tests start from a clean state */
+    for (int i = 0; i < 3; ++i) {
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(server, client);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(client, server);
+    }
+    ok(quicly_num_streams(client) == 0);
+    ok(quicly_num_streams(server) == 0);
+}
+
 static void test_reset_then_close(void)
 {
     quicly_stream_t *client_stream, *server_stream;
@@ -1107,6 +1200,7 @@ void test_simple(void)
 
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
+    subtest("ratemeter-event", test_ratemeter_event);
     subtest("reset-then-close", test_reset_then_close);
     subtest("send-then-close", test_send_then_close);
     subtest("reset-after-close", test_reset_after_close);

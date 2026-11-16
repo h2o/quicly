@@ -1613,6 +1613,17 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int
                              use_loss_time);
 }
 
+static inline void notify_ratemeter_event(quicly_conn_t *conn, quicly_ratemeter_event_type_t type, uint64_t pn,
+                                          uint64_t bytes_acked, double sent_at)
+{
+    quicly_on_ratemeter_event_t *cb = conn->super.ctx->on_ratemeter_event;
+    if (cb == NULL)
+        return;
+    quicly_ratemeter_event_t event = {
+        .type = type, .now = conn->stash.now, .pn = pn, .bytes_acked = bytes_acked, .sent_at = sent_at};
+    cb->cb(cb, conn, &event, &conn->egress.ratemeter);
+}
+
 static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int sendbuf_full, int pacer_limited)
 {
     has_sendable_data = has_sendable_data && conn->super.remote.address_validation.validated;
@@ -1621,10 +1632,12 @@ static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int se
 
     if (quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter) != is_ratemeter_limited) {
         if (is_ratemeter_limited) {
+            notify_ratemeter_event(conn, QUICLY_RATEMETER_EVENT_ENTER_CC_LIMITED, conn->egress.packet_number, 0, 0);
             quicly_ratemeter_enter_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
             QUICLY_PROBE(ENTER_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
             QUICLY_LOG_CONN(enter_cc_limited, conn, { PTLS_LOG_ELEMENT_NUMBER(pn, conn->egress.packet_number); });
         } else {
+            notify_ratemeter_event(conn, QUICLY_RATEMETER_EVENT_EXIT_CC_LIMITED, conn->egress.packet_number, 0, 0);
             quicly_ratemeter_exit_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
             QUICLY_PROBE(EXIT_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
             QUICLY_LOG_CONN(exit_cc_limited, conn, { PTLS_LOG_ELEMENT_NUMBER(pn, conn->egress.packet_number); });
@@ -2238,6 +2251,7 @@ static quicly_error_t promote_path(quicly_conn_t *conn, size_t path_index)
 
     /* reset ratemeter */
     quicly_ratemeter_init(&conn->egress.ratemeter);
+    notify_ratemeter_event(conn, QUICLY_RATEMETER_EVENT_RESET, 0, 0, 0);
 
     /* remember PN when the path was promoted */
     conn->egress.pn_path_start = conn->egress.packet_number;
@@ -6704,9 +6718,12 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
     QUICLY_PROBE(ACK_DELAY_RECEIVED, conn, conn->stash.now, frame.ack_delay);
     QUICLY_LOG_CONN(ack_delay_received, conn, { PTLS_LOG_ELEMENT_NUMBER(ack_delay, frame.ack_delay); });
 
-    if (largest_newly_acked.pn != UINT64_MAX)
+    if (largest_newly_acked.pn != UINT64_MAX) {
+        notify_ratemeter_event(conn, QUICLY_RATEMETER_EVENT_ACK, largest_newly_acked.pn, conn->super.stats.num_bytes.ack_received,
+                               largest_newly_acked.sent_at);
         quicly_ratemeter_on_ack(&conn->egress.ratemeter, conn->stash.now, conn->super.stats.num_bytes.ack_received,
                                 largest_newly_acked.pn);
+    }
 
     /* ECN feedback is processed before the loss detection engine updates the largest acknowledged, and before OnPacketAckedCC, as
      * L4S feeds it to the marking estimator. */
