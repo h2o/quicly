@@ -53,11 +53,17 @@ void test_stream_concurrency(void)
         transmit(server, client);
     }
 
+    /* the stream limits advertised by the server are visible */
+    ok(quicly_get_egress_max_streams(client, 0) == limit);
+    ok(quicly_get_egress_max_streams(client, 1) == quic_ctx.transport_params.max_streams_uni);
+
     /* open as many streams as we can */
     for (i = 0; i < limit + 1; ++i) {
+        int can_open = quicly_get_local_next_stream_id(client, 0) / 4 < quicly_get_egress_max_streams(client, 0);
         ret = quicly_open_stream(client, client_streams + i, 0);
         assert(ret == 0);
         client_streambufs[i] = client_streams[i]->data;
+        ok(can_open == !client_streams[i]->streams_blocked);
         if (client_streams[i]->streams_blocked)
             break;
         ret = quicly_streambuf_egress_write(client_streams[i], "hello", 5);
@@ -96,9 +102,11 @@ void test_stream_concurrency(void)
     /* we would have free room now that RST of the server-sent side is ACKed */
     ok(server_streambuf->is_detached);
     ok(!client_streams[i]->streams_blocked);
+    ok(quicly_get_egress_max_streams(client, 0) == limit + 1);
     ++i;
 
     /* but we cannot open one more */
+    ok(quicly_get_local_next_stream_id(client, 0) / 4 >= quicly_get_egress_max_streams(client, 0));
     ret = quicly_open_stream(client, client_streams + i, 0);
     ok(ret == 0);
     ok(client_streams[i]->streams_blocked);
