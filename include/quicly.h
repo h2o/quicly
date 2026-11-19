@@ -524,6 +524,11 @@ struct st_quicly_conn_streamgroup_state_t {
          */                                                                                                                        \
         uint64_t ack_received;                                                                                                     \
         /**                                                                                                                        \
+         * Of `ack_received`, the packets that carried in-flight bytes; i.e., the packets counted in `num_bytes.ack_received`.     \
+         * ACK-only packets, and packets acknowledged after being declared lost, are not counted.                                  \
+         */                                                                                                                        \
+        uint64_t ack_received_in_flight;                                                                                           \
+        /**                                                                                                                        \
          * Total number of packets for which acknowledgements were received after being marked lost.                               \
          */                                                                                                                        \
         uint64_t late_acked;                                                                                                       \
@@ -758,6 +763,7 @@ typedef struct st_quicly_stats_t {
     apply(num_packets.lost, "num-packets.lost")                                                                                    \
     apply(num_packets.lost_time_threshold, "num-packets.lost-time-threshold")                                                      \
     apply(num_packets.ack_received, "num-packets.ack-received")                                                                    \
+    apply(num_packets.ack_received_in_flight, "num-packets.ack-received-in-flight")                                                \
     apply(num_packets.late_acked, "num-packets.late-acked")                                                                        \
     apply(num_packets.initial_received, "num-packets.initial-received")                                                            \
     apply(num_packets.zero_rtt_received, "num-packets.zero-rtt-received")                                                          \

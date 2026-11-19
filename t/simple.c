@@ -155,6 +155,134 @@ static void simple_http(void)
     ok(quicly_num_streams(server) == 0);
 }
 
+/* `num_packets.ack_received_in_flight` counts the acknowledged packets that carried in-flight bytes, i.e. the ones whose bytes are
+ * in `num_bytes.ack_received`, whereas `num_packets.ack_received` also counts ACK-only packets. */
+static void test_ack_received_in_flight(void)
+{
+    const char *req = "GET / HTTP/1.0\r\n\r\n", *resp = "HTTP/1.0 200 OK\r\n\r\nhello world";
+    quicly_stream_t *client_stream, *server_stream;
+    quicly_stats_t before, mid, after;
+    quicly_error_t ret;
+
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    quicly_streambuf_egress_write(client_stream, req, 4);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+
+    /* the server sends an ACK-only packet */
+    quicly_get_stats(server, &before);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+    quicly_get_stats(server, &mid);
+    ok(mid.num_packets.sent == before.num_packets.sent + 1);
+    ok(mid.num_bytes.sent > before.num_bytes.sent);
+
+    /* then a packet carrying stream data; the client's ACK covers both */
+    quicly_streambuf_egress_write(client_stream, req + 4, strlen(req) - 4);
+    quicly_streambuf_egress_shutdown(client_stream);
+    transmit(client, server);
+    quicly_streambuf_egress_write(server_stream, resp, strlen(resp));
+    quicly_streambuf_egress_shutdown(server_stream);
+    transmit(server, client);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(client, server);
+    quicly_get_stats(server, &after);
+
+    ok(after.num_packets.ack_received - before.num_packets.ack_received == 2);
+    ok(after.num_packets.ack_received_in_flight - before.num_packets.ack_received_in_flight == 1);
+    ok(after.num_bytes.ack_received > before.num_bytes.ack_received);
+
+    /* let both sides close the stream, so that the following tests start from a clean state */
+    for (int i = 0; i < 3; ++i) {
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(server, client);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(client, server);
+    }
+    ok(quicly_num_streams(client) == 0);
+    ok(quicly_num_streams(server) == 0);
+}
+
+/* packets acknowledged after being declared lost are counted in `num_packets.ack_received` but not in
+ * `num_packets.ack_received_in_flight`, as their bytes have already been removed from in-flight */
+static void test_ack_received_in_flight_late_ack(void)
+{
+    const char *req = "GET / HTTP/1.0\r\n\r\n";
+    static char resp[16 * 1024];
+    quicly_stream_t *client_stream, *server_stream;
+    test_streambuf_t *client_streambuf;
+    quicly_stats_t before, after;
+    quicly_error_t ret;
+
+    memset(resp, 'a', sizeof(resp));
+
+    ret = quicly_open_stream(client, &client_stream, 0);
+    ok(ret == 0);
+    client_streambuf = client_stream->data;
+    quicly_streambuf_egress_write(client_stream, req, strlen(req));
+    quicly_streambuf_egress_shutdown(client_stream);
+    transmit(client, server);
+    server_stream = quicly_get_stream(server, client_stream->stream_id);
+    ok(server_stream != NULL);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(server, client);
+
+    { /* the server sends a burst; the first packet is held back while the rest are delivered and acknowledged, so that the
+       * server declares the first one lost by the packet threshold */
+        quicly_address_t dest, src;
+        struct iovec datagrams[32];
+        static uint8_t buf[32 * 1500];
+        quicly_decoded_packet_t decoded[64];
+        size_t num_datagrams = PTLS_ELEMENTSOF(datagrams), num_decoded, i;
+
+        quicly_streambuf_egress_write(server_stream, resp, sizeof(resp));
+        quicly_streambuf_egress_shutdown(server_stream);
+        ret = quicly_send(server, &dest, &src, datagrams, &num_datagrams, buf, sizeof(buf));
+        ok(ret == 0);
+        ok(num_datagrams >= 4);
+
+        num_decoded = decode_packets(decoded, datagrams + 1, num_datagrams - 1);
+        for (i = 0; i != num_decoded; ++i) {
+            ret = quicly_receive(client, NULL, &fake_address.sa, decoded + i);
+            ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+        }
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        quicly_get_stats(server, &before);
+        transmit(client, server);
+        quicly_get_stats(server, &after);
+        ok(after.num_packets.lost == before.num_packets.lost + 1);
+
+        /* the held-back packet arrives late, and its acknowledgement is a late ack */
+        num_decoded = decode_packets(decoded, datagrams, 1);
+        for (i = 0; i != num_decoded; ++i) {
+            ret = quicly_receive(client, NULL, &fake_address.sa, decoded + i);
+            ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+        }
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        quicly_get_stats(server, &before);
+        transmit(client, server);
+        quicly_get_stats(server, &after);
+    }
+
+    ok(after.num_packets.late_acked == before.num_packets.late_acked + 1);
+    ok(after.num_packets.ack_received == before.num_packets.ack_received + 1);
+    ok(after.num_packets.ack_received_in_flight == before.num_packets.ack_received_in_flight);
+    ok(after.num_bytes.ack_received == before.num_bytes.ack_received);
+
+    /* let both sides close the stream, so that the following tests start from a clean state */
+    for (int i = 0; i < 3; ++i) {
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(server, client);
+        quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+        transmit(client, server);
+    }
+    ok(client_streambuf->super.ingress.off == sizeof(resp));
+    ok(quicly_num_streams(client) == 0);
+    ok(quicly_num_streams(server) == 0);
+}
+
 static void test_reset_then_close(void)
 {
     quicly_stream_t *client_stream, *server_stream;
@@ -1107,6 +1235,8 @@ void test_simple(void)
 
     subtest("handshake", test_handshake);
     subtest("simple-http", simple_http);
+    subtest("ack-received-in-flight", test_ack_received_in_flight);
+    subtest("ack-received-in-flight-late-ack", test_ack_received_in_flight_late_ack);
     subtest("reset-then-close", test_reset_then_close);
     subtest("send-then-close", test_send_then_close);
     subtest("reset-after-close", test_reset_after_close);
