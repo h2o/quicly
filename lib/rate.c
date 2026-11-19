@@ -103,7 +103,7 @@ static uint64_t to_speed(uint64_t bytes_acked, uint32_t elapsed)
     return bytes_acked * 1000 / elapsed;
 }
 
-void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate)
+void quicly_ratemeter_report(const quicly_ratemeter_t *meter, quicly_rate_t *rate)
 {
     { /* Calculate latest, or return if there are no samples at all. `latest` being reported will be the most recent "full" sample
        * if available, or else a partial sample. */

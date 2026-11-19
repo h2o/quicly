@@ -167,7 +167,7 @@ static void on_ratemeter_event(quicly_on_ratemeter_event_t *self, quicly_conn_t 
     if (conn != ratemeter_events.conn)
         return;
     /* each event is reported before the estimator handles it */
-    int cc_limited = quicly_ratemeter_is_cc_limited((quicly_ratemeter_t *)meter);
+    int cc_limited = quicly_ratemeter_is_cc_limited(meter);
     if (event->now != quic_now)
         ++ratemeter_events.num_violations;
     switch (event->type) {

@@ -93,7 +93,7 @@ void quicly_ratemeter_init(quicly_ratemeter_t *meter);
 /**
  * returns if currently marked as CC-limited
  */
-static int quicly_ratemeter_is_cc_limited(quicly_ratemeter_t *meter);
+static int quicly_ratemeter_is_cc_limited(const quicly_ratemeter_t *meter);
 /**
  * Notifies the estimator that the flow is becoming CC-limited at the point of sending packets *starting* from packet number `pn`.
  */
@@ -111,11 +111,11 @@ void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, int64_t now, uint64_t by
 /**
  * Returns the delivery rate estimate
  */
-void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate);
+void quicly_ratemeter_report(const quicly_ratemeter_t *meter, quicly_rate_t *rate);
 
 /* inline definitions */
 
-inline int quicly_ratemeter_is_cc_limited(quicly_ratemeter_t *meter)
+inline int quicly_ratemeter_is_cc_limited(const quicly_ratemeter_t *meter)
 {
     return meter->pn_cwnd_limited.start != UINT64_MAX && meter->pn_cwnd_limited.end == UINT64_MAX;
 }
