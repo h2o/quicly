@@ -1345,6 +1345,49 @@ static void test_set_cc(void)
     ok(strcmp(stats.cc.type->name, "reno") == 0);
 }
 
+static struct {
+    size_t num_reset, num_other;
+    int cc_limited_at_reset;
+} ratemeter_reset_events;
+
+static void on_ratemeter_reset_event(quicly_on_ratemeter_event_t *self, quicly_conn_t *conn, const quicly_ratemeter_event_t *event,
+                                     const quicly_ratemeter_t *meter)
+{
+    if (event->type == QUICLY_RATEMETER_EVENT_RESET) {
+        ++ratemeter_reset_events.num_reset;
+        /* RESET is reported after the estimator has been reset */
+        ratemeter_reset_events.cc_limited_at_reset = quicly_ratemeter_is_cc_limited(meter);
+        ok(event->pn == 0 && event->bytes_acked == 0 && event->sent_at == 0);
+    } else {
+        ++ratemeter_reset_events.num_other;
+    }
+}
+
+static void test_ratemeter_event_reset(void)
+{
+    static quicly_on_ratemeter_event_t cb = {on_ratemeter_reset_event};
+    quicly_context_t ctx = quic_ctx;
+    ctx.on_ratemeter_event = &cb;
+    quicly_conn_t *conn;
+
+    memset(&ratemeter_reset_events, 0, sizeof(ratemeter_reset_events));
+    ok(quicly_connect(&conn, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                      NULL) == 0);
+
+    /* put the estimator in the CC-limited state, so that the reset is observable */
+    quicly_ratemeter_enter_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
+    ok(quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter));
+
+    ok(new_path(conn, 1, &fake_address.sa, NULL) == 0);
+    ok(promote_path(conn, 1) == 0);
+
+    ok(ratemeter_reset_events.num_reset == 1);
+    ok(ratemeter_reset_events.num_other == 0);
+    ok(!ratemeter_reset_events.cc_limited_at_reset);
+
+    quicly_free(conn);
+}
+
 static void test_cc_accel_context(void)
 {
     quicly_init_cc_t *const policies[] = {&quicly_cc_cubic_init, &quicly_cc_cuback_init};
@@ -3693,6 +3736,7 @@ int main(int argc, char **argv)
     subtest("lower-receive-window", test_lower_receive_window);
     subtest("state-exhaustion", test_state_exhaustion);
     subtest("migration-during-handshake", test_migration_during_handshake);
+    subtest("ratemeter-event-reset", test_ratemeter_event_reset);
     subtest("pto-with-backup-path-probe", test_pto_with_backup_path_probe);
 
     subtest("stats-foreach", test_stats_foreach);
