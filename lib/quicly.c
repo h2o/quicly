@@ -1542,6 +1542,11 @@ quicly_stream_id_t quicly_get_ingress_max_streams(quicly_conn_t *conn, int uni)
     return maxsender->committed;
 }
 
+uint64_t quicly_get_egress_max_streams(quicly_conn_t *conn, int uni)
+{
+    return uni ? conn->egress.max_streams.uni.count : conn->egress.max_streams.bidi.count;
+}
+
 void quicly_get_max_data(quicly_conn_t *conn, uint64_t *send_permitted, uint64_t *sent, uint64_t *consumed, uint64_t *shifted)
 {
     if (send_permitted != NULL)

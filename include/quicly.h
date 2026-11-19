@@ -1498,6 +1498,13 @@ quicly_conn_t *quicly_resume_handshake(ptls_t *tls);
  */
 quicly_stream_id_t quicly_get_ingress_max_streams(quicly_conn_t *conn, int uni);
 /**
+ * Returns the maximum number of streams of the given type that the peer currently allows the local endpoint to open (i.e., the
+ * largest value received through the transport parameters or MAX_STREAMS frames). `quicly_open_stream` opens streams beyond this
+ * limit as `streams_blocked`; applications that prefer to refuse rather than queue can test whether opening a stream now would be
+ * blocked by checking `quicly_get_local_next_stream_id(conn, uni) / 4 >= quicly_get_egress_max_streams(conn, uni)`.
+ */
+uint64_t quicly_get_egress_max_streams(quicly_conn_t *conn, int uni);
+/**
  * Iterates through each stream. When the callback returns a non-zero value, bails out from the iteration, returning the returned
  * value.
  */
