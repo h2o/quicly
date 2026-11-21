@@ -241,4 +241,13 @@ void test_local_cid(void)
     ok(quicly_local_cid_retire(&small_set, 0, &has_pending) == 0);
     ok(has_pending);
     ok(exists_once(&small_set, 3, QUICLY_LOCAL_CID_STATE_PENDING));
+
+    /* standalone CID set remains valid after relocation by value */
+    quicly_cid_plaintext_t cid_plaintext3 = {0};
+    quicly_local_cid_set_t orig_set, relocated_set;
+    quicly_local_cid_init_set(&orig_set, &test_encryptor, &cid_plaintext3);
+    relocated_set = orig_set;
+    memset(&orig_set, 0xff, sizeof(orig_set));
+    ok(quicly_local_cid_set_size(&relocated_set, NUM_CIDS) != 0);
+    ok(exists_once(&relocated_set, 1, QUICLY_LOCAL_CID_STATE_PENDING));
 }

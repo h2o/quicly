@@ -27,14 +27,15 @@ static int has_pending(quicly_local_cid_set_t *set)
 }
 
 /**
- * generates a new CID and increments path_id. returns true if successfully generated.
+ * generates a new CID and assigns the next tag and sequence. returns true if successfully generated.
  */
 static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
 {
-    if (set->_encryptor == NULL || *set->_next_cid_tag >= QUICLY_MAX_PATH_ID)
+    uint8_t *next_cid_tag = set->_next_cid_tag != NULL ? set->_next_cid_tag : &set->_local_next_cid_tag;
+    if (set->_encryptor == NULL || *next_cid_tag >= QUICLY_MAX_PATH_ID)
         return 0;
 
-    uint8_t tag = (*set->_next_cid_tag)++;
+    uint8_t tag = (*next_cid_tag)++;
     set->plaintext.path_id = tag;
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
     set->cids[idx].cid_tag = tag;
@@ -82,9 +83,9 @@ void quicly_local_cid_init_set_shared(quicly_local_cid_set_t *set, quicly_cid_en
     *set = (quicly_local_cid_set_t){
         ._encryptor = encryptor,
         ._size = 1,
+        ._next_cid_tag = next_cid_tag,
         ._allow_empty = allow_empty != 0,
     };
-    set->_next_cid_tag = next_cid_tag != NULL ? next_cid_tag : &set->_local_next_cid_tag;
 
     /* if provided, set master id */
     if (new_cid != NULL) {
