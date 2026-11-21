@@ -4552,8 +4552,19 @@ static void test_multipath_negotiation(void)
         quicly_decoded_packet_t dec;
         ok(decode_packets(&dec, &forged_iov, 1) == 1);
         ok(quicly_receive(server, NULL, &fake_address.sa, &dec) == QUICLY_ERROR_PACKET_IGNORED);
+        ptls_aead_context_t *cached_next = server->application->cipher.ingress.next_aead;
+        ok(cached_next != NULL);
         ok(server->application->cipher.ingress.key_phase.prepared == prepared_before);
         ok(memcmp(server->application->cipher.ingress.secret, secret_before, sizeof(secret_before)) == 0);
+        /* second forged packet reuses cached candidate AEAD without re-deriving; valid packet then promotes it */
+        ok(decode_packets(&dec, &forged_iov, 1) == 1);
+        ok(quicly_receive(server, NULL, &fake_address.sa, &dec) == QUICLY_ERROR_PACKET_IGNORED);
+        ok(server->application->cipher.ingress.next_aead == cached_next);
+        client->application->cipher.egress.key_update_pn.next = client->application->cipher.egress.packets_sent;
+        client->application->cipher.egress.key_update_pn.next_at = quic_now;
+        ok(send_raw_1rtt_frame(client, server, 0, NULL, &fake_address.sa, &ping, 1) == 0);
+        ok(server->application->cipher.ingress.next_aead == NULL &&
+           server->application->cipher.ingress.key_phase.prepared == prepared_before + 1);
         free_multipath_regression_peers(client, server, s);
     }
 
@@ -5917,6 +5928,62 @@ static void test_multipath_custom_recovery(void)
         ok(quicly_send(f.client, &dst, &src, &pkt, &cnt, buf, sizeof(buf)) == 0 && cnt == 1 &&
            dst.sin.sin_port == get_path(f.client, 0)->address.remote.sin.sin_port &&
            f.client->super.stats.num_frames_sent.datagram == ub_before + 2 && !quicly_has_datagram_frames(f.client));
+
+        /* rotated high DCID sequence number lookup, latched CID limit on PATH_CIDS_BLOCKED, and per-DATAGRAM backup preference */
+        uint64_t saved_dcid_seq = get_path(f.client, 0)->dcid;
+        uint64_t saved_slot_seq = f.client->path_spaces[0]->remote_cid_set.cids[0].sequence;
+        f.client->path_spaces[0]->remote_cid_set.cids[0].sequence =
+            PTLS_ELEMENTSOF(f.client->path_spaces[0]->remote_cid_set.cids) + 5;
+        get_path(f.client, 0)->dcid = f.client->path_spaces[0]->remote_cid_set.cids[0].sequence;
+        ok(path_max_datagram_frame_space(f.client, 0) > 0);
+        f.client->path_spaces[0]->remote_cid_set.cids[0].sequence = saved_slot_seq;
+        get_path(f.client, 0)->dcid = saved_dcid_seq;
+
+        uint64_t saved_ctx_cid_limit = f.client->super.ctx->transport_params.active_connection_id_limit;
+        uint8_t saved_conn_cid_limit = f.client->local_cid_limit;
+        uint64_t saved_largest_exp = f.client->path_spaces[1]->remote_cid_set._largest_sequence_expected;
+        uint64_t saved_next_exp = f.client->path_spaces[1]->next_expected_cid_seq;
+        f.client->local_cid_limit = 2;
+        f.client->super.ctx->transport_params.active_connection_id_limit = QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT;
+        f.client->path_spaces[1]->remote_cid_set._largest_sequence_expected = 1;
+        f.client->path_spaces[1]->next_expected_cid_seq = 0;
+        f.client->path_spaces[1]->path_cids_blocked.sender = QUICLY_SENDER_STATE_NONE;
+        schedule_path_cids_blocked(f.client, f.client->path_spaces[1]);
+        ok(f.client->path_spaces[1]->path_cids_blocked.sequence == 0);
+        f.client->path_spaces[1]->path_cids_blocked.sender = QUICLY_SENDER_STATE_NONE;
+        f.client->path_spaces[1]->remote_cid_set._largest_sequence_expected = saved_largest_exp;
+        f.client->path_spaces[1]->next_expected_cid_seq = saved_next_exp;
+        f.client->local_cid_limit = saved_conn_cid_limit;
+        f.client->egress.pending_flows = 0;
+        f.client->super.ctx->transport_params.active_connection_id_limit = saved_ctx_cid_limit;
+
+        /* built-in scheduler: 1280-MTU backup path 0 sends only the 1200B datagram and leaves 64B for 1200-MTU primary path 1 */
+        quicly_path_scheduler_t *saved_sched = f.client->super.ctx->path_scheduler;
+        f.client->super.ctx->path_scheduler = &quicly_default_path_scheduler;
+        f.client->path_spaces[0]->is_backup = 1;
+        f.client->path_spaces[1]->is_backup = 0;
+        f.client->path_spaces[0]->pn_space->send_ack_at = INT64_MAX;
+        f.client->path_spaces[0]->loss.alarm_at = INT64_MAX;
+        f.client->path_spaces[1]->pn_space->send_ack_at = INT64_MAX;
+        f.client->path_spaces[1]->loss.alarm_at = INT64_MAX;
+        quicly_send_datagram_frames(f.client, ub_dgs, 2);
+        quicly_send_context_t bk_s = {.current = {.first_byte = -1},
+                                      .datagrams = &pkt,
+                                      .max_datagrams = 1,
+                                      .payload_buf = {.datagram = buf, .end = buf + sizeof(buf)}};
+        lock_now(f.client, 0);
+        uint64_t bk_dg_before = f.client->super.stats.num_frames_sent.datagram;
+        size_t bk_pkts = 0;
+        ok(quicly_send_on_path(f.client, &bk_s, 0, &bk_pkts) == 0 && bk_pkts == 1 &&
+           f.client->super.stats.num_frames_sent.datagram == bk_dg_before + 1 &&
+           f.client->egress.datagram_frame_payloads.count == 1);
+        unlock_now(f.client);
+        cnt = 1;
+        ok(quicly_send(f.client, &dst, &src, &pkt, &cnt, buf, sizeof(buf)) == 0 && cnt == 1 &&
+           dst.sin.sin_port == get_path(f.client, 1)->address.remote.sin.sin_port &&
+           f.client->super.stats.num_frames_sent.datagram == bk_dg_before + 2 && !quicly_has_datagram_frames(f.client));
+        f.client->path_spaces[0]->is_backup = 0;
+        f.client->super.ctx->path_scheduler = saved_sched;
 
         /* retiring path zero's final CID on another active path succeeds after tag exhaustion, while connection-last fails */
         f.server->next_local_cid_tag = QUICLY_MAX_PATH_ID;
