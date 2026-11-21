@@ -1038,8 +1038,10 @@ inline uint8_t *quicly_encode_datagram_frame(uint8_t *dst, ptls_iovec_t payload)
 {
     dst = quicly_encodev(dst, QUICLY_FRAME_TYPE_DATAGRAM_WITHLEN);
     dst = quicly_encodev(dst, payload.len);
-    memcpy(dst, payload.base, payload.len);
-    dst += payload.len;
+    if (payload.len != 0) {
+        memcpy(dst, payload.base, payload.len);
+        dst += payload.len;
+    }
     return dst;
 }
 
