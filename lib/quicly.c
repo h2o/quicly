@@ -401,6 +401,7 @@ struct st_quicly_conn_t {
     uint8_t next_local_cid_tag;
     uint8_t local_cid_limit;
     uint8_t local_multipath_enabled : 1;
+    uint16_t local_cid_path_map_capacity;
     uint16_t *local_cid_path_map;
     /**
      * the initial context
@@ -699,13 +700,19 @@ static quicly_error_t sync_local_cid_map(quicly_conn_t *conn, quicly_path_space_
 {
     if (conn->super.ctx->cid_encryptor == NULL || !quicly_is_multipath(conn))
         return 0;
-    if (conn->local_cid_path_map == NULL) {
-        size_t map_bytes = sizeof(*conn->local_cid_path_map) * (QUICLY_MAX_PATH_ID + 1);
-        if ((conn->local_cid_path_map = malloc(map_bytes)) == NULL)
+    if (conn->local_cid_path_map_capacity == 0 || conn->local_cid_path_map_capacity < conn->next_local_cid_tag) {
+        size_t old_capacity = conn->local_cid_path_map_capacity;
+        size_t capacity = old_capacity != 0 ? old_capacity * 2 : 16;
+        while (capacity < conn->next_local_cid_tag)
+            capacity *= 2;
+        uint16_t *map = realloc(conn->local_cid_path_map, capacity * sizeof(*map));
+        if (map == NULL)
             return PTLS_ERROR_NO_MEMORY;
-        memset(conn->local_cid_path_map, 0xff, map_bytes);
-        if (conn->path_spaces[0] != NULL && conn->path_spaces[0] != ps)
-            sync_local_cid_entries(conn->local_cid_path_map, conn->path_spaces[0]);
+        memset(map + old_capacity, 0xff, (capacity - old_capacity) * sizeof(*map));
+        conn->local_cid_path_map = map;
+        conn->local_cid_path_map_capacity = (uint16_t)capacity;
+        if (old_capacity == 0 && conn->path_spaces[0] != NULL && conn->path_spaces[0] != ps)
+            sync_local_cid_entries(map, conn->path_spaces[0]);
     }
     sync_local_cid_entries(conn->local_cid_path_map, ps);
     return 0;
@@ -724,7 +731,7 @@ static int resolve_local_cid_path_id(quicly_conn_t *conn, const quicly_decoded_p
         }
         return 0;
     }
-    if (conn->local_cid_path_map[tag] == UINT16_MAX)
+    if (tag >= conn->local_cid_path_map_capacity || conn->local_cid_path_map[tag] == UINT16_MAX)
         return 0;
     *path_id = conn->local_cid_path_map[tag];
     return 1;
@@ -7598,6 +7605,11 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
                 /* PENDING CIDs are located at the front */
                 struct st_quicly_local_cid_t *c = &ps->local_cid_set.cids[i];
                 if (c->state != QUICLY_LOCAL_CID_STATE_PENDING)
+                    break;
+                /* A failed map growth can leave a new CID pending. Retry before putting it on the wire. */
+                if (quicly_is_multipath(conn) && conn->super.ctx->cid_encryptor != NULL &&
+                    (c->cid_tag >= conn->local_cid_path_map_capacity || conn->local_cid_path_map[c->cid_tag] == UINT16_MAX) &&
+                    (ret = sync_local_cid_map(conn, ps)) != 0)
                     break;
                 if ((ret = send_new_connection_id(conn, s, ps, c)) != 0)
                     break;
