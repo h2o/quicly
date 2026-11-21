@@ -104,8 +104,7 @@ void quicly_ratemeter_enter_cc_limited(quicly_ratemeter_t *meter, uint64_t pn);
 void quicly_ratemeter_exit_cc_limited(quicly_ratemeter_t *meter, uint64_t pn);
 /**
  * Given three values, update the estimation.
- * @param bytes_acked  total number of bytes being acked from the beginning of the connection; i.e.,
- *                     `quicly_stats_t::num_bytes.ack_received`
+ * @param bytes_acked  cumulative acked congestion-controlled bytes for the PN space being measured (monotonic per space)
  */
 void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, int64_t now, uint64_t bytes_acked, uint64_t pn);
 /**

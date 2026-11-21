@@ -58,7 +58,7 @@ static int verify_cid(const quicly_local_cid_t *cid, quicly_cid_encryptor_t *enc
         return 0;
 
     encryptor->decrypt_cid(encryptor, &plaintext, cid->cid.cid, cid->cid.len);
-    return !(cid->sequence == plaintext.path_id);
+    return !(cid->cid_tag == plaintext.path_id);
 }
 
 /**
@@ -210,6 +210,15 @@ void test_local_cid(void)
         seq_to_retire++;
     }
 
+    /* alternate paths may retire their final CID without closing the connection */
+    quicly_local_cid_set_t alt_set;
+    uint8_t shared_tag = 250;
+    quicly_local_cid_init_set_shared(&alt_set, &test_encryptor, &cid_plaintext, &shared_tag, 1);
+    ok(quicly_local_cid_set_size(&alt_set, NUM_CIDS) != 0);
+    for (uint64_t seq = 0; seq < 5; ++seq)
+        ok(quicly_local_cid_retire(&alt_set, seq, &has_pending) == 0);
+    ok(!has_pending);
+
     /* create a set with a NULL CID encryptor */
     quicly_local_cid_set_t empty_set;
     quicly_local_cid_init_set(&empty_set, NULL, NULL);
@@ -232,4 +241,13 @@ void test_local_cid(void)
     ok(quicly_local_cid_retire(&small_set, 0, &has_pending) == 0);
     ok(has_pending);
     ok(exists_once(&small_set, 3, QUICLY_LOCAL_CID_STATE_PENDING));
+
+    /* standalone CID set remains valid after relocation by value */
+    quicly_cid_plaintext_t cid_plaintext3 = {0};
+    quicly_local_cid_set_t orig_set, relocated_set;
+    quicly_local_cid_init_set(&orig_set, &test_encryptor, &cid_plaintext3);
+    relocated_set = orig_set;
+    memset(&orig_set, 0xff, sizeof(orig_set));
+    ok(quicly_local_cid_set_size(&relocated_set, NUM_CIDS) != 0);
+    ok(exists_once(&relocated_set, 1, QUICLY_LOCAL_CID_STATE_PENDING));
 }

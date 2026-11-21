@@ -27,15 +27,19 @@ static int has_pending(quicly_local_cid_set_t *set)
 }
 
 /**
- * generates a new CID and increments path_id. returns true if successfully generated.
+ * generates a new CID and assigns the next tag and sequence. returns true if successfully generated.
  */
 static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
 {
-    if (set->_encryptor == NULL || set->plaintext.path_id >= QUICLY_MAX_PATH_ID)
+    uint8_t *next_cid_tag = set->_next_cid_tag != NULL ? set->_next_cid_tag : &set->_local_next_cid_tag;
+    if (set->_encryptor == NULL || *next_cid_tag >= QUICLY_MAX_PATH_ID)
         return 0;
 
+    uint8_t tag = (*next_cid_tag)++;
+    set->plaintext.path_id = tag;
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
-    set->cids[idx].sequence = set->plaintext.path_id++;
+    set->cids[idx].cid_tag = tag;
+    set->cids[idx].sequence = set->_next_sequence++;
 
     return 1;
 }
@@ -73,12 +77,14 @@ static void do_mark_delivered(quicly_local_cid_set_t *set, size_t idx)
     set->cids[idx].state = QUICLY_LOCAL_CID_STATE_DELIVERED;
 }
 
-void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
-                               const quicly_cid_plaintext_t *new_cid)
+void quicly_local_cid_init_set_shared(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                                      const quicly_cid_plaintext_t *new_cid, uint8_t *next_cid_tag, int allow_empty)
 {
     *set = (quicly_local_cid_set_t){
         ._encryptor = encryptor,
         ._size = 1,
+        ._next_cid_tag = next_cid_tag,
+        ._allow_empty = allow_empty != 0,
     };
 
     /* if provided, set master id */
@@ -90,13 +96,29 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
     /* initialize cids[0] */
     if (encryptor != NULL) {
         assert(new_cid != NULL && "master CID must be specified when a non-zero length CID is to be used");
-        generate_cid(set, 0);
+        if (generate_cid(set, 0)) {
+            set->cids[0].state =
+                QUICLY_LOCAL_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the remote peer */
+        } else {
+            set->cids[0].state = QUICLY_LOCAL_CID_STATE_IDLE;
+            set->cids[0].sequence = UINT64_MAX;
+            set->cids[0].cid_tag = QUICLY_MAX_PATH_ID;
+        }
+    } else {
+        set->cids[0].state = QUICLY_LOCAL_CID_STATE_DELIVERED;
+        set->cids[0].cid_tag = QUICLY_MAX_PATH_ID;
     }
-    set->cids[0].state =
-        QUICLY_LOCAL_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the remote peer */
 
-    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
+    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++) {
         set->cids[i].sequence = UINT64_MAX;
+        set->cids[i].cid_tag = QUICLY_MAX_PATH_ID;
+    }
+}
+
+void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                               const quicly_cid_plaintext_t *new_cid)
+{
+    quicly_local_cid_init_set_shared(set, encryptor, new_cid, NULL, 0);
 }
 
 int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
@@ -124,7 +146,7 @@ int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
         is_pending = 1;
     }
 
-    return is_pending;
+    return is_pending || has_pending(set);
 }
 
 void quicly_local_cid_on_sent(quicly_local_cid_set_t *set, size_t num_sent)
@@ -201,13 +223,14 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
         return 0;
     }
 
-    /* it is a protocol violation for the remote peer to retire the only CID that is available to it */
-    if (becomes_empty)
+    /* peer must not retire the only CID on path 0 */
+    if (becomes_empty && !set->_allow_empty)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     /* retire given CID */
     set->cids[retired_at].state = QUICLY_LOCAL_CID_STATE_IDLE;
     set->cids[retired_at].sequence = UINT64_MAX;
+    set->cids[retired_at].cid_tag = QUICLY_MAX_PATH_ID;
 
     /* move following PENDING CIDs to front */
     for (size_t i = retired_at + 1; i < set->_size; i++) {

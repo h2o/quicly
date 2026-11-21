@@ -1222,7 +1222,7 @@ Exit:
     if (fp != NULL)
         fclose(fp);
     ptls_buffer_dispose(&buf);
-    return 0;
+    return ret;
 }
 
 int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src,
@@ -1340,6 +1340,7 @@ static void usage(const char *cmd)
            "  --jumpstart-default <wnd> jumpstart CWND size for new connections, in packets\n"
            "  --jumpstart-max <wnd>     maximum jumpstart CWND size for resuming connections\n"
            "  -I timeout                idle timeout (in milliseconds; default: 30,000)\n"
+           "  --initial-max-path-id <N> enable multipath (RFC 10069) with specified max path ID\n"
            "  -K num-packets            perform key update every num-packets packets\n"
            "  -l log-file               file to log traffic secrets\n"
            "  -M <bytes>                max stream data (in bytes; default: 1MB)\n"
@@ -1716,6 +1717,7 @@ int main(int argc, char **argv)
                                              {"decrypt-packet", required_argument, NULL, 0},
                                              {"encrypt-packet", required_argument, NULL, 0},
                                              {"decrypt-packet-batch", required_argument, NULL, 0},
+                                             {"initial-max-path-id", required_argument, NULL, 0},
                                              {NULL}};
     while ((ch = getopt_long(argc, argv, "a:b:B:c:C:Dd:k:Ee:f:Gi:I:K:l:M:m:NnOp:P:Rr:S:s:u:U:Vvw:W:x:X:y:h", longopts,
                              &opt_index)) != -1) {
@@ -1764,6 +1766,16 @@ int main(int argc, char **argv)
                 }
             } else if (strcmp(longopts[opt_index].name, "exit-after-handshake") == 0) {
                 exit_after_handshake = 1;
+            } else if (strcmp(longopts[opt_index].name, "initial-max-path-id") == 0) {
+                char *endptr;
+                errno = 0;
+                unsigned long long val = strtoull(optarg, &endptr, 10);
+                if (*optarg < '0' || *optarg > '9' || *endptr != '\0' || errno == ERANGE || val > QUICLY_MAX_PATH_ID) {
+                    fprintf(stderr, "failed to parse initial-max-path-id: %s\n", optarg);
+                    exit(1);
+                }
+                ctx.transport_params.initial_max_path_id = val;
+                ctx.transport_params.enable_multipath = 1;
             } else if (strcmp(longopts[opt_index].name, "calc-initial-secret") == 0) {
                 return cmd_calc_initial_secret(optarg);
             } else if (strcmp(longopts[opt_index].name, "decrypt-packet") == 0) {
@@ -2090,20 +2102,24 @@ int main(int argc, char **argv)
             load_session();
         hs_properties.client.ech.configs = ech.config_list;
         hs_properties.client.ech.retry_configs = &ech.retry.configs;
-        use_cid_encryptor = cid_key != NULL;
+        use_cid_encryptor =
+            cid_key != NULL || ctx.transport_params.enable_multipath || ctx.transport_params.initial_max_path_id != 0;
     }
     if (use_cid_encryptor) {
+        ptls_iovec_t cid_key_vec;
         if (cid_key == NULL) {
-            static char random_key[17];
-            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
-            cid_key = random_key;
+            static uint8_t random_key[16];
+            tlsctx.random_bytes(random_key, sizeof(random_key));
+            cid_key_vec = ptls_iovec_init(random_key, sizeof(random_key));
+        } else {
+            cid_key_vec = ptls_iovec_init(cid_key, strlen(cid_key));
         }
         ctx.cid_encryptor = quicly_new_default_cid_encryptor(
 #if QUICLY_HAVE_FUSION
             ptls_fusion_is_supported_by_cpu() ? &ptls_fusion_quiclb :
 #endif
                                               &ptls_openssl_quiclb,
-            &ptls_openssl_aes128ecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
+            &ptls_openssl_aes128ecb, &ptls_openssl_sha256, cid_key_vec);
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");

@@ -4,9 +4,11 @@ use strict;
 use warnings;
 use Fcntl qw(F_SETFD FD_CLOEXEC);
 use File::Temp;
+use IO::Select;
 use IO::Socket::INET;
 use JSON qw(decode_json);
 use Socket qw(SOCK_DGRAM IPPROTO_UDP inet_aton pack_sockaddr_in);
+use Time::HiRes qw(time);
 
 sub new {
     my ($klass, $host, $port, %opts) = @_;
@@ -23,7 +25,7 @@ sub new {
         },
         peeraddr            => pack_sockaddr_in($port, inet_aton($host)),
         pn                  => 256, # whatever large enough to avoid collision with those used during the handshake
-        largest_pn_received => -1,
+        largest_1rtt_pn_received => -1,
     }, $klass;
 
     # perform handshake and obtain connection parameters
@@ -53,9 +55,9 @@ sub new {
             }
         } elsif ($event->{type} eq 'crypto_update_secret' && $event->{epoch} == 3) {
             ($event->{is_enc} ? $self->{enc_secret} : $self->{dec_secret}) = $event->{secret};
-        } elsif ($event->{type} eq 'packet_received') {
-            $self->{largest_pn_received} = $event->{pn}
-                if $self->{largest_pn_received} < $event->{pn};
+        } elsif ($event->{type} eq 'packet_received' && $event->{packet_type} == 3) {
+            $self->{largest_1rtt_pn_received} = $event->{pn}
+                if $self->{largest_1rtt_pn_received} < $event->{pn};
         }
     }
     close $fh
@@ -64,9 +66,9 @@ sub new {
     $self;
 }
 
-sub largest_pn_received {
+sub largest_1rtt_pn_received {
     my $self = shift;
-    $self->{largest_pn_received};
+    $self->{largest_1rtt_pn_received};
 }
 
 sub send {
@@ -89,6 +91,19 @@ sub receive {
     recv($self->{sock}, my $encrypted, 1500, 0)
         or return;
     $self->transform_packet(0, $encrypted);
+}
+
+sub receive_until {
+    my ($self, $pattern, $timeout) = @_;
+    my $selector = IO::Select->new($self->{sock});
+    my $deadline = time + $timeout;
+
+    while (my $remaining = $deadline - time) {
+        last if $remaining < 0 || !$selector->can_read($remaining);
+        my $received = $self->receive();
+        return $received if defined $received && $received =~ $pattern;
+    }
+    return;
 }
 
 sub transform_packet {
