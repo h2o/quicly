@@ -4181,6 +4181,14 @@ static void test_datagram_queue(void)
     quic_ctx.transport_params.max_datagram_frame_size = 1200;
     quic_ctx.receive_datagram_frame = &receiver;
 
+    quicly_conn_t queue_owner = {.super.ctx = &quic_ctx};
+    quicly_datagram_queue_t queue = {0};
+    ptls_iovec_t empty = ptls_iovec_init(NULL, 0);
+    ok(enqueue_datagram_queue(&queue_owner, &queue, &empty, 1) == 1 && queue.capacity == 8);
+    ptls_iovec_t batch[64] = {{0}};
+    ok(enqueue_datagram_queue(&queue_owner, &queue, batch, PTLS_ELEMENTSOF(batch)) == 63 && queue.capacity == 64);
+    clear_datagram_queue(&queue);
+
     /* partial send, refill, and unsent suffix cleanup */
     quicly_conn_t *client, *server;
     test_setup_connected_peers(&client, &server);
