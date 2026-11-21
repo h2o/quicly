@@ -38,14 +38,14 @@ static void encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *en
         --num_key_changes_on_encrypt;
         ++test_key_generation;
     }
-    encrypted->cid[0] = plaintext->sequence;
+    encrypted->cid[0] = plaintext->path_id;
     encrypted->len = 1;
 }
 
 static size_t decrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
                           size_t len)
 {
-    plaintext->sequence = ((const uint8_t *)encrypted)[0];
+    plaintext->path_id = ((const uint8_t *)encrypted)[0];
     return 1;
 }
 
@@ -68,7 +68,7 @@ static int verify_cid(const quicly_local_cid_t *cid, quicly_cid_encryptor_t *enc
         return 0;
 
     encryptor->decrypt_cid(encryptor, &plaintext, cid->cid.cid, cid->cid.len);
-    return !(cid->sequence == plaintext.sequence);
+    return !(cid->cid_tag == plaintext.path_id);
 }
 
 /**
@@ -233,16 +233,44 @@ static void test_rotate_exhaustion(void)
     int exhausted;
 
     init_delivered_set(&set, &test_generational_encryptor);
-    set.plaintext.sequence = QUICLY_MAX_CID_SEQUENCE - NUM_CIDS + 1;
+    set._local_next_cid_tag = QUICLY_MAX_PATH_ID - NUM_CIDS + 1;
     ++test_key_generation;
     ok(!quicly_local_cid_rotate(&set, &exhausted) && exhausted);
     /* not attempted again until the key changes again */
     ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
 
     /* rotated if there are just enough path IDs */
-    set.plaintext.sequence = QUICLY_MAX_CID_SEQUENCE - NUM_CIDS;
+    set._local_next_cid_tag = QUICLY_MAX_PATH_ID - NUM_CIDS;
     ++test_key_generation;
     ok(quicly_local_cid_rotate(&set, &exhausted));
+}
+
+static void test_rotate_shared_tags(void)
+{
+    quicly_local_cid_set_t set;
+    static const quicly_cid_plaintext_t plaintext = {0};
+    uint8_t shared_tag = QUICLY_MAX_PATH_ID - 7;
+    int pending, exhausted;
+
+    quicly_local_cid_init_set_shared(&set, &test_generational_encryptor, &plaintext, &shared_tag, 1);
+    quicly_local_cid_set_size(&set, 2);
+    send_and_ack_all(&set);
+    ++test_key_generation;
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+    ok(set.retire_prior_to == 2);
+    send_and_ack_all(&set);
+    ok(quicly_local_cid_retire(&set, 0, &pending, &exhausted) == 0 && !pending);
+    ok(!quicly_local_cid_set_size(&set, 2));
+    ok(quicly_local_cid_set_size(&set, 3));
+    ok(set._next_sequence == 5);
+    ok(verify_array(&set) == 0);
+    deliver_and_retire_old(&set);
+
+    /* Two unused global tags remain, fewer than the three live CIDs on this path. */
+    ++test_key_generation;
+    ok(!quicly_local_cid_rotate(&set, &exhausted) && exhausted);
+    ok(shared_tag == QUICLY_MAX_PATH_ID - 2);
+    ok(set.retire_prior_to == 2);
 }
 
 static void test_rotate_upon_key_change_during_encryption(void)
@@ -270,7 +298,7 @@ static void test_retire_without_replacement(void)
     int has_pending, exhausted;
 
     init_delivered_set(&set, &test_generational_encryptor);
-    set.plaintext.sequence = QUICLY_MAX_CID_SEQUENCE - NUM_CIDS;
+    set._local_next_cid_tag = QUICLY_MAX_PATH_ID - NUM_CIDS;
     ++test_key_generation;
     ok(quicly_local_cid_rotate(&set, &exhausted));
     send_and_ack_all(&set);
@@ -280,9 +308,9 @@ static void test_retire_without_replacement(void)
     ok(exhausted);
 
     /* retiring the last CID that is not being retired by Retire Prior To is a protocol violation */
-    for (uint64_t seq = set.retire_prior_to + 1; seq < QUICLY_MAX_CID_SEQUENCE - 1; seq++)
+    for (uint64_t seq = set.retire_prior_to + 1; seq < set._next_sequence - 1; seq++)
         quicly_local_cid_retire(&set, seq, &has_pending, &exhausted);
-    ok(quicly_local_cid_retire(&set, QUICLY_MAX_CID_SEQUENCE - 1, &has_pending, &exhausted) ==
+    ok(quicly_local_cid_retire(&set, set._next_sequence - 1, &has_pending, &exhausted) ==
        QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
 }
 
@@ -370,8 +398,8 @@ void test_local_cid(void)
     /* try to exhaust CID */
     size_t num_retired = 7;
     uint64_t seq_to_retire = 7;
-    while (num_retired < QUICLY_MAX_CID_SEQUENCE) {
-        if (seq_to_retire == QUICLY_MAX_CID_SEQUENCE - 1) {
+    while (num_retired < QUICLY_MAX_PATH_ID) {
+        if (seq_to_retire == QUICLY_MAX_PATH_ID - 1) {
             /* this is the maximum CID we can generate -- after retiring it, there should be no CID to send */
             ok(quicly_local_cid_retire(&set, seq_to_retire, &has_pending, &exhausted) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
         } else {
@@ -383,11 +411,11 @@ void test_local_cid(void)
     }
 
     /* alternate paths may retire their final CID without closing the connection */
-    quicly_cid_plaintext_t alt_plaintext = {.path_id = 1};
     quicly_local_cid_set_t alt_set;
-    quicly_local_cid_init_set(&alt_set, &test_encryptor, &alt_plaintext);
+    uint8_t shared_tag = 250;
+    quicly_local_cid_init_set_shared(&alt_set, &test_encryptor, &cid_plaintext, &shared_tag, 1);
     ok(quicly_local_cid_set_size(&alt_set, NUM_CIDS) != 0);
-    for (uint64_t seq = 0; seq < QUICLY_MAX_CID_SEQUENCE; ++seq)
+    for (uint64_t seq = 0; seq < 5; ++seq)
         ok(quicly_local_cid_retire(&alt_set, seq, &has_pending, &exhausted) == 0);
     ok(!has_pending);
 
@@ -417,6 +445,7 @@ void test_local_cid(void)
     subtest("rotate-upon-key-change", test_rotate_upon_key_change);
     subtest("rotate-after-delivery", test_rotate_after_delivery);
     subtest("rotate-after-retirement", test_rotate_after_retirement);
+    subtest("rotate-shared-tags", test_rotate_shared_tags);
     subtest("rotate-exhaustion", test_rotate_exhaustion);
     subtest("rotate-upon-key-change-during-encryption", test_rotate_upon_key_change_during_encryption);
     subtest("retire-without-replacement", test_retire_without_replacement);

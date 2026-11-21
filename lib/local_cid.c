@@ -27,17 +27,18 @@ static int has_pending(quicly_local_cid_set_t *set)
 }
 
 /**
- * generates a new CID and increments sequence. returns true if successfully generated.
+ * generates a new CID and increments path_id. returns true if successfully generated.
  */
 static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
 {
-    if (set->_encryptor == NULL || set->plaintext.sequence >= QUICLY_MAX_CID_SEQUENCE)
+    if (set->_encryptor == NULL || *set->_next_cid_tag >= QUICLY_MAX_PATH_ID)
         return 0;
 
-    set->cids[idx].sequence = set->plaintext.sequence;
-
+    uint8_t tag = (*set->_next_cid_tag)++;
+    set->plaintext.path_id = tag;
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
-    set->plaintext.sequence++;
+    set->cids[idx].cid_tag = tag;
+    set->cids[idx].sequence = set->_next_sequence++;
 
     return 1;
 }
@@ -75,16 +76,19 @@ static void do_mark_delivered(quicly_local_cid_set_t *set, size_t idx)
     set->cids[idx].state = QUICLY_LOCAL_CID_STATE_DELIVERED;
 }
 
-void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
-                               const quicly_cid_plaintext_t *new_cid)
+void quicly_local_cid_init_set_shared(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                                      const quicly_cid_plaintext_t *new_cid, uint8_t *next_cid_tag, int allow_empty)
 {
     *set = (quicly_local_cid_set_t){
-        ._size = 1,
         ._encryptor = encryptor,
+        ._size = 1,
+        ._allow_empty = allow_empty != 0,
     };
+    set->_next_cid_tag = next_cid_tag != NULL ? next_cid_tag : &set->_local_next_cid_tag;
 
-    /* if provided, set plaintext */
+    /* if provided, set master id */
     if (new_cid != NULL) {
+        assert(new_cid->path_id == 0);
         set->plaintext = *new_cid;
     }
 
@@ -93,29 +97,52 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
         assert(new_cid != NULL && "master CID must be specified when a non-zero length CID is to be used");
         if (encryptor->get_key_generation != NULL)
             set->key_generation = encryptor->get_key_generation(encryptor);
-        generate_cid(set, 0);
+        if (generate_cid(set, 0)) {
+            set->cids[0].state =
+                QUICLY_LOCAL_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the remote peer */
+        } else {
+            set->cids[0].state = QUICLY_LOCAL_CID_STATE_IDLE;
+            set->cids[0].sequence = UINT64_MAX;
+            set->cids[0].cid_tag = QUICLY_MAX_PATH_ID;
+        }
+    } else {
+        set->cids[0].state = QUICLY_LOCAL_CID_STATE_DELIVERED;
+        set->cids[0].cid_tag = QUICLY_MAX_PATH_ID;
     }
-    set->cids[0].state =
-        QUICLY_LOCAL_CID_STATE_DELIVERED; /* no need to use NCID frames, the use delivers this CID to the remote peer */
 
-    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++)
+    for (size_t i = 1; i < PTLS_ELEMENTSOF(set->cids); i++) {
         set->cids[i].sequence = UINT64_MAX;
+        set->cids[i].cid_tag = QUICLY_MAX_PATH_ID;
+    }
+}
+
+void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                               const quicly_cid_plaintext_t *new_cid)
+{
+    quicly_local_cid_init_set_shared(set, encryptor, new_cid, NULL, 0);
 }
 
 int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size)
 {
     assert(set->_size <= size && size <= QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
-    size_t additional = size - set->_size;
     set->_size = size;
 
-    for (size_t i = 0; additional != 0 && i < PTLS_ELEMENTSOF(set->cids); i++) {
+    /* A rotation can leave both generations in the array. Count only the CIDs still available to the peer. */
+    size_t available = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++)
+        if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE && set->cids[i].sequence >= set->retire_prior_to)
+            ++available;
+
+    for (size_t i = 0; available < size; i++) {
+        assert(i < PTLS_ELEMENTSOF(set->cids));
         if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE)
             continue;
         if (!generate_cid(set, i))
             break;
         do_mark_pending(set, i);
-        --additional;
+        ++available;
     }
+
     return has_pending(set);
 }
 
@@ -196,13 +223,14 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
         return 0;
     }
 
-    /* peer must not retire the only CID on path 0 */
-    if (becomes_empty && set->plaintext.path_id == 0)
+    /* it is a protocol violation for the remote peer to retire the only CID that is available to it */
+    if (becomes_empty && !set->_allow_empty)
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
 
     /* retire given CID */
     set->cids[retired_at].state = QUICLY_LOCAL_CID_STATE_IDLE;
     set->cids[retired_at].sequence = UINT64_MAX;
+    set->cids[retired_at].cid_tag = QUICLY_MAX_PATH_ID;
 
     /* move following PENDING CIDs to front */
     for (size_t i = retired_at + 1; i < PTLS_ELEMENTSOF(set->cids); i++) {
@@ -254,15 +282,17 @@ int quicly_local_cid_rotate(quicly_local_cid_set_t *set, int *exhausted)
      * might be encrypted using the newer key, in which case they are replaced again, rather than the change being missed. */
     set->key_generation = new_key_generation;
 
-    /* replace all or nothing; once there are not enough CID sequence numbers, there will never be, as `sequence` never decreases while the
-     * number of CIDs in use decreases only when `sequence` reaches the maximum */
-    if (set->plaintext.sequence + num_cids > QUICLY_MAX_CID_SEQUENCE) {
+    if (num_cids == 0)
+        return 0;
+
+    /* All paths use the same tag space. Ensure that every replacement can be issued before retiring any CID. */
+    if (*set->_next_cid_tag + num_cids > QUICLY_MAX_PATH_ID) {
         *exhausted = 1;
         return 0;
     }
 
     /* issue new CIDs using the IDLE entries; there are enough, as all the CIDs in use are at or above `retire_prior_to` */
-    set->retire_prior_to = set->plaintext.sequence;
+    set->retire_prior_to = set->_next_sequence;
     for (i = 0; num_cids != 0; i++) {
         assert(i < PTLS_ELEMENTSOF(set->cids));
         if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE)

@@ -165,7 +165,7 @@ static void default_encrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_t *enc
         break;
     }
     p = quicly_encode32(p, plaintext->master_id);
-    p = quicly_encode32(p, ((uint32_t)plaintext->thread_id << 16) | (plaintext->sequence << 8) | plaintext->path_id);
+    p = quicly_encode32(p, (plaintext->thread_id << 8) | plaintext->path_id);
     assert(p - buf == self->cid_encrypt_ctx->algo->block_size);
 
     /* generate CID */
@@ -204,10 +204,8 @@ static size_t default_decrypt_cid(quicly_cid_encryptor_t *_self, quicly_cid_plai
         plaintext->node_id = 0;
     }
     plaintext->master_id = quicly_decode32(&p);
-    uint32_t v = quicly_decode32(&p);
-    plaintext->path_id = v & 0xff;
-    plaintext->sequence = (v >> 8) & 0xff;
-    plaintext->thread_id = v >> 16;
+    plaintext->thread_id = quicly_decode24(&p);
+    plaintext->path_id = *p++;
     assert(p - ptbuf == len);
 
     return len;
@@ -334,22 +332,14 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
     if (!conn_is_blocked)
         quicly_linklist_insert_list(&sched->active, &sched->blocked);
 
-    quicly_linklist_t *node = sched->active.next;
-
-    while (quicly_can_send_data((quicly_conn_t *)conn, s) && node != &sched->active) {
-        quicly_stream_t *stream = (void *)((char *)node - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler));
-        quicly_linklist_t *next_node = node->next;
-
-        if (!quicly_stream_can_send_on_path(stream, s)) {
-            node = next_node;
-            continue;
-        }
-
+    while (quicly_can_send_data((quicly_conn_t *)conn, s) && quicly_linklist_is_linked(&sched->active)) {
+        /* detach the first active stream */
+        quicly_stream_t *stream =
+            (void *)((char *)sched->active.next - offsetof(quicly_stream_t, _send_aux.pending_link.default_scheduler));
         quicly_linklist_unlink(&stream->_send_aux.pending_link.default_scheduler);
         /* relink the stream to the blocked list if necessary */
         if (conn_is_blocked && !quicly_stream_can_send(stream, 0)) {
             quicly_linklist_insert(sched->blocked.prev, &stream->_send_aux.pending_link.default_scheduler);
-            node = next_node;
             continue;
         }
         /* send! */
@@ -366,9 +356,6 @@ static quicly_error_t default_stream_scheduler_do_send(quicly_stream_scheduler_t
         conn_is_blocked = quicly_is_blocked(conn);
         if (quicly_stream_can_send(stream, 1))
             link_stream(sched, stream, conn_is_blocked);
-
-        /* restart from head as on_send_emit may unlink other streams */
-        node = sched->active.next;
     }
 
     return ret;

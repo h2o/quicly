@@ -55,6 +55,7 @@ typedef struct st_quicly_local_cid_t {
     uint64_t sequence;
     quicly_cid_t cid;
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
+    uint8_t cid_tag;
 } quicly_local_cid_t;
 
 /**
@@ -62,7 +63,8 @@ typedef struct st_quicly_local_cid_t {
  */
 typedef struct st_quicly_local_cid_set_t {
     /**
-     * connection identifier tuple (node_id, thread_id, master_id) and path_id; `sequence` tracks the next CID sequence to issue
+     * Identifier of the connection used by quicly. Three tuple of (node_id, thread_id, master_id) is used to identify the
+     * connection. `path_id` is maintained by the "local_cid" module, and used for identifying each CID being issued.
      */
     quicly_cid_plaintext_t plaintext;
     /**
@@ -75,8 +77,13 @@ typedef struct st_quicly_local_cid_set_t {
      * retained until the peer retires them, while the same number of new CIDs are issued.
      */
     quicly_local_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * 2];
-    size_t _size; /* target number of active CIDs, excluding those being retired */
+    /** Number of CIDs to keep available to the peer, excluding CIDs below retire_prior_to. */
+    size_t _size;
     quicly_cid_encryptor_t *_encryptor;
+    uint64_t _next_sequence;
+    uint8_t *_next_cid_tag;
+    uint8_t _local_next_cid_tag;
+    uint8_t _allow_empty;
     /**
      * value of the Retire Prior To field of the NEW_CONNECTION_ID frames being sent
      */
@@ -95,15 +102,15 @@ typedef struct st_quicly_local_cid_set_t {
  */
 void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
                                const quicly_cid_plaintext_t *new_cid);
+void quicly_local_cid_init_set_shared(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                                      const quicly_cid_plaintext_t *new_cid, uint8_t *next_cid_tag, int allow_empty);
 /**
- * Issues CIDs so that `size` CIDs are available to the peer. Afterwards, the number is retained by issuing a new CID whenever the
- * peer retires one. The target size may grow after initialization. `size` must not exceed
- * QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT.
+ * Maintains up to `size` CIDs available to the peer, issuing replacements as the peer retires them. The target can increase
+ * up to QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT.
  *
  * Returns true if there is something to send.
  */
 int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size);
-
 static inline size_t quicly_local_cid_get_size(const quicly_local_cid_set_t *set)
 {
     return set->_size;
