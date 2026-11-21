@@ -26,15 +26,21 @@ static int has_pending(quicly_local_cid_set_t *set)
     return set->cids[0].state == QUICLY_LOCAL_CID_STATE_PENDING;
 }
 
+static uint8_t *get_next_cid_tag(quicly_local_cid_set_t *set)
+{
+    return set->_next_cid_tag != NULL ? set->_next_cid_tag : &set->_local_next_cid_tag;
+}
+
 /**
- * generates a new CID and increments path_id. returns true if successfully generated.
+ * generates a new CID and assigns the next tag and sequence. returns true if successfully generated.
  */
 static int generate_cid(quicly_local_cid_set_t *set, size_t idx)
 {
-    if (set->_encryptor == NULL || *set->_next_cid_tag >= QUICLY_MAX_PATH_ID)
+    uint8_t *next_cid_tag = get_next_cid_tag(set);
+    if (set->_encryptor == NULL || *next_cid_tag >= QUICLY_MAX_PATH_ID)
         return 0;
 
-    uint8_t tag = (*set->_next_cid_tag)++;
+    uint8_t tag = (*next_cid_tag)++;
     set->plaintext.path_id = tag;
     set->_encryptor->encrypt_cid(set->_encryptor, &set->cids[idx].cid, set->cids[idx].stateless_reset_token, &set->plaintext);
     set->cids[idx].cid_tag = tag;
@@ -82,9 +88,9 @@ void quicly_local_cid_init_set_shared(quicly_local_cid_set_t *set, quicly_cid_en
     *set = (quicly_local_cid_set_t){
         ._encryptor = encryptor,
         ._size = 1,
+        ._next_cid_tag = next_cid_tag,
         ._allow_empty = allow_empty != 0,
     };
-    set->_next_cid_tag = next_cid_tag != NULL ? next_cid_tag : &set->_local_next_cid_tag;
 
     /* if provided, set master id */
     if (new_cid != NULL) {
@@ -286,7 +292,7 @@ int quicly_local_cid_rotate(quicly_local_cid_set_t *set, int *exhausted)
         return 0;
 
     /* All paths use the same tag space. Ensure that every replacement can be issued before retiring any CID. */
-    if (*set->_next_cid_tag + num_cids > QUICLY_MAX_PATH_ID) {
+    if (*get_next_cid_tag(set) + num_cids > QUICLY_MAX_PATH_ID) {
         *exhausted = 1;
         return 0;
     }

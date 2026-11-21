@@ -760,7 +760,6 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
     quicly_error_t ret;
     quicly_conn_t *conn = NULL;
     int64_t exit_at = INT64_MAX;
-    int close_called = 0;
 
     signal(SIGTERM, on_client_signal);
 
@@ -859,6 +858,7 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
                                     enqueue_requests_at = ceil(now + request_interval);
                                 }
                             } else {
+                                static int close_called;
                                 if (!close_called) {
                                     dump_stats(stderr, conn);
                                     quicly_close(conn, 0, "");
@@ -874,8 +874,6 @@ static int run_client(int fd, struct sockaddr *sa, const char *host)
             ret = send_pending(fd, conn);
             if (ret != 0) {
                 ech_save_retry_configs();
-                if (!close_called)
-                    dump_stats(stderr, conn);
                 quicly_free(conn);
                 conn = NULL;
                 if (delivery_stats)
@@ -1224,7 +1222,7 @@ Exit:
     if (fp != NULL)
         fclose(fp);
     ptls_buffer_dispose(&buf);
-    return 0;
+    return ret;
 }
 
 int save_session_ticket_cb(ptls_save_ticket_t *_self, ptls_t *tls, ptls_iovec_t src,
@@ -2108,17 +2106,20 @@ int main(int argc, char **argv)
             cid_key != NULL || ctx.transport_params.enable_multipath || ctx.transport_params.initial_max_path_id != 0;
     }
     if (use_cid_encryptor) {
+        ptls_iovec_t cid_key_vec;
         if (cid_key == NULL) {
-            static char random_key[17];
-            tlsctx.random_bytes(random_key, sizeof(random_key) - 1);
-            cid_key = random_key;
+            static uint8_t random_key[16];
+            tlsctx.random_bytes(random_key, sizeof(random_key));
+            cid_key_vec = ptls_iovec_init(random_key, sizeof(random_key));
+        } else {
+            cid_key_vec = ptls_iovec_init(cid_key, strlen(cid_key));
         }
         ctx.cid_encryptor = quicly_new_default_cid_encryptor(
 #if QUICLY_HAVE_FUSION
             ptls_fusion_is_supported_by_cpu() ? &ptls_fusion_quiclb :
 #endif
                                               &ptls_openssl_quiclb,
-            &ptls_openssl_aes128ecb, &ptls_openssl_sha256, ptls_iovec_init(cid_key, strlen(cid_key)));
+            &ptls_openssl_aes128ecb, &ptls_openssl_sha256, cid_key_vec);
     }
     if (argc != 2) {
         fprintf(stderr, "missing host and port\n");
