@@ -189,7 +189,9 @@ struct st_quicly_application_space_t {
                 ptls_cipher_context_t *zero_rtt, *one_rtt;
             } header_protection;
             ptls_aead_context_t *aead[2]; /* 0-RTT uses aead[1], 1-RTT uses aead[key_phase] */
+            ptls_aead_context_t *next_aead;
             uint8_t secret[PTLS_MAX_DIGEST_SIZE];
+            uint8_t next_secret[PTLS_MAX_DIGEST_SIZE];
             struct {
                 uint64_t prepared;
                 uint64_t decrypted;
@@ -397,6 +399,7 @@ struct st_quicly_conn_t {
     quicly_address_t peer_handshake_address;
     quicly_address_t local_handshake_address;
     uint8_t next_local_cid_tag;
+    uint8_t local_cid_limit;
     uint8_t local_multipath_enabled : 1;
     uint16_t *local_cid_path_map;
     /**
@@ -1526,6 +1529,7 @@ void quicly_stream_sync_recvbuf(quicly_stream_t *stream, size_t shift_amount)
 static size_t local_active_cid_limit(const quicly_context_t *ctx)
 {
     PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT >= QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT);
+    PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT <= UINT8_MAX);
 
     uint64_t limit = ctx->transport_params.active_connection_id_limit;
     if (limit == 0 || limit > QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT)
@@ -1533,6 +1537,11 @@ static size_t local_active_cid_limit(const quicly_context_t *ctx)
     if (limit < QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT)
         return QUICLY_MIN_ACTIVE_CONNECTION_ID_LIMIT;
     return (size_t)limit;
+}
+
+static inline size_t conn_local_active_cid_limit(const quicly_conn_t *conn)
+{
+    return conn->local_cid_limit != 0 ? conn->local_cid_limit : local_active_cid_limit(conn->super.ctx);
 }
 
 /**
@@ -2396,7 +2405,10 @@ static void free_application_space(struct st_quicly_application_space_t **space)
         DISPOSE_INGRESS(header_protection.one_rtt, ptls_cipher_free);
         DISPOSE_INGRESS(aead[0], ptls_aead_free);
         DISPOSE_INGRESS(aead[1], ptls_aead_free);
+        DISPOSE_INGRESS(next_aead, ptls_aead_free);
 #undef DISPOSE_INGRESS
+        ptls_clear_memory((*space)->cipher.ingress.secret, sizeof((*space)->cipher.ingress.secret));
+        ptls_clear_memory((*space)->cipher.ingress.next_secret, sizeof((*space)->cipher.ingress.next_secret));
         if ((*space)->cipher.egress.key.aead != NULL)
             dispose_cipher(&(*space)->cipher.egress.key);
         ptls_clear_memory((*space)->cipher.egress.secret, sizeof((*space)->cipher.egress.secret));
@@ -2652,7 +2664,7 @@ static quicly_error_t alloc_path_space(quicly_conn_t *conn, size_t path_index, u
             return map_ret;
         }
 
-        size_t cid_limit = local_active_cid_limit(conn->super.ctx);
+        size_t cid_limit = conn_local_active_cid_limit(conn);
         for (size_t i = 0; i < PTLS_ELEMENTSOF(ps->remote_cid_set.cids); i++)
             ps->remote_cid_set.cids[i] = (quicly_remote_cid_t){
                 .state = QUICLY_REMOTE_CID_UNAVAILABLE,
@@ -3952,6 +3964,7 @@ static quicly_conn_t *create_connection(quicly_context_t *ctx, uint32_t protocol
             remote_cid = &remote_cid_val;
         }
         size_t cid_limit = local_active_cid_limit(ctx);
+        conn->local_cid_limit = (uint8_t)cid_limit;
         quicly_remote_cid_init_set(&ps->remote_cid_set, remote_cid, ctx->tls->random_bytes);
         ps->remote_cid_set._largest_sequence_expected = cid_limit - 1;
         ps->next_expected_cid_seq = ps->remote_cid_set.cids[0].cid.len != 0 ? 1 : 0;
@@ -4171,7 +4184,7 @@ quicly_error_t quicly_connect(quicly_conn_t **_conn, quicly_context_t *ctx, cons
     ptls_buffer_init(&conn->crypto.transport_params.buf, "", 0);
     {
         quicly_transport_parameters_t local_params = conn->super.ctx->transport_params;
-        local_params.active_connection_id_limit = local_active_cid_limit(conn->super.ctx);
+        local_params.active_connection_id_limit = conn_local_active_cid_limit(conn);
         /* RFC 10069 section 2.1 forbids advertising initial_max_path_id when either endpoint uses zero-length CIDs */
         if (version_is_draft(conn->super.version) || conn->path_spaces[0]->local_cid_set.cids[0].cid.len == 0 ||
             server_cid->len == 0) {
@@ -4300,7 +4313,7 @@ static int server_collected_extensions(ptls_t *tls, ptls_handshake_properties_t 
     assert(ps->local_cid_set.cids[0].sequence == 0 && "make sure that local_cid is in expected state before sending SRT");
     {
         quicly_transport_parameters_t local_params = conn->super.ctx->transport_params;
-        local_params.active_connection_id_limit = local_active_cid_limit(conn->super.ctx);
+        local_params.active_connection_id_limit = conn_local_active_cid_limit(conn);
         /* RFC 10069 section 2.1 forbids advertising initial_max_path_id when either endpoint uses zero-length CIDs */
         if (version_is_draft(conn->super.version) || ps->remote_cid_set.cids[0].cid.len == 0 ||
             ps->local_cid_set.cids[0].cid.len == 0) {
@@ -4396,34 +4409,33 @@ static int aead_decrypt_1rtt(void *ctx, uint64_t pn, quicly_decoded_packet_t *pa
         *ptlen = SIZE_MAX;
     }
 
-    /* stage candidate key update without mutating retained keys until authentication succeeds */
+    /* stage and cache candidate key update without mutating retained keys until authentication succeeds */
     if (*ptlen == SIZE_MAX) {
         ptls_cipher_suite_t *cipher = ptls_get_cipher(conn->crypto.tls);
-        uint8_t next_secret[PTLS_MAX_DIGEST_SIZE];
-        ptls_aead_context_t *next_aead = NULL;
 
-        if ((ret = ptls_hkdf_expand_label(cipher->hash, next_secret, cipher->hash->digest_size,
-                                          ptls_iovec_init(space->cipher.ingress.secret, cipher->hash->digest_size), "quic ku",
-                                          ptls_iovec_init(NULL, 0), NULL)) != 0)
-            return ret;
-        if ((ret = setup_cipher(conn, QUICLY_EPOCH_1RTT, 0, NULL, &next_aead, cipher->aead, cipher->hash, next_secret)) != 0) {
-            ptls_clear_memory(next_secret, cipher->hash->digest_size);
-            return ret;
+        if (space->cipher.ingress.next_aead == NULL) {
+            if ((ret = ptls_hkdf_expand_label(cipher->hash, space->cipher.ingress.next_secret, cipher->hash->digest_size,
+                                              ptls_iovec_init(space->cipher.ingress.secret, cipher->hash->digest_size), "quic ku",
+                                              ptls_iovec_init(NULL, 0), NULL)) != 0)
+                return ret;
+            if ((ret = setup_cipher(conn, QUICLY_EPOCH_1RTT, 0, NULL, &space->cipher.ingress.next_aead, cipher->aead, cipher->hash,
+                                    space->cipher.ingress.next_secret)) != 0) {
+                ptls_clear_memory(space->cipher.ingress.next_secret, sizeof(space->cipher.ingress.next_secret));
+                return ret;
+            }
         }
-        if ((*ptlen = aead_decrypt_core(next_aead, pn, packet, aead_off)) == SIZE_MAX) {
-            ptls_aead_free(next_aead);
-            ptls_clear_memory(next_secret, cipher->hash->digest_size);
+        if ((*ptlen = aead_decrypt_core(space->cipher.ingress.next_aead, pn, packet, aead_off)) == SIZE_MAX)
             return QUICLY_ERROR_PACKET_IGNORED;
-        }
         if (space->cipher.ingress.header_protection.zero_rtt != NULL) {
             ptls_cipher_free(space->cipher.ingress.header_protection.zero_rtt);
             space->cipher.ingress.header_protection.zero_rtt = NULL;
         }
         if (space->cipher.ingress.aead[aead_index] != NULL)
             ptls_aead_free(space->cipher.ingress.aead[aead_index]);
-        space->cipher.ingress.aead[aead_index] = next_aead;
-        memcpy(space->cipher.ingress.secret, next_secret, cipher->hash->digest_size);
-        ptls_clear_memory(next_secret, cipher->hash->digest_size);
+        space->cipher.ingress.aead[aead_index] = space->cipher.ingress.next_aead;
+        space->cipher.ingress.next_aead = NULL;
+        memcpy(space->cipher.ingress.secret, space->cipher.ingress.next_secret, cipher->hash->digest_size);
+        ptls_clear_memory(space->cipher.ingress.next_secret, sizeof(space->cipher.ingress.next_secret));
         ++space->cipher.ingress.key_phase.prepared;
         QUICLY_PROBE(CRYPTO_RECEIVE_KEY_UPDATE_PREPARE, conn, conn->stash.now, space->cipher.ingress.key_phase.prepared,
                      QUICLY_PROBE_HEXDUMP(space->cipher.ingress.secret, cipher->hash->digest_size));
@@ -5223,6 +5235,22 @@ static int application_path_can_send_data(quicly_conn_t *conn, size_t path_index
     return !quicly_is_multipath(conn) || path_scheduling_rank(get_path(conn, path_index)) == preferred_rank;
 }
 
+static quicly_cid_t *get_dcid(quicly_conn_t *conn, size_t path_index)
+{
+    struct st_quicly_conn_path_t *path = get_path(conn, path_index);
+    quicly_path_space_t *ps = path->path_space;
+
+    assert(path->dcid != UINT64_MAX);
+
+    /* lookup DCID and return */
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(ps->remote_cid_set.cids); ++i) {
+        if (ps->remote_cid_set.cids[i].sequence == path->dcid && ps->remote_cid_set.cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE)
+            return &ps->remote_cid_set.cids[i].cid;
+    }
+    assert(!"CID lookup failure");
+    return NULL;
+}
+
 static size_t path_max_datagram_frame_space(quicly_conn_t *conn, size_t path_index)
 {
     struct st_quicly_conn_path_t *path = get_path(conn, path_index);
@@ -5231,7 +5259,9 @@ static size_t path_max_datagram_frame_space(quicly_conn_t *conn, size_t path_ind
     quicly_path_space_t *ps = path->path_space;
     size_t dcid_len = conn->super.original_dcid.len;
     if (path->dcid != UINT64_MAX) {
-        dcid_len = ps->remote_cid_set.cids[path->dcid].cid.len;
+        const quicly_cid_t *dcid = get_dcid(conn, path_index);
+        if (dcid != NULL)
+            dcid_len = dcid->len;
     } else {
         for (size_t i = 0; i < PTLS_ELEMENTSOF(ps->remote_cid_set.cids); ++i) {
             if (ps->remote_cid_set.cids[i].state == QUICLY_REMOTE_CID_AVAILABLE ||
@@ -5484,7 +5514,7 @@ static int setup_path_dcid(quicly_conn_t *conn, size_t path_index)
 
 static void schedule_path_cids_blocked(quicly_conn_t *conn, quicly_path_space_t *ps)
 {
-    uint64_t sequence = ps->remote_cid_set._largest_sequence_expected + 1 - local_active_cid_limit(conn->super.ctx);
+    uint64_t sequence = ps->remote_cid_set._largest_sequence_expected + 1 - conn_local_active_cid_limit(conn);
     if (ps->next_expected_cid_seq > sequence)
         sequence = ps->next_expected_cid_seq;
 
@@ -5525,22 +5555,6 @@ static void schedule_path_open_blocked(quicly_conn_t *conn)
         conn->egress.paths_blocked.max_path_id = conn->super.remote.max_path_id;
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     }
-}
-
-static quicly_cid_t *get_dcid(quicly_conn_t *conn, size_t path_index)
-{
-    struct st_quicly_conn_path_t *path = get_path(conn, path_index);
-    quicly_path_space_t *ps = path->path_space;
-
-    assert(path->dcid != UINT64_MAX);
-
-    /* lookup DCID and return */
-    for (size_t i = 0; i < PTLS_ELEMENTSOF(ps->remote_cid_set.cids); ++i) {
-        if (ps->remote_cid_set.cids[i].sequence == path->dcid && ps->remote_cid_set.cids[i].state != QUICLY_REMOTE_CID_UNAVAILABLE)
-            return &ps->remote_cid_set.cids[i].cid;
-    }
-    assert(!"CID lookup failure");
-    return NULL;
 }
 
 /**
@@ -7647,10 +7661,13 @@ static quicly_error_t emit_datagram_queue(quicly_conn_t *conn, quicly_send_conte
                                           size_t *consumed, int is_unbound)
 {
     quicly_error_t ret;
-    quicly_path_space_t *ps = get_send_path(conn, s)->path_space;
+    struct st_quicly_conn_path_t *path = get_send_path(conn, s);
+    quicly_path_space_t *ps = path->path_space;
     size_t overhead = calc_packet_overhead(conn, s);
     size_t max_pkt_space = ps->max_udp_payload_size > overhead ? ps->max_udp_payload_size - overhead : 0;
     size_t max_conn_space = is_unbound ? conn_max_datagram_frame_space(conn) : max_pkt_space;
+    int check_rank = is_unbound && quicly_is_multipath(conn) && !has_application_data_policy(conn);
+    unsigned path_rank = check_rank ? path_scheduling_rank(path) : 0;
     for (size_t i = 0; i != q->count; ++i) {
         size_t slot = (q->head + i) % q->capacity;
         quicly_datagram_entry_t *entry = q->entries + slot;
@@ -7662,8 +7679,8 @@ static quicly_error_t emit_datagram_queue(quicly_conn_t *conn, quicly_send_conte
             ++*consumed;
             continue;
         }
-        /* skip unbound frames that need a larger-MTU path without stalling smaller frames queued behind them */
-        if (required_space > max_pkt_space)
+        /* skip unbound frames that need a larger-MTU path or prefer a higher-priority available path */
+        if (required_space > max_pkt_space || (check_rank && path_rank > preferred_datagram_rank(conn, required_space)))
             continue;
         if ((ret = do_allocate_frame(conn, s, required_space, ALLOCATE_FRAME_TYPE_ACK_ELICITING)) != 0)
             return ret;
