@@ -5819,9 +5819,18 @@ static void test_multipath_custom_recovery(void)
         f.server->super.local.max_path_id = QUICLY_MAX_PATH_ID;
         f.server->super.remote.max_path_id = QUICLY_MAX_PATH_ID;
         lock_now(f.server, 0);
+        size_t map_capacity = f.server->local_cid_path_map_capacity;
+        ok(map_capacity == 16);
+        uint8_t old_tag = f.server->path_spaces[0]->local_cid_set.cids[0].cid_tag;
+        f.server->next_local_cid_tag = (uint8_t)(map_capacity + 1);
         ok(alloc_path_space(f.server, 2, QUICLY_MAX_PATH_ID) == 0);
-        uint32_t resolved_pid = 0;
+        ok(f.server->local_cid_path_map_capacity == 2 * map_capacity);
+        uint32_t resolved_pid = UINT32_MAX;
         quicly_decoded_packet_t fake_pkt = {0};
+        fake_pkt.cid.dest.plaintext.path_id = old_tag;
+        ok(resolve_local_cid_path_id(f.server, &fake_pkt, &resolved_pid) && resolved_pid == 0);
+        fake_pkt.cid.dest.plaintext.path_id = (uint8_t)map_capacity;
+        ok(!resolve_local_cid_path_id(f.server, &fake_pkt, &resolved_pid));
         fake_pkt.cid.dest.plaintext.path_id = f.server->path_spaces[2]->local_cid_set.cids[0].cid_tag;
         ok(resolve_local_cid_path_id(f.server, &fake_pkt, &resolved_pid) && resolved_pid == QUICLY_MAX_PATH_ID);
 
