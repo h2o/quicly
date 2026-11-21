@@ -990,11 +990,13 @@ struct _st_quicly_conn_public_t {
     quicly_state_t state;
     struct {
         /**
-         * initial local CID snapshot retained for layout compatibility and tracing; live CID state belongs to path zero.
+         * initial local CID plaintext retained for probe offset compatibility; live CID state belongs to path zero.
          * `quicly_conn_public_t::local.cid_set.plaintext.master_id has to be located right after `ctx` and `state`, as probes rely
          * on that assumption.
          */
-        quicly_local_cid_set_t cid_set;
+        struct {
+            quicly_cid_plaintext_t plaintext;
+        } cid_set;
         /**
          * the SCID used in long header packets. Equivalent to local_cid[seq=0]. Retaining the value separately is the easiest way
          * of staying away from the complexity caused by remote peer sending RCID frames before the handshake concludes.
@@ -1007,10 +1009,6 @@ struct _st_quicly_conn_public_t {
         uint64_t max_path_id;
     } local;
     struct {
-        /**
-         * initial remote CID snapshot retained for layout compatibility; use quicly_get_remote_cid for path zero's live CID state.
-         */
-        quicly_remote_cid_set_t cid_set;
         struct st_quicly_conn_streamgroup_state_t bidi, uni;
         quicly_transport_parameters_t transport_params;
         struct {
