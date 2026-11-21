@@ -55,6 +55,7 @@ typedef struct st_quicly_local_cid_t {
     uint64_t sequence;
     quicly_cid_t cid;
     uint8_t stateless_reset_token[QUICLY_STATELESS_RESET_TOKEN_LEN];
+    uint8_t cid_tag;
 } quicly_local_cid_t;
 
 /**
@@ -62,7 +63,8 @@ typedef struct st_quicly_local_cid_t {
  */
 typedef struct st_quicly_local_cid_set_t {
     /**
-     * connection identifier tuple (node_id, thread_id, master_id) and path_id; `sequence` tracks the next CID sequence to issue
+     * Identifier of the connection used by quicly. Three tuple of (node_id, thread_id, master_id) is used to identify the
+     * connection. `path_id` is maintained by the "local_cid" module, and used for identifying each CID being issued.
      */
     quicly_cid_plaintext_t plaintext;
     /**
@@ -79,6 +81,10 @@ typedef struct st_quicly_local_cid_set_t {
      */
     size_t _size;
     quicly_cid_encryptor_t *_encryptor;
+    uint64_t _next_sequence;
+    uint8_t *_next_cid_tag;
+    uint8_t _local_next_cid_tag;
+    uint8_t _allow_empty;
 } quicly_local_cid_set_t;
 
 /**
@@ -89,6 +95,8 @@ typedef struct st_quicly_local_cid_set_t {
  */
 void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
                                const quicly_cid_plaintext_t *new_cid);
+void quicly_local_cid_init_set_shared(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
+                                      const quicly_cid_plaintext_t *new_cid, uint8_t *next_cid_tag, int allow_empty);
 /**
  * sets a new size of locally issued CIDs.
  *

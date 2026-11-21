@@ -270,8 +270,6 @@ typedef struct st_quicly_cc_ecn_counts_t {
 } quicly_cc_ecn_counts_t;
 
 typedef struct st_quicly_cc_t {
-    /* back-pointer to connection */
-    struct st_quicly_conn_t *conn;
     /**
      * Congestion controller type.
      */
@@ -763,9 +761,6 @@ inline void quicly_cc_add_cwnd(uint32_t *cwnd, uint32_t increment)
     *cwnd = (uint64_t)*cwnd + increment > INT32_MAX ? (uint32_t)INT32_MAX : *cwnd + increment;
 #endif
 }
-
-/* coupled LIA congestion avoidance target across active multipath paths */
-uint64_t quicly_calculate_lia_target(struct st_quicly_conn_t *conn);
 
 #ifdef __cplusplus
 }

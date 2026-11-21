@@ -28,14 +28,14 @@
 static void encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
                         const quicly_cid_plaintext_t *plaintext)
 {
-    encrypted->cid[0] = plaintext->sequence;
+    encrypted->cid[0] = plaintext->path_id;
     encrypted->len = 1;
 }
 
 static size_t decrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
                           size_t len)
 {
-    plaintext->sequence = ((const uint8_t *)encrypted)[0];
+    plaintext->path_id = ((const uint8_t *)encrypted)[0];
     return 1;
 }
 
@@ -58,7 +58,7 @@ static int verify_cid(const quicly_local_cid_t *cid, quicly_cid_encryptor_t *enc
         return 0;
 
     encryptor->decrypt_cid(encryptor, &plaintext, cid->cid.cid, cid->cid.len);
-    return !(cid->sequence == plaintext.sequence);
+    return !(cid->cid_tag == plaintext.path_id);
 }
 
 /**
@@ -198,8 +198,8 @@ void test_local_cid(void)
     /* try to exhaust CID */
     size_t num_retired = 7;
     uint64_t seq_to_retire = 7;
-    while (num_retired < QUICLY_MAX_CID_SEQUENCE) {
-        if (seq_to_retire == QUICLY_MAX_CID_SEQUENCE - 1) {
+    while (num_retired < QUICLY_MAX_PATH_ID) {
+        if (seq_to_retire == QUICLY_MAX_PATH_ID - 1) {
             /* this is the maximum CID we can generate -- after retiring it, there should be no CID to send */
             ok(quicly_local_cid_retire(&set, seq_to_retire, &has_pending) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
         } else {
@@ -211,11 +211,11 @@ void test_local_cid(void)
     }
 
     /* alternate paths may retire their final CID without closing the connection */
-    quicly_cid_plaintext_t alt_plaintext = {.path_id = 1};
     quicly_local_cid_set_t alt_set;
-    quicly_local_cid_init_set(&alt_set, &test_encryptor, &alt_plaintext);
+    uint8_t shared_tag = 250;
+    quicly_local_cid_init_set_shared(&alt_set, &test_encryptor, &cid_plaintext, &shared_tag, 1);
     ok(quicly_local_cid_set_size(&alt_set, NUM_CIDS) != 0);
-    for (uint64_t seq = 0; seq < QUICLY_MAX_CID_SEQUENCE; ++seq)
+    for (uint64_t seq = 0; seq < 5; ++seq)
         ok(quicly_local_cid_retire(&alt_set, seq, &has_pending) == 0);
     ok(!has_pending);
 

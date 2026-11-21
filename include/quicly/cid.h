@@ -31,9 +31,10 @@ extern "C" {
 #include "picotls.h"
 #include "quicly/constants.h"
 
-/* maximum local path ID and per-path CID sequence bound encoded in 8-bit CID plaintext fields */
+/**
+ * Guard value. We would never send path_id of this value.
+ */
 #define QUICLY_MAX_PATH_ID UINT8_MAX
-#define QUICLY_MAX_CID_SEQUENCE UINT8_MAX
 
 typedef struct st_quicly_cid_t {
     uint8_t cid[QUICLY_MAX_CID_LEN_V1];
@@ -51,17 +52,13 @@ typedef struct st_quicly_cid_plaintext_t {
      */
     uint32_t master_id;
     /**
-     * path ID of the connection (0 when multipath is not negotiated)
+     * path ID of the connection; we issue up to 255 CIDs per connection (see QUICLY_MAX_PATH_ID)
      */
     uint32_t path_id : 8;
     /**
-     * per-path CID sequence number; up to 255 CIDs are issued per path (see QUICLY_MAX_CID_SEQUENCE)
-     */
-    uint32_t sequence : 8;
-    /**
      * for intra-node routing
      */
-    uint32_t thread_id : 16;
+    uint32_t thread_id : 24;
     /**
      * for inter-node routing; available only when using a 16-byte cipher to encrypt CIDs, otherwise set to zero.
      */

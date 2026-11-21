@@ -622,19 +622,11 @@ static uint32_t calc_bytes_per_mtu_increase(quicly_cc_t *cc, const quicly_loss_t
         return cc->state.pico.bytes_per_mtu_increase;
     } else {
         assert(cc->type == &quicly_cc_type_reno);
-        uint64_t target = cc->cwnd;
-        if (cc->conn != NULL && quicly_is_multipath(cc->conn)) {
-            uint64_t lia_target = quicly_calculate_lia_target(cc->conn);
-            if (lia_target > target)
-                target = lia_target;
-        }
         if (cc->conf->normalize_mtu) {
-            target = target <= UINT64_MAX / max_udp_payload_size ? target * max_udp_payload_size / QUICLY_CC_REFERENCE_MTU
-                                                                 : UINT32_MAX;
-            if (target < 1)
-                target = 1;
+            uint64_t bytes = (uint64_t)cc->cwnd * max_udp_payload_size / QUICLY_CC_REFERENCE_MTU;
+            return bytes < 1 ? 1 : bytes > UINT32_MAX ? UINT32_MAX : (uint32_t)bytes;
         }
-        return target > UINT32_MAX ? UINT32_MAX : (uint32_t)target;
+        return cc->cwnd;
     }
 }
 
@@ -1076,9 +1068,7 @@ static int switch_to(quicly_cc_t *cc, quicly_cc_type_t *type)
             cc->type = type;
             pico_init_pico_state(cc);
         } else {
-            struct st_quicly_conn_t *conn = cc->conn;
             pico_reset(cc, type, cc->cwnd_initial, cc->conf);
-            cc->conn = conn;
         }
         return 1;
     }
