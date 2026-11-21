@@ -1036,18 +1036,36 @@ static void unmark_datagram_queue(quicly_datagram_queue_t *q)
         q->entries[(q->head + i) % q->capacity].consumed = 0;
 }
 
+static size_t datagram_queue_limit(quicly_conn_t *conn)
+{
+    size_t limit = conn->super.ctx->max_datagram_frame_payloads;
+    return limit != 0 ? limit : QUICLY_DEFAULT_MAX_DATAGRAM_FRAME_PAYLOADS;
+}
+
 static size_t enqueue_datagram_queue(quicly_conn_t *conn, quicly_datagram_queue_t *q, ptls_iovec_t *datagrams, size_t num_datagrams)
 {
-    if (q->entries == NULL) {
-        size_t capacity = conn->super.ctx->max_datagram_frame_payloads != 0 ? conn->super.ctx->max_datagram_frame_payloads
-                                                                            : QUICLY_DEFAULT_MAX_DATAGRAM_FRAME_PAYLOADS;
-        if (capacity == 0 || capacity > SIZE_MAX / sizeof(q->entries[0]))
-            return 0;
-        if ((q->entries = malloc(sizeof(q->entries[0]) * capacity)) == NULL)
-            return 0;
-        q->capacity = capacity;
-        q->head = 0;
-        q->count = 0;
+    size_t limit = datagram_queue_limit(conn);
+    if (limit > SIZE_MAX / sizeof(q->entries[0]) || q->count >= limit || num_datagrams == 0)
+        return 0;
+    if (num_datagrams > limit - q->count)
+        num_datagrams = limit - q->count;
+
+    size_t needed = q->count + num_datagrams;
+    if (needed > q->capacity) {
+        size_t capacity = q->capacity != 0 ? q->capacity * 2 : 8;
+        while (capacity < needed)
+            capacity *= 2;
+        if (capacity > limit)
+            capacity = limit;
+        quicly_datagram_entry_t *entries = malloc(sizeof(*entries) * capacity);
+        if (entries != NULL) {
+            for (size_t i = 0; i != q->count; ++i)
+                entries[i] = q->entries[(q->head + i) % q->capacity];
+            free(q->entries);
+            q->entries = entries;
+            q->capacity = capacity;
+            q->head = 0;
+        }
     }
     size_t enqueued = 0;
     for (size_t i = 0; i != num_datagrams; ++i) {
@@ -8039,10 +8057,7 @@ size_t quicly_get_max_datagram_frames_path(quicly_conn_t *conn, size_t path_inde
     struct st_quicly_conn_path_t *path = get_path(conn, path_index);
     if (path == NULL || path != path->path_space->addrs[0] || path->abandoned)
         return 0;
-    if (path->path_space->datagram_frame_payloads.capacity != 0)
-        return path->path_space->datagram_frame_payloads.capacity;
-    return conn->super.ctx->max_datagram_frame_payloads != 0 ? conn->super.ctx->max_datagram_frame_payloads
-                                                             : QUICLY_DEFAULT_MAX_DATAGRAM_FRAME_PAYLOADS;
+    return datagram_queue_limit(conn);
 }
 
 int quicly_has_datagram_frames(quicly_conn_t *conn)
