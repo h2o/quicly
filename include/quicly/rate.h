@@ -30,60 +30,52 @@
 extern "C" {
 #endif
 
-#ifndef QUICLY_DELIVERY_RATE_SAMPLE_PERIOD
-/**
- * sampling period of delivery rate, in milliseconds
- */
-#define QUICLY_DELIVERY_RATE_SAMPLE_PERIOD 50
-#endif
-
-#ifndef QUICLY_DELIVERY_RATE_SAMPLE_COUNT
-/**
- * number of samples to retain (and to calculate average from)
- */
-#define QUICLY_DELIVERY_RATE_SAMPLE_COUNT 10
-#endif
-
-struct st_quicly_rate_sample_t {
-    uint32_t elapsed;
-    uint32_t bytes_acked;
-};
-
 /**
  * State used for estimating the delivery rate.
+ * While the flow is CC-limited, the estimator measures the bytes acknowledged over consecutive windows, each of which starts at an
+ * ACK and ends at the ACK for the first packet sent after that ACK. Each window therefore spans at least one round trip. The first
+ * window after becoming CC-limited is discarded, as the packets acknowledged during that window might have been sent before the
+ * flow became CC-limited. When the flow stops being CC-limited, the window being measured is discarded as well. The rate measured
+ * over each window is a sample, from which a smoothed rate and its variation are calculated in the same way as smoothed_rtt and
+ * rttvar of RFC 9002.
  */
 typedef struct st_quicly_ratemeter_t {
     /**
-     * ring buffer retaining the most recent samples
+     * Estimate, in bytes / second. `smoothed` is NAN until the first sample is obtained.
      */
     struct {
-        struct st_quicly_rate_sample_t entries[QUICLY_DELIVERY_RATE_SAMPLE_COUNT];
-        size_t latest;
-    } past_samples;
+        double latest;
+        double smoothed;
+        double variation;
+    } estimate;
     /**
-     * packet number range within which the flow has been CWND-limited
+     * The window being measured.
      */
-    quicly_range_t pn_cwnd_limited;
-    /**
-     * Current sample being collected, if any. When running, `start.at` and `start.bytes_acked` retains the values at the start of
-     * the current sampling period. When not, `start.at` is set to INT64_MAX, and `sample` is zero-cleared.
-     */
-    struct {
-        struct {
-            int64_t at;
-            uint64_t bytes_acked;
-        } start;
-        struct st_quicly_rate_sample_t sample;
-    } current;
+    struct st_quicly_ratemeter_window_t {
+        /**
+         * The window ends at an ACK for this packet number or above. UINT64_MAX while the flow is not CC-limited.
+         */
+        uint64_t end_pn;
+        /**
+         * Time and the cumulative number of bytes acknowledged at the start of the window. `at` is NAN during the first window
+         * after becoming CC-limited, which is not used as a sample.
+         */
+        double at;
+        uint64_t bytes_acked;
+    } window;
 } quicly_ratemeter_t;
 
 /**
- * Estimated delivery rate, in bytes / second.
+ * Estimated delivery rate, in bytes / second. All values are zero until the first sample is obtained.
+ *
+ * `latest` is comparable to what Linux reports as `tcpi_delivery_rate`: both are the rate of the most recent sample, measured from
+ * the ACK received before a packet was sent until that packet is acknowledged. Linux additionally bounds each sample by the time
+ * over which the packets were sent, takes a sample at every ACK, and keeps the latest sample that is not application-limited.
  */
 typedef struct st_quicly_rate_t {
     uint64_t latest;
     uint64_t smoothed;
-    uint64_t stdev;
+    uint64_t variation;
 } quicly_rate_t;
 
 /**
@@ -103,11 +95,10 @@ void quicly_ratemeter_enter_cc_limited(quicly_ratemeter_t *meter, uint64_t pn);
  */
 void quicly_ratemeter_exit_cc_limited(quicly_ratemeter_t *meter, uint64_t pn);
 /**
- * Given three values, update the estimation.
- * @param bytes_acked  total number of bytes being acked from the beginning of the connection; i.e.,
- *                     `quicly_stats_t::num_bytes.ack_received`
+ * Updates the estimation upon receiving an ACK.
  */
-void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, int64_t now, uint64_t bytes_acked, uint64_t pn);
+void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, double now, uint64_t bytes_acked, uint64_t largest_pn_acked,
+                             uint64_t next_pn);
 /**
  * Returns the delivery rate estimate
  */
@@ -117,7 +108,7 @@ void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate);
 
 inline int quicly_ratemeter_is_cc_limited(quicly_ratemeter_t *meter)
 {
-    return meter->pn_cwnd_limited.start != UINT64_MAX && meter->pn_cwnd_limited.end == UINT64_MAX;
+    return meter->window.end_pn != UINT64_MAX;
 }
 
 #ifdef __cplusplus

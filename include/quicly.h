@@ -880,7 +880,7 @@ typedef struct st_quicly_stats_t {
     apply(cc.num_prague_reductions, "cc.num-prague-reductions")                                                                    \
     apply(delivery_rate.latest, "delivery-rate.latest")                                                                            \
     apply(delivery_rate.smoothed, "delivery-rate.smoothed")                                                                        \
-    apply(delivery_rate.stdev, "delivery-rate.stdev")                                                                              \
+    apply(delivery_rate.variation, "delivery-rate.variation")                                                                        \
     apply(num_sentmap_packets_largest, "num-sentmap-packets-largest")
 
 #define QUICLY_STATS_FOREACH(apply)                                                                                                \

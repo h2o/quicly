@@ -6705,8 +6705,8 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
     QUICLY_LOG_CONN(ack_delay_received, conn, { PTLS_LOG_ELEMENT_NUMBER(ack_delay, frame.ack_delay); });
 
     if (largest_newly_acked.pn != UINT64_MAX)
-        quicly_ratemeter_on_ack(&conn->egress.ratemeter, conn->stash.now, conn->super.stats.num_bytes.ack_received,
-                                largest_newly_acked.pn);
+        quicly_ratemeter_on_ack(&conn->egress.ratemeter, conn->stash.now_double, conn->super.stats.num_bytes.ack_received,
+                                largest_newly_acked.pn, conn->egress.packet_number);
 
     /* ECN feedback is processed before the loss detection engine updates the largest acknowledged, and before OnPacketAckedCC, as
      * L4S feeds it to the marking estimator. */
