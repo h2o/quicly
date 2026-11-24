@@ -25,9 +25,19 @@
 
 #define NUM_CIDS 4
 
+static uint64_t test_key_generation;
+/**
+ * number of subsequent calls to `encrypt_cid` that change the key (i.e., increment `test_key_generation`) before encrypting
+ */
+static size_t num_key_changes_on_encrypt;
+
 static void encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
                         const quicly_cid_plaintext_t *plaintext)
 {
+    if (num_key_changes_on_encrypt != 0) {
+        --num_key_changes_on_encrypt;
+        ++test_key_generation;
+    }
     encrypted->cid[0] = plaintext->path_id;
     encrypted->len = 1;
 }
@@ -137,16 +147,28 @@ static size_t num_retiring(const quicly_local_cid_set_t *set)
     return num;
 }
 
+static uint64_t get_key_generation(struct st_quicly_cid_encryptor_t *self)
+{
+    return test_key_generation;
+}
+
+static quicly_cid_encryptor_t test_generational_encryptor = {
+    .encrypt_cid = encrypt_cid,
+    .decrypt_cid = decrypt_cid,
+    .get_key_generation = get_key_generation,
+};
+
 static void test_rotate(void)
 {
     quicly_local_cid_set_t set;
     static const quicly_cid_plaintext_t cid_plaintext = {0};
     int has_pending, exhausted;
 
-    quicly_local_cid_init_set(&set, &test_encryptor, &cid_plaintext);
+    quicly_local_cid_init_set(&set, &test_generational_encryptor, &cid_plaintext);
     ok(quicly_local_cid_set_size(&set, NUM_CIDS) != 0);
 
-    /* not rotated until all the CIDs are delivered */
+    /* the key changes, but the CIDs are not rotated until all of them are delivered */
+    ++test_key_generation;
     ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
     quicly_local_cid_on_sent(&set, NUM_CIDS - 1);
     quicly_local_cid_on_acked(&set, 1);
@@ -168,7 +190,9 @@ static void test_rotate(void)
     ok(exists_once(&set, 3, QUICLY_LOCAL_CID_STATE_DELIVERED));
     send_and_ack_all(&set);
 
-    /* not rotated again until all the old CIDs are retired; retiring them does not generate new CIDs, and duplicates are ignored */
+    /* the key changes again, but the CIDs are not rotated until all the old CIDs are retired; retiring them does not generate new
+     * CIDs, and duplicates are ignored */
+    ++test_key_generation;
     for (uint64_t seq = 0; seq < NUM_CIDS; seq++) {
         ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
         ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
@@ -200,8 +224,10 @@ static void test_rotate(void)
     ok(num_retiring(&set) == 0);
 
     /* not rotated if path IDs are insufficient for replacing all the CIDs */
+    ++test_key_generation;
     set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS + 1;
     ok(!quicly_local_cid_rotate(&set, &exhausted) && exhausted);
+    ++test_key_generation;
     set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS;
     ok(quicly_local_cid_rotate(&set, &exhausted));
     ok(set.retire_prior_to == QUICLY_MAX_PATH_ID - NUM_CIDS);
@@ -218,6 +244,64 @@ static void test_rotate(void)
     }
     ok(quicly_local_cid_retire(&set, QUICLY_MAX_PATH_ID - 1, &has_pending, &exhausted) ==
        QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+}
+
+static void test_key_generation_tracking(void)
+{
+    quicly_local_cid_set_t set;
+    static const quicly_cid_plaintext_t cid_plaintext = {0};
+    int has_pending, exhausted;
+
+    /* without the callback, the CIDs are never rotated */
+    quicly_local_cid_init_set(&set, &test_encryptor, &cid_plaintext);
+    ok(quicly_local_cid_set_size(&set, NUM_CIDS) != 0);
+    send_and_ack_all(&set);
+    ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
+    ok(set.retire_prior_to == 0);
+
+    /* if the key changes while the initial CID is being generated, the generation read before is recorded */
+    num_key_changes_on_encrypt = 1;
+    quicly_local_cid_init_set(&set, &test_generational_encryptor, &cid_plaintext);
+    ok(set.key_generation == test_key_generation - 1);
+
+    /* with the callback, the CIDs are rotated only when the key changes */
+    quicly_local_cid_init_set(&set, &test_generational_encryptor, &cid_plaintext);
+    ok(set.key_generation == test_key_generation);
+    ok(quicly_local_cid_set_size(&set, NUM_CIDS) != 0);
+    send_and_ack_all(&set);
+    ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
+    ok(set.retire_prior_to == 0);
+    ++test_key_generation;
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+    ok(set.key_generation == test_key_generation);
+    send_and_ack_all(&set);
+    for (uint64_t seq = 0; seq < NUM_CIDS; seq++)
+        ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
+    ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
+    ok(set.retire_prior_to == NUM_CIDS);
+
+    /* if the key changes while the new CIDs are being generated, they are rotated again */
+    ++test_key_generation;
+    uint64_t key_generation_before = test_key_generation;
+    num_key_changes_on_encrypt = 1;
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+    ok(test_key_generation == key_generation_before + 1);
+    ok(set.key_generation == key_generation_before);
+    send_and_ack_all(&set);
+    for (uint64_t seq = NUM_CIDS; seq < 2 * NUM_CIDS; seq++)
+        ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+    ok(set.key_generation == test_key_generation);
+    send_and_ack_all(&set);
+    for (uint64_t seq = 2 * NUM_CIDS; seq < 3 * NUM_CIDS; seq++)
+        ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
+
+    /* once the CIDs turn out to be exhausted, the rotation is not attempted until the key changes again */
+    set.plaintext.path_id = QUICLY_MAX_PATH_ID;
+    ++test_key_generation;
+    ok(!quicly_local_cid_rotate(&set, &exhausted) && exhausted);
+    ok(set.key_generation == test_key_generation);
+    ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
 }
 
 void test_local_cid(void)
@@ -346,4 +430,5 @@ void test_local_cid(void)
     ok(exists_once(&small_set, 3, QUICLY_LOCAL_CID_STATE_PENDING));
 
     subtest("rotate", test_rotate);
+    subtest("key-generation", test_key_generation_tracking);
 }

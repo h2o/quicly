@@ -3839,32 +3839,6 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     return at;
 }
 
-quicly_error_t quicly_rotate_local_cids(quicly_conn_t *conn)
-{
-    int exhausted;
-
-    if (conn->super.state >= QUICLY_STATE_CLOSING)
-        return QUICLY_ERROR_IS_CLOSING;
-    /* The replacement is deferred until the handshake is confirmed; RFC 9000 does not require this, but it avoids retiring the CID
-     * used during the handshake while long header packets might still be exchanged. */
-    if (conn->initial != NULL || conn->handshake != NULL)
-        return QUICLY_ERROR_AGAIN;
-    if (!quicly_local_cid_rotate(&conn->super.local.cid_set, &exhausted)) {
-        if (!exhausted)
-            return QUICLY_ERROR_AGAIN;
-        conn->super.stats.num_local_cid_exhaustion = 1;
-        return QUICLY_ERROR_CID_EXHAUSTION;
-    }
-
-    ++conn->super.stats.num_local_cid_rotations;
-    QUICLY_PROBE(LOCAL_CID_ROTATE, conn, conn->stash.now, conn->super.local.cid_set.retire_prior_to);
-    QUICLY_LOG_CONN(local_cid_rotate, conn,
-                    { PTLS_LOG_ELEMENT_NUMBER(retire_prior_to, conn->super.local.cid_set.retire_prior_to); });
-
-    conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
-    return 0;
-}
-
 uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn)
 {
     if (!conn->application)
@@ -6134,6 +6108,21 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
         ret = do_send_closed(conn, &s);
         goto Exit;
+    }
+
+    /* Replace the local CIDs if the key used for encrypting them has changed. Doing so only when something is to be sent avoids
+     * waking up connections just for the replacement. */
+    if (conn->initial == NULL && conn->handshake == NULL) {
+        int exhausted;
+        if (quicly_local_cid_rotate(&conn->super.local.cid_set, &exhausted)) {
+            ++conn->super.stats.num_local_cid_rotations;
+            QUICLY_PROBE(LOCAL_CID_ROTATE, conn, conn->stash.now, conn->super.local.cid_set.retire_prior_to);
+            QUICLY_LOG_CONN(local_cid_rotate, conn,
+                            { PTLS_LOG_ELEMENT_NUMBER(retire_prior_to, conn->super.local.cid_set.retire_prior_to); });
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        } else if (exhausted) {
+            conn->super.stats.num_local_cid_exhaustion = 1;
+        }
     }
 
     /* try emitting one probe packet on one of the backup paths, or ... (note: API of `quicly_send` allows us to send packets on no

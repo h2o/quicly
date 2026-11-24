@@ -89,6 +89,8 @@ void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor
     /* initialize cids[0] */
     if (encryptor != NULL) {
         assert(new_cid != NULL && "master CID must be specified when a non-zero length CID is to be used");
+        if (encryptor->get_key_generation != NULL)
+            set->key_generation = encryptor->get_key_generation(encryptor);
         generate_cid(set, 0);
     }
     set->cids[0].state =
@@ -230,9 +232,13 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
 int quicly_local_cid_rotate(quicly_local_cid_set_t *set, int *exhausted)
 {
     size_t num_cids = 0, i;
+    uint64_t new_key_generation;
 
-    assert(set->_encryptor != NULL);
     *exhausted = 0;
+
+    if (set->_encryptor == NULL || set->_encryptor->get_key_generation == NULL ||
+        (new_key_generation = set->_encryptor->get_key_generation(set->_encryptor)) == set->key_generation)
+        return 0;
 
     for (i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
         if (set->cids[i].state == QUICLY_LOCAL_CID_STATE_IDLE)
@@ -246,6 +252,11 @@ int quicly_local_cid_rotate(quicly_local_cid_set_t *set, int *exhausted)
             return 0;
         ++num_cids;
     }
+
+    /* Record the generation read before generating the new CIDs. If the key changes while they are being generated, some of them
+     * might be encrypted using the newer key, in which case they are replaced again, rather than the change being missed. */
+    set->key_generation = new_key_generation;
+
     /* replace all or nothing; once there are not enough path IDs, there will never be, as `path_id` never decreases while the
      * number of CIDs in use decreases only when `path_id` reaches the maximum */
     if (set->plaintext.path_id + num_cids > QUICLY_MAX_PATH_ID) {

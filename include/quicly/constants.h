@@ -134,8 +134,6 @@ typedef int64_t quicly_error_t;
 #define QUICLY_ERROR_STATE_EXHAUSTION 0xff07
 #define QUICLY_ERROR_INVALID_INITIAL_VERSION 0xff08
 #define QUICLY_ERROR_DECRYPTION_FAILED 0xff09
-#define QUICLY_ERROR_AGAIN 0xff0a          /* the operation cannot be performed at the moment, but can be retried later */
-#define QUICLY_ERROR_CID_EXHAUSTION 0xff0b /* no more CIDs can be issued on the connection */
 
 typedef int64_t quicly_stream_id_t;
 

@@ -93,6 +93,11 @@ typedef struct st_quicly_cid_encryptor_t {
      * generates a stateless reset token (returns if generated)
      */
     int (*generate_stateless_reset_token)(struct st_quicly_cid_encryptor_t *self, void *token, const void *cid);
+    /**
+     * optional; returns the generation of the key being used for encrypting CIDs. When the value changes, quicly replaces the CIDs
+     * issued to the peer, so that the connection survives the removal of the old key.
+     */
+    uint64_t (*get_key_generation)(struct st_quicly_cid_encryptor_t *self);
 } quicly_cid_encryptor_t;
 
 static void quicly_set_cid(quicly_cid_t *dest, ptls_iovec_t src);

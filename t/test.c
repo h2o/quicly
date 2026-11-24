@@ -1599,7 +1599,7 @@ static size_t num_local_cids(quicly_conn_t *conn, int below)
 }
 
 /**
- * checks that `conn` has completed the rotation requested, and that the peer uses the new CIDs
+ * checks that `conn` has rotated its CIDs, and that the peer uses the new ones
  */
 static void check_rotated(quicly_conn_t *conn, quicly_conn_t *peer, uint64_t min_retire_prior_to)
 {
@@ -1615,11 +1615,43 @@ static void check_rotated(quicly_conn_t *conn, quicly_conn_t *peer, uint64_t min
     ok(quicly_get_state(peer) == QUICLY_STATE_CONNECTED);
 }
 
+/**
+ * CID encryptor that wraps the default one, reporting `rotating_key_generation` as the generation of the key
+ */
+static quicly_cid_encryptor_t *rotating_inner;
+static uint64_t rotating_key_generation;
+
+static void rotating_encrypt_cid(quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
+                                 const quicly_cid_plaintext_t *plaintext)
+{
+    rotating_inner->encrypt_cid(rotating_inner, encrypted, stateless_reset_token, plaintext);
+}
+
+static size_t rotating_decrypt_cid(quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
+                                   size_t len)
+{
+    return rotating_inner->decrypt_cid(rotating_inner, plaintext, encrypted, len);
+}
+
+static int rotating_generate_stateless_reset_token(quicly_cid_encryptor_t *self, void *token, const void *cid)
+{
+    return rotating_inner->generate_stateless_reset_token(rotating_inner, token, cid);
+}
+
+static uint64_t rotating_get_key_generation(quicly_cid_encryptor_t *self)
+{
+    return rotating_key_generation;
+}
+
 static void test_rotate_local_cids(void)
 {
+    static quicly_cid_encryptor_t rotating_encryptor = {rotating_encrypt_cid, rotating_decrypt_cid,
+                                                        rotating_generate_stateless_reset_token, rotating_get_key_generation};
     quicly_cid_encryptor_t *orig_encryptor = quic_ctx.cid_encryptor;
-    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_aes128ecb, &ptls_openssl_aes128ecb,
-                                                              &ptls_openssl_sha256, ptls_iovec_init("rotate", 6));
+    rotating_inner = quicly_new_default_cid_encryptor(&ptls_openssl_aes128ecb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+                                                      ptls_iovec_init("rotate", 6));
+    rotating_key_generation = 0;
+    quic_ctx.cid_encryptor = &rotating_encryptor;
     quicly_conn_t *client, *server;
 
     { /* CIDs are not rotated until the handshake is confirmed */
@@ -1630,17 +1662,26 @@ static void test_rotate_local_cids(void)
         size_t num_datagrams = 1;
         ok(quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
                           NULL, NULL, NULL) == 0);
-        ok(quicly_rotate_local_cids(client) == QUICLY_ERROR_AGAIN);
+        ++rotating_key_generation; /* the change is seen by the client while it has only the CID sent in the first flight */
         ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
         ok(num_datagrams == 1);
+        ok(client->super.local.cid_set.retire_prior_to == 0);
         ok(decode_packets(&decoded, &datagram, 1) == 1);
         ok(quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL, NULL) == 0);
-        ok(quicly_rotate_local_cids(server) == QUICLY_ERROR_AGAIN);
+        ++rotating_key_generation;
         ok(transmit(server, client) != 0);
-        ok(quicly_rotate_local_cids(server) == QUICLY_ERROR_AGAIN);
-        ok(quicly_rotate_local_cids(client) == QUICLY_ERROR_AGAIN);
+        ok(transmit(client, server) != 0);
         ok(server->super.local.cid_set.retire_prior_to == 0);
         ok(client->super.local.cid_set.retire_prior_to == 0);
+        /* once the handshake is confirmed, the CIDs are rotated when packets are sent */
+        exchange_until_idle(client, server);
+        send_and_get_dcid_path_id(client, server);
+        send_and_get_dcid_path_id(server, client);
+        exchange_until_idle(client, server);
+        ok(server->super.stats.num_local_cid_rotations == 1);
+        ok(client->super.stats.num_local_cid_rotations == 1);
+        check_rotated(server, client, num_local_cids(server, 0));
+        check_rotated(client, server, num_local_cids(client, 0));
         quicly_free(client);
         quicly_free(server);
     }
@@ -1650,39 +1691,33 @@ static void test_rotate_local_cids(void)
     ok(num_server_cids > 1);
     uint64_t num_retired_by_client = server->super.stats.num_frames_received.retire_connection_id;
 
-    /* rotate; the new CIDs are sent by the next call to `quicly_send` */
-    ok(server->super.stats.num_local_cid_rotations == 0);
-    ok(quicly_rotate_local_cids(server) == 0);
-    ok(server->super.stats.num_local_cid_rotations == 1);
+    { /* a change of the key does not cause packets to be sent */
+        int64_t timeout = quicly_get_first_timeout(server);
+        ++rotating_key_generation;
+        ok(quicly_get_first_timeout(server) == timeout);
+        ok(transmit(server, client) == 0);
+        ok(server->super.local.cid_set.retire_prior_to == 0);
+    }
+
+    /* the CIDs are rotated when packets are sent */
+    send_and_get_dcid_path_id(server, client);
     uint64_t first_retire_prior_to = server->super.local.cid_set.retire_prior_to;
     ok(first_retire_prior_to >= num_server_cids);
     ok(num_local_cids(server, 1) == num_server_cids);
-    ok(transmit(server, client) != 0);
+    ok(server->super.stats.num_local_cid_rotations == 1);
 
-    /* not rotated again until the new CIDs are delivered and the old ones are retired; failed attempts do not schedule packets */
-    {
-        int64_t timeout = quicly_get_first_timeout(server);
-        ok(quicly_rotate_local_cids(server) == QUICLY_ERROR_AGAIN);
-        ok(quicly_get_first_timeout(server) == timeout);
-        ok(server->super.local.cid_set.retire_prior_to == first_retire_prior_to);
-    }
+    /* another change is not acted upon until the new CIDs are delivered and the old ones are retired */
+    ++rotating_key_generation;
+    send_and_get_dcid_path_id(server, client);
+    ok(server->super.local.cid_set.retire_prior_to == first_retire_prior_to);
+    ok(server->super.stats.num_local_cid_rotations == 1);
     exchange_until_idle(client, server);
-    ok(server->super.stats.num_frames_received.retire_connection_id - num_retired_by_client == num_server_cids);
-    check_rotated(server, client, first_retire_prior_to);
-
-    /* rotate again */
-    ok(quicly_rotate_local_cids(server) == 0);
+    send_and_get_dcid_path_id(client, server);
+    send_and_get_dcid_path_id(server, client);
+    exchange_until_idle(client, server);
     ok(server->super.stats.num_local_cid_rotations == 2);
-    exchange_until_idle(client, server);
     ok(server->super.stats.num_frames_received.retire_connection_id - num_retired_by_client == 2 * num_server_cids);
     check_rotated(server, client, first_retire_prior_to + num_server_cids);
-
-    /* rotate the client's CIDs */
-    size_t num_client_cids = num_local_cids(client, 0);
-    ok(quicly_rotate_local_cids(client) == 0);
-    ok(client->super.stats.num_local_cid_rotations == 1);
-    exchange_until_idle(client, server);
-    check_rotated(client, server, num_client_cids);
 
     { /* running out of CIDs keeps the connection open, while recording that it happened */
         quicly_local_cid_set_t *set = &server->super.local.cid_set;
@@ -1706,19 +1741,18 @@ static void test_rotate_local_cids(void)
         unlock_now(server);
         ok(server->super.stats.num_local_cid_exhaustion == 1);
         ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
-        /* rotation is not possible either */
+        /* rotation upon a change of the key is not possible either */
         server->super.stats.num_local_cid_exhaustion = 0;
-        ok(quicly_rotate_local_cids(server) == QUICLY_ERROR_CID_EXHAUSTION);
+        ++rotating_key_generation;
+        send_and_get_dcid_path_id(server, client);
         ok(server->super.stats.num_local_cid_exhaustion == 1);
+        ok(server->super.stats.num_local_cid_rotations == 2);
+        ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
     }
-
-    /* closing connections cannot be rotated */
-    ok(quicly_close(client, 0, "") == 0);
-    ok(quicly_rotate_local_cids(client) == QUICLY_ERROR_IS_CLOSING);
 
     quicly_free(client);
     quicly_free(server);
-    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
+    quicly_free_default_cid_encryptor(rotating_inner);
     quic_ctx.cid_encryptor = orig_encryptor;
 }
 

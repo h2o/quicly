@@ -81,6 +81,10 @@ typedef struct st_quicly_local_cid_set_t {
      * value of the Retire Prior To field of the NEW_CONNECTION_ID frames being sent
      */
     uint64_t retire_prior_to;
+    /**
+     * generation of the key used by `_encryptor` when the CIDs were issued (see `quicly_cid_encryptor_t::get_key_generation`)
+     */
+    uint64_t key_generation;
 } quicly_local_cid_set_t;
 
 /**
@@ -123,14 +127,15 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence);
  */
 quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *has_pending, int *exhausted);
 /**
- * Replaces all the CIDs with new ones, raising `retire_prior_to` so that the remote peer retires the old ones. The set must have a
- * CID encryptor.
+ * Replaces all the CIDs with new ones if the key used by the CID encryptor has changed since they were issued (see
+ * `quicly_cid_encryptor_t::get_key_generation`), raising `retire_prior_to` so that the remote peer retires the old ones.
  *
  * The CIDs are replaced only after all of them have been delivered (as the peer retires only the CIDs it has received) and the ones
- * retired by the previous call have been retired by the peer (RFC 9000 Section 5.1.2).
+ * retired by the previous replacement have been retired by the peer (RFC 9000 Section 5.1.2); until then, the caller is expected to
+ * call this function again.
  *
- * @return true if the CIDs have been replaced. Otherwise, `*exhausted` tells if retrying is pointless due to the exhaustion of
- * CIDs.
+ * @return true if the CIDs have been replaced. Otherwise, `*exhausted` is set to true if the CIDs cannot be replaced due to their
+ *         exhaustion; the replacement is not attempted again until the key changes again.
  */
 int quicly_local_cid_rotate(quicly_local_cid_set_t *set, int *exhausted);
 
