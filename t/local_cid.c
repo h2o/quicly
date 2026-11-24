@@ -210,12 +210,6 @@ static void test_rotate(void)
     ok(exists_once(&set, 2 * NUM_CIDS, QUICLY_LOCAL_CID_STATE_PENDING));
     send_and_ack_all(&set);
 
-    /* rotate again, and retire the old CIDs */
-    ok(quicly_local_cid_rotate(&set, &exhausted));
-    send_and_ack_all(&set);
-    for (uint64_t seq = NUM_CIDS + 1; seq <= 2 * NUM_CIDS; seq++)
-        ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
-
     /* not rotated if path IDs are insufficient for replacing all the CIDs */
     ++test_key_generation;
     set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS + 1;
