@@ -18,6 +18,9 @@ from workers import acquire_lock, parse_cpus, worker
 p = argparse.ArgumentParser()
 p.add_argument("protocol", choices=["tcp", "quic"])
 p.add_argument("--cc", default="cubic")
+p.add_argument("--cc-source", type=Path,
+               help="TCP only: the checkout from which the kernel module tcp_CC was built and loaded; records its commit, and "
+                    "requires the loaded module to be the one built there")
 p.add_argument("--abba", action="store_true")
 p.add_argument("--l4s", action="store_true", help="QUIC with L4S (ECT(1) and Prague); requires --cc cuback")
 p.add_argument("--txtime", action="store_true",
@@ -56,6 +59,21 @@ if args.protocol == "tcp" and (args.abba or args.rapid_start or args.abe or args
     p.error("ABBA, Rapid Start, ABE, and L4S apply only to QUIC")
 if args.l4s and args.cc != "cuback":
     p.error("L4S requires --cc cuback")
+if args.cc_source is not None and args.protocol != "tcp":
+    p.error("--cc-source applies only to TCP")
+cc_source = None
+if args.cc_source is not None:
+    source = args.cc_source.resolve()
+    module = "tcp_" + args.cc
+    # srcversion is a hash of the module's sources; equal values tie the loaded module to what was built in the checkout
+    built = subprocess.check_output(["modinfo", "-F", "srcversion", str(source / (module + ".ko"))], text=True).strip()
+    loaded_path = Path(f"/sys/module/{module}/srcversion")
+    loaded = loaded_path.read_text().strip() if loaded_path.exists() else None
+    if not built or loaded != built:
+        p.error(f"loaded {module} (srcversion {loaded}) is not the module built in {source} (srcversion {built or None})")
+    git = lambda *a: subprocess.check_output(["git", "-C", str(source), *a], text=True)
+    cc_source = dict(path=str(source), module=module, srcversion=loaded, remotes=git("remote", "-v"),
+                     commit=git("rev-parse", "HEAD").strip(), status=git("status", "--porcelain"), diff=git("diff", "HEAD"))
 expected_queue = {"tail": "fifo", "codel": f"codel:{args.codel}", "codel_noecn": f"codel/noecn:{args.codel}",
                   "dualpi2": f"dualpi2:{args.dualpi2_device}" if args.dualpi2_device else "dualpi2"}
 if args.queue != expected_queue[args.condition]:
@@ -144,7 +162,7 @@ if not args.dry_run:
     if args.txtime:
         qdisc = subprocess.check_output(["tc", "qdisc", "show", "dev", lane['tun'], "root"], text=True)
         assert qdisc.startswith("qdisc fq "), qdisc
-metadata = dict(protocol=args.protocol, cc=args.cc, abba=args.abba, abe=args.abe, l4s=args.l4s, txtime=args.txtime,
+metadata = dict(protocol=args.protocol, cc=args.cc, cc_source=cc_source, abba=args.abba, abe=args.abe, l4s=args.l4s, txtime=args.txtime,
     rapid_start=args.rapid_start,
     condition=args.condition, trace_id=trace.name.split(".max=")[0].removeprefix("trace-"), trace_path=str(trace),
     queue=args.queue, dry_run=args.dry_run, build_metadata=build_info,

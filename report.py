@@ -52,7 +52,7 @@ def policy_of(m):
     else:
         condition = f"codel-{m['queue'].removeprefix('codel:').replace(':', '-')}"
     if m['protocol'] == 'tcp':
-        assert m['cc'] in ('cubic', 'bbr') and not m['abba']
+        assert not m['abba']
         return condition, 'tcp_' + m['cc']
     # ABE only changes the response to ECN marks, so it is ignored under tail drop; runs predating the abe key used the
     # codel_noabe condition for ABE off
@@ -99,10 +99,18 @@ for line in subprocess.check_output(['git', 'log', '--all', '--reverse', '--form
     commits_by_tree.setdefault(tree, commit)
 
 # environment of the runs: for each item, the number of runs with each value
-environment = {'quicly': Counter(), 'Kernel': Counter()}
+environment = {'quicly': Counter(), 'Kernel': Counter(), 'TCP CC modules': Counter()}
 for run, m, condition, policy in runs:
     environment['quicly'][source_label(m['build_metadata'], run)] += 1
     environment['Kernel'][m['kernel']] += 1
+    if m.get('cc_source'):
+        s = m['cc_source']
+        origin = s['remotes'].split()[1] if s['remotes'] else s['path']
+        changes = f" with the changes recorded in {run.relative_to(root)}/metadata.json" if s['status'] else ''
+        environment['TCP CC modules'][f"{s['module']} (srcversion {s['srcversion']}) built from {origin} at "
+                                      f"{s['commit'][:8]}{changes}"] += 1
+if not environment['TCP CC modules']:
+    del environment['TCP CC modules']
     if condition.startswith('codel-'):
         codel_settings.add(m['queue'].removeprefix('codel:'))
 if settings is not None and 'codel' in settings.get('conditions', ['codel']):
@@ -151,19 +159,33 @@ for run, m, condition, policy in runs:
         saved_trace.parent.mkdir(exist_ok=True)
         shutil.copy2(m['trace_path'], saved_trace)
 
-# QUIC policies are in the order given to the matrix, under each condition; roots predating that order are ordered by
-# controller, ABBA and ABE
+# QUIC policies are grouped by controller, in the order the controllers first appear in the matrix (alphabetical for roots
+# predating that order); within a controller, those with ABBA come first, then those with ABE, and the rest follow the
+# order given to the matrix
 present = {policy.removeprefix('quic_') for *_, policy in runs if policy.startswith('quic_')}
 if quic_specs is not None:
     # each spec followed by its tail-drop name, so that the order holds under every condition
     names = [name for spec in quic_specs for name in (spec, spec.replace('+abe', ''))]
-    quic_policies = sorted(present, key=names.index)
 else:
-    quic_policies = sorted(present, key=lambda name: (list(quic_colors).index(quic_color_key(name)), '+abe' not in name))
-policies = {'tcp_cubic': ('TCP CUBIC', '#2ca02c'), 'tcp_bbr': ('TCP BBR', '#9467bd')}
+    names = sorted(present)
+controllers = list(dict.fromkeys(name.split('+')[0] for name in names))
+quic_policies = sorted(present, key=lambda name: (controllers.index(name.split('+')[0]), '+abba' not in name,
+                                                  '+abe' not in name, names.index(name)))
+# TCP CUBIC and BBR come first, followed by the TCP CCs added to the matrix, in order, and then any other TCP CCs present
+tcp_added = settings.get('tcp_cc', []) if settings is not None else []
+tcp_present = {policy.removeprefix('tcp_') for *_, policy in runs if policy.startswith('tcp_')}
+tcp_names = list(dict.fromkeys(['cubic', 'bbr', *tcp_added, *sorted(tcp_present)]))
+# colors of the added TCP CCs, in order, distinct from those of the QUIC policies
+tcp_colors = dict(zip(tcp_names, ['#2ca02c', '#9467bd', '#7f7f7f', '#000000', '#98df8a', '#c5b0d5']))
+assert len(tcp_colors) == len(tcp_names), 'Too many TCP CCs to color'
+policies = {'tcp_' + name: ('TCP ' + name.upper(), tcp_colors[name]) for name in tcp_names}
+tcp_labels = [label for k, (label, _) in policies.items() if k.removeprefix('tcp_') in tcp_present]
 for name in quic_policies:
     policies['quic_' + name] = ('QUIC ' + name.upper(), quic_colors[quic_color_key(name)])
 quic_labels = [label for k, (label, _) in policies.items() if k.startswith('quic_')]
+tcp_item = (f'<li>{html.escape(", ".join(tcp_labels))}: the Linux TCP congestion controllers of the host, built into the kernel or '
+            'loaded as the modules listed under Environment, over TLS, with pacing and an initial window of 30.</li>'
+            if tcp_labels else '')
 
 def delay_stats(weighted):
     """Average, p50, p90 and p99 of delays given as (delay, weight) pairs sorted by delay."""
@@ -199,7 +221,7 @@ def table(stats):
 page = ['<!doctype html><meta charset="utf-8"><title>Fresh-host CC benchmark</title>',
     '<style>body{font:16px system-ui;margin:2em}table{border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:right}td:first-child,th:first-child{text-align:left}.panel{overflow:auto}img{width:100%;max-width:1000px}</style>',
     '<h1>Congestion-control trace benchmark</h1>',
-    f'<h2>Policies</h2><ul><li>TCP CUBIC, TCP BBR: the host kernel\'s implementations, over TLS, with pacing and an initial window of 30.</li><li>{html.escape(', '.join(quic_labels))}: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start) unless named +RAPID, and a 1472-byte UDP payload. Each is named by the congestion controller, followed by +ABE when built with QUICLY_USE_ABE=1 (otherwise 0), +ABBA when ABBA is enabled, +L4S when sending ECT(1) and responding to CE as Prague, +RAPID when using Jump Start (60 packets) and Rapid Start, and +TXTIME when the server gives each packet a departure time (SCM_TXTIME) at its pacing rate, so that the fq qdisc paces each packet. ABE only affects the response to ECN marks, so it is omitted under tail drop; in the CoDel charts, policies without ABE are dashed.</li></ul>',
+    f'<h2>Policies</h2><ul>{tcp_item}<li>{html.escape(', '.join(quic_labels))}: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start) unless named +RAPID, and a 1472-byte UDP payload. Each is named by the congestion controller, followed by +ABE when built with QUICLY_USE_ABE=1 (otherwise 0), +ABBA when ABBA is enabled, +L4S when sending ECT(1) and responding to CE as Prague, +RAPID when using Jump Start (60 packets) and Rapid Start, and +TXTIME when the server gives each packet a departure time (SCM_TXTIME) at its pacing rate, so that the fq qdisc paces each packet. ABE only affects the response to ECN marks, so it is omitted under tail drop; in the CoDel charts, policies without ABE are dashed.</li></ul>',
     f'<h2>Scenarios</h2><ul><li>Traces: <a href="https://github.com/Soheil-ab/Cellular-Traces-NYC">NYC cellular traces</a> set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: {html.escape(', '.join(label for _, label in conditions))}; CoDel is target:interval in ms with ECN, and DualPI2 follows Linux\'s with default parameters, with one queue for the single flow.</li></ul>',
     '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by tunulator but not forwarded; it includes packets remaining in tunulator at cutoff, while CE-marked packets are forwarded.</p>',
     '<p>Delay is measured for every 15000th byte of the stream: from when tunulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking.</p>',

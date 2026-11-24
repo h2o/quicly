@@ -5,7 +5,6 @@ import fcntl
 import hashlib
 import json
 import os
-import platform
 from pathlib import Path
 import signal
 import subprocess
@@ -32,6 +31,14 @@ def quic_cc_name(cc, abe, abba, l4s, txtime, rapid):
         ('+rapid' if rapid else '')
 
 
+def parse_tcp_cc(value):
+    """Parses NAME[=DIR] into (NAME, DIR); DIR is the checkout from which the kernel module tcp_NAME was built and loaded."""
+    name, sep, source = value.partition('=')
+    if not name.isidentifier() or name in ('cubic', 'bbr') or (sep and not source):
+        raise argparse.ArgumentTypeError(f'invalid TCP CC to add (CUBIC and BBR always run): {value}')
+    return name, Path(source) if source else None
+
+
 CONDITIONS = ('tail', 'codel', 'dualpi2')
 
 
@@ -48,6 +55,9 @@ def main():
                         'repeat for several '
                         '(default: cubic+abe and cubic+abe+abba)')
     p.add_argument('--no-tcp', action='store_true', help='Run the QUIC policies only, without TCP CUBIC and BBR')
+    p.add_argument('--tcp-cc', action='append', type=parse_tcp_cc,
+                   help='TCP CC to run in addition to CUBIC and BBR, as NAME, or NAME=DIR when it is the kernel module tcp_NAME '
+                        'built and loaded from the checkout DIR, whose commit is then recorded; repeat for several')
     p.add_argument('--dualpi2-device', type=int, default=0,
                    help='Device buffer between DualPI2 and the link, in packets, for the dualpi2 condition (default: none)')
     p.add_argument('--condition', action='append', choices=CONDITIONS,
@@ -78,6 +88,11 @@ def main():
         p.error('QUIC policies with +txtime require --cpus')
     if any(not abe for _, abe, *_ in quic_ccs) and a.noabe_build is None:
         p.error('QUIC policies without +abe require --noabe-build')
+    tcp_sources = dict(a.tcp_cc or [])
+    if len(tcp_sources) != len(a.tcp_cc or []):
+        p.error('Each TCP CC can be added once')
+    if tcp_sources and a.no_tcp:
+        p.error('--tcp-cc adds TCP CCs, which --no-tcp leaves out')
     selected = sorted(set(a.condition or ['tail', 'codel']), key=CONDITIONS.index)
     # (directory, condition, setting); runs of each CoDel setting and of each DualPI2 device buffer size are in directories named
     # after it
@@ -92,27 +107,32 @@ def main():
     fcntl.flock(output_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     # Pin the controller/reporting process to CPUs excluded from the workers when possible.
     controller_cpus = sorted(os.sched_getaffinity(0) - set(a.cpus or []))
+    # The kernel is not a matrix setting: each run records the kernel it was measured on in its metadata.
     signature = dict(cpus=cpus, traces=[t.name for t in traces], smoke=a.smoke,
                      dry_run=a.dry_run, noabe=bool(a.noabe_build),
-                     controller_cpus=controller_cpus, kernel=platform.release(),
+                     controller_cpus=controller_cpus,
                      quic_cc=[quic_cc_name(*c) for c in quic_ccs], codel=codels, conditions=selected, tcp=not a.no_tcp,
-                     dualpi2_device=a.dualpi2_device)
+                     tcp_cc=list(tcp_sources), dualpi2_device=a.dualpi2_device)
     manifest = a.output / 'matrix-settings.json'
     write_manifest = not manifest.exists()
     if manifest.exists():
-        previous = json.loads(manifest.read_text())
+        stored = json.loads(manifest.read_text())
+        previous = dict(stored)
         previous.setdefault('quic_cc', 'cubic')  # Older matrices used CUBIC exclusively.
         previous.setdefault('codel', '5:100')  # Older matrices used the fixed CoDel setting.
         previous.setdefault('conditions', ['tail', 'codel'])  # Older matrices had tail drop and CoDel only.
         previous.setdefault('tcp', True)  # Older matrices always ran TCP.
+        previous.setdefault('tcp_cc', [])  # Older matrices ran TCP CUBIC and BBR only.
         previous.setdefault('dualpi2_device', 0)  # Older matrices had no device buffer.
+        previous.pop('kernel', None)  # Older matrices recorded the kernel as a setting.
         if isinstance(previous['codel'], str):  # Older matrices had one CoDel setting.
             previous['codel'] = [previous['codel']]
-        # CoDel settings can be added to an existing root
-        assert previous['codel'] == codels[:len(previous['codel'])], 'Matrix settings changed; use a fresh output root'
-        write_manifest = previous['codel'] != codels
-        previous['codel'] = codels
+        # CoDel settings and TCP CCs can be added to an existing root
+        for key in ('codel', 'tcp_cc'):
+            assert previous[key] == signature[key][:len(previous[key])], 'Matrix settings changed; use a fresh output root'
+            previous[key] = signature[key]
         assert previous == signature, 'Matrix settings changed; use a fresh output root'
+        write_manifest = stored != signature
     (a.output / 'matrix.pid').write_text(str(os.getpid()) + '\n')
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     signal.signal(signal.SIGINT, lambda *_: sys.exit(130))
@@ -129,8 +149,8 @@ def main():
             queue = {'tail': 'fifo', 'codel': f'codel:{codel}', 'dualpi2': f'dualpi2:{device}' if device else 'dualpi2'}[condition]
             # ABE only changes the response to ECN marks, so it is omitted under tail drop
             quic = [(cc, abe and condition != 'tail', abba, l4s, txtime, rapid) for cc, abe, abba, l4s, txtime, rapid in quic_ccs]
-            policies = [] if a.no_tcp else [('tcp', 'cubic', False, False, False, False, False),
-                                            ('tcp', 'bbr', False, False, False, False, False)]
+            policies = [] if a.no_tcp else [('tcp', cc, False, False, False, False, False)
+                                            for cc in ['cubic', 'bbr', *tcp_sources]]
             policies += [('quic', *c) for c in dict.fromkeys(quic)]
             for protocol, cc, abe, abba, l4s, txtime, rapid in policies:
                 cpu = cpus[job_index % len(cpus)]
@@ -143,7 +163,6 @@ def main():
                     json.loads((out / 'result.json').read_text())
                     assert (out / 'curves.csv').is_file(), f'Missing curves: {out}'
                     assert not m['dry_run'] and not a.dry_run
-                    assert m['kernel'] == signature['kernel'], f'Kernel changed: {out}'
                     assert m['trace_sha256'] == trace_info[trace][1]
                     # runs predating --abe used the codel_noabe condition for ABE off, and had ABE on under codel otherwise
                     recorded_abe = m.get('abe', m['protocol'] == 'quic' and m['condition'] == 'codel')
@@ -177,6 +196,8 @@ def main():
                     command += ['--txtime']
                 if rapid:
                     command += ['--rapid-start']
+                if protocol == 'tcp' and tcp_sources.get(cc) is not None:
+                    command += ['--cc-source', str(tcp_sources[cc])]
                 if a.smoke:
                     command += ['--end', '7000']
                 if a.dry_run:
