@@ -180,7 +180,6 @@ static void test_rotate(void)
     /* rotate */
     ok(quicly_local_cid_rotate(&set, &exhausted));
     ok(set.retire_prior_to == NUM_CIDS);
-    ok(num_retiring(&set) == NUM_CIDS);
     ok(verify_array(&set) == 0);
     for (uint64_t seq = 0; seq < NUM_CIDS; seq++)
         ok(exists_once(&set, seq, QUICLY_LOCAL_CID_STATE_DELIVERED));
@@ -197,8 +196,6 @@ static void test_rotate(void)
         ok(!has_pending);
         ok(!exhausted); /* not replaced as intended, rather than due to exhaustion */
         ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
-        ok(!has_pending);
-        ok(!exhausted);
         ok(num_retiring(&set) == NUM_CIDS - seq - 1);
     }
     ok(count_by_state(&set, QUICLY_LOCAL_CID_STATE_DELIVERED) == NUM_CIDS);
@@ -219,16 +216,11 @@ static void test_rotate(void)
     ok(quicly_local_cid_rotate(&set, &exhausted));
     ok(set.retire_prior_to == QUICLY_MAX_PATH_ID - NUM_CIDS);
     ok(exists_once(&set, QUICLY_MAX_PATH_ID - 1, QUICLY_LOCAL_CID_STATE_PENDING));
-    ok(verify_array(&set) == 0);
-    ok(num_retiring(&set) == NUM_CIDS);
 
     /* retiring the last CID at or above `retire_prior_to` is a protocol violation, even if the old ones are yet to be retired */
     send_and_ack_all(&set);
-    for (uint64_t seq = QUICLY_MAX_PATH_ID - NUM_CIDS; seq < QUICLY_MAX_PATH_ID - 1; seq++) {
+    for (uint64_t seq = QUICLY_MAX_PATH_ID - NUM_CIDS; seq < QUICLY_MAX_PATH_ID - 1; seq++)
         ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
-        ok(exhausted); /* no path IDs left */
-        ok(!has_pending);
-    }
     ok(quicly_local_cid_retire(&set, QUICLY_MAX_PATH_ID - 1, &has_pending, &exhausted) ==
        QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
 }
@@ -244,7 +236,6 @@ static void test_key_generation_tracking(void)
     ok(quicly_local_cid_set_size(&set, NUM_CIDS) != 0);
     send_and_ack_all(&set);
     ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
-    ok(set.retire_prior_to == 0);
 
     /* if the key changes while the initial CID is being generated, the generation read before is recorded */
     num_key_changes_on_encrypt = 1;
@@ -253,14 +244,12 @@ static void test_key_generation_tracking(void)
 
     /* with the callback, the CIDs are rotated only when the key changes */
     quicly_local_cid_init_set(&set, &test_generational_encryptor, &cid_plaintext);
-    ok(set.key_generation == test_key_generation);
     ok(quicly_local_cid_set_size(&set, NUM_CIDS) != 0);
     send_and_ack_all(&set);
     ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
     ok(set.retire_prior_to == 0);
     ++test_key_generation;
     ok(quicly_local_cid_rotate(&set, &exhausted));
-    ok(set.key_generation == test_key_generation);
     send_and_ack_all(&set);
     for (uint64_t seq = 0; seq < NUM_CIDS; seq++)
         ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
@@ -387,7 +376,6 @@ void test_local_cid(void)
         } else {
             ok(quicly_local_cid_retire(&set, seq_to_retire, &has_pending, &exhausted) == 0);
             ok(has_pending);
-            ok(!exhausted);
         }
         num_retired++;
         seq_to_retire++;

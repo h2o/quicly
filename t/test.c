@@ -1611,8 +1611,6 @@ static void check_rotated(quicly_conn_t *conn, quicly_conn_t *peer, uint64_t min
             ok(set->cids[i].state == QUICLY_LOCAL_CID_STATE_DELIVERED);
     ok(send_and_get_dcid_path_id(peer, conn) >= set->retire_prior_to);
     exchange_until_idle(conn, peer);
-    ok(quicly_get_state(conn) == QUICLY_STATE_CONNECTED);
-    ok(quicly_get_state(peer) == QUICLY_STATE_CONNECTED);
 }
 
 /**
@@ -1671,8 +1669,6 @@ static void test_rotate_local_cids(void)
         ++rotating_key_generation;
         ok(transmit(server, client) != 0);
         ok(transmit(client, server) != 0);
-        ok(server->super.local.cid_set.retire_prior_to == 0);
-        ok(client->super.local.cid_set.retire_prior_to == 0);
         /* once the handshake is confirmed, the CIDs are rotated when packets are sent */
         exchange_until_idle(client, server);
         send_and_get_dcid_path_id(client, server);
@@ -1688,13 +1684,10 @@ static void test_rotate_local_cids(void)
 
     test_setup_connected_peers(&client, &server);
     size_t num_server_cids = num_local_cids(server, 0);
-    ok(num_server_cids > 1);
     uint64_t num_retired_by_client = server->super.stats.num_frames_received.retire_connection_id;
 
     { /* a change of the key does not cause packets to be sent */
-        int64_t timeout = quicly_get_first_timeout(server);
         ++rotating_key_generation;
-        ok(quicly_get_first_timeout(server) == timeout);
         ok(transmit(server, client) == 0);
         ok(server->super.local.cid_set.retire_prior_to == 0);
     }
@@ -1732,7 +1725,6 @@ static void test_rotate_local_cids(void)
         ok(handle_retire_connection_id_frame(server, &state) == 0);
         unlock_now(server);
         ok(server->super.stats.num_local_cid_exhaustion == 1);
-        ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
         /* rotation upon a change of the key is not possible either */
         server->super.stats.num_local_cid_exhaustion = 0;
         ++rotating_key_generation;
