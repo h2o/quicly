@@ -1560,6 +1560,180 @@ static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **s
     exchange_until_idle(*client, *server);
 }
 
+/* CIDs of `rotating_cid_encryptor` are (key, path_id, master_id, thread_id), 8 bytes; all keys remain decryptable */
+static uint8_t rotating_cid_key;
+/* if non-NULL, only the CIDs of this connection need renewal */
+static quicly_conn_t *rotating_cid_renew_only;
+
+static void rotating_cid_reset_token(void *token, const uint8_t *cid)
+{
+    memset(token, 0xaa, QUICLY_STATELESS_RESET_TOKEN_LEN);
+    memcpy(token, cid, 8);
+}
+
+static void rotating_cid_encrypt(quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
+                                 const quicly_cid_plaintext_t *plaintext)
+{
+    encrypted->cid[0] = rotating_cid_key;
+    encrypted->cid[1] = (uint8_t)plaintext->path_id;
+    memcpy(encrypted->cid + 2, &plaintext->master_id, 4);
+    encrypted->cid[6] = (uint8_t)plaintext->thread_id;
+    encrypted->cid[7] = (uint8_t)(plaintext->thread_id >> 8);
+    encrypted->len = 8;
+    if (stateless_reset_token != NULL)
+        rotating_cid_reset_token(stateless_reset_token, encrypted->cid);
+}
+
+static size_t rotating_cid_decrypt(quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *_encrypted,
+                                   size_t len)
+{
+    const uint8_t *encrypted = _encrypted;
+    if (len != 0 && len != 8)
+        return SIZE_MAX;
+    *plaintext = (quicly_cid_plaintext_t){.path_id = encrypted[1], .thread_id = encrypted[6] | (encrypted[7] << 8)};
+    memcpy(&plaintext->master_id, encrypted + 2, 4);
+    return 8;
+}
+
+static int rotating_cid_generate_reset_token(quicly_cid_encryptor_t *self, void *token, const void *cid)
+{
+    rotating_cid_reset_token(token, cid);
+    return 1;
+}
+
+static int rotating_cid_needs_renewal(quicly_cid_encryptor_t *self, const quicly_cid_t *cid)
+{
+    if (rotating_cid_renew_only != NULL &&
+        memcmp(cid->cid + 2, &rotating_cid_renew_only->super.local.cid_set.plaintext.master_id, 4) != 0)
+        return 0;
+    return cid->cid[0] != rotating_cid_key;
+}
+
+static quicly_cid_encryptor_t rotating_cid_encryptor = {rotating_cid_encrypt, rotating_cid_decrypt,
+                                                        rotating_cid_generate_reset_token, rotating_cid_needs_renewal};
+
+/* sends stream data from `src` to `dst`, returning the key of the DCID being used */
+static uint8_t send_and_get_dcid_key(quicly_conn_t *src, quicly_conn_t *dst)
+{
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(src, &stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(stream, "hello", 5) == 0);
+    ok(quicly_streambuf_egress_shutdown(stream) == 0);
+
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[8];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(num_datagrams != 0);
+    if (num_datagrams == 0)
+        return UINT8_MAX;
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
+    ok(num_packets != 0);
+    if (num_packets == 0)
+        return UINT8_MAX;
+    ok(decoded[0].cid.dest.encrypted.len == 8);
+    uint8_t key = decoded[0].cid.dest.encrypted.base[0];
+    for (size_t i = 0; i != num_packets; ++i) {
+        quicly_error_t ret = quicly_receive(dst, NULL, &fake_address.sa, decoded + i);
+        ok(ret == 0 || ret == QUICLY_ERROR_PACKET_IGNORED);
+    }
+    return key;
+}
+
+/* like `exchange_until_idle`, but also fires loss timers, and stops if a connection is closed */
+static void exchange_until_settled(quicly_conn_t *client, quicly_conn_t *server)
+{
+    for (size_t i = 0; i < 1000; ++i) {
+        if (quicly_get_state(client) != QUICLY_STATE_CONNECTED || quicly_get_state(server) != QUICLY_STATE_CONNECTED)
+            break;
+        int64_t tc = quicly_get_first_timeout(client), ts = quicly_get_first_timeout(server);
+        int64_t tmin = tc <= ts ? tc : ts;
+        if (tmin - quic_now > 1000)
+            break;
+        if (tmin > quic_now)
+            quic_now = tmin;
+        if (tc <= ts) {
+            transmit(client, server);
+        } else {
+            transmit(server, client);
+        }
+    }
+}
+
+static void check_cids_renewed(quicly_conn_t *client, quicly_conn_t *server, uint64_t num_renewals)
+{
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
+    if (quicly_get_state(client) != QUICLY_STATE_CONNECTED || quicly_get_state(server) != QUICLY_STATE_CONNECTED)
+        return;
+    ok(server->super.stats.num_local_cid_renewals == num_renewals);
+    ok(client->super.stats.num_local_cid_renewals == num_renewals);
+    ok(server->super.local.cid_set.retiring.count == 0);
+    ok(client->super.local.cid_set.retiring.count == 0);
+    ok(send_and_get_dcid_key(client, server) == rotating_cid_key);
+    ok(send_and_get_dcid_key(server, client) == rotating_cid_key);
+    exchange_until_settled(client, server);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
+}
+
+static void test_cid_renewal(void)
+{
+    quicly_cid_encryptor_t *orig_encryptor = quic_ctx.cid_encryptor;
+    quic_ctx.cid_encryptor = &rotating_cid_encryptor;
+    rotating_cid_key = 0;
+
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+    exchange_until_settled(client, server);
+    ok(quicly_local_cid_get_size(&server->super.local.cid_set) == QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT);
+    check_cids_renewed(client, server, 0);
+
+    /* rotate key */
+    rotating_cid_key = 1;
+    send_and_get_dcid_key(client, server);
+    ok(server->super.stats.num_local_cid_renewals == 1);
+    exchange_until_settled(client, server);
+    check_cids_renewed(client, server, 1);
+
+    /* rotate key, losing the first NEW_CONNECTION_ID frames */
+    rotating_cid_key = 2;
+    send_and_get_dcid_key(client, server);
+    ok(server->super.stats.num_local_cid_renewals == 2);
+    {
+        quicly_address_t destaddr, srcaddr;
+        struct iovec datagrams[8];
+        uint8_t buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+        size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+        ok(quicly_send(server, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+        ok(num_datagrams != 0); /* dropped */
+    }
+    exchange_until_settled(client, server);
+    check_cids_renewed(client, server, 2);
+
+    /* rotate the server's key while the server sends and the client only ACKs */
+    rotating_cid_key = 3;
+    rotating_cid_renew_only = server;
+    send_and_get_dcid_key(server, client);
+    quic_now += QUICLY_DELAYED_ACK_TIMEOUT;
+    transmit(client, server);
+    ok(server->super.stats.num_local_cid_renewals == 3);
+    exchange_until_settled(client, server);
+    ok(server->super.local.cid_set.retiring.count == 0);
+    ok(send_and_get_dcid_key(client, server) == rotating_cid_key);
+    exchange_until_settled(client, server);
+    ok(client->super.stats.num_local_cid_renewals == 2);
+    ok(quicly_get_state(client) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
+    rotating_cid_renew_only = NULL;
+
+    quicly_free(client);
+    quicly_free(server);
+    quic_ctx.cid_encryptor = orig_encryptor;
+}
+
 static void test_cc_limited_drain_and_resume(void)
 {
     quicly_init_cc_t *saved_init_cc = quic_ctx.egress[0].cc.init_cc;
@@ -3634,6 +3808,7 @@ int main(int argc, char **argv)
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
     subtest("cid", test_cid);
+    subtest("cid-renewal", test_cid_renewal);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("lossy", test_lossy);

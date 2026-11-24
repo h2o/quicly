@@ -80,6 +80,17 @@ typedef struct st_quicly_local_cid_set_t {
      */
     size_t _size;
     quicly_cid_encryptor_t *_encryptor;
+    /**
+     * value of the Retire Prior To field being sent
+     */
+    uint64_t retire_prior_to;
+    /**
+     * sequence numbers below `retire_prior_to` not yet retired by the remote peer
+     */
+    struct {
+        uint64_t sequences[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
+        size_t count;
+    } retiring;
 } quicly_local_cid_set_t;
 
 /**
@@ -123,6 +134,12 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence);
  * @return 0 if the request was legal, otherwise an error code
  */
 quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *has_pending);
+/**
+ * replaces all CIDs if the encryptor says any of them needs renewal, and all have been delivered and the previous ones retired
+ *
+ * returns true if there is something to send
+ */
+int quicly_local_cid_renew(quicly_local_cid_set_t *set);
 
 /* inline definitions */
 

@@ -682,7 +682,11 @@ struct st_quicly_conn_streamgroup_state_t {
     /**                                                                                                                            \
      * Total number of connections that used an alternative egress context (i.e., not `egress[0]`).                                \
      */                                                                                                                            \
-    uint64_t num_alt_egress
+    uint64_t num_alt_egress;                                                                                                       \
+    /**                                                                                                                            \
+     * Number of times the local CIDs were replaced because their key was being retired.                                           \
+     */                                                                                                                            \
+    uint64_t num_local_cid_renewals
 
 /**
  * Stats that do not need to be gathered upon the invocation of `quicly_get_stats`. This macro is used to define the same fields in
@@ -832,7 +836,8 @@ typedef struct st_quicly_stats_t {
     apply(num_handshake_timeouts, "num-handshake-timeouts")                                                                        \
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
     apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
-    apply(num_alt_egress, "num-alt-egress")
+    apply(num_alt_egress, "num-alt-egress")                                                                                        \
+    apply(num_local_cid_renewals, "num-local-cid-renewals")
 
 /**
  * Macro for iterating QUICLY_STATS_PREBUILT_COUNTERS.

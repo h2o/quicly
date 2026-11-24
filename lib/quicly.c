@@ -5431,8 +5431,10 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
 static quicly_error_t send_new_connection_id(quicly_conn_t *conn, quicly_send_context_t *s, struct st_quicly_local_cid_t *new_cid)
 {
     quicly_sent_t *sent;
-    uint64_t retire_prior_to = 0; /* TODO */
+    uint64_t retire_prior_to = conn->super.local.cid_set.retire_prior_to;
     quicly_error_t ret;
+
+    assert(new_cid->sequence >= retire_prior_to);
 
     if ((ret = allocate_ack_eliciting_frame(
              conn, s, quicly_new_connection_id_frame_capacity(new_cid->sequence, retire_prior_to, new_cid->cid.len), &sent,
@@ -8050,6 +8052,14 @@ static quicly_error_t do_receive(quicly_conn_t *conn, struct sockaddr *dest_addr
             if (packet->inferior_path)
                 conn->super.stats.num_paths.promoted_to_inferior_path += 1;
             recalc_send_probe_at(conn);
+        }
+        /* replace local CIDs encrypted by a retiring key, once the handshake is confirmed */
+        if (conn->handshake == NULL && quicly_local_cid_renew(&conn->super.local.cid_set)) {
+            ++conn->super.stats.num_local_cid_renewals;
+            QUICLY_PROBE(LOCAL_CID_RENEW, conn, conn->stash.now, conn->super.local.cid_set.retire_prior_to);
+            QUICLY_LOG_CONN(local_cid_renew, conn,
+                            { PTLS_LOG_ELEMENT_NUMBER(retire_prior_to, conn->super.local.cid_set.retire_prior_to); });
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
         }
         break;
     default:

@@ -181,6 +181,15 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence)
 
 quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *_has_pending)
 {
+    /* CIDs replaced by `quicly_local_cid_renew` do not occupy a slot */
+    for (size_t i = 0; i < set->retiring.count; i++) {
+        if (set->retiring.sequences[i] == sequence) {
+            set->retiring.sequences[i] = set->retiring.sequences[--set->retiring.count];
+            *_has_pending = has_pending(set);
+            return 0;
+        }
+    }
+
     /* find the CID to be retired, also check if there is at least one CID that has been issued */
     size_t retired_at = set->_size;
     int becomes_empty = 1;
@@ -226,4 +235,36 @@ quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t seq
     }
 
     return 0;
+}
+
+int quicly_local_cid_renew(quicly_local_cid_set_t *set)
+{
+    if (set->_encryptor == NULL || set->_encryptor->needs_renewal == NULL)
+        return 0;
+
+    /* wait for the previous Retire Prior To to take effect (RFC 9000 Section 5.1.2), and for enough path IDs */
+    if (set->retiring.count != 0)
+        return 0;
+    PTLS_BUILD_ASSERT(PTLS_ELEMENTSOF(set->cids) == PTLS_ELEMENTSOF(set->retiring.sequences));
+    if (set->plaintext.path_id + set->_size > QUICLY_MAX_PATH_ID)
+        return 0;
+    /* undelivered CIDs would leave gaps in the sequence numbers seen by the peer */
+    size_t i;
+    for (i = 0; i < set->_size; i++)
+        if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_DELIVERED)
+            return 0;
+    for (i = 0; i < set->_size; i++)
+        if (set->_encryptor->needs_renewal(set->_encryptor, &set->cids[i].cid))
+            break;
+    if (i == set->_size)
+        return 0;
+
+    set->retire_prior_to = set->plaintext.path_id;
+    for (i = 0; i < set->_size; i++) {
+        set->retiring.sequences[set->retiring.count++] = set->cids[i].sequence;
+        generate_cid(set, i);
+        set->cids[i].state = QUICLY_LOCAL_CID_STATE_PENDING;
+    }
+
+    return 1;
 }

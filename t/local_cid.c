@@ -114,6 +114,124 @@ static int exists_once(const quicly_local_cid_set_t *set, uint64_t sequence, enu
     return occurrence == 1;
 }
 
+/* CIDs of `rotating_encryptor` are (key, path_id) */
+static uint8_t current_key;
+
+static void rotating_encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
+                                 const quicly_cid_plaintext_t *plaintext)
+{
+    encrypted->cid[0] = current_key;
+    encrypted->cid[1] = plaintext->path_id;
+    encrypted->len = 2;
+}
+
+static size_t rotating_decrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
+                                   size_t len)
+{
+    plaintext->path_id = ((const uint8_t *)encrypted)[1];
+    return 2;
+}
+
+static int rotating_needs_renewal(struct st_quicly_cid_encryptor_t *self, const quicly_cid_t *cid)
+{
+    return cid->cid[0] != current_key;
+}
+
+static quicly_cid_encryptor_t rotating_encryptor = {
+    .encrypt_cid = rotating_encrypt_cid,
+    .decrypt_cid = rotating_decrypt_cid,
+    .needs_renewal = rotating_needs_renewal,
+};
+
+static int all_use_current_key(const quicly_local_cid_set_t *set)
+{
+    for (size_t i = 0; i < set->_size; i++)
+        if (set->cids[i].cid.cid[0] != current_key)
+            return 0;
+    return 1;
+}
+
+static void deliver_all(quicly_local_cid_set_t *set)
+{
+    size_t num_pending = 0;
+    while (num_pending < set->_size && set->cids[num_pending].state == QUICLY_LOCAL_CID_STATE_PENDING)
+        ++num_pending;
+    quicly_local_cid_on_sent(set, num_pending);
+    for (size_t i = 0; i < set->_size; i++)
+        quicly_local_cid_on_acked(set, set->cids[i].sequence);
+}
+
+static void test_renew(void)
+{
+    quicly_local_cid_set_t set;
+    static const quicly_cid_plaintext_t cid_plaintext = {0};
+    int has_pending;
+
+    current_key = 0;
+    quicly_local_cid_init_set(&set, &rotating_encryptor, &cid_plaintext);
+    ok(quicly_local_cid_set_size(&set, NUM_CIDS) != 0);
+
+    /* not renewed until delivered */
+    current_key = 1;
+    ok(!quicly_local_cid_renew(&set));
+    current_key = 0;
+    deliver_all(&set);
+    ok(count_by_state(&set, QUICLY_LOCAL_CID_STATE_DELIVERED) == NUM_CIDS);
+
+    ok(!quicly_local_cid_renew(&set));
+    ok(set.retire_prior_to == 0);
+
+    /* rotate key */
+    current_key = 1;
+    ok(quicly_local_cid_renew(&set));
+    ok(set.retire_prior_to == NUM_CIDS);
+    ok(set.retiring.count == NUM_CIDS);
+    ok(verify_array(&set) == 0);
+    ok(count_by_state(&set, QUICLY_LOCAL_CID_STATE_PENDING) == NUM_CIDS);
+    for (uint64_t seq = NUM_CIDS; seq < 2 * NUM_CIDS; seq++)
+        ok(exists_once(&set, seq, QUICLY_LOCAL_CID_STATE_PENDING));
+    ok(all_use_current_key(&set));
+    ok(!quicly_local_cid_renew(&set)); /* new CIDs still pending */
+
+    /* not renewed until the old ones are retired */
+    deliver_all(&set);
+    current_key = 2;
+    ok(!quicly_local_cid_renew(&set));
+
+    /* retiring old CIDs does not generate new ones */
+    for (uint64_t seq = 0; seq < NUM_CIDS; seq++) {
+        ok(quicly_local_cid_retire(&set, seq, &has_pending) == 0);
+        ok(!has_pending);
+    }
+    ok(quicly_local_cid_retire(&set, 1, &has_pending) == 0);
+    ok(!has_pending);
+    ok(set.retiring.count == 0);
+    ok(count_by_state(&set, QUICLY_LOCAL_CID_STATE_DELIVERED) == NUM_CIDS);
+
+    /* retiring a new CID works as usual */
+    ok(quicly_local_cid_retire(&set, NUM_CIDS, &has_pending) == 0);
+    ok(has_pending);
+    ok(exists_once(&set, 2 * NUM_CIDS, QUICLY_LOCAL_CID_STATE_PENDING));
+    ok(!quicly_local_cid_renew(&set));
+    deliver_all(&set);
+    ok(quicly_local_cid_renew(&set));
+    ok(set.retire_prior_to == 2 * NUM_CIDS + 1);
+    ok(set.retiring.count == NUM_CIDS);
+    ok(all_use_current_key(&set));
+    deliver_all(&set);
+    for (uint64_t seq = NUM_CIDS + 1; seq <= 2 * NUM_CIDS; seq++)
+        ok(quicly_local_cid_retire(&set, seq, &has_pending) == 0);
+    ok(set.retiring.count == 0);
+
+    /* path IDs exhausted */
+    current_key = 3;
+    set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS + 1;
+    ok(!quicly_local_cid_renew(&set));
+    set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS;
+    ok(quicly_local_cid_renew(&set));
+    ok(exists_once(&set, QUICLY_MAX_PATH_ID - 1, QUICLY_LOCAL_CID_STATE_PENDING));
+}
+
 void test_local_cid(void)
 {
     PTLS_BUILD_ASSERT(QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT >= NUM_CIDS);
@@ -232,4 +350,8 @@ void test_local_cid(void)
     ok(quicly_local_cid_retire(&small_set, 0, &has_pending) == 0);
     ok(has_pending);
     ok(exists_once(&small_set, 3, QUICLY_LOCAL_CID_STATE_PENDING));
+
+    ok(!quicly_local_cid_renew(&small_set));
+
+    subtest("renew", test_renew);
 }
