@@ -1560,6 +1560,164 @@ static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **s
     exchange_until_idle(*client, *server);
 }
 
+/**
+ * sends stream data from `src` to `dst`, returning the path ID of the DCID being used
+ */
+static uint64_t send_and_get_dcid_path_id(quicly_conn_t *src, quicly_conn_t *dst)
+{
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(src, &stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(stream, "hello", 5) == 0);
+
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[4];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    assert(num_datagrams != 0);
+
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
+    uint64_t path_id = decoded[0].cid.dest.plaintext.path_id;
+    for (size_t i = 0; i < num_packets; ++i)
+        ok(quicly_receive(dst, NULL, &fake_address.sa, decoded + i) == 0);
+
+    return path_id;
+}
+
+/**
+ * returns the number of local CIDs at or above `retire_prior_to` if `below` is false, or those below if true
+ */
+static size_t num_local_cids(quicly_conn_t *conn, int below)
+{
+    const quicly_local_cid_set_t *set = &conn->super.local.cid_set;
+    size_t num = 0;
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++)
+        if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE && (set->cids[i].sequence < set->retire_prior_to) == below)
+            ++num;
+    return num;
+}
+
+/**
+ * checks that `conn` has completed the rotation requested, and that the peer uses the new CIDs
+ */
+static void check_rotated(quicly_conn_t *conn, quicly_conn_t *peer, uint64_t min_retire_prior_to)
+{
+    const quicly_local_cid_set_t *set = &conn->super.local.cid_set;
+    ok(set->retire_prior_to >= min_retire_prior_to);
+    ok(num_local_cids(conn, 1) == 0);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++)
+        if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE)
+            ok(set->cids[i].state == QUICLY_LOCAL_CID_STATE_DELIVERED);
+    ok(send_and_get_dcid_path_id(peer, conn) >= set->retire_prior_to);
+    exchange_until_idle(conn, peer);
+    ok(quicly_get_state(conn) == QUICLY_STATE_CONNECTED);
+    ok(quicly_get_state(peer) == QUICLY_STATE_CONNECTED);
+}
+
+static void test_rotate_local_cids(void)
+{
+    quicly_cid_encryptor_t *orig_encryptor = quic_ctx.cid_encryptor;
+    quic_ctx.cid_encryptor = quicly_new_default_cid_encryptor(&ptls_openssl_aes128ecb, &ptls_openssl_aes128ecb,
+                                                              &ptls_openssl_sha256, ptls_iovec_init("rotate", 6));
+    quicly_conn_t *client, *server;
+
+    { /* CIDs are not rotated until the handshake is confirmed */
+        quicly_address_t dest, src;
+        struct iovec datagram;
+        uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+        quicly_decoded_packet_t decoded;
+        size_t num_datagrams = 1;
+        ok(quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0),
+                          NULL, NULL, NULL) == 0);
+        ok(quicly_rotate_local_cids(client) == QUICLY_ERROR_AGAIN);
+        ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
+        ok(num_datagrams == 1);
+        ok(decode_packets(&decoded, &datagram, 1) == 1);
+        ok(quicly_accept(&server, &quic_ctx, NULL, &fake_address.sa, &decoded, NULL, new_master_id(), NULL, NULL) == 0);
+        ok(quicly_rotate_local_cids(server) == QUICLY_ERROR_AGAIN);
+        ok(transmit(server, client) != 0);
+        ok(quicly_rotate_local_cids(server) == QUICLY_ERROR_AGAIN);
+        ok(quicly_rotate_local_cids(client) == QUICLY_ERROR_AGAIN);
+        ok(server->super.local.cid_set.retire_prior_to == 0);
+        ok(client->super.local.cid_set.retire_prior_to == 0);
+        quicly_free(client);
+        quicly_free(server);
+    }
+
+    test_setup_connected_peers(&client, &server);
+    size_t num_server_cids = num_local_cids(server, 0);
+    ok(num_server_cids > 1);
+    uint64_t num_retired_by_client = server->super.stats.num_frames_received.retire_connection_id;
+
+    /* rotate; the new CIDs are sent by the next call to `quicly_send` */
+    ok(quicly_rotate_local_cids(server) == 0);
+    uint64_t first_retire_prior_to = server->super.local.cid_set.retire_prior_to;
+    ok(first_retire_prior_to >= num_server_cids);
+    ok(num_local_cids(server, 1) == num_server_cids);
+    ok(transmit(server, client) != 0);
+
+    /* not rotated again until the new CIDs are delivered and the old ones are retired; failed attempts do not schedule packets */
+    {
+        int64_t timeout = quicly_get_first_timeout(server);
+        ok(quicly_rotate_local_cids(server) == QUICLY_ERROR_AGAIN);
+        ok(quicly_get_first_timeout(server) == timeout);
+        ok(server->super.local.cid_set.retire_prior_to == first_retire_prior_to);
+    }
+    exchange_until_idle(client, server);
+    ok(server->super.stats.num_frames_received.retire_connection_id - num_retired_by_client == num_server_cids);
+    check_rotated(server, client, first_retire_prior_to);
+
+    /* rotate again */
+    ok(quicly_rotate_local_cids(server) == 0);
+    exchange_until_idle(client, server);
+    ok(server->super.stats.num_frames_received.retire_connection_id - num_retired_by_client == 2 * num_server_cids);
+    check_rotated(server, client, first_retire_prior_to + num_server_cids);
+
+    /* rotate the client's CIDs */
+    size_t num_client_cids = num_local_cids(client, 0);
+    ok(quicly_rotate_local_cids(client) == 0);
+    exchange_until_idle(client, server);
+    check_rotated(client, server, num_client_cids);
+
+    { /* running out of CIDs keeps the connection open, while recording that it happened */
+        quicly_local_cid_set_t *set = &server->super.local.cid_set;
+        ok(server->super.stats.num_local_cid_exhaustion == 0);
+        set->plaintext.path_id = QUICLY_MAX_PATH_ID;
+        /* the peer retires a CID that cannot be replaced */
+        uint64_t sequence = UINT64_MAX;
+        for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
+            if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE) {
+                sequence = set->cids[i].sequence;
+                break;
+            }
+        }
+        uint8_t frame[16], *frame_end = quicly_encode_retire_connection_id_frame(frame, sequence);
+        struct st_quicly_handle_payload_state_t state = {.src = frame + 1 /* skip frame type */,
+                                                         .end = frame_end,
+                                                         .epoch = QUICLY_EPOCH_1RTT,
+                                                         .frame_type = QUICLY_FRAME_TYPE_RETIRE_CONNECTION_ID};
+        lock_now(server, 0);
+        ok(handle_retire_connection_id_frame(server, &state) == 0);
+        unlock_now(server);
+        ok(server->super.stats.num_local_cid_exhaustion == 1);
+        ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
+        /* rotation is not possible either */
+        server->super.stats.num_local_cid_exhaustion = 0;
+        ok(quicly_rotate_local_cids(server) == QUICLY_ERROR_CID_EXHAUSTION);
+        ok(server->super.stats.num_local_cid_exhaustion == 1);
+    }
+
+    /* closing connections cannot be rotated */
+    ok(quicly_close(client, 0, "") == 0);
+    ok(quicly_rotate_local_cids(client) == QUICLY_ERROR_IS_CLOSING);
+
+    quicly_free(client);
+    quicly_free(server);
+    quicly_free_default_cid_encryptor(quic_ctx.cid_encryptor);
+    quic_ctx.cid_encryptor = orig_encryptor;
+}
+
 static void test_cc_limited_drain_and_resume(void)
 {
     quicly_init_cc_t *saved_init_cc = quic_ctx.egress[0].cc.init_cc;
@@ -3634,6 +3792,7 @@ int main(int argc, char **argv)
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
     subtest("cid", test_cid);
+    subtest("rotate-local-cids", test_rotate_local_cids);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("lossy", test_lossy);

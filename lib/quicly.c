@@ -3839,6 +3839,27 @@ int64_t quicly_get_first_timeout(quicly_conn_t *conn)
     return at;
 }
 
+quicly_error_t quicly_rotate_local_cids(quicly_conn_t *conn)
+{
+    int exhausted;
+
+    if (conn->super.state >= QUICLY_STATE_CLOSING)
+        return QUICLY_ERROR_IS_CLOSING;
+    /* The replacement is deferred until the handshake is confirmed; RFC 9000 does not require this, but it avoids retiring the CID
+     * used during the handshake while long header packets might still be exchanged. */
+    if (conn->initial != NULL || conn->handshake != NULL)
+        return QUICLY_ERROR_AGAIN;
+    if (!quicly_local_cid_rotate(&conn->super.local.cid_set, &exhausted)) {
+        if (!exhausted)
+            return QUICLY_ERROR_AGAIN;
+        conn->super.stats.num_local_cid_exhaustion = 1;
+        return QUICLY_ERROR_CID_EXHAUSTION;
+    }
+
+    conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+    return 0;
+}
+
 uint64_t quicly_get_next_expected_packet_number(quicly_conn_t *conn)
 {
     if (!conn->application)
@@ -5431,8 +5452,10 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
 static quicly_error_t send_new_connection_id(quicly_conn_t *conn, quicly_send_context_t *s, struct st_quicly_local_cid_t *new_cid)
 {
     quicly_sent_t *sent;
-    uint64_t retire_prior_to = 0; /* TODO */
+    uint64_t retire_prior_to = conn->super.local.cid_set.retire_prior_to;
     quicly_error_t ret;
+
+    assert(new_cid->sequence >= retire_prior_to);
 
     if ((ret = allocate_ack_eliciting_frame(
              conn, s, quicly_new_connection_id_frame_capacity(new_cid->sequence, retire_prior_to, new_cid->cid.len), &sent,
@@ -5642,8 +5665,8 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
         return ret;
 
     { /* NEW_CONNECTION_ID */
-        size_t i, size = quicly_local_cid_get_size(&conn->super.local.cid_set);
-        for (i = 0; i < size; i++) {
+        size_t i;
+        for (i = 0; i < PTLS_ELEMENTSOF(conn->super.local.cid_set.cids); i++) {
             /* PENDING CIDs are located at the front */
             struct st_quicly_local_cid_t *c = &conn->super.local.cid_set.cids[i];
             if (c->state != QUICLY_LOCAL_CID_STATE_PENDING)
@@ -7273,7 +7296,7 @@ static quicly_error_t handle_new_connection_id_frame(quicly_conn_t *conn, struct
 
 static quicly_error_t handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
-    int has_pending;
+    int has_pending, exhausted;
     quicly_retire_connection_id_frame_t frame;
     quicly_error_t ret;
 
@@ -7289,8 +7312,10 @@ static quicly_error_t handle_retire_connection_id_frame(quicly_conn_t *conn, str
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     }
 
-    if ((ret = quicly_local_cid_retire(&conn->super.local.cid_set, frame.sequence, &has_pending)) != 0)
+    if ((ret = quicly_local_cid_retire(&conn->super.local.cid_set, frame.sequence, &has_pending, &exhausted)) != 0)
         return ret;
+    if (exhausted)
+        conn->super.stats.num_local_cid_exhaustion = 1;
     if (has_pending)
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
 
