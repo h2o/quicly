@@ -1706,18 +1706,10 @@ static void test_rotate_local_cids(void)
     ok(num_local_cids(server, 1) == num_server_cids);
     ok(server->super.stats.num_local_cid_rotations == 1);
 
-    /* another change is not acted upon until the new CIDs are delivered and the old ones are retired */
-    ++rotating_key_generation;
-    send_and_get_dcid_path_id(server, client);
-    ok(server->super.local.cid_set.retire_prior_to == first_retire_prior_to);
-    ok(server->super.stats.num_local_cid_rotations == 1);
+    /* the client retires the old CIDs and uses the new ones */
     exchange_until_idle(client, server);
-    send_and_get_dcid_path_id(client, server);
-    send_and_get_dcid_path_id(server, client);
-    exchange_until_idle(client, server);
-    ok(server->super.stats.num_local_cid_rotations == 2);
-    ok(server->super.stats.num_frames_received.retire_connection_id - num_retired_by_client == 2 * num_server_cids);
-    check_rotated(server, client, first_retire_prior_to + num_server_cids);
+    ok(server->super.stats.num_frames_received.retire_connection_id - num_retired_by_client == num_server_cids);
+    check_rotated(server, client, first_retire_prior_to);
 
     { /* running out of CIDs keeps the connection open, while recording that it happened */
         quicly_local_cid_set_t *set = &server->super.local.cid_set;
@@ -1746,7 +1738,7 @@ static void test_rotate_local_cids(void)
         ++rotating_key_generation;
         send_and_get_dcid_path_id(server, client);
         ok(server->super.stats.num_local_cid_exhaustion == 1);
-        ok(server->super.stats.num_local_cid_rotations == 2);
+        ok(server->super.stats.num_local_cid_rotations == 1);
         ok(quicly_get_state(server) == QUICLY_STATE_CONNECTED);
     }
 
