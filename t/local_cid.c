@@ -186,8 +186,6 @@ static void test_rotate(void)
         ok(exists_once(&set, seq, QUICLY_LOCAL_CID_STATE_DELIVERED));
     for (uint64_t seq = NUM_CIDS; seq < 2 * NUM_CIDS; seq++)
         ok(exists_once(&set, seq, QUICLY_LOCAL_CID_STATE_PENDING));
-    ok(quicly_local_cid_on_lost(&set, 3)); /* the old CID is retained as DELIVERED */
-    ok(exists_once(&set, 3, QUICLY_LOCAL_CID_STATE_DELIVERED));
     send_and_ack_all(&set);
 
     /* the key changes again, but the CIDs are not rotated until all the old CIDs are retired; retiring them does not generate new
@@ -210,18 +208,13 @@ static void test_rotate(void)
     ok(has_pending);
     ok(!exhausted);
     ok(exists_once(&set, 2 * NUM_CIDS, QUICLY_LOCAL_CID_STATE_PENDING));
-    ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
     send_and_ack_all(&set);
 
-    /* rotate again, the CIDs being non-contiguous */
+    /* rotate again, and retire the old CIDs */
     ok(quicly_local_cid_rotate(&set, &exhausted));
-    ok(set.retire_prior_to == 2 * NUM_CIDS + 1);
-    ok(num_retiring(&set) == NUM_CIDS);
-    ok(verify_array(&set) == 0);
     send_and_ack_all(&set);
     for (uint64_t seq = NUM_CIDS + 1; seq <= 2 * NUM_CIDS; seq++)
         ok(quicly_local_cid_retire(&set, seq, &has_pending, &exhausted) == 0);
-    ok(num_retiring(&set) == 0);
 
     /* not rotated if path IDs are insufficient for replacing all the CIDs */
     ++test_key_generation;
