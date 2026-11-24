@@ -684,6 +684,10 @@ struct st_quicly_conn_streamgroup_state_t {
      */                                                                                                                            \
     uint64_t num_alt_egress;                                                                                                       \
     /**                                                                                                                            \
+     * Number of times the CIDs issued to the peer were replaced by `quicly_rotate_local_cids`.                                    \
+     */                                                                                                                            \
+    uint64_t num_local_cid_rotations;                                                                                              \
+    /**                                                                                                                            \
      * 1 if the connection needed to issue CIDs but could not due to their exhaustion (i.e., when rotating them or when replacing  \
      * the ones retired by the peer), otherwise 0.                                                                                 \
      */                                                                                                                            \
@@ -838,6 +842,7 @@ typedef struct st_quicly_stats_t {
     apply(num_initial_handshake_exceeded, "num-initial-handshake-exceeded")                                                        \
     apply(num_jumpstart_applicable, "num-jumpstart-applicable")                                                                    \
     apply(num_alt_egress, "num-alt-egress")                                                                                        \
+    apply(num_local_cid_rotations, "num-local-cid-rotations")                                                                      \
     apply(num_local_cid_exhaustion, "num-local-cid-exhaustion")
 
 /**

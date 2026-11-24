@@ -1651,7 +1651,9 @@ static void test_rotate_local_cids(void)
     uint64_t num_retired_by_client = server->super.stats.num_frames_received.retire_connection_id;
 
     /* rotate; the new CIDs are sent by the next call to `quicly_send` */
+    ok(server->super.stats.num_local_cid_rotations == 0);
     ok(quicly_rotate_local_cids(server) == 0);
+    ok(server->super.stats.num_local_cid_rotations == 1);
     uint64_t first_retire_prior_to = server->super.local.cid_set.retire_prior_to;
     ok(first_retire_prior_to >= num_server_cids);
     ok(num_local_cids(server, 1) == num_server_cids);
@@ -1670,6 +1672,7 @@ static void test_rotate_local_cids(void)
 
     /* rotate again */
     ok(quicly_rotate_local_cids(server) == 0);
+    ok(server->super.stats.num_local_cid_rotations == 2);
     exchange_until_idle(client, server);
     ok(server->super.stats.num_frames_received.retire_connection_id - num_retired_by_client == 2 * num_server_cids);
     check_rotated(server, client, first_retire_prior_to + num_server_cids);
@@ -1677,6 +1680,7 @@ static void test_rotate_local_cids(void)
     /* rotate the client's CIDs */
     size_t num_client_cids = num_local_cids(client, 0);
     ok(quicly_rotate_local_cids(client) == 0);
+    ok(client->super.stats.num_local_cid_rotations == 1);
     exchange_until_idle(client, server);
     check_rotated(client, server, num_client_cids);
 

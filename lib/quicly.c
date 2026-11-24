@@ -3856,6 +3856,13 @@ quicly_error_t quicly_rotate_local_cids(quicly_conn_t *conn)
         return QUICLY_ERROR_CID_EXHAUSTION;
     }
 
+    ++conn->super.stats.num_local_cid_rotations;
+    lock_now(conn, 1);
+    QUICLY_PROBE(LOCAL_CID_ROTATE, conn, conn->stash.now, conn->super.local.cid_set.retire_prior_to);
+    QUICLY_LOG_CONN(local_cid_rotate, conn,
+                    { PTLS_LOG_ELEMENT_NUMBER(retire_prior_to, conn->super.local.cid_set.retire_prior_to); });
+    unlock_now(conn);
+
     conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
     return 0;
 }
