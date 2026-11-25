@@ -1680,6 +1680,42 @@ static void test_jumpstart_cwnd(void)
     ok(derive_jumpstart_cwnd(UINT32_MAX, 1200, 250, 1000000, 125) == 125000); /* if RTT decreses, CWND is reduced proportionally */
 
     ok(derive_jumpstart_cwnd(64, 1250, 250, 1000000, 250) == 80000);
+
+    /* path 0 jumpstart CWND uses configured transport max UDP payload size */
+    quicly_context_t ctx = quic_ctx;
+    ctx.egress[0].pacing = 1;
+    ctx.egress[0].default_jumpstart_packets = 80;
+    quicly_conn_t *client, *server;
+    quicly_address_t dest, src;
+    struct iovec dgrams[8];
+    uint8_t buf[PTLS_ELEMENTSOF(dgrams) * 1500];
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(dgrams) * 4];
+    size_t num_dgrams = PTLS_ELEMENTSOF(dgrams);
+
+    ok(quicly_connect(&client, &ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL, NULL,
+                      NULL) == 0);
+    ok(quicly_send(client, &dest, &src, dgrams, &num_dgrams, buf, sizeof(buf)) == 0);
+    size_t num_decoded = decode_packets(decoded, dgrams, num_dgrams);
+    ok(num_decoded == 1);
+    ok(quicly_accept(&server, &ctx, NULL, &fake_address.sa, decoded, NULL, new_master_id(), NULL, NULL) == 0);
+    quic_now += 20;
+    transmit(server, client);
+    quic_now += 20;
+    transmit(client, server);
+
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(server, &stream, 0) == 0);
+    uint8_t data[150000] = {0};
+    ok(quicly_streambuf_egress_write(stream, data, sizeof(data)) == 0);
+    num_dgrams = PTLS_ELEMENTSOF(dgrams);
+    ok(quicly_send(server, &dest, &src, dgrams, &num_dgrams, buf, sizeof(buf)) == 0);
+    quicly_stats_t stats;
+    ok(quicly_get_stats(server, &stats) == 0);
+    ok(stats.jumpstart.cwnd == quicly_cc_calc_initial_cwnd(80, ctx.transport_params.max_udp_payload_size));
+    ok(stats.jumpstart.cwnd == 80 * 1472);
+
+    quicly_free(client);
+    quicly_free(server);
 }
 
 static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **server)
