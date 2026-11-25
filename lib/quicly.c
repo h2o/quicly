@@ -5431,8 +5431,10 @@ static quicly_error_t send_connection_close(quicly_conn_t *conn, size_t epoch, q
 static quicly_error_t send_new_connection_id(quicly_conn_t *conn, quicly_send_context_t *s, struct st_quicly_local_cid_t *new_cid)
 {
     quicly_sent_t *sent;
-    uint64_t retire_prior_to = 0; /* TODO */
+    uint64_t retire_prior_to = conn->super.local.cid_set.retire_prior_to;
     quicly_error_t ret;
+
+    assert(new_cid->sequence >= retire_prior_to);
 
     if ((ret = allocate_ack_eliciting_frame(
              conn, s, quicly_new_connection_id_frame_capacity(new_cid->sequence, retire_prior_to, new_cid->cid.len), &sent,
@@ -5642,8 +5644,8 @@ static quicly_error_t send_other_control_frames(quicly_conn_t *conn, quicly_send
         return ret;
 
     { /* NEW_CONNECTION_ID */
-        size_t i, size = quicly_local_cid_get_size(&conn->super.local.cid_set);
-        for (i = 0; i < size; i++) {
+        size_t i;
+        for (i = 0; i < PTLS_ELEMENTSOF(conn->super.local.cid_set.cids); i++) {
             /* PENDING CIDs are located at the front */
             struct st_quicly_local_cid_t *c = &conn->super.local.cid_set.cids[i];
             if (c->state != QUICLY_LOCAL_CID_STATE_PENDING)
@@ -6106,6 +6108,21 @@ quicly_error_t quicly_send(quicly_conn_t *conn, quicly_address_t *dest, quicly_a
     if (conn->super.state >= QUICLY_STATE_CLOSING) {
         ret = do_send_closed(conn, &s);
         goto Exit;
+    }
+
+    /* Replace the local CIDs if the key used for encrypting them has changed. Doing so only when something is to be sent avoids
+     * waking up connections just for the replacement. */
+    if (conn->initial == NULL && conn->handshake == NULL) {
+        int exhausted;
+        if (quicly_local_cid_rotate(&conn->super.local.cid_set, &exhausted)) {
+            ++conn->super.stats.num_local_cid_rotations;
+            QUICLY_PROBE(LOCAL_CID_ROTATE, conn, conn->stash.now, conn->super.local.cid_set.retire_prior_to);
+            QUICLY_LOG_CONN(local_cid_rotate, conn,
+                            { PTLS_LOG_ELEMENT_NUMBER(retire_prior_to, conn->super.local.cid_set.retire_prior_to); });
+            conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
+        } else if (exhausted) {
+            conn->super.stats.num_local_cid_exhaustion = 1;
+        }
     }
 
     /* try emitting one probe packet on one of the backup paths, or ... (note: API of `quicly_send` allows us to send packets on no
@@ -7273,7 +7290,7 @@ static quicly_error_t handle_new_connection_id_frame(quicly_conn_t *conn, struct
 
 static quicly_error_t handle_retire_connection_id_frame(quicly_conn_t *conn, struct st_quicly_handle_payload_state_t *state)
 {
-    int has_pending;
+    int has_pending, exhausted;
     quicly_retire_connection_id_frame_t frame;
     quicly_error_t ret;
 
@@ -7289,8 +7306,10 @@ static quicly_error_t handle_retire_connection_id_frame(quicly_conn_t *conn, str
         return QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION;
     }
 
-    if ((ret = quicly_local_cid_retire(&conn->super.local.cid_set, frame.sequence, &has_pending)) != 0)
+    if ((ret = quicly_local_cid_retire(&conn->super.local.cid_set, frame.sequence, &has_pending, &exhausted)) != 0)
         return ret;
+    if (exhausted)
+        conn->super.stats.num_local_cid_exhaustion = 1;
     if (has_pending)
         conn->egress.pending_flows |= QUICLY_PENDING_FLOW_OTHERS_BIT;
 

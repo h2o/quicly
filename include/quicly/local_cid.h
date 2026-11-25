@@ -67,41 +67,42 @@ typedef struct st_quicly_local_cid_set_t {
      */
     quicly_cid_plaintext_t plaintext;
     /**
-     * storage to retain local CIDs
+     * storage to retain local CIDs that have been issued and are yet to be retired (unused entries are in IDLE state)
      *
      * Pending CIDs (state == STATE_PENDING) are moved to the front of the array, in the order it was marked as pending.
      * This ensures that pending CIDs are sent in FIFO manner. Order of CIDs with other states is not defined.
      *
-     * Actual size of the array is constrained by _size.
+     * The array is twice as large as the number of CIDs being issued, so that the CIDs being retired by `retire_prior_to` can be
+     * retained until the peer retires them, while the same number of new CIDs are issued.
      */
-    quicly_local_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT];
-    /**
-     * how many entries are actually usable in `cids`?
-     */
-    size_t _size;
+    quicly_local_cid_t cids[QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT * 2];
     quicly_cid_encryptor_t *_encryptor;
+    /**
+     * value of the Retire Prior To field of the NEW_CONNECTION_ID frames being sent
+     */
+    uint64_t retire_prior_to;
+    /**
+     * generation of the key used by `_encryptor` when the CIDs were issued (see `quicly_cid_encryptor_t::get_key_generation`)
+     */
+    uint64_t key_generation;
 } quicly_local_cid_set_t;
 
 /**
  * initialize the structure
  *
- * If `encryptor` is non-NULL, it is initialized with size==1 (sequence==0 is registered as DELIVERED).
- * Otherwise, it is initialized with size==0, and the size shall never be increased.
+ * The set is initialized with one CID (sequence==0 is registered as DELIVERED). If `encryptor` is NULL, the CID is zero-length and
+ * no more CIDs are issued.
  */
 void quicly_local_cid_init_set(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor,
                                const quicly_cid_plaintext_t *new_cid);
 /**
- * sets a new size of locally issued CIDs.
- *
- * The new size must be equal to or grater than the current size, and must be equal to or less than the elements of `cids`.
+ * Issues CIDs so that `size` CIDs are available to the peer. Afterwards, the number is retained by issuing a new CID whenever the
+ * peer retires one. This function is called once, after initialization. `size` must not exceed
+ * QUICLY_LOCAL_ACTIVE_CONNECTION_ID_LIMIT.
  *
  * Returns true if there is something to send.
  */
-int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t new_cap);
-/**
- * returns true if all entries in the given set is in IDLE state
- */
-static size_t quicly_local_cid_get_size(const quicly_local_cid_set_t *set);
+int quicly_local_cid_set_size(quicly_local_cid_set_t *set, size_t size);
 /**
  * tells the module that the first `num_sent` pending CIDs have been sent
  */
@@ -119,17 +120,24 @@ int quicly_local_cid_on_lost(quicly_local_cid_set_t *set, uint64_t sequence);
 /**
  * remove the specified CID from the storage.
  *
- * This makes one slot for CIDs empty. The CID generator callback is then called to fill the slot with a new CID.
- * @return 0 if the request was legal, otherwise an error code
+ * Unless the CID has been retired by `retire_prior_to`, the CID generator callback is then called to issue a new CID in its place.
+ * `*has_pending` is set to true if there is something to send. `*exhausted` is set to true if a new CID could not be issued in
+ * place of the retired one, due to the exhaustion of CIDs; the connection can continue, with fewer CIDs available to the peer.
+ * @return 0 if the request was legal, otherwise an error code (a connection error caused by the peer)
  */
-quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *has_pending);
-
-/* inline definitions */
-
-inline size_t quicly_local_cid_get_size(const quicly_local_cid_set_t *set)
-{
-    return set->_size;
-}
+quicly_error_t quicly_local_cid_retire(quicly_local_cid_set_t *set, uint64_t sequence, int *has_pending, int *exhausted);
+/**
+ * Replaces all the CIDs with new ones if the key used by the CID encryptor has changed since they were issued (see
+ * `quicly_cid_encryptor_t::get_key_generation`), raising `retire_prior_to` so that the remote peer retires the old ones.
+ *
+ * The CIDs are replaced only after all of them have been delivered (as the peer retires only the CIDs it has received) and the ones
+ * retired by the previous replacement have been retired by the peer (RFC 9000 Section 5.1.2); until then, the caller is expected to
+ * call this function again.
+ *
+ * @return true if the CIDs have been replaced. Otherwise, `*exhausted` is set to true if the CIDs cannot be replaced due to their
+ *         exhaustion; the replacement is not attempted again until the key changes again.
+ */
+int quicly_local_cid_rotate(quicly_local_cid_set_t *set, int *exhausted);
 
 #ifdef __cplusplus
 }

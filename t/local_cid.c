@@ -25,9 +25,19 @@
 
 #define NUM_CIDS 4
 
+static uint64_t test_key_generation;
+/**
+ * number of subsequent calls to `encrypt_cid` that change the key (i.e., increment `test_key_generation`) before encrypting
+ */
+static size_t num_key_changes_on_encrypt;
+
 static void encrypt_cid(struct st_quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
                         const quicly_cid_plaintext_t *plaintext)
 {
+    if (num_key_changes_on_encrypt != 0) {
+        --num_key_changes_on_encrypt;
+        ++test_key_generation;
+    }
     encrypted->cid[0] = plaintext->path_id;
     encrypted->len = 1;
 }
@@ -71,7 +81,7 @@ static int verify_cid(const quicly_local_cid_t *cid, quicly_cid_encryptor_t *enc
 static int verify_array(const quicly_local_cid_set_t *set)
 {
     int allow_pending = 1;
-    for (size_t i = 0; i < set->_size; i++) {
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
         if (allow_pending) {
             if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_PENDING)
                 allow_pending = 0;
@@ -101,7 +111,7 @@ static size_t count_by_state(const quicly_local_cid_set_t *set, enum en_quicly_l
 static int exists_once(const quicly_local_cid_set_t *set, uint64_t sequence, enum en_quicly_local_cid_state_t state)
 {
     size_t occurrence = 0;
-    for (size_t i = 0; i < set->_size; i++) {
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++) {
         if (set->cids[i].sequence == sequence) {
             if (set->cids[i].state != state)
                 return 0;
@@ -112,6 +122,168 @@ static int exists_once(const quicly_local_cid_set_t *set, uint64_t sequence, enu
     }
 
     return occurrence == 1;
+}
+
+static void send_and_ack_all(quicly_local_cid_set_t *set)
+{
+    size_t num_pending = 0;
+    while (num_pending < PTLS_ELEMENTSOF(set->cids) && set->cids[num_pending].state == QUICLY_LOCAL_CID_STATE_PENDING)
+        ++num_pending;
+    quicly_local_cid_on_sent(set, num_pending);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++)
+        if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE)
+            quicly_local_cid_on_acked(set, set->cids[i].sequence);
+}
+
+static uint64_t get_key_generation(struct st_quicly_cid_encryptor_t *self)
+{
+    return test_key_generation;
+}
+
+static quicly_cid_encryptor_t test_generational_encryptor = {
+    .encrypt_cid = encrypt_cid,
+    .decrypt_cid = decrypt_cid,
+    .get_key_generation = get_key_generation,
+};
+
+/**
+ * initializes a set that uses `encryptor`, with all the CIDs being delivered to the peer
+ */
+static void init_delivered_set(quicly_local_cid_set_t *set, quicly_cid_encryptor_t *encryptor)
+{
+    static const quicly_cid_plaintext_t cid_plaintext = {0};
+    quicly_local_cid_init_set(set, encryptor, &cid_plaintext);
+    quicly_local_cid_set_size(set, NUM_CIDS);
+    send_and_ack_all(set);
+}
+
+/**
+ * delivers the CIDs being issued and retires the ones below `retire_prior_to`, as the peer would do
+ */
+static void deliver_and_retire_old(quicly_local_cid_set_t *set)
+{
+    uint64_t old[PTLS_ELEMENTSOF(set->cids)];
+    size_t num_old = 0;
+    int has_pending, exhausted;
+
+    send_and_ack_all(set);
+    for (size_t i = 0; i < PTLS_ELEMENTSOF(set->cids); i++)
+        if (set->cids[i].state != QUICLY_LOCAL_CID_STATE_IDLE && set->cids[i].sequence < set->retire_prior_to)
+            old[num_old++] = set->cids[i].sequence;
+    for (size_t i = 0; i < num_old; i++)
+        quicly_local_cid_retire(set, old[i], &has_pending, &exhausted);
+}
+
+static void test_rotate_upon_key_change(void)
+{
+    quicly_local_cid_set_t set;
+    int exhausted;
+
+    init_delivered_set(&set, &test_generational_encryptor);
+    ok(!quicly_local_cid_rotate(&set, &exhausted));
+    ++test_key_generation;
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+    ok(set.retire_prior_to == NUM_CIDS);
+
+    /* encryptors that do not report the generation of the key never trigger the rotation */
+    init_delivered_set(&set, &test_encryptor);
+    ++test_key_generation;
+    ok(!quicly_local_cid_rotate(&set, &exhausted));
+}
+
+static void test_rotate_after_delivery(void)
+{
+    quicly_local_cid_set_t set;
+    static const quicly_cid_plaintext_t cid_plaintext = {0};
+    int exhausted;
+
+    quicly_local_cid_init_set(&set, &test_generational_encryptor, &cid_plaintext);
+    quicly_local_cid_set_size(&set, NUM_CIDS);
+    quicly_local_cid_on_sent(&set, NUM_CIDS - 1);
+    ++test_key_generation;
+    ok(!quicly_local_cid_rotate(&set, &exhausted));
+    send_and_ack_all(&set);
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+}
+
+static void test_rotate_after_retirement(void)
+{
+    quicly_local_cid_set_t set;
+    int has_pending, exhausted;
+
+    init_delivered_set(&set, &test_generational_encryptor);
+    ++test_key_generation;
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+    send_and_ack_all(&set);
+
+    /* the CIDs are not rotated again until all the ones retired by the previous rotation are retired by the peer, and they are not
+     * replaced when retired */
+    ++test_key_generation;
+    for (uint64_t seq = 0; seq < NUM_CIDS - 1; seq++)
+        quicly_local_cid_retire(&set, seq, &has_pending, &exhausted);
+    ok(!quicly_local_cid_rotate(&set, &exhausted));
+    quicly_local_cid_retire(&set, NUM_CIDS - 1, &has_pending, &exhausted);
+    ok(!has_pending);
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+}
+
+static void test_rotate_exhaustion(void)
+{
+    quicly_local_cid_set_t set;
+    int exhausted;
+
+    init_delivered_set(&set, &test_generational_encryptor);
+    set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS + 1;
+    ++test_key_generation;
+    ok(!quicly_local_cid_rotate(&set, &exhausted) && exhausted);
+    /* not attempted again until the key changes again */
+    ok(!quicly_local_cid_rotate(&set, &exhausted) && !exhausted);
+
+    /* rotated if there are just enough path IDs */
+    set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS;
+    ++test_key_generation;
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+}
+
+static void test_rotate_upon_key_change_during_encryption(void)
+{
+    quicly_local_cid_set_t set;
+    int exhausted;
+
+    /* while generating the initial CID */
+    num_key_changes_on_encrypt = 1;
+    init_delivered_set(&set, &test_generational_encryptor);
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+
+    /* while rotating the CIDs */
+    deliver_and_retire_old(&set);
+    ++test_key_generation;
+    num_key_changes_on_encrypt = 1;
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+    deliver_and_retire_old(&set);
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+}
+
+static void test_retire_without_replacement(void)
+{
+    quicly_local_cid_set_t set;
+    int has_pending, exhausted;
+
+    init_delivered_set(&set, &test_generational_encryptor);
+    set.plaintext.path_id = QUICLY_MAX_PATH_ID - NUM_CIDS;
+    ++test_key_generation;
+    ok(quicly_local_cid_rotate(&set, &exhausted));
+    send_and_ack_all(&set);
+
+    /* no CID can be issued in place of the one being retired */
+    quicly_local_cid_retire(&set, set.retire_prior_to, &has_pending, &exhausted);
+    ok(exhausted);
+
+    /* retiring the last CID that is not being retired by Retire Prior To is a protocol violation */
+    for (uint64_t seq = set.retire_prior_to + 1; seq < QUICLY_MAX_PATH_ID - 1; seq++)
+        quicly_local_cid_retire(&set, seq, &has_pending, &exhausted);
+    ok(quicly_local_cid_retire(&set, QUICLY_MAX_PATH_ID - 1, &has_pending, &exhausted) ==
+       QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
 }
 
 void test_local_cid(void)
@@ -155,14 +327,14 @@ void test_local_cid(void)
     ok(count_by_state(&set, QUICLY_LOCAL_CID_STATE_PENDING) == 0);
 
     /* retire everything */
-    int has_pending;
-    ok(quicly_local_cid_retire(&set, 0, &has_pending) == 0);
+    int has_pending, exhausted;
+    ok(quicly_local_cid_retire(&set, 0, &has_pending, &exhausted) == 0);
     ok(has_pending);
-    ok(quicly_local_cid_retire(&set, 1, &has_pending) == 0);
+    ok(quicly_local_cid_retire(&set, 1, &has_pending, &exhausted) == 0);
     ok(has_pending);
-    ok(quicly_local_cid_retire(&set, 2, &has_pending) == 0);
+    ok(quicly_local_cid_retire(&set, 2, &has_pending, &exhausted) == 0);
     ok(has_pending);
-    ok(quicly_local_cid_retire(&set, 3, &has_pending) == 0);
+    ok(quicly_local_cid_retire(&set, 3, &has_pending, &exhausted) == 0);
     ok(has_pending);
     ok(count_by_state(&set, QUICLY_LOCAL_CID_STATE_PENDING) == 4);
     /* partial send */
@@ -175,7 +347,7 @@ void test_local_cid(void)
     ok(exists_once(&set, 7, QUICLY_LOCAL_CID_STATE_PENDING));
 
     /* retire one in the middle of PENDING CIDs */
-    ok(quicly_local_cid_retire(&set, 6, &has_pending) == 0);
+    ok(quicly_local_cid_retire(&set, 6, &has_pending, &exhausted) == 0);
     ok(has_pending);
     ok(verify_array(&set) == 0);
 
@@ -189,9 +361,9 @@ void test_local_cid(void)
     ok(exists_once(&set, 8, QUICLY_LOCAL_CID_STATE_PENDING));
 
     /* at this moment sequence=0,1,2,3,6 have been retired */
-    ok(quicly_local_cid_retire(&set, 4, &has_pending) == 0);
+    ok(quicly_local_cid_retire(&set, 4, &has_pending, &exhausted) == 0);
     ok(has_pending);
-    ok(quicly_local_cid_retire(&set, 5, &has_pending) == 0);
+    ok(quicly_local_cid_retire(&set, 5, &has_pending, &exhausted) == 0);
     ok(has_pending);
     /* sequence=0-6 have been retired */
 
@@ -201,9 +373,9 @@ void test_local_cid(void)
     while (num_retired < QUICLY_MAX_PATH_ID) {
         if (seq_to_retire == QUICLY_MAX_PATH_ID - 1) {
             /* this is the maximum CID we can generate -- after retiring it, there should be no CID to send */
-            ok(quicly_local_cid_retire(&set, seq_to_retire, &has_pending) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
+            ok(quicly_local_cid_retire(&set, seq_to_retire, &has_pending, &exhausted) == QUICLY_TRANSPORT_ERROR_PROTOCOL_VIOLATION);
         } else {
-            ok(quicly_local_cid_retire(&set, seq_to_retire, &has_pending) == 0);
+            ok(quicly_local_cid_retire(&set, seq_to_retire, &has_pending, &exhausted) == 0);
             ok(has_pending);
         }
         num_retired++;
@@ -229,7 +401,14 @@ void test_local_cid(void)
     ok(exists_once(&small_set, 1, QUICLY_LOCAL_CID_STATE_PENDING));
     ok(exists_once(&small_set, 2, QUICLY_LOCAL_CID_STATE_PENDING));
     ok(!exists_once(&small_set, 3, QUICLY_LOCAL_CID_STATE_PENDING)); /* seq=3 should not exist yet */
-    ok(quicly_local_cid_retire(&small_set, 0, &has_pending) == 0);
+    ok(quicly_local_cid_retire(&small_set, 0, &has_pending, &exhausted) == 0);
     ok(has_pending);
     ok(exists_once(&small_set, 3, QUICLY_LOCAL_CID_STATE_PENDING));
+
+    subtest("rotate-upon-key-change", test_rotate_upon_key_change);
+    subtest("rotate-after-delivery", test_rotate_after_delivery);
+    subtest("rotate-after-retirement", test_rotate_after_retirement);
+    subtest("rotate-exhaustion", test_rotate_exhaustion);
+    subtest("rotate-upon-key-change-during-encryption", test_rotate_upon_key_change_during_encryption);
+    subtest("retire-without-replacement", test_retire_without_replacement);
 }
