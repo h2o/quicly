@@ -446,6 +446,10 @@ struct st_quicly_conn_t {
          */
         uint8_t try_jumpstart : 1;
         /**
+         * if the flow is CC-limited, as last determined by `update_rate_limit`
+         */
+        uint8_t is_cc_limited : 1;
+        /**
          * payload of DATAGRAM frames to be sent
          */
         struct {
@@ -1619,13 +1623,14 @@ static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int se
     int is_cwnd_limited = has_sendable_data && conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd,
         is_ratemeter_limited = has_sendable_data && (sendbuf_full || is_cwnd_limited || pacer_limited);
 
-    if (quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter) != is_ratemeter_limited) {
+    if (!is_ratemeter_limited)
+        quicly_ratemeter_on_app_limited(&conn->egress.ratemeter);
+    if (conn->egress.is_cc_limited != is_ratemeter_limited) {
+        conn->egress.is_cc_limited = is_ratemeter_limited;
         if (is_ratemeter_limited) {
-            quicly_ratemeter_enter_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
             QUICLY_PROBE(ENTER_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
             QUICLY_LOG_CONN(enter_cc_limited, conn, { PTLS_LOG_ELEMENT_NUMBER(pn, conn->egress.packet_number); });
         } else {
-            quicly_ratemeter_exit_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
             QUICLY_PROBE(EXIT_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
             QUICLY_LOG_CONN(exit_cc_limited, conn, { PTLS_LOG_ELEMENT_NUMBER(pn, conn->egress.packet_number); });
         }

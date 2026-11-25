@@ -76,13 +76,8 @@ static void sim_run(struct sim_t *sim, int64_t duration, uint32_t packet_size, i
         memmove(sim->in_flight, sim->in_flight + num_acked, (sim->num_in_flight - num_acked) * sizeof(sim->in_flight[0]));
         sim->num_in_flight -= num_acked;
         /* send */
-        if (cc_limited != quicly_ratemeter_is_cc_limited(&sim->meter)) {
-            if (cc_limited) {
-                quicly_ratemeter_enter_cc_limited(&sim->meter, sim->pn);
-            } else {
-                quicly_ratemeter_exit_cc_limited(&sim->meter, sim->pn);
-            }
-        }
+        if (!cc_limited)
+            quicly_ratemeter_on_app_limited(&sim->meter);
         assert(sim->num_in_flight < sizeof(sim->in_flight) / sizeof(sim->in_flight[0]));
         sim->in_flight[sim->num_in_flight].ack_at = ack_at(sim->now);
         sim->in_flight[sim->num_in_flight].pn = sim->pn++;
@@ -108,15 +103,11 @@ static void test_basic(void)
     sim_run(&sim, 10000, 1000, 1, ack_after_50ms);
     CHECK_REPORT(1000000, 1000000, 0);
 
-    /* application-limited, 10 bytes per millisecond; nothing is measured */
+    /* application-limited, 10 bytes per millisecond; the samples, being application-limited and lower, are not used */
     sim_run(&sim, 1000, 10, 0, ack_after_50ms);
     CHECK_REPORT(1000000, 1000000, 0);
 
-    /* CC-limited, 2KB per millisecond; the first window, which includes the ACKs of packets sent while application-limited, ends
-     * after one round trip but is not used */
-    sim_run(&sim, 51, 2000, 1, ack_after_50ms);
-    ok(isnan(meter.window.at) == 0);
-    CHECK_REPORT(1000000, 1000000, 0);
+    /* CC-limited, 2KB per millisecond */
     sim_run(&sim, 10000, 2000, 1, ack_after_50ms);
     CHECK_REPORT(2000000, 2000000, 0);
 
@@ -131,13 +122,13 @@ static void test_short_flights(void)
 
     quicly_ratemeter_init(&meter);
 
-    /* CC-limited flights of 10 packets sent back-to-back and acked within 0.2ms, separated by 100ms of not being CC-limited; no
-     * window spans a round trip while CC-limited */
+    /* CC-limited flights of 10 packets sent back-to-back and acked within 0.2ms, separated by 100ms of being application-limited;
+     * each window spans from the ACKs of one flight to those of the next, measuring 10KB per 150ms, which is used as it is the only
+     * estimate, even though application-limited */
     for (int flight = 0; flight < 20; ++flight) {
-        quicly_ratemeter_enter_cc_limited(&meter, pn);
         uint64_t first_pn = pn;
         pn += 10;
-        quicly_ratemeter_exit_cc_limited(&meter, pn);
+        quicly_ratemeter_on_app_limited(&meter);
         now += 50;
         for (int i = 0; i < 10; ++i) {
             bytes_acked += 1000;
@@ -145,7 +136,7 @@ static void test_short_flights(void)
         }
         now += 100;
     }
-    CHECK_REPORT(0, 0, 0);
+    CHECK_REPORT(66667, 66667, 33333);
 }
 
 static double ack_in_clumps(double sent_at)

@@ -1511,7 +1511,6 @@ static void test_resume_sendrate(void)
     calc_resume_sendrate(&conn, &rate, &rtt);
     ok(rate == 0 && rtt == 0);
 
-    quicly_ratemeter_enter_cc_limited(&conn.egress.ratemeter, 0);
     quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1000, 1000, 0, 1);
     quicly_ratemeter_on_ack(&conn.egress.ratemeter, 1050, 51000, 1, 2);
     for (size_t i = 0; i < PTLS_ELEMENTSOF(cases); ++i) {

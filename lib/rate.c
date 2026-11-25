@@ -32,43 +32,35 @@ void quicly_ratemeter_init(quicly_ratemeter_t *meter)
     };
 }
 
-void quicly_ratemeter_enter_cc_limited(quicly_ratemeter_t *meter, uint64_t pn)
-{
-    assert(!quicly_ratemeter_is_cc_limited(meter));
-
-    /* The first window ends at the ACK for the first packet sent while CC-limited, and is not used as a sample. */
-    meter->window = (struct st_quicly_ratemeter_window_t){.end_pn = pn, .at = NAN};
-}
-
-void quicly_ratemeter_exit_cc_limited(quicly_ratemeter_t *meter, uint64_t pn)
-{
-    assert(quicly_ratemeter_is_cc_limited(meter));
-
-    meter->window.end_pn = UINT64_MAX;
-}
-
 void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, double now, uint64_t bytes_acked, uint64_t largest_pn_acked,
                              uint64_t next_pn)
 {
-    if (meter->window.end_pn == UINT64_MAX || largest_pn_acked < meter->window.end_pn)
-        return;
-
-    /* The window has ended; update the estimate using the window as a sample, unless it is the first one. The estimate is updated
-     * in the same way as smoothed_rtt and rttvar of RFC 9002. */
-    if (!isnan(meter->window.at)) {
+    if (meter->window.end_pn != UINT64_MAX) {
+        if (largest_pn_acked < meter->window.end_pn)
+            return;
+        /* The window has ended; update the estimate using the window as a sample, unless it is an application-limited one that is
+         * not higher than the latest sample. The estimate is updated in the same way as smoothed_rtt and rttvar of RFC 9002. */
         double sample = (bytes_acked - meter->window.bytes_acked) * 1000 / (now - meter->window.at);
-        if (isnan(meter->estimate.smoothed)) {
-            meter->estimate.smoothed = sample;
-            meter->estimate.variation = sample / 2;
-        } else {
-            meter->estimate.variation = meter->estimate.variation * 3 / 4 + fabs(meter->estimate.smoothed - sample) / 4;
-            meter->estimate.smoothed = meter->estimate.smoothed * 7 / 8 + sample / 8;
+        int app_limited = meter->window.app_limited.send_side || meter->window.app_limited.receive_side;
+        if (!app_limited || isnan(meter->estimate.smoothed) || sample > meter->estimate.latest) {
+            if (isnan(meter->estimate.smoothed)) {
+                meter->estimate.smoothed = sample;
+                meter->estimate.variation = sample / 2;
+            } else {
+                meter->estimate.variation = meter->estimate.variation * 3 / 4 + fabs(meter->estimate.smoothed - sample) / 4;
+                meter->estimate.smoothed = meter->estimate.smoothed * 7 / 8 + sample / 8;
+            }
+            meter->estimate.latest = sample;
         }
-        meter->estimate.latest = sample;
     }
 
     /* start the next window, which ends at the ACK for the next packet to be sent */
-    meter->window = (struct st_quicly_ratemeter_window_t){.end_pn = next_pn, .at = now, .bytes_acked = bytes_acked};
+    meter->window = (struct st_quicly_ratemeter_window_t){
+        .end_pn = next_pn,
+        .at = now,
+        .bytes_acked = bytes_acked,
+        .app_limited = {.send_side = meter->window.app_limited.receive_side},
+    };
 }
 
 void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate)
