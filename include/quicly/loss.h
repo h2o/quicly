@@ -354,13 +354,13 @@ inline void quicly_loss_update_alarm(quicly_loss_t *r, int64_t now, double last_
 #define SET_ALARM(t)                                                                                                               \
     do {                                                                                                                           \
         int64_t _t = (t);                                                                                                          \
-        if (is_after_send) {                                                                                                       \
-            assert(now < _t);                                                                                                      \
-        } else if (_t < now) {                                                                                                     \
-            _t = now;                                                                                                              \
+        if (_t <= now) {                                                                                                           \
+            _t = now + (is_after_send != 0);                                                                                       \
         }                                                                                                                          \
         r->alarm_at = _t;                                                                                                          \
     } while (0)
+
+    /* only advance overdue alarm on the serviced path; leave other paths due */
 
     /* time-threshold loss detection */
     if (r->loss_time != INT64_MAX && use_loss_time) {
