@@ -1,6 +1,6 @@
 # Tunulator congestion-control benchmark
 
-This orphan branch contains the scripts for taking **all measurements from scratch**, including TCP CUBIC and TCP BBR. It contains no quicly source, binaries, or measurement results. From a separate quicly source checkout, check out the suite with:
+This orphan branch contains the scripts for taking **all measurements from scratch**, including TCP CUBIC and BBR, TCP CCs loaded as kernel modules such as BBRv3, and Google QUICHE's BBRv3. It contains no quicly source, binaries, or measurement results. From a separate quicly source checkout, check out the suite with:
 
 ```sh
 git worktree add tmp/tunulator-new-host experiment/tunulator-ccbench
@@ -8,7 +8,7 @@ git worktree add tmp/tunulator-new-host experiment/tunulator-ccbench
 
 Run the commands below from that quicly source checkout, not from the suite worktree. Scripts use paths supplied on the command line and need no old experiment directories or old executables.
 
-Written against quicly **`054e9e387fa8efb0852eb24b2120021fbed71f11`** on 2026-10-04. This revision includes `QUICLY_USE_ABE`, a compile-time switch for disabling ABE (see §4), and the instrumentation the latency measurement needs (tunulator `-L`, `recv-offset` events in the clients' output, `cli --decrypt-packet-batch`). Use this commit for an exact source baseline, or pin and record a newer commit deliberately.
+Written against quicly **`faf1a0ba5a6ba56794a534c4c75a981f3b65949f`** (branch `kazuho/abba-low-rtt-only`), with which the matrix of 2026-11-24 was measured. This revision includes `QUICLY_USE_ABE`, a compile-time switch for disabling ABE (see §4), the instrumentation the latency measurement needs (tunulator `-L`, `recv-offset` events in the clients' output, `cli --decrypt-packet-batch`), and tunulator's DualPI2 disciplines. Use this commit for an exact source baseline, or pin and record a newer commit deliberately.
 
 ## 1. What is being measured
 
@@ -24,12 +24,12 @@ The primary matrix uses **ordinary CUBIC startup**, with Rapid Start and Jump St
 
 | Scenario | TCP, freshly measured | QUIC, freshly measured |
 |---|---|---|
-| Tail drop | CUBIC, BBR | CUBIC, CUBIC+ABBA |
-| CoDel ECN | CUBIC, BBR | CUBIC+ABE, CUBIC+ABE+ABBA, and with the no-ABE build CUBIC, CUBIC+ABBA |
+| Tail drop | CUBIC, BBR (BBRv1), and the CCs added with `--tcp-cc`, e.g. BBRv3 | quicly CUBIC, CUBIC+ABBA; QUICHE BBRv3 with `--quiche-cc` |
+| CoDel ECN, for each `--codel` setting | Same | quicly CUBIC+ABE, CUBIC+ABE+ABBA, and with the no-ABE build CUBIC, CUBIC+ABBA; QUICHE BBRv3 with `--quiche-cc` |
 
 QUIC policies are named `CC[+abe][+abba][+l4s][+txtime][+rapid]` (see §10). ABE only affects the response to ECN marks, so under tail drop `+abe` is omitted and policies differing only in ABE are measured once, with the ordinary build.
 
-With 23 traces and the four QUIC policies above (`--quic-cc cubic+abe --quic-cc cubic+abe+abba --quic-cc cubic --quic-cc cubic+abba`), this is **230 distinct transfers**: 92 TCP and 138 QUIC. The recorded durations total about **30 hours of sequential playback**, plus build, reporting, and capture overhead. With the default QUIC policies (`cubic+abe` and `cubic+abe+abba`) it is 184 transfers, about 24 hours. Repeat the complete matrix in a new result root for additional samples. Measure all compared policies on the same host with consistent settings.
+With 23 traces, TCP CUBIC and BBR, the four quicly policies above (`--quic-cc cubic+abe --quic-cc cubic+abe+abba --quic-cc cubic --quic-cc cubic+abba`) and one CoDel setting, this is **230 distinct transfers**: 92 TCP and 138 QUIC. The recorded durations total about **30 hours of sequential playback**, plus build, reporting, and capture overhead. With the default QUIC policies (`cubic+abe` and `cubic+abe+abba`) it is 184 transfers, about 24 hours. The matrix of 2026-11-24 adds two CoDel settings (`--codel 5:100 --codel 10:100 --codel 26:100`), TCP BBRv3 (`--tcp-cc bbr3=...`) and QUICHE BBRv3 (`--quiche-cc bbr3=...`): 30 transfers per trace, **690** in all (276 TCP, 322 quicly, 92 QUICHE), about 88 hours of playback, or about 11 hours on 8 parallel workers (see §10). Repeat the complete matrix in a new result root for additional samples. Measure all compared policies on the same host with consistent settings.
 
 ## 2. Contents of this directory
 
@@ -44,7 +44,7 @@ With 23 traces and the four QUIC policies above (`--quic-cc cubic+abe --quic-cc 
 - `quicly-txtime.patch`: experimental kernel pacing for quicly's `cli` (`--so-txtime`), used by the `+txtime` QUIC policies only (see §10).
 - `quiche/`: `hq_server`, an HTTP/0.9 server on Google QUICHE for the QUICHE policies, with the QUICHE patch it requires and its build script (see §10).
 
-No source patches are needed at this revision: `--abba` is a native CLI option, and the no-ABE build is a compile-time flag (`-DQUICLY_USE_ABE=0`), not a patch. See §4.
+quicly needs no source patch at this revision: `--abba` is a native CLI option, and the no-ABE build is a compile-time flag (`-DQUICLY_USE_ABE=0`), not a patch. See §4. The kit's patches are only for the experimental `+txtime` policies (`quicly-txtime.patch`) and for QUICHE (`quiche/quiche.patch`), see §10.
 
 Use Python **3.9 or later**, standard library only. Run commands below from the new quicly checkout root unless stated otherwise. Do not run captures while compiling or making other substantial host changes.
 
@@ -60,8 +60,8 @@ sudo apt-get install build-essential cmake git perl libssl-dev python3 iproute2 
 For a new checkout, clone `https://github.com/h2o/quicly.git` and enter it. Fetch the experiment branch if needed, then pin the desired commit and initialize its submodules:
 
 ```sh
-git fetch origin kazuho/tunulator-latency
-git switch --detach 054e9e387fa8efb0852eb24b2120021fbed71f11
+git fetch origin kazuho/abba-low-rtt-only
+git switch --detach faf1a0ba5a6ba56794a534c4c75a981f3b65949f
 git submodule update --init --recursive
 mkdir -p tmp
 git clone https://github.com/Soheil-ab/Cellular-Traces-NYC.git tmp/Cellular-Traces-NYC
@@ -96,7 +96,7 @@ cmake --build build/ccbench --target cli http09 tunulator test.t -j 4
 build/ccbench/test.t > build/ccbench/tests.log 2>&1
 ```
 
-Check the test exit code before continuing. The pinned ordinary build passes all 35 unit groups. If a statistical lossy-network assertion fails, retain its log and investigate/repeat explicitly; do not silently label failed tests as passing. Inspect `configure.log`/CMake output if DTrace or Fusion support is unavailable. On a different architecture it may be necessary to use `WITH_FUSION=OFF`; use the same settings for all local variants and record them. Benchmark preparation requires no root privileges.
+Check the test exit code before continuing. The pinned ordinary build passes all 81 unit groups. If a statistical lossy-network assertion fails, retain its log and investigate/repeat explicitly; do not silently label failed tests as passing. Inspect `configure.log`/CMake output if DTrace or Fusion support is unavailable. On a different architecture it may be necessary to use `WITH_FUSION=OFF`; use the same settings for all local variants and record them. Benchmark preparation requires no root privileges.
 
 `matrix.py` runs `record-build.py` to completion for each build before launching capture workers. The helper stores provenance in `<build-dir>/.build-info-cache.json`, keyed by the hashes of all three binaries; changed hashes trigger collection again. Workers only read the prepared file. `validate-parallel.py` performs the same preparation before starting concurrent captures.
 
@@ -120,7 +120,7 @@ cmake --build build/ccbench-noabe --target cli http09 tunulator test.t -j 4
 build/ccbench-noabe/test.t > build/ccbench-noabe/tests.log 2>&1
 ```
 
-**Known test gap:** at this revision, `t/cc.c` hardcodes ABE-on expectations (`QUICLY_BETA_ECN`, the `0.8` Reno-ECN alpha, ABBA's `85000`/gain-cap constants) in several subtests without checking `QUICLY_USE_ABE`, so `test.t` built with `-DQUICLY_USE_ABE=0` fails `cubic-abe`, `pico-ecn`, `pico-ecn-rapid-start`, and the ABBA `gain-cap`/`cubic-gain-cap`/`cuback-gain-cap`/`cubic-lifecycle`/`cuback-lifecycle` subtests — this is a pre-existing gap in quicly's own tests, not a benchmark-side patch to apply or a build defect. Confirm the failures are limited to exactly these named subtests (`build/ccbench-noabe/tests.log`) before proceeding; a failure elsewhere is a real regression. Use the ordinary build for TCP; the ABE toggle in this study changes QUIC only.
+**Known test gap:** at this revision, several subtests of `t/cc.c` expect ABE-on behavior without checking `QUICLY_USE_ABE`, so `test.t` built with `-DQUICLY_USE_ABE=0` fails the `cc` group: its subtests `cubic-abe`, `pico-ecn` and `pico-ecn-rapid-start`, and the `abba` subtests `proportional-switch`, `gain-cap`, `cubic-gain-cap`, `cuback-gain-cap`, `cubic-lifecycle` and `cuback-lifecycle` — this is a pre-existing gap in quicly's own tests, not a benchmark-side patch to apply or a build defect. Confirm the failures are limited to exactly these named subtests (`build/ccbench-noabe/tests.log`) before proceeding; a failure elsewhere is a real regression. Use the ordinary build for TCP; the ABE toggle in this study changes QUIC only.
 
 ## 5. One-time host setup
 
@@ -137,7 +137,7 @@ sudo sysctl -w net.ipv4.tcp_ecn=1
 
 Do **not** assign `192.0.2.1` as a local interface address. No NAT or IP forwarding setup is needed. Tunulator disables TUN checksum/segmentation offload when attaching. The existing kernel/firewall must permit the synthetic loopback-address traffic through tun0; diagnose local policy rather than broadly disabling the firewall.
 
-TCP BBR must be available from the destination kernel. If it is modular, an administrator can run `sudo modprobe tcp_bbr`. Do not change the system-wide default CC: `http09 -C` selects it per socket. Other TCP CCs, including ones loaded from an out-of-tree module such as BBRv3, can be added with `matrix.py --tcp-cc` (see §10).
+TCP BBR, the kernel's `tcp_bbr`, must be available from the destination kernel; it is BBRv1, and the report labels it `TCP BBR1`. If it is modular, an administrator can run `sudo modprobe tcp_bbr`. Do not change the system-wide default CC: `http09 -C` selects it per socket. Other TCP CCs, including ones loaded from an out-of-tree module such as BBRv3, can be added with `matrix.py --tcp-cc` (see §10).
 
 Read-only checks, without sudo:
 
@@ -152,7 +152,7 @@ sysctl net.ipv4.tcp_available_congestion_control net.ipv4.tcp_allowed_congestion
 tc -s qdisc show dev tun0
 ```
 
-Keep this host information in the result archive; TCP BBR is the host kernel's implementation, not a portable binary-defined version. Capture the distribution/kernel package version as well as the controller name. The docs explain [TUN ownership](https://docs.kernel.org/networking/tuntap.html) and [`route_localnet`/TCP ECN](https://docs.kernel.org/networking/ip-sysctl.html). A sandbox denying TUN or sockets may require running the capture outside that sandbox; this is separate from running as root. Do not use `sudo -n -l` as a routine preflight.
+Keep this host information in the result archive; TCP BBR1 is the host kernel's implementation, not a portable binary-defined version. Capture the distribution/kernel package version as well as the controller name. The docs explain [TUN ownership](https://docs.kernel.org/networking/tuntap.html) and [`route_localnet`/TCP ECN](https://docs.kernel.org/networking/ip-sysctl.html). A sandbox denying TUN or sockets may require running the capture outside that sandbox; this is separate from running as root. Do not use `sudo -n -l` as a routine preflight.
 
 ## 6. Exact shared settings
 
@@ -188,7 +188,7 @@ Keep ECN enabled at endpoints even when testing `codel/noecn`. QUIC enables ECN 
 
 The `5:100` target:interval is the default, not fixed: `run-one.py --codel TARGET:INTERVAL` (and matching `--queue codel:TARGET:INTERVAL`) and `matrix.py --codel TARGET:INTERVAL` override it for the `codel` condition. `matrix.py --codel` can be repeated to measure several settings in one output root, e.g. `--codel 5:100 --codel 10:100`; runs of each setting are in directories named after it (`codel-5-100`, ...). `run-one.py` still rejects a `--queue` that does not match `--condition`/`--codel`, so both must be changed together. A `matrix.py` run records its `--codel` values in `matrix-settings.json`; resuming an output root with additional `--codel` values appended runs only the new settings, while removing or reordering values fails with "Matrix settings changed", same as changing `--quic-cc`.
 
-The DualPI2 disciplines require a tunulator built from quicly's `kazuho/l4s` branch (commit `855b867d` or later). `matrix.py --condition` selects the queue conditions to run; repeat it for several (`tail`, `codel`, `dualpi2`; default `tail` and `codel`). `--dualpi2-device N` adds the device buffer to the `dualpi2` condition; its runs are in a directory named `dualpi2-devN` rather than `dualpi2`, and `run-one.py` takes the same option, with `--condition dualpi2 --queue dualpi2:N`. As under CoDel, ABE matters under DualPI2, so QUIC policies without `+abe` use `--noabe-build` there. `--no-tcp` leaves out TCP CUBIC and BBR. These settings are recorded in `matrix-settings.json` and checked on resume like the others.
+The DualPI2 disciplines require a tunulator built from a quicly revision including commit `855b867d`, as the pinned revision does. `matrix.py --condition` selects the queue conditions to run; repeat it for several (`tail`, `codel`, `dualpi2`; default `tail` and `codel`). `--dualpi2-device N` adds the device buffer to the `dualpi2` condition; its runs are in a directory named `dualpi2-devN` rather than `dualpi2`, and `run-one.py` takes the same option, with `--condition dualpi2 --queue dualpi2:N`. As under CoDel, ABE matters under DualPI2, so QUIC policies without `+abe` use `--noabe-build` there. `--no-tcp` leaves out TCP CUBIC and BBR. These settings are recorded in `matrix-settings.json` and checked on resume like the others.
 
 ## 7. Smoke and individual taxi3 runs
 
@@ -230,7 +230,7 @@ Run in a persistent terminal such as tmux, or use `nohup` and redirect to a log 
 
 `matrix.pid` records the matrix process. SIGTERM to that exact live process terminates the active capture and cleans up its endpoint/emulator process groups. Completed captures have `result.json` written last. Resume with the same command and CPU list: completed entries are checked against the trace hash, window, settings and executable hashes before being skipped. An interrupted directory has no `result.json`; **move that incomplete directory outside the result root** before resuming, preserving its logs. The single-run helper deliberately refuses to overwrite it. Use a fresh output root after changing source, binaries, or experimental settings. The kernel is not a matrix setting: runs measured on different kernels can share a root, as each run's `metadata.json` records its kernel and the report lists the kernels of the runs, with the number of runs on each, under Environment.
 
-A TCP CoDel measurement is displayed alongside both QUIC ABE settings because ABE modifies only QUIC, and a tail-drop measurement of a QUIC policy is shared by its ABE and no-ABE specs. Total distinct transfers remain 230, not 276.
+A TCP CoDel measurement is displayed alongside both QUIC ABE settings because ABE modifies only QUIC, and a tail-drop measurement of a QUIC policy is shared by its ABE and no-ABE specs. With the four quicly policies and one CoDel setting, distinct transfers are thus 230, not 276.
 
 Each transfer saves:
 
@@ -318,31 +318,17 @@ python3 tmp/tunulator-new-host/matrix.py --traces tmp/Cellular-Traces-NYC \
   --cpus 1-15 --trace-id 2768760-taxi3 --output tmp/taxi3-parallel
 ```
 
-This has ten jobs, so only ten workers are used. Repeat `--trace-id` to select multiple traces. Omit it to run all 23 traces (230 transfers) with up to 15 concurrent captures. This scheduler assigns the jobs to run round-robin to CPU queues, in order of trace length, shortest first; completed runs are skipped before assignment, so the jobs of a resume are spread over all CPUs. A completed run is reused on resume whichever CPU it was measured on; its `metadata.json` records the CPU. A worker immediately takes its next assigned job when free. `--dry-run` creates planned metadata without acquiring TUNs or producing measurements/HTML; use a separate root from real captures.
+This has ten jobs, so only ten workers are used. Repeat `--trace-id` to select multiple traces. Omit it to run all 23 traces (230 transfers with one CoDel setting) with up to 15 concurrent captures. This scheduler assigns the jobs to run round-robin to CPU queues, in order of trace length, shortest first; completed runs are skipped before assignment, so the jobs of a resume are spread over all CPUs. A completed run is reused on resume whichever CPU it was measured on; its `metadata.json` records the CPU. A worker immediately takes its next assigned job when free. `--dry-run` creates planned metadata without acquiring TUNs or producing measurements/HTML; use a separate root from real captures.
 
-`--quic-cc CC[+abe][+abba][+l4s][+txtime][+rapid]` selects a QUIC policy; repeat it for several, e.g. `--quic-cc cubic --quic-cc cuback+abe+abba --quic-cc pico+abe`. CC is `cubic`, `cuback` or `pico`; `+abe` uses the ordinary build under CoDel and DualPI2, while its absence uses `--noabe-build` (required then); `+abba` enables ABBA on both endpoints (cubic and cuback only); `+l4s` sends ECT(1) and responds to CE as Prague (`cli --l4s`, cuback only); `+txtime` paces each packet in the kernel (see below); `+rapid` uses Jump Start (60 packets) and Rapid Start instead of ordinary startup (`run-one.py --rapid-start`). The default is `--quic-cc cubic+abe --quic-cc cubic+abe+abba`. Under tail drop `+abe` is dropped, and specs that then coincide run once. Runs are in directories named `quic_` followed by the spec (`quic_cubic+abe+abba`, ...), and the report labels them `QUIC ` followed by the spec in capitals (`QUIC CUBIC+ABE+ABBA`). This changes only the QUIC controller: IW stays 30, pacing stays enabled, and Rapid Start and Jump Start stay disabled unless `+rapid` is given. TCP remains CUBIC/BBR, plus any TCP CCs added with `--tcp-cc` (below). Resume rejects a different selection; result roots made before this option was repeatable can only be re-rendered.
+`--quic-cc CC[+abe][+abba][+l4s][+txtime][+rapid]` selects a QUIC policy; repeat it for several, e.g. `--quic-cc cubic --quic-cc cuback+abe+abba --quic-cc pico+abe`. CC is `cubic`, `cuback` or `pico`; `+abe` uses the ordinary build under CoDel and DualPI2, while its absence uses `--noabe-build` (required then); `+abba` enables ABBA on both endpoints (cubic and cuback only); `+l4s` sends ECT(1) and responds to CE as Prague (`cli --l4s`, cuback only); `+txtime` paces each packet in the kernel (see below); `+rapid` uses Jump Start (60 packets) and Rapid Start instead of ordinary startup (`run-one.py --rapid-start`). The default is `--quic-cc cubic+abe --quic-cc cubic+abe+abba`. Under tail drop `+abe` is dropped, and specs that then coincide run once. Runs are in directories named `quic_` followed by the spec (`quic_cubic+abe+abba`, ...), and the report labels them `quicly ` followed by the spec in capitals (`quicly CUBIC+ABE+ABBA`). This changes only the QUIC controller: IW stays 30, pacing stays enabled, and Rapid Start and Jump Start stay disabled unless `+rapid` is given. TCP remains CUBIC/BBR, plus any TCP CCs added with `--tcp-cc` (below). Resume rejects a different selection; result roots made before this option was repeatable can only be re-rendered.
 
 `--tcp-cc NAME[=DIR]` adds a TCP CC to TCP CUBIC and BBR, which always run unless `--no-tcp` is given; repeat it for several. NAME is passed to `http09 -C`, so it must be listed in `net.ipv4.tcp_available_congestion_control`. When NAME is implemented by an out-of-tree kernel module, give DIR, the checkout in which the module `tcp_NAME.ko` was built and from which it was loaded; for example, `--tcp-cc bbr3=../3p/tcp_bbr_modules` for BBRv3 from [tcp_bbr_modules](https://github.com/hrimfaxi/tcp_bbr_modules). The matrix passes DIR to `run-one.py --cc-source`, which records in `metadata.json` (`cc_source`) the checkout's commit, remotes, `git status --porcelain` and `git diff HEAD`, and the module's `srcversion`, a hash of the module's sources. It refuses to capture unless the `srcversion` of the loaded module (`/sys/module/tcp_NAME/srcversion`) equals that of `DIR/tcp_NAME.ko`, so the recorded commit is that of the module measured. Runs are in directories named `tcp_` followed by NAME, the report labels them `TCP ` followed by NAME in capitals (`TCP BBR3`), and lists each module with its commit under Environment. TCP CCs can be added to an existing root on resume, as CoDel settings can, running only the captures of the added CCs; removing or reordering them fails with "Matrix settings changed".
 
-`--quiche-cc bbr3=DIR` adds QUICHE BBR3: Google QUICHE's BBRv3 sender (`Bbr3Sender`) as the server, measured against the same quicly client. DIR is a checkout of [QUICHE](https://github.com/google/quiche), in which `quiche/build-quiche.sh DIR` builds `hq_server` (`DIR/bazel-bin/ccbench/hq_server`) with [Bazel](https://bazel.build) (via `bazelisk`, which runs the version in `DIR/.bazelversion`) and clang. The script applies `quiche/quiche.patch` to a checkout without changes, and refuses to build one with other changes; it links `quiche/` into the checkout as `DIR/ccbench`. The patch raises QUICHE's limit on outgoing packets from 1452 to 1472 bytes (`kMaxOutgoingPacketSize`), so its UDP payloads are as large as quicly's, and adds `Bbr3Sender::SetInitialCongestionWindowInBytes`, as QUICHE sets the initial window only in packets of 1460 bytes. `hq_server` serves `GET /N` over ALPN `hq-interop` with QUICHE's raw-QUIC session (`QuicGenericServerSession`); every connection uses BBRv3, which no QUICHE connection option selects, with an initial window of 30 packets of 1472 bytes (44160 bytes, as quicly's `cubic:30`), and pacing, which QUICHE enables by default. The client is quicly's `cli` with `-a hq-interop` and the options of the quicly policies; it also writes the key log for `latency.py`. QUICHE's BBRv3 sends no ECN-capable packets, so under CoDel its packets are dropped where those of the other policies are marked. `hq_server` disables QUICHE's server-side blackhole detection (`quic_disable_server_blackhole_detection`), which is on by default and closes a connection when there is no progress for 2 TLPs and 5 RTOs (at least about 6.5 seconds), as during the 15-second outage of `trace-3109898-bus`; quicly and TCP keep their connections through it. Resume keeps completed runs of the earlier build without that setting (`EARLIER_HQ_SERVER_SHA256` in `matrix.py`), as it differs only in that close. The matrix passes DIR to `run-one.py quiche --cc bbr3 --quiche DIR`, which refuses to capture unless the checkout's changes are exactly `quiche/quiche.patch`, and records in `metadata.json` (`quiche_source`) the checkout's commit, remotes, `git status --porcelain` and `git diff HEAD`, its Bazel version, the kit's commit and the status and hashes of the files in `quiche/`; `binary_sha256` includes `hq_server`, which resume checks against `DIR/bazel-bin/ccbench/hq_server`. Runs are in directories named `quiche_bbr3`, under tail drop and each CoDel setting. QUICHE CCs can be added to an existing root on resume, as TCP CCs can.
+`--quiche-cc bbr3=DIR` adds QUICHE BBR3: Google QUICHE's BBRv3 sender (`Bbr3Sender`) as the server, measured against the same quicly client. DIR is a checkout of [QUICHE](https://github.com/google/quiche), in which `quiche/build-quiche.sh DIR` builds `hq_server` (`DIR/bazel-bin/ccbench/hq_server`) with [Bazel](https://bazel.build) (via `bazelisk`, which runs the version in `DIR/.bazelversion`) and clang. The script applies `quiche/quiche.patch` to a checkout without changes, and refuses to build one with other changes; it links `quiche/` into the checkout as `DIR/ccbench`. The patch raises QUICHE's limit on outgoing packets from 1452 to 1472 bytes (`kMaxOutgoingPacketSize`), so its UDP payloads are as large as quicly's, and adds `Bbr3Sender::SetInitialCongestionWindowInBytes`, as QUICHE sets the initial window only in packets of 1460 bytes. `hq_server` serves `GET /N` over ALPN `hq-interop` with QUICHE's raw-QUIC session (`QuicGenericServerSession`); every connection uses BBRv3, which no QUICHE connection option selects, with an initial window of 30 packets of 1472 bytes (44160 bytes, as quicly's `cubic:30`), and pacing, which QUICHE enables by default. The client is quicly's `cli` with `-a hq-interop` and the options of the quicly policies; it also writes the key log for `latency.py`. QUICHE's BBRv3 sends no ECN-capable packets, so under CoDel its packets are dropped where those of the other policies are marked. TCP BBRv3 (`tcp_bbr3` of tcp_bbr_modules) does not respond to CE in these runs: it uses ECN only when its `ecn_low` module parameter is set (default off) and the minimum RTT is at most 5 ms. As tunulator's CoDel marks an ECN-capable packet instead of dropping it, TCP BBRv3's packets are dropped only when the buffer is full; QUICHE's, being dropped by CoDel, are subject to it. `hq_server` disables QUICHE's server-side blackhole detection (`quic_disable_server_blackhole_detection`), which is on by default and closes a connection when there is no progress for 2 TLPs and 5 RTOs (at least about 6.5 seconds), as during the 15-second outage of `trace-3109898-bus`; quicly and TCP keep their connections through it. Resume keeps completed runs of the earlier build without that setting (`EARLIER_HQ_SERVER_SHA256` in `matrix.py`), as it differs only in that close. The matrix passes DIR to `run-one.py quiche --cc bbr3 --quiche DIR`, which refuses to capture unless the checkout's changes are exactly `quiche/quiche.patch`, and records in `metadata.json` (`quiche_source`) the checkout's commit, remotes, `git status --porcelain` and `git diff HEAD`, its Bazel version, the kit's commit and the status and hashes of the files in `quiche/`; `binary_sha256` includes `hq_server`, which resume checks against `DIR/bazel-bin/ccbench/hq_server`. Runs are in directories named `quiche_bbr3`, under tail drop and each CoDel setting. QUICHE CCs can be added to an existing root on resume, as TCP CCs can.
 
-#### Kernel pacing (`+txtime`)
+To reuse TCP measurements with different QUIC policies, copy the complete `<trace-id>/tail/tcp_cubic`, `tail/tcp_bbr`, `codel-5-100/tcp_cubic`, and `codel-5-100/tcp_bbr` directories (and those of any other CoDel setting and of the CCs added with `--tcp-cc`) into the same relative paths in a new output root; hard links (`cp -al`) avoid duplicating them. Do not copy the old `matrix-settings.json` or QUIC directories. Existing completed variants are validated and skipped; only missing variants run. Trace/window, controller/startup, and binary hashes must match. Directories without `result.json` are incomplete and must be moved aside, not silently skipped. The new matrix settings are saved after validation succeeds.
 
-With `+txtime`, the QUIC server gives each packet a departure time (`SCM_TXTIME`) at the rate of quicly's pacer, so that the `fq` qdisc releases packets one at a time rather than in the bursts quicly's pacer permits. This is experimental and not part of quicly: apply `quicly-txtime.patch` to the quicly source and use that build for the `+txtime` policies (`git am path/to/quicly-txtime.patch`; it applies to `kazuho/l4s` at `f19c5913`). The patch adds `cli --so-txtime`, which `run-one.py --txtime` passes to the server only. Known issue: quicly measures RTT from when a packet is handed to the socket, so time spent waiting in `fq` counts as RTT.
-
-`+txtime` requires `--cpus`: CPU N uses a separate TUN, `tunfqN`, whose root qdisc is `fq`, with peer `192.0.2.(N+129)` and server port `20200+N`; other policies keep `tunN`. `run-one.py` checks that the root qdisc of `tunfqN` is `fq` before capturing. Create the lanes once as an administrator, e.g. for CPUs 8 to 15:
-
-```sh
-for cpu in $(seq 8 15); do
-  sudo ip tuntap add dev "tunfq${cpu}" mode tun user "$(id -u)" || break
-  sudo ip link set dev "tunfq${cpu}" mtu 1500 up || break
-  sudo sysctl -w "net.ipv4.conf.tunfq${cpu}.route_localnet=1" || break
-  sudo ip route add "192.0.2.$((cpu + 129))/32" dev "tunfq${cpu}" src 127.0.0.1 initcwnd 30 || break
-  sudo tc qdisc replace dev "tunfq${cpu}" root fq || break
-done
-```
-
-To reuse TCP measurements with different QUIC policies, copy the complete `<trace-id>/tail/tcp_cubic`, `tail/tcp_bbr`, `codel-5-100/tcp_cubic`, and `codel-5-100/tcp_bbr` directories (and those of any other CoDel setting) into the same relative paths in a new output root. Do not copy the old `matrix-settings.json` or QUIC directories. Existing completed variants are validated and skipped; only missing variants run. Trace/window, controller/startup, and binary hashes must match. Directories without `result.json` are incomplete and must be moved aside, not silently skipped. The new matrix settings are saved after validation succeeds.
+Runs can also be shared only for the report: e.g. the `tcp_bbr3` and `quiche_bbr3` directories of a CUBIC root hard-linked into a CUBACK root measured on the same traces. The report shows every TCP and QUICHE policy present in a root, whatever its `matrix-settings.json` lists (QUIC policies other than those listed are not shown), and lists the kernels of the runs under Environment. A later resume of that root validates those runs only if given the matching `--tcp-cc`/`--quiche-cc`; otherwise it leaves them alone.
 
 For one capture, add `--cpu 3` to `run-one.py` to use CPU 3, tun3, peer 192.0.2.4 and port 20003. `metadata.json` records this mapping and `processes.json` records each child PID and verified affinity. `matrix-settings.json` records worker CPUs and trace selection; resume rejects changed settings. Use fresh roots for different concurrency levels. A failed capture stops the matrix and terminates/reaps the other active captures; retain and move incomplete directories before resuming. Send SIGTERM to `matrix.pid` for the same cleanup. Do not SIGKILL the controller or runners.
 
@@ -359,6 +345,22 @@ python3 tmp/tunulator-new-host/validate-parallel.py --cpus 1-15 \
 ```
 
 VMs are a possible fallback if shared-host interference is demonstrated, not a prerequisite.
+
+#### Kernel pacing (`+txtime`)
+
+With `+txtime`, the QUIC server gives each packet a departure time (`SCM_TXTIME`) at the rate of quicly's pacer, so that the `fq` qdisc releases packets one at a time rather than in the bursts quicly's pacer permits. This is experimental and not part of quicly: apply `quicly-txtime.patch` to the quicly source and use that build for the `+txtime` policies (`git am path/to/quicly-txtime.patch`; it applies to `kazuho/l4s` at `f19c5913`). The patch adds `cli --so-txtime`, which `run-one.py --txtime` passes to the server only. Known issue: quicly measures RTT from when a packet is handed to the socket, so time spent waiting in `fq` counts as RTT.
+
+`+txtime` requires `--cpus`: CPU N uses a separate TUN, `tunfqN`, whose root qdisc is `fq`, with peer `192.0.2.(N+129)` and server port `20200+N`; other policies keep `tunN`. `run-one.py` checks that the root qdisc of `tunfqN` is `fq` before capturing. Create the lanes once as an administrator, e.g. for CPUs 8 to 15:
+
+```sh
+for cpu in $(seq 8 15); do
+  sudo ip tuntap add dev "tunfq${cpu}" mode tun user "$(id -u)" || break
+  sudo ip link set dev "tunfq${cpu}" mtu 1500 up || break
+  sudo sysctl -w "net.ipv4.conf.tunfq${cpu}.route_localnet=1" || break
+  sudo ip route add "192.0.2.$((cpu + 129))/32" dev "tunfq${cpu}" src 127.0.0.1 initcwnd 30 || break
+  sudo tc qdisc replace dev "tunfq${cpu}" root fq || break
+done
+```
 
 ## 11. Provenance and validation
 
