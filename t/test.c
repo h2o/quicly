@@ -1560,6 +1560,111 @@ static void test_setup_connected_peers(quicly_conn_t **client, quicly_conn_t **s
     exchange_until_idle(*client, *server);
 }
 
+/**
+ * sends stream data from `src` to `dst`, returning the path ID of the DCID being used
+ */
+static uint64_t send_and_get_dcid_path_id(quicly_conn_t *src, quicly_conn_t *dst)
+{
+    quicly_stream_t *stream;
+    ok(quicly_open_stream(src, &stream, 0) == 0);
+    ok(quicly_streambuf_egress_write(stream, "hello", 5) == 0);
+
+    quicly_address_t destaddr, srcaddr;
+    struct iovec datagrams[4];
+    uint8_t buf[PTLS_ELEMENTSOF(datagrams) * quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams = PTLS_ELEMENTSOF(datagrams);
+    ok(quicly_send(src, &destaddr, &srcaddr, datagrams, &num_datagrams, buf, sizeof(buf)) == 0);
+    assert(num_datagrams != 0);
+
+    quicly_decoded_packet_t decoded[PTLS_ELEMENTSOF(datagrams) * 2];
+    size_t num_packets = decode_packets(decoded, datagrams, num_datagrams);
+    uint64_t path_id = decoded[0].cid.dest.plaintext.path_id;
+    for (size_t i = 0; i < num_packets; ++i)
+        ok(quicly_receive(dst, NULL, &fake_address.sa, decoded + i) == 0);
+
+    return path_id;
+}
+
+/**
+ * CID encryptor that wraps the default one, reporting `rotating_key_generation` as the generation of the key
+ */
+static quicly_cid_encryptor_t *rotating_inner;
+static uint64_t rotating_key_generation;
+
+static void rotating_encrypt_cid(quicly_cid_encryptor_t *self, quicly_cid_t *encrypted, void *stateless_reset_token,
+                                 const quicly_cid_plaintext_t *plaintext)
+{
+    rotating_inner->encrypt_cid(rotating_inner, encrypted, stateless_reset_token, plaintext);
+}
+
+static size_t rotating_decrypt_cid(quicly_cid_encryptor_t *self, quicly_cid_plaintext_t *plaintext, const void *encrypted,
+                                   size_t len)
+{
+    return rotating_inner->decrypt_cid(rotating_inner, plaintext, encrypted, len);
+}
+
+static int rotating_generate_stateless_reset_token(quicly_cid_encryptor_t *self, void *token, const void *cid)
+{
+    return rotating_inner->generate_stateless_reset_token(rotating_inner, token, cid);
+}
+
+static uint64_t rotating_get_key_generation(quicly_cid_encryptor_t *self)
+{
+    return rotating_key_generation;
+}
+
+static quicly_cid_encryptor_t rotating_encryptor = {rotating_encrypt_cid, rotating_decrypt_cid,
+                                                    rotating_generate_stateless_reset_token, rotating_get_key_generation};
+
+static void test_rotate_local_cids_upon_key_change(void)
+{
+    quicly_conn_t *client, *server;
+    test_setup_connected_peers(&client, &server);
+
+    /* the CIDs are rotated when the server sends packets, and the client switches to the new ones, whose sequence numbers start
+     * from the next one to be issued at the moment the key changes */
+    uint64_t first_new_sequence = server->super.local.cid_set.plaintext.path_id;
+    ++rotating_key_generation;
+    send_and_get_dcid_path_id(server, client);
+    exchange_until_idle(client, server);
+    ok(send_and_get_dcid_path_id(client, server) >= first_new_sequence);
+
+    quicly_free(client);
+    quicly_free(server);
+}
+
+static void test_rotate_local_cids_after_handshake(void)
+{
+    quicly_conn_t *client;
+    quicly_address_t dest, src;
+    struct iovec datagram;
+    uint8_t buf[quic_ctx.transport_params.max_udp_payload_size];
+    size_t num_datagrams = 1;
+
+    /* the key changes while the client has only the CID sent in the first flight */
+    ok(quicly_connect(&client, &quic_ctx, "example.com", &fake_address.sa, NULL, new_master_id(), ptls_iovec_init(NULL, 0), NULL,
+                      NULL, NULL) == 0);
+    ++rotating_key_generation;
+    ok(quicly_send(client, &dest, &src, &datagram, &num_datagrams, buf, sizeof(buf)) == 0);
+    ok(client->super.local.cid_set.retire_prior_to == 0);
+
+    quicly_free(client);
+}
+
+static void test_rotate_local_cids(void)
+{
+    quicly_cid_encryptor_t *orig_encryptor = quic_ctx.cid_encryptor;
+    rotating_inner = quicly_new_default_cid_encryptor(&ptls_openssl_aes128ecb, &ptls_openssl_aes128ecb, &ptls_openssl_sha256,
+                                                      ptls_iovec_init("rotate", 6));
+    quic_ctx.cid_encryptor = &rotating_encryptor;
+
+    subtest("upon-key-change", test_rotate_local_cids_upon_key_change);
+    subtest("after-handshake", test_rotate_local_cids_after_handshake);
+
+    quic_ctx.cid_encryptor = orig_encryptor;
+    quicly_free_default_cid_encryptor(rotating_inner);
+}
+
 static void test_cc_limited_drain_and_resume(void)
 {
     quicly_init_cc_t *saved_init_cc = quic_ctx.egress[0].cc.init_cc;
@@ -3634,6 +3739,7 @@ int main(int argc, char **argv)
     subtest("test-retry-aead", test_retry_aead);
     subtest("transport-parameters", test_transport_parameters);
     subtest("cid", test_cid);
+    subtest("rotate-local-cids", test_rotate_local_cids);
     subtest("simple", test_simple);
     subtest("stream-concurrency", test_stream_concurrency);
     subtest("lossy", test_lossy);

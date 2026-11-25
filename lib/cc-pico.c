@@ -450,8 +450,8 @@ static void abba_fit_model(struct st_quicly_cc_abba_t *state)
     double wl = state->low.cwnd, rl = state->low.rtt;
     double wh = state->high.cwnd, rh = state->high.rtt;
 
-    /* A new minimum can move the low point to or beyond the congestion window. Preserve the previous model so that the
-     * lower RTT increases acceleration; refitting through the new low point would erase that growth signal. */
+    /* The low window is the one left by the reduction and is below the high window, unless Jump Start or Rapid Start adjusted CWND
+     * during recovery. Leave the model unfit if no span of windows is available. */
     if (wh <= wl)
         return;
     /* A small RTT span is not enough to estimate a useful slope; retain a horizontal model until the queue has drained enough. */
@@ -501,9 +501,11 @@ static void abba_on_acked(struct st_quicly_cc_abba_t *state, uint32_t cwnd, cons
         state->low.rtt = state->high.rtt;
         fit = 1;
     }
-    /* Retain the low point until RTT improves by at least 1ms, ignoring smaller changes as noise. */
-    if (state->low.rtt - rtt->latest >= 1) {
-        state->low.cwnd = cwnd;
+    /* A lower RTT shows that the earlier samples were inflated by jitter; correct the RTT of the low point, but retain its window,
+     * as the growth since is real and is what acceleration is based on. Once the model has been redrawn from the origin, the low
+     * point plays no part; refitting through it would revive the abandoned line far outside its range, letting a lower RTT lower
+     * the RTT target being pursued. */
+    if (state->b != 0 && rtt->latest < state->low.rtt) {
         state->low.rtt = rtt->latest;
         fit = 1;
     }

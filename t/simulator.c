@@ -69,6 +69,10 @@ static void sim_random_bytes(void *dst, size_t len)
 }
 
 static double now = 1000;
+/**
+ * jitter added after the bottleneck (see `struct net_jitter`); zero if none
+ */
+static double path_jitter;
 static struct {
     uint64_t eligible_packets;
     uint64_t stalls;
@@ -310,7 +314,11 @@ static void net_delay_forward(struct net_node *_self, struct net_packet *packet)
 static double net_delay_next_run_at(struct net_node *_self)
 {
     struct net_delay *self = (struct net_delay *)_self;
-    return self->queue.first != NULL ? self->queue.first->enter_at + self->queue.delay : INFINITY;
+    if (self->queue.first == NULL)
+        return INFINITY;
+    /* the delay might have been reduced by a path change after the packet entered */
+    double at = self->queue.first->enter_at + self->queue.delay;
+    return at < now ? now : at;
 }
 
 static void net_delay_run(struct net_node *_self)
@@ -328,6 +336,57 @@ static void net_delay_init(struct net_delay *self, double delay)
     *self = (struct net_delay){
         .super = {net_delay_forward, net_delay_next_run_at, net_delay_run},
         .queue = {.append_at = &self->queue.first, .type = NET_QUEUE_DELAY, .delay = delay},
+    };
+}
+
+/**
+ * Adds a delay drawn uniformly from [0, jitter) to each packet, without reordering them; a packet is never released before the one
+ * that preceded it. Placed after the bottleneck, so that the variation is not absorbed by a standing queue, as is the case with
+ * the scheduling of a radio link.
+ */
+struct net_jitter {
+    struct net_node super;
+    struct net_node *next_node;
+    struct net_queue queue;
+    double jitter;
+    double last_release_at;
+};
+
+static void net_jitter_forward(struct net_node *_self, struct net_packet *packet)
+{
+    struct net_jitter *self = (struct net_jitter *)_self;
+    uint32_t random_value;
+    sim_random_bytes(&random_value, sizeof(random_value));
+    double release_at = now + self->jitter * ((double)random_value / ((double)UINT32_MAX + 1));
+    if (release_at < self->last_release_at)
+        release_at = self->last_release_at;
+    self->last_release_at = release_at;
+    net_queue_enqueue(&self->queue, packet);
+    packet->enter_at = release_at; /* retains the time of release rather than of entry */
+}
+
+static double net_jitter_next_run_at(struct net_node *_self)
+{
+    struct net_jitter *self = (struct net_jitter *)_self;
+    return self->queue.first != NULL ? self->queue.first->enter_at : INFINITY;
+}
+
+static void net_jitter_run(struct net_node *_self)
+{
+    struct net_jitter *self = (struct net_jitter *)_self;
+
+    while (self->queue.first != NULL && self->queue.first->enter_at <= now) {
+        struct net_packet *packet = net_queue_dequeue(&self->queue);
+        self->next_node->forward_(self->next_node, packet);
+    }
+}
+
+static void net_jitter_init(struct net_jitter *self, double jitter)
+{
+    *self = (struct net_jitter){
+        .super = {net_jitter_forward, net_jitter_next_run_at, net_jitter_run},
+        .queue = {.append_at = &self->queue.first},
+        .jitter = jitter,
     };
 }
 
@@ -676,6 +735,51 @@ static void net_bottleneck_init(struct net_bottleneck *self, double bytes_per_se
     }
 }
 
+/**
+ * Changes of the path applied at given times, e.g., a radio link switching to carrier aggregation: the rate of the bottleneck is
+ * replaced, and the delay of every flow is shifted by `delay_delta`. The depth of the bottleneck queue is retained in seconds.
+ */
+#define NET_MAX_PATH_CHANGES 8
+static struct net_path_change {
+    double at;
+    double bytes_per_sec;
+    double delay_delta;
+} path_changes[NET_MAX_PATH_CHANGES];
+static size_t num_path_changes;
+
+struct net_path_changer {
+    struct net_node super;
+    struct net_bottleneck *bottleneck;
+    double depth;
+    struct net_delay *delays[NET_BOTTLENECK_MAX_QUEUES];
+    size_t num_delays;
+    size_t next_change;
+};
+
+static double net_path_changer_next_run_at(struct net_node *_self)
+{
+    struct net_path_changer *self = (struct net_path_changer *)_self;
+    return self->next_change < num_path_changes ? 1000 + path_changes[self->next_change].at : INFINITY;
+}
+
+static void net_path_changer_run(struct net_node *_self)
+{
+    struct net_path_changer *self = (struct net_path_changer *)_self;
+
+    while (self->next_change < num_path_changes && 1000 + path_changes[self->next_change].at <= now) {
+        struct net_path_change *change = &path_changes[self->next_change++];
+        self->bottleneck->bytes_per_sec = change->bytes_per_sec;
+        self->bottleneck->capacity = (size_t)(change->bytes_per_sec * self->depth);
+        for (size_t i = 0; i < self->num_delays; ++i) {
+            self->delays[i]->queue.delay += change->delay_delta;
+            if (self->delays[i]->queue.delay < 0)
+                self->delays[i]->queue.delay = 0;
+        }
+        printf("{\"path-change\": {\"bytes-per-sec\": %f, \"delay-delta\": %f}, \"at\": %f}\n", change->bytes_per_sec,
+               change->delay_delta, now);
+    }
+}
+
 static quicly_cid_plaintext_t next_quic_cid;
 
 static void net_endpoint_receive(struct net_endpoint *self, struct net_packet *packet)
@@ -911,6 +1015,13 @@ static void usage(const char *cmd)
            "  -F                  gives each flow a queue of its own; `-A codel -F` is\n"
            "                      fq_codel\n"
            "  -r <probability>    adds random loss at given probability (default: 0)\n"
+           "  -S <secs>:<bytes_per_sec>[:<delay_delta>]\n"
+           "                      at given seconds into the simulation, changes the\n"
+           "                      bottleneck bandwidth, retaining the queue depth in\n"
+           "                      seconds, and shifts the delay of every flow by\n"
+           "                      delay_delta seconds (default: 0); can be repeated\n"
+           "  -J <secs>           adds jitter drawn uniformly from [0, secs) after the\n"
+           "                      bottleneck, without reordering packets\n"
            "  -R                  turns on rapid start\n"
            "  --abba              enables ABBA\n"
            "  --l4s               enables L4S; CUBACK must be used\n"
@@ -974,7 +1085,7 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
     reset_getopt_state();
     static const struct option longopts[] = {{"abba", no_argument, NULL, 0}, {"l4s", no_argument, NULL, 0}, {NULL}};
     int ch, opt_index;
-    while ((ch = getopt_long(argc, argv, "A:Ba:b:c:d:EFi:j:l:m:Mpq:r:Rs:th", longopts, &opt_index)) != -1) {
+    while ((ch = getopt_long(argc, argv, "A:Ba:b:c:d:EFi:J:j:l:m:Mpq:r:RS:s:th", longopts, &opt_index)) != -1) {
 
         switch (ch) {
         case 0:
@@ -1059,6 +1170,47 @@ static int parse_options(int argc, char **argv, quicly_context_t *quicctx, doubl
                 return 0;
             }
             break;
+        case 'J':
+            if (bw == NULL) {
+                fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
+                return 0;
+            }
+            if (sscanf(optarg, "%lf", &path_jitter) != 1 || !(path_jitter >= 0)) {
+                fprintf(stderr, "invalid jitter: %s\n", optarg);
+                return 0;
+            }
+            break;
+        case 'S': {
+            if (bw == NULL) {
+                fprintf(stderr, "-%c is a global option and cannot be used inside a flow block\n", ch);
+                return 0;
+            }
+            if (num_path_changes == NET_MAX_PATH_CHANGES) {
+                fprintf(stderr, "too many path changes\n");
+                return 0;
+            }
+            struct net_path_change change = {};
+            char *p = optarg, *end;
+            int valid = 0;
+            change.at = strtod(p, &end);
+            if (end != p && *end == ':') {
+                p = end + 1;
+                change.bytes_per_sec = strtod(p, &end);
+                if (end != p && *end == ':') {
+                    p = end + 1;
+                    change.delay_delta = strtod(p, &end);
+                    valid = end != p && *end == '\0';
+                } else {
+                    valid = end != p && *end == '\0';
+                }
+            }
+            if (!valid || !(change.at >= 0 && change.bytes_per_sec > 0) ||
+                (num_path_changes != 0 && change.at < path_changes[num_path_changes - 1].at)) {
+                fprintf(stderr, "invalid path change: %s\n", optarg);
+                return 0;
+            }
+            path_changes[num_path_changes++] = change;
+        } break;
         case 'j':
             if (sscanf(optarg, "%" PRIu32, &quicctx->egress[0].default_jumpstart_packets) != 1) {
                 fprintf(stderr, "invalid jumpstart window size: %s\n", optarg);
@@ -1249,6 +1401,8 @@ int main(int argc, char **argv)
 
     struct net_bottleneck bottleneck_node;
     struct net_random_loss random_loss_node;
+    struct net_jitter jitter_node;
+    struct net_path_changer path_changer_node = {.super = {NULL, net_path_changer_next_run_at, net_path_changer_run}};
     struct {
         struct net_endpoint node;
         quicly_context_t accept_ctx;
@@ -1314,6 +1468,8 @@ int main(int argc, char **argv)
             net_delay_init(delay_node, flow_delay);
             delay_node->next_node = &bottleneck_node.super;
             *node_insert_at++ = &delay_node->super;
+            assert(path_changer_node.num_delays < PTLS_ELEMENTSOF(path_changer_node.delays));
+            path_changer_node.delays[path_changer_node.num_delays++] = delay_node;
 
             struct net_endpoint *client_node = malloc(sizeof(*client_node));
             net_endpoint_init(client_node, flow_ack_scheduler_probability, flow_ack_scheduler_delay);
@@ -1354,6 +1510,21 @@ int main(int argc, char **argv)
         random_loss_node.next_node = &server_node.node.super;
         bottleneck_node.next_node = &random_loss_node.super;
         *node_insert_at++ = &random_loss_node.super;
+    }
+
+    /* setup jitter, between the bottleneck and whatever follows */
+    if (path_jitter > 0) {
+        net_jitter_init(&jitter_node, path_jitter);
+        jitter_node.next_node = bottleneck_node.next_node;
+        bottleneck_node.next_node = &jitter_node.super;
+        *node_insert_at++ = &jitter_node.super;
+    }
+
+    /* setup path changes */
+    if (num_path_changes != 0) {
+        path_changer_node.bottleneck = &bottleneck_node;
+        path_changer_node.depth = depth;
+        *node_insert_at++ = &path_changer_node.super;
     }
 
     while (now < 1000 + length)

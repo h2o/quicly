@@ -129,6 +129,7 @@ provider quicly {
 
     probe new_connection_id_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence, uint64_t retire_prior_to, const char *cid, const char *stateless_reset_token);
     probe new_connection_id_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence, uint64_t retire_prior_to, const char *cid, const char *stateless_reset_token);
+    probe local_cid_rotate(struct st_quicly_conn_t *conn, int64_t at, uint64_t retire_prior_to);
 
     probe retire_connection_id_send(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence);
     probe retire_connection_id_receive(struct st_quicly_conn_t *conn, int64_t at, uint64_t sequence);
