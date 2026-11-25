@@ -880,24 +880,20 @@ static void test_abba_model(void)
     ok(state.a == a && state.b == b);
     rtt.latest = 70;
     abba_on_acked(&state, 75000, &rtt, 0, 0, QUICLY_BETA_LOSS);
-    ok(state.low.cwnd == 70000); /* Equal samples do not move the point. */
+    ok(state.low.cwnd == 70000 && state.low.rtt == 70); /* Equal samples do not move the point. */
     ok(state.a == a && state.b == b);
-    /* Sub-millisecond improvements retain both low-point fields and the model until the total reaches 1ms. */
+    /* Any lower sample, including a sub-millisecond one, corrects the RTT of the low point; its window stays at recovery exit. */
     const float samples[] = {69.5f, 69.001f};
     for (size_t i = 0; i != sizeof(samples) / sizeof(samples[0]); ++i) {
         rtt.latest = samples[i];
         abba_on_acked(&state, 76000, &rtt, 0, 0, QUICLY_BETA_LOSS);
-        ok(state.low.cwnd == 70000 && state.low.rtt == 70);
-        ok(state.a == a && state.b == b);
+        ok(state.low.cwnd == 70000 && state.low.rtt == samples[i]);
+        ok(state.a == 0 && state.b == samples[i]);
     }
-    rtt.latest = 69;
-    abba_on_acked(&state, 76000, &rtt, 0, 0, QUICLY_BETA_LOSS);
-    ok(state.low.cwnd == 76000 && state.low.rtt == 69);
-    ok(state.high.rtt == 70 && state.a == 0 && state.b == 69);
     rtt.latest = 65;
     abba_on_acked(&state, 78000, &rtt, 0, 0, QUICLY_BETA_LOSS);
-    ok(state.high.rtt == 70 && state.low.rtt == 65);
-    ok(state.a == (float)(5. / 22000 * (2. / 3)) && state.b > 0);
+    ok(state.high.rtt == 70 && state.low.cwnd == 70000 && state.low.rtt == 65);
+    ok(state.a == (float)(5. / 30000 * (2. / 3)) && state.b > 0);
 
     /* Without an intervening recovery ACK, retain the congestion sample even when SRTT is lower. */
     rtt.latest = 160;
@@ -1006,6 +1002,17 @@ static void test_abba_min_rtt_span(void)
     }
 }
 
+/* Expected slope of the proportional model redrawn after a new minimum `rl` refits the line through the fixed low window. */
+static float abba_expected_switch(struct st_quicly_cc_abba_t state, float rl, uint32_t cwnd, const quicly_rtt_t *rtt)
+{
+    state.low.rtt = rl;
+    abba_fit_model(&state);
+    double target = quicly_rtt_get_floor(rtt), predicted = (double)state.a * cwnd + state.b;
+    if (predicted > target)
+        target = predicted;
+    return (float)(target / cwnd);
+}
+
 static void test_abba_proportional_switch(void)
 {
     for (int by_ecn = 0; by_ecn != 2; ++by_ecn) {
@@ -1024,18 +1031,21 @@ static void test_abba_proportional_switch(void)
         double a = state.a;
         ok(a == (float)(target / (threshold + 1)) && state.b == 0);
 
-        /* New minima invoke fitting, which preserves the model when the low window is at or beyond the congestion window. */
+        /* Once proportional, a new minimum leaves the low point and the model untouched. */
         quicly_rtt_update(&rtt, 80, 0, 1001);
         abba_on_acked(&state, 150000, &rtt, 0, by_ecn, (QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS));
-        ok(state.low.cwnd == 150000 && state.low.rtt == 80);
+        ok(state.low.cwnd == 70000 && state.low.rtt == 100);
         ok(state.a == a && state.b == 0);
+        float expected;
 
         /* Flattening an origin-capped fit leaves a positive intercept, permitting the later proportional switch. */
         state = (struct st_quicly_cc_abba_t){.high = {100000, 200}, .low = {70000, 100}};
         abba_fit_model(&state);
-        target = (double)state.a * 150000 + state.b;
+        ok(state.b > 0);
+        /* The 80ms sample is a new minimum, so the line is refitted at the corrected low RTT before being redrawn. */
+        expected = abba_expected_switch(state, rtt.latest, 150000, &rtt);
         abba_on_acked(&state, 150000, &rtt, 0, by_ecn, (QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS));
-        ok(state.a == (float)(target / 150000) && state.b == 0);
+        ok(state.a == expected && state.b == 0);
 
         /* An unfitted model with no ordered window span is anchored at the RTT floor, not SRTT. */
         state = (struct st_quicly_cc_abba_t){.high = {100000, 120}, .low = {100000, 80}, .a = 0, .b = NAN};
@@ -1087,41 +1097,52 @@ static void test_abba_minimum_at_larger_window(void)
             /* ACK half a window so the per-ACK cap does not mask increases in model gain. */
             uint32_t previous_growth = abba_on_growth(&state, cwnd, cwnd, cwnd / 2, &rtt, 0, &(int){0}) - cwnd;
 
-            /* A new minimum moves the low point but preserves the model, increasing acceleration as RTT falls. */
+            /* A new minimum corrects only the RTT of the low point and refits the line through the fixed low window. With the
+             * sample at the corrected low RTT, the inverse model yields the low window, so the gain is unchanged. */
             rtt.latest = beyond ? 72 : 64;
+            struct st_quicly_cc_abba_t expected = state;
+            expected.low.rtt = rtt.latest;
+            abba_fit_model(&expected);
             abba_on_acked(&state, cwnd, &rtt, 0, by_ecn, (QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS));
-            ok(state.low.cwnd == cwnd && state.low.rtt == rtt.latest);
+            ok(state.low.cwnd == 49152 && state.low.rtt == rtt.latest);
             ok(state.high.cwnd == 65536 && state.high.rtt == 120);
-            ok(state.a == a && state.b == b);
-            ok(abba_on_growth(&state, cwnd, cwnd, cwnd / 2, &rtt, 0, &(int){0}) - cwnd > previous_growth);
+            ok(state.a == expected.a && state.b == expected.b && state.a != a);
+            uint32_t growth = abba_on_growth(&state, cwnd, cwnd, cwnd / 2, &rtt, 0, &(int){0}) - cwnd;
+            ok(growth + 1 >= previous_growth && growth <= previous_growth + 1);
+            a = state.a;
+            b = state.b;
 
             /* Further window growth without a new minimum leaves both the low point and the model unchanged. */
             uint32_t grown_cwnd = cwnd + 512;
             abba_on_acked(&state, grown_cwnd, &rtt, 0, by_ecn, (QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS));
-            ok(state.low.cwnd == cwnd);
+            ok(state.low.cwnd == 49152 && state.low.rtt == rtt.latest);
             ok(state.a == a && state.b == b);
-            previous_growth = abba_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd / 2, &rtt, 0, &(int){0}) - grown_cwnd;
 
-            /* Another minimum below the switch threshold likewise increases acceleration without refitting. */
+            /* Another minimum below the switch threshold likewise refits through the fixed low window. */
             --rtt.latest;
+            expected = state;
+            expected.low.rtt = rtt.latest;
+            abba_fit_model(&expected);
             abba_on_acked(&state, grown_cwnd, &rtt, 0, by_ecn, (QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS));
-            ok(state.low.cwnd == grown_cwnd && state.low.rtt == rtt.latest);
-            ok(state.a == a && state.b == b);
-            ok(abba_on_growth(&state, grown_cwnd, grown_cwnd, grown_cwnd / 2, &rtt, 0, &(int){0}) - grown_cwnd > previous_growth);
+            ok(state.low.cwnd == 49152 && state.low.rtt == rtt.latest);
+            ok(state.a == expected.a && state.b == expected.b);
 
-            /* Crossing the switch threshold preserves the model's prediction when establishing the proportional model. */
+            /* Crossing the switch threshold with a new minimum redraws the refitted prediction as the proportional model. */
             --rtt.latest;
             rtt.smoothed = 90;
-            double target = (double)state.a * 90000 + state.b;
+            float expected_a = abba_expected_switch(state, rtt.latest, 90000, &rtt);
             abba_on_acked(&state, 90000, &rtt, 0, by_ecn, (QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS));
-            ok(state.low.cwnd == 90000 && state.low.rtt == rtt.latest);
-            a = state.a;
-            ok(a == (float)(target / 90000) && state.b == 0);
+            ok(state.low.cwnd == 49152 && state.low.rtt == rtt.latest);
+            ok(state.a == expected_a && state.b == 0);
+            /* Once proportional, a further minimum moves neither the low point nor the model, so acceleration increases. */
+            float low_rtt = state.low.rtt;
+            uint32_t growth_before = abba_on_growth(&state, 91000, 91000, 91000 / 2, &rtt, 0, &(int){0}) - 91000;
             --rtt.latest;
             rtt.smoothed = 80;
             abba_on_acked(&state, 91000, &rtt, 0, by_ecn, (QUICLY_USE_ABE && by_ecn ? QUICLY_BETA_ECN : QUICLY_BETA_LOSS));
-            ok(state.low.cwnd == 91000 && state.low.rtt == rtt.latest);
-            ok(state.a == a && state.b == 0);
+            ok(state.low.cwnd == 49152 && state.low.rtt == low_rtt);
+            ok(state.a == expected_a && state.b == 0);
+            ok(abba_on_growth(&state, 91000, 91000, 91000 / 2, &rtt, 0, &(int){0}) - 91000 > growth_before);
         }
     }
 }
