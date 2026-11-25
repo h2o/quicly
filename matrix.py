@@ -12,6 +12,10 @@ import sys
 import time
 from workers import parse_cpus
 
+# Earlier builds of hq_server whose completed runs are kept on resume: the build before blackhole detection was disabled,
+# which differs only in closing a connection after 2 TLPs and 5 RTOs without progress; none of its kept runs was closed.
+EARLIER_HQ_SERVER_SHA256 = {'da990e15b79e8035c719330391bc4909e57305c6105194aef1da115221cb509b'}
+
 
 def parse_quic_cc(value):
     """Parses CC[+abe][+abba][+l4s][+txtime][+rapid] into (CC, abe, abba, l4s, txtime, rapid)."""
@@ -39,6 +43,14 @@ def parse_tcp_cc(value):
     return name, Path(source) if source else None
 
 
+def parse_quiche_cc(value):
+    """Parses NAME=DIR into (NAME, DIR); DIR is the checkout of Google QUICHE in which quiche/build-quiche.sh built hq_server."""
+    name, sep, source = value.partition('=')
+    if name != 'bbr3' or not source:
+        raise argparse.ArgumentTypeError(f'invalid QUICHE CC (hq_server runs bbr3 only), expected bbr3=DIR: {value}')
+    return name, Path(source)
+
+
 CONDITIONS = ('tail', 'codel', 'dualpi2')
 
 
@@ -58,6 +70,9 @@ def main():
     p.add_argument('--tcp-cc', action='append', type=parse_tcp_cc,
                    help='TCP CC to run in addition to CUBIC and BBR, as NAME, or NAME=DIR when it is the kernel module tcp_NAME '
                         'built and loaded from the checkout DIR, whose commit is then recorded; repeat for several')
+    p.add_argument('--quiche-cc', action='append', type=parse_quiche_cc,
+                   help='QUICHE policy to run, as bbr3=DIR, DIR being the checkout of Google QUICHE in which '
+                        'quiche/build-quiche.sh built hq_server, whose commit is then recorded')
     p.add_argument('--dualpi2-device', type=int, default=0,
                    help='Device buffer between DualPI2 and the link, in packets, for the dualpi2 condition (default: none)')
     p.add_argument('--condition', action='append', choices=CONDITIONS,
@@ -93,6 +108,9 @@ def main():
         p.error('Each TCP CC can be added once')
     if tcp_sources and a.no_tcp:
         p.error('--tcp-cc adds TCP CCs, which --no-tcp leaves out')
+    quiche_sources = dict(a.quiche_cc or [])
+    if len(quiche_sources) != len(a.quiche_cc or []):
+        p.error('Each QUICHE CC can be added once')
     selected = sorted(set(a.condition or ['tail', 'codel']), key=CONDITIONS.index)
     # (directory, condition, setting); runs of each CoDel setting and of each DualPI2 device buffer size are in directories named
     # after it
@@ -112,7 +130,7 @@ def main():
                      dry_run=a.dry_run, noabe=bool(a.noabe_build),
                      controller_cpus=controller_cpus,
                      quic_cc=[quic_cc_name(*c) for c in quic_ccs], codel=codels, conditions=selected, tcp=not a.no_tcp,
-                     tcp_cc=list(tcp_sources), dualpi2_device=a.dualpi2_device)
+                     tcp_cc=list(tcp_sources), quiche_cc=list(quiche_sources), dualpi2_device=a.dualpi2_device)
     manifest = a.output / 'matrix-settings.json'
     write_manifest = not manifest.exists()
     if manifest.exists():
@@ -123,12 +141,13 @@ def main():
         previous.setdefault('conditions', ['tail', 'codel'])  # Older matrices had tail drop and CoDel only.
         previous.setdefault('tcp', True)  # Older matrices always ran TCP.
         previous.setdefault('tcp_cc', [])  # Older matrices ran TCP CUBIC and BBR only.
+        previous.setdefault('quiche_cc', [])  # Older matrices ran no QUICHE policies.
         previous.setdefault('dualpi2_device', 0)  # Older matrices had no device buffer.
         previous.pop('kernel', None)  # Older matrices recorded the kernel as a setting.
         if isinstance(previous['codel'], str):  # Older matrices had one CoDel setting.
             previous['codel'] = [previous['codel']]
-        # CoDel settings and TCP CCs can be added to an existing root
-        for key in ('codel', 'tcp_cc'):
+        # CoDel settings, TCP CCs and QUICHE CCs can be added to an existing root
+        for key in ('codel', 'tcp_cc', 'quiche_cc'):
             assert previous[key] == signature[key][:len(previous[key])], 'Matrix settings changed; use a fresh output root'
             previous[key] = signature[key]
         assert previous == signature, 'Matrix settings changed; use a fresh output root'
@@ -141,6 +160,7 @@ def main():
     for trace in traces:
         raw = trace.read_bytes()
         trace_info[trace] = (int(raw.splitlines()[-1]), hashlib.sha256(raw).hexdigest())
+    # jobs to run are assigned to the CPUs in turn, so that those of a resume are spread over all CPUs too
     job_index = 0
     for trace in sorted(traces, key=lambda t: trace_info[t][0]):
         for directory, condition, setting in conditions:
@@ -152,10 +172,11 @@ def main():
             policies = [] if a.no_tcp else [('tcp', cc, False, False, False, False, False)
                                             for cc in ['cubic', 'bbr', *tcp_sources]]
             policies += [('quic', *c) for c in dict.fromkeys(quic)]
+            policies += [('quiche', cc, False, False, False, False, False) for cc in quiche_sources]
             for protocol, cc, abe, abba, l4s, txtime, rapid in policies:
-                cpu = cpus[job_index % len(cpus)]
-                job_index += 1
                 policy = protocol + '_' + (quic_cc_name(cc, abe, abba, l4s, txtime, rapid) if protocol == 'quic' else cc)
+                # hq_server is built in the QUICHE checkout; the other binaries are those of the build
+                binaries = {'hq_server': quiche_sources[cc] / 'bazel-bin' / 'ccbench' / 'hq_server'} if protocol == 'quiche' else {}
                 build = a.noabe_build if protocol == 'quic' and condition != 'tail' and not abe else a.build
                 out = a.output / trace.name.removeprefix('trace-') / directory / policy
                 if (out / 'result.json').exists():
@@ -173,10 +194,15 @@ def main():
                     assert m['start_ms'] == 5000
                     assert m['end_ms'] == (7000 if a.smoke else trace_info[trace][0] - 5000)
                     for binary, digest in m['binary_sha256'].items():
-                        assert hashlib.sha256((build / Path(binary).name).read_bytes()).hexdigest() == digest
+                        if Path(binary).name == 'hq_server' and digest in EARLIER_HQ_SERVER_SHA256:
+                            continue
+                        path = binaries.get(Path(binary).name, build / Path(binary).name)
+                        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, f'Binary changed: {path}'
                     print('Already complete:', out, flush=True)
                     continue
                 assert not out.exists(), f'Preserve incomplete directory outside result root before resuming: {out}'
+                cpu = cpus[job_index % len(cpus)]
+                job_index += 1
                 command = [sys.executable, str(kit / 'run-one.py'), protocol, '--cc', cc,
                            '--trace', str(trace), '--queue', queue, '--condition', condition,
                            '--build', str(build), '--output', str(out), '--latency']
@@ -198,6 +224,8 @@ def main():
                     command += ['--rapid-start']
                 if protocol == 'tcp' and tcp_sources.get(cc) is not None:
                     command += ['--cc-source', str(tcp_sources[cc])]
+                if protocol == 'quiche':
+                    command += ['--quiche', str(quiche_sources[cc])]
                 if a.smoke:
                     command += ['--end', '7000']
                 if a.dry_run:

@@ -16,11 +16,15 @@ from workers import acquire_lock, parse_cpus, worker
 
 
 p = argparse.ArgumentParser()
-p.add_argument("protocol", choices=["tcp", "quic"])
+p.add_argument("protocol", choices=["tcp", "quic", "quiche"],
+               help="quiche: the server is hq_server built on Google QUICHE (see quiche/), with quicly's cli as the client")
 p.add_argument("--cc", default="cubic")
 p.add_argument("--cc-source", type=Path,
                help="TCP only: the checkout from which the kernel module tcp_CC was built and loaded; records its commit, and "
                     "requires the loaded module to be the one built there")
+p.add_argument("--quiche", type=Path,
+               help="quiche only (required): the checkout of Google QUICHE in which quiche/build-quiche.sh built hq_server; "
+                    "records its commit, and requires its changes to be exactly quiche/quiche.patch")
 p.add_argument("--abba", action="store_true")
 p.add_argument("--l4s", action="store_true", help="QUIC with L4S (ECT(1) and Prague); requires --cc cuback")
 p.add_argument("--txtime", action="store_true",
@@ -55,8 +59,12 @@ lane = worker(args.cpu, args.txtime) if args.cpu is not None else dict(cpu=None,
 if args.cpu is not None:
     # Pin preparation too; children inherit affinity before exec and thread creation.
     os.sched_setaffinity(0, {args.cpu})
-if args.protocol == "tcp" and (args.abba or args.rapid_start or args.abe or args.l4s or args.txtime):
-    p.error("ABBA, Rapid Start, ABE, and L4S apply only to QUIC")
+if args.protocol != "quic" and (args.abba or args.rapid_start or args.abe or args.l4s or args.txtime):
+    p.error("ABBA, Rapid Start, ABE, L4S and TXTIME apply only to QUIC")
+if (args.quiche is not None) != (args.protocol == "quiche"):
+    p.error("--quiche is required for, and applies only to, quiche")
+if args.protocol == "quiche" and args.cc != "bbr3":
+    p.error("hq_server runs BBRv3 only; use --cc bbr3")
 if args.l4s and args.cc != "cuback":
     p.error("L4S requires --cc cuback")
 if args.cc_source is not None and args.protocol != "tcp":
@@ -74,6 +82,20 @@ if args.cc_source is not None:
     git = lambda *a: subprocess.check_output(["git", "-C", str(source), *a], text=True)
     cc_source = dict(path=str(source), module=module, srcversion=loaded, remotes=git("remote", "-v"),
                      commit=git("rev-parse", "HEAD").strip(), status=git("status", "--porcelain"), diff=git("diff", "HEAD"))
+quiche_source = None
+if args.quiche is not None:
+    source = args.quiche.resolve()
+    kit = Path(__file__).resolve().parent
+    git = lambda d, *a: subprocess.check_output(["git", "-C", str(d), *a], text=True)
+    quiche_source = dict(path=str(source), remotes=git(source, "remote", "-v"), commit=git(source, "rev-parse", "HEAD").strip(),
+                         status=git(source, "status", "--porcelain"), diff=git(source, "diff", "HEAD"),
+                         bazel_version=(source / ".bazelversion").read_text().strip(),
+                         # hq_server's own sources are in the kit
+                         kit_commit=git(kit, "rev-parse", "HEAD").strip(), kit_status=git(kit, "status", "--porcelain", "quiche"),
+                         kit_sha256={name: hashlib.sha256((kit / "quiche" / name).read_bytes()).hexdigest()
+                                     for name in ("hq_server.cc", "BUILD.bazel", "quiche.patch", "build-quiche.sh")})
+    if quiche_source["diff"] != (kit / "quiche" / "quiche.patch").read_text():
+        p.error(f"the changes in {source} are not exactly quiche/quiche.patch; build with quiche/build-quiche.sh")
 expected_queue = {"tail": "fifo", "codel": f"codel:{args.codel}", "codel_noecn": f"codel/noecn:{args.codel}",
                   "dualpi2": f"dualpi2:{args.dualpi2_device}" if args.dualpi2_device else "dualpi2"}
 if args.queue != expected_queue[args.condition]:
@@ -122,6 +144,14 @@ if args.protocol == "tcp":
     binary = build / "http09"
     options = ["-C", args.cc, "-p"]
     request = []
+elif args.protocol == "quiche":
+    # bazel-bin links to Bazel's output tree; the binary run is recorded by its resolved path and hash
+    binary = (args.quiche / "bazel-bin" / "ccbench" / "hq_server").resolve()
+    server_options = ["--initial_cwnd=30", "--max_packet_size=1472"]
+    # the client's options are those of the quicly client of the QUIC policies
+    client_options = ["-a", "hq-interop", "-C", "cubic:30:p", "-y", "aes128gcmsha256", "-u", "1472", "-U", "1472",
+                      "-M", "16777216", "--jumpstart-default", "0", "--jumpstart-max", "0"]
+    request = ["--delivery-stats", "-p", "/10000000000"]
 else:
     binary = build / "cli"
     options = ["-C", args.cc + ":30:p", "-y", "aes128gcmsha256",
@@ -136,20 +166,31 @@ else:
         del options[options.index("--jumpstart-max"):options.index("--jumpstart-max") + 2]
         options += ["--rapid-start"]
     request = ["--delivery-stats", "-p", "/10000000000"]
-server_extra, tunulator_extra = [], []
+server_extra, client_extra, tunulator_extra = [], [], []
 if args.txtime:
     server_extra = ["--so-txtime"]
 if args.latency:
     tunulator_extra = ["-L", str(out / "tunulator.pktlog")]
     if args.protocol == "quic":
         server_extra += ["-l", str(out / "keylog")]
+    elif args.protocol == "quiche":
+        client_extra += ["-l", str(out / "keylog")]  # the client logs the same secrets as the server
+if args.protocol == "quiche":
+    client_binary = build / "cli"
+    server = [str(binary), "--certificate_file=" + credentials[1], "--key_file=" + credentials[3], *server_options,
+              "127.0.0.1", port]
+    client = [str(client_binary), *client_options, *client_extra, *request, lane['peer'], port]
+else:
+    client_binary = binary
+    server = [str(binary), *credentials, *options, *server_extra, "127.0.0.1", port]
+    client = [str(binary), *options, *request, lane['peer'], port]
 commands = {
-    "server": [str(binary), *credentials, *options, *server_extra, "127.0.0.1", port],
+    "server": server,
     "tunulator": [str(build / "tunulator"), "-t", "/dev/net/tun", "-n", lane['tun'],
                   "-F", str(trace), str(args.offset), "-p", "0", "-P", "60000",
                   "-B", str(buffer_bytes), "-r", "0", "-R", "0",
                   "-Q", args.queue, *tunulator_extra, lane['peer'], port],
-    "client": [str(binary), *options, *request, lane['peer'], port],
+    "client": client,
 }
 route = "dry run: not inspected"
 if not args.dry_run:
@@ -162,7 +203,7 @@ if not args.dry_run:
     if args.txtime:
         qdisc = subprocess.check_output(["tc", "qdisc", "show", "dev", lane['tun'], "root"], text=True)
         assert qdisc.startswith("qdisc fq "), qdisc
-metadata = dict(protocol=args.protocol, cc=args.cc, cc_source=cc_source, abba=args.abba, abe=args.abe, l4s=args.l4s, txtime=args.txtime,
+metadata = dict(protocol=args.protocol, cc=args.cc, cc_source=cc_source, quiche_source=quiche_source, abba=args.abba, abe=args.abe, l4s=args.l4s, txtime=args.txtime,
     rapid_start=args.rapid_start,
     condition=args.condition, trace_id=trace.name.split(".max=")[0].removeprefix("trace-"), trace_path=str(trace),
     queue=args.queue, dry_run=args.dry_run, build_metadata=build_info,
@@ -171,7 +212,7 @@ metadata = dict(protocol=args.protocol, cc=args.cc, cc_source=cc_source, abba=ar
     tcp_ecn=Path("/proc/sys/net/ipv4/tcp_ecn").read_text().strip(),
     trace_sha256=hashlib.sha256(trace.read_bytes()).hexdigest(),
     binary_sha256={str(b): hashlib.sha256(b.read_bytes()).hexdigest()
-                   for b in [binary, build / "tunulator"]},
+                   for b in dict.fromkeys([binary, client_binary, build / "tunulator"])},
     latency=args.latency,
     start_ms=args.offset, end_ms=end_ms, duration_ms=duration_ms,
     buffer_bytes=buffer_bytes, capacity_bytes=capacity_bytes)

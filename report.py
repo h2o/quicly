@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import charts
+from matrix import EARLIER_HQ_SERVER_SHA256
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('output', type=Path)
@@ -51,9 +52,9 @@ def policy_of(m):
         condition = 'dualpi2' if m['queue'] == 'dualpi2' else f"dualpi2-dev{m['queue'].removeprefix('dualpi2:')}"
     else:
         condition = f"codel-{m['queue'].removeprefix('codel:').replace(':', '-')}"
-    if m['protocol'] == 'tcp':
+    if m['protocol'] in ('tcp', 'quiche'):
         assert not m['abba']
-        return condition, 'tcp_' + m['cc']
+        return condition, m['protocol'] + '_' + m['cc']
     # ABE only changes the response to ECN marks, so it is ignored under tail drop; runs predating the abe key used the
     # codel_noabe condition for ABE off
     abe = m['condition'] in ('codel', 'dualpi2') and m.get('abe', True)
@@ -99,7 +100,7 @@ for line in subprocess.check_output(['git', 'log', '--all', '--reverse', '--form
     commits_by_tree.setdefault(tree, commit)
 
 # environment of the runs: for each item, the number of runs with each value
-environment = {'quicly': Counter(), 'Kernel': Counter(), 'TCP CC modules': Counter()}
+environment = {'quicly': Counter(), 'Kernel': Counter(), 'TCP CC modules': Counter(), 'QUICHE': Counter()}
 for run, m, condition, policy in runs:
     environment['quicly'][source_label(m['build_metadata'], run)] += 1
     environment['Kernel'][m['kernel']] += 1
@@ -109,10 +110,17 @@ for run, m, condition, policy in runs:
         changes = f" with the changes recorded in {run.relative_to(root)}/metadata.json" if s['status'] else ''
         environment['TCP CC modules'][f"{s['module']} (srcversion {s['srcversion']}) built from {origin} at "
                                       f"{s['commit'][:8]}{changes}"] += 1
-if not environment['TCP CC modules']:
-    del environment['TCP CC modules']
+    if m.get('quiche_source'):
+        s = m['quiche_source']
+        origin = s['remotes'].split()[1] if s['remotes'] else s['path']
+        kit_changes = ' with uncommitted changes' if s['kit_status'] else ''
+        environment['QUICHE'][f"{origin} at {s['commit'][:8]} with quiche/quiche.patch, hq_server of the kit at "
+                              f"{s['kit_commit'][:8]}{kit_changes}, Bazel {s['bazel_version']}"] += 1
     if condition.startswith('codel-'):
         codel_settings.add(m['queue'].removeprefix('codel:'))
+for name in ('TCP CC modules', 'QUICHE'):
+    if not environment[name]:
+        del environment[name]
 if settings is not None and 'codel' in settings.get('conditions', ['codel']):
     codel_settings.update([settings['codel']] if isinstance(settings.get('codel'), str) else settings.get('codel', ['5:100']))
 codel_settings = sorted(codel_settings, key=lambda c: tuple(map(int, c.split(':'))))
@@ -178,11 +186,35 @@ tcp_names = list(dict.fromkeys(['cubic', 'bbr', *tcp_added, *sorted(tcp_present)
 # colors of the added TCP CCs, in order, distinct from those of the QUIC policies
 tcp_colors = dict(zip(tcp_names, ['#2ca02c', '#9467bd', '#7f7f7f', '#000000', '#98df8a', '#c5b0d5']))
 assert len(tcp_colors) == len(tcp_names), 'Too many TCP CCs to color'
-policies = {'tcp_' + name: ('TCP ' + name.upper(), tcp_colors[name]) for name in tcp_names}
+# the kernel's tcp_bbr is BBRv1, labeled as such to tell it from BBR3
+tcp_display = {'bbr': 'BBR1'}
+policies = {'tcp_' + name: ('TCP ' + tcp_display.get(name, name.upper()), tcp_colors[name]) for name in tcp_names}
 tcp_labels = [label for k, (label, _) in policies.items() if k.removeprefix('tcp_') in tcp_present]
+# QUICHE policies follow the TCP ones, in the order given to the matrix; hq_server runs BBRv3 only
+quiche_present = {policy.removeprefix('quiche_') for *_, policy in runs if policy.startswith('quiche_')}
+quiche_names = list(dict.fromkeys([*(settings.get('quiche_cc', []) if settings is not None else []), *sorted(quiche_present)]))
+quiche_colors = {'bbr3': '#8c6d31'}
+for name in quiche_names:
+    policies['quiche_' + name] = ('QUICHE ' + name.upper(), quiche_colors[name])
+quiche_labels = [label for k, (label, _) in policies.items() if k.startswith('quiche_') and k.removeprefix('quiche_') in quiche_present]
+# quicly policies come last
 for name in quic_policies:
-    policies['quic_' + name] = ('QUIC ' + name.upper(), quic_colors[quic_color_key(name)])
+    policies['quic_' + name] = ('quicly ' + name.upper(), quic_colors[quic_color_key(name)])
 quic_labels = [label for k, (label, _) in policies.items() if k.startswith('quic_')]
+# QUICHE runs kept from the build of hq_server with blackhole detection on, which closed none of them
+earlier_quiche_runs = sum(1 for _, m, _, policy in runs if policy.startswith('quiche_') and
+                          any(Path(b).name == 'hq_server' and d in EARLIER_HQ_SERVER_SHA256 for b, d in m['binary_sha256'].items()))
+quiche_runs = sum(1 for *_, policy in runs if policy.startswith('quiche_'))
+earlier_note = (f' {earlier_quiche_runs} of the {quiche_runs} QUICHE runs used an earlier build of hq_server that left the '
+                'detection on; it closed none of them.' if earlier_quiche_runs else '')
+quiche_item = (f'<li>{html.escape(", ".join(quiche_labels))}: hq_server, an HTTP/0.9 server built on Google QUICHE (listed under '
+               'Environment) with its BBRv3 sender, and quicly\'s cli as the client; QUICHE is patched to send 1472-byte UDP '
+               'payloads, and hq_server sets an initial window of 30 such packets (44160 bytes, as quicly), paces, and uses '
+               'ordinary startup. QUICHE\'s BBRv3 sends no ECN-capable packets, so CoDel drops its packets where it marks those '
+               'of the other policies. hq_server disables QUICHE\'s server-side blackhole detection, which would otherwise close '
+               'the connection when there is no progress for 2 TLPs and 5 RTOs (at least about 6.5 seconds), as during the 15-second '
+               f'outage of 3109898-bus; quicly and TCP keep their connections through it.{earlier_note}</li>'
+               if quiche_labels else '')
 tcp_item = (f'<li>{html.escape(", ".join(tcp_labels))}: the Linux TCP congestion controllers of the host, built into the kernel or '
             'loaded as the modules listed under Environment, over TLS, with pacing and an initial window of 30.</li>'
             if tcp_labels else '')
@@ -221,7 +253,7 @@ def table(stats):
 page = ['<!doctype html><meta charset="utf-8"><title>Fresh-host CC benchmark</title>',
     '<style>body{font:16px system-ui;margin:2em}table{border-collapse:collapse}td,th{padding:.4em;border-bottom:1px solid #ddd;text-align:right}td:first-child,th:first-child{text-align:left}.panel{overflow:auto}img{width:100%;max-width:1000px}</style>',
     '<h1>Congestion-control trace benchmark</h1>',
-    f'<h2>Policies</h2><ul>{tcp_item}<li>{html.escape(', '.join(quic_labels))}: quicly with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start) unless named +RAPID, and a 1472-byte UDP payload. Each is named by the congestion controller, followed by +ABE when built with QUICLY_USE_ABE=1 (otherwise 0), +ABBA when ABBA is enabled, +L4S when sending ECT(1) and responding to CE as Prague, +RAPID when using Jump Start (60 packets) and Rapid Start, and +TXTIME when the server gives each packet a departure time (SCM_TXTIME) at its pacing rate, so that the fq qdisc paces each packet. ABE only affects the response to ECN marks, so it is omitted under tail drop; in the CoDel charts, policies without ABE are dashed.</li></ul>',
+    f'<h2>Policies</h2><ul>{tcp_item}{quiche_item}<li>{html.escape(', '.join(quic_labels))}: quicly as server and client, with an initial window of 30, pacing, ordinary startup (no Rapid Start or Jump Start) unless named +RAPID, and a 1472-byte UDP payload. Each is named by the congestion controller, followed by +ABE when built with QUICLY_USE_ABE=1 (otherwise 0), +ABBA when ABBA is enabled, +L4S when sending ECT(1) and responding to CE as Prague, +RAPID when using Jump Start (60 packets) and Rapid Start, and +TXTIME when the server gives each packet a departure time (SCM_TXTIME) at its pacing rate, so that the fq qdisc paces each packet. ABE only affects the response to ECN marks, so it is omitted under tail drop; in the CoDel charts, policies without ABE are dashed.</li></ul>',
     f'<h2>Scenarios</h2><ul><li>Traces: <a href="https://github.com/Soheil-ab/Cellular-Traces-NYC">NYC cellular traces</a> set the downstream bandwidth; each is measured from 5 seconds into the trace until 5 seconds before its end.</li><li>Network: emulated by tunulator, which sits between the client and the server and plays back the trace as the downstream bandwidth, with 60ms base RTT, a queue of 60ms at the trace\'s peak one-second-bin rate, and no random loss.</li><li>Queue disciplines: {html.escape(', '.join(label for _, label in conditions))}; CoDel is target:interval in ms with ECN, and DualPI2 follows Linux\'s with default parameters, with one queue for the single flow.</li></ul>',
     '<p>Goodput is plaintext delivered to the application; its utilization is a few percent below that of IP forwarded, as both divide by the IP capacity, counted in IP bytes including headers and TLS or QUIC overhead. Not delivered is the share of IP bytes received by tunulator but not forwarded; it includes packets remaining in tunulator at cutoff, while CE-marked packets are forwarded.</p>',
     '<p>Delay is measured for every 15000th byte of the stream: from when tunulator first received a packet carrying it to when the client received it, so it includes propagation, queueing, loss recovery and head-of-line blocking.</p>',

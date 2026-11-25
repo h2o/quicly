@@ -1,0 +1,12 @@
+# Built inside a checkout of https://github.com/google/quiche, where this directory is linked as ccbench/; see
+# build-quiche.sh.
+cc_binary(
+    name = "hq_server",
+    srcs = ["hq_server.cc"],
+    deps = [
+        "//quiche:io_tool_support",
+        "//quiche:quiche_core",
+        "//quiche:quiche_tool_support",
+        "@com_google_absl//absl/strings",
+    ],
+)
