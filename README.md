@@ -68,7 +68,7 @@ git clone https://github.com/Soheil-ab/Cellular-Traces-NYC.git tmp/Cellular-Trac
 git -C tmp/Cellular-Traces-NYC checkout ac6717b5f113bf899344e91ffc57e472daf29954
 ```
 
-The [Cellular-Traces-NYC dataset](https://github.com/Soheil-ab/Cellular-Traces-NYC) has 23 NYC cellular traces, covering stationary users, walking, and bus/taxi rides. Enumerate `trace-*` but exclude `trace-info`; do not include `wired48`. Preserve the dataset attribution to *Classic Meets Modern: a Pragmatic Learning-Based Congestion Control for the Internet*, SIGCOMM 2020, when sharing results.
+The [Cellular-Traces-NYC dataset](https://github.com/Soheil-ab/Cellular-Traces-NYC) has 23 cellular traces recorded in New York City in 2019, covering stationary users, walking, and bus/taxi rides. Enumerate `trace-*` but exclude `trace-info`; do not include `wired48`. Preserve the dataset attribution to *Classic Meets Modern: a Pragmatic Learning-Based Congestion Control for the Internet*, SIGCOMM 2020, when sharing results.
 
 Each line is a millisecond timestamp granting **1,500 IP bytes** of downstream service. Duplicate timestamps grant multiple packets' worth of service. The files need no conversion. The old names ending in `.max=…Mbps` were renamed copies, not a different trace format.
 
@@ -163,7 +163,7 @@ Keep this host information in the result archive; TCP BBR1 is the host kernel's 
 | Downstream bandwidth | `-F TRACE 5000`; trace playback starts with the first packet the emulator receives |
 | Upstream bandwidth | Tunulator default, effectively unconstrained for these profiles |
 | Queue | `ceil(peak_bytes_per_second × 0.060)`, minimum 1500 bytes; peak uses whole-trace one-second bins |
-| Random loss | `-r 0 -R 0` |
+| Random loss | `-r 0 -R 0`; when set, random losses occur after the bottleneck, consuming bandwidth |
 | Initial congestion window | 30 packets: TCP route `initcwnd 30`, QUIC `-C cubic:30:p` |
 | TCP pacing | `http09 -p` (1 Gbit/s ceiling) |
 | QUIC pacing | `:p` in `-C` |
@@ -172,7 +172,7 @@ Keep this host information in the result archive; TCP BBR1 is the host kernel's 
 | Ordinary QUIC startup | `--jumpstart-default 0 --jumpstart-max 0`, no `--rapid-start` |
 | ABBA | Add `--abba` on both endpoints only for the ABBA policy |
 
-Tunulator grants 1500 bytes per trace entry, expires unused opportunities, and can wrap. These windows avoid wrapping. The buffer uses the peak rate of the **entire trace**, not just the selected window. The helper computes these values from raw files and includes startup within the window.
+Tunulator grants 1500 bytes per trace entry, expires unused opportunities, and can wrap. These windows avoid wrapping. The buffer uses the peak rate of the **entire trace**, not just the selected window. The helper computes these values from raw files and includes startup within the window. The queue size is an experimental choice, not the buffer of the original cellular link; with the upstream left unconstrained, this is a downstream-bandwidth experiment, not a replay of every characteristic of the original link.
 
 For `2768760-taxi3`: `[5000,99814)` ms, duration **94.814 seconds**, peak **20.376 Mbps**, queue **152820 bytes**, IP capacity **113946000 bytes**.
 
@@ -184,7 +184,7 @@ For `2768760-taxi3`: `[5000,99814)` ms, duration **94.814 seconds**, peak **20.3
 | `-Q dualpi2` | Linux DualPI2 with its default parameters, for traffic of one kind; marks and drops as packets leave the queue for the link |
 | `-Q dualpi2:N` | Same, with a device buffer of N packets between DualPI2 and the link, which packets enter whenever it has room |
 
-Keep ECN enabled at endpoints even when testing `codel/noecn`. QUIC enables ECN by default; omit `--disable-ecn`. Verify actual negotiation/CE feedback in socket or endpoint statistics during smoke testing; configuration alone is not evidence that marks were received. CoDel queueing time excludes configured propagation delay, and ECN mode can still overflow its finite buffer.
+Keep ECN enabled at endpoints even when testing `codel/noecn`. QUIC enables ECN by default; omit `--disable-ecn`. Verify actual negotiation/CE feedback in socket or endpoint statistics during smoke testing; configuration alone is not evidence that marks were received. Nor does negotiation make every controller respond to CE alike: TCP BBRv3, for one, ignores it in these runs (see §10). CoDel queueing time excludes configured propagation delay, and ECN mode can still overflow its finite buffer.
 
 The `5:100` target:interval is the default, not fixed: `run-one.py --codel TARGET:INTERVAL` (and matching `--queue codel:TARGET:INTERVAL`) and `matrix.py --codel TARGET:INTERVAL` override it for the `codel` condition. `matrix.py --codel` can be repeated to measure several settings in one output root, e.g. `--codel 5:100 --codel 10:100`; runs of each setting are in directories named after it (`codel-5-100`, ...). `run-one.py` still rejects a `--queue` that does not match `--condition`/`--codel`, so both must be changed together. A `matrix.py` run records its `--codel` values in `matrix-settings.json`; resuming an output root with additional `--codel` values appended runs only the new settings, while removing or reordering values fails with "Matrix settings changed", same as changing `--quic-cc`.
 
@@ -261,7 +261,7 @@ Tunulator emits one JSON object per millisecond with per-flow arrays:
  downstream IP received, downstream IP forwarded]
 ```
 
-The capture sums flows because there is one transfer. Client stdout contains application bytes per millisecond. Tunulator starts trace playback and its statistics when it receives the first packet, so the measurement does not depend on how long it took to load the trace and attach the TUN (the client is started 5 seconds after tunulator). The client runs for exactly the selected trace duration; tunulator is stopped a second later, writing its statistics up to then. The window ends 5 seconds before the end of the trace, so the trace never wraps. Client and emulator clocks start separately; the accounting aligns the client's first sample to the emulator's first upstream packet. This is a millisecond approximation, including startup, not exact per-packet clock synchronization. The accounting covers **only the selected trace duration**.
+Keys are `t` (TCP) or `u` (UDP) followed by the client port. Received is counted before the emulator's drops; forwarded is a successful TUN write. All server ports given to one tunulator share its queue and rate in each direction. `tunulator -h` documents its options and output. The capture sums flows because there is one transfer. Client stdout contains application bytes per millisecond. Tunulator starts trace playback and its statistics when it receives the first packet, so the measurement does not depend on how long it took to load the trace and attach the TUN (the client is started 5 seconds after tunulator). The client runs for exactly the selected trace duration; tunulator is stopped a second later, writing its statistics up to then. The window ends 5 seconds before the end of the trace, so the trace never wraps. Client and emulator clocks start separately; the accounting aligns the client's first sample to the emulator's first upstream packet. This is a millisecond approximation, including startup, not exact per-packet clock synchronization. The accounting covers **only the selected trace duration**.
 
 | Metric | Definition |
 |---|---|
