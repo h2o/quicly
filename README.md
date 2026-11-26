@@ -1,5 +1,11 @@
 # Tunulator congestion-control benchmark
 
+This benchmark compares how congestion controllers cope with the rapidly changing bandwidth of cellular links: how much of the available capacity each one uses, and how much queueing delay and loss it causes doing so. It replays 23 recorded cellular bandwidth traces through an emulated bottleneck, under tail drop and under CoDel with ECN, and measures for each controller the goodput, the share of IP bytes not delivered, and the distribution of the delay of the stream's bytes.
+
+It is built to evaluate quicly's controllers (CUBIC and CUBACK, with and without ABE and ABBA) against widely deployed alternatives: Linux TCP CUBIC, BBRv1 and BBRv3, and Google QUICHE's BBRv3, which serves the same quicly client. All policies get the same path (60 ms base RTT, the same queue, initial window, pacing and packet size), so that differences come from the controllers.
+
+The measurements are single-flow emulations on one host. They show how controllers respond to bandwidth variation and AQM, not how they share a link or behave on a real cellular network (see §1 and §10 for what is and isn't modelled).
+
 This orphan branch contains the scripts for taking **all measurements from scratch**, including TCP CUBIC and BBR, TCP CCs loaded as kernel modules such as BBRv3, and Google QUICHE's BBRv3. It contains no quicly source, binaries, or measurement results. From a separate quicly source checkout, check out the suite with:
 
 ```sh
