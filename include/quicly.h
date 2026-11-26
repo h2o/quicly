@@ -266,6 +266,12 @@ typedef struct st_quicly_transport_parameters_t {
      */
     uint8_t reset_stream_at : 1;
     /**
+     * When decoded, indicates that the peer advertised reset_stream_at using only the provisional codepoint of earlier drafts
+     * (0x17f7586d2cb571). When encoded, makes quicly advertise reset_stream_at using that codepoint instead. A server mirrors the
+     * choice of the client.
+     */
+    uint8_t reset_stream_at_provisional : 1;
+    /**
      *
      */
     uint64_t active_connection_id_limit;
