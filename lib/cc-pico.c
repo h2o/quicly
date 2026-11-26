@@ -563,13 +563,13 @@ static uint32_t abba_on_growth(struct st_quicly_cc_abba_t *state, uint32_t cwnd,
             gain = max_gain[use_ecn_beta];
     }
 
+    /* Limit accelerated growth to half the bytes acked, so that CWND grows by no more than 1.5x per RTT, the bound CUBIC applies
+     * (RFC 9438, Sections 4.4 and 4.5). `cubic_cwnd` is not limited by this. */
+    if (gain > 0.5)
+        gain = 0.5;
+
     /* Compete with ordinary growth from the same pre-ACK CWND. */
     double increase = acked * gain + state->increase_remainder;
-
-    /* Limit accelerated growth to half the pre-ACK CWND. This is a per-ACK safety cap, not the normal growth rate; it  does not cap
-     the ordinary policy's candidate. Include fractional carry and round down for odd-sized windows. */
-    if (increase > cwnd / 2)
-        increase = cwnd / 2;
 
     /* If ordinary CUBIC has already supplied at least the requested increase, use that and do not bank unused acceleration. */
     if (cwnd + increase <= cubic_cwnd)
