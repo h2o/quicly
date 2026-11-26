@@ -446,6 +446,10 @@ struct st_quicly_conn_t {
          */
         uint8_t try_jumpstart : 1;
         /**
+         * if the flow is CC-limited, as last determined by `update_rate_limit`
+         */
+        uint8_t is_cc_limited : 1;
+        /**
          * payload of DATAGRAM frames to be sent
          */
         struct {
@@ -1619,13 +1623,14 @@ static void update_rate_limit(quicly_conn_t *conn, int has_sendable_data, int se
     int is_cwnd_limited = has_sendable_data && conn->egress.loss.sentmap.bytes_in_flight >= conn->egress.cc.cwnd,
         is_ratemeter_limited = has_sendable_data && (sendbuf_full || is_cwnd_limited || pacer_limited);
 
-    if (quicly_ratemeter_is_cc_limited(&conn->egress.ratemeter) != is_ratemeter_limited) {
+    if (!is_ratemeter_limited)
+        quicly_ratemeter_on_app_limited(&conn->egress.ratemeter);
+    if (conn->egress.is_cc_limited != is_ratemeter_limited) {
+        conn->egress.is_cc_limited = is_ratemeter_limited;
         if (is_ratemeter_limited) {
-            quicly_ratemeter_enter_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
             QUICLY_PROBE(ENTER_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
             QUICLY_LOG_CONN(enter_cc_limited, conn, { PTLS_LOG_ELEMENT_NUMBER(pn, conn->egress.packet_number); });
         } else {
-            quicly_ratemeter_exit_cc_limited(&conn->egress.ratemeter, conn->egress.packet_number);
             QUICLY_PROBE(EXIT_CC_LIMITED, conn, conn->stash.now, conn->egress.packet_number);
             QUICLY_LOG_CONN(exit_cc_limited, conn, { PTLS_LOG_ELEMENT_NUMBER(pn, conn->egress.packet_number); });
         }
@@ -2079,8 +2084,10 @@ static void calc_resume_sendrate(quicly_conn_t *conn, uint64_t *rate, uint32_t *
 
     quicly_ratemeter_report(&conn->egress.ratemeter, &reported);
 
-    if (reported.smoothed != 0 || reported.latest != 0) {
-        *rate = reported.smoothed > reported.latest ? reported.smoothed : reported.latest;
+    /* use the latest sample, which is the rate over the last round trip; the smoothed rate follows a drop of capacity only over
+     * several samples */
+    if (reported.latest != 0) {
+        *rate = reported.latest;
         /* Resume RTTs use integer milliseconds; round up so sub-ms samples do not become the zero (unavailable) sentinel. */
         *rtt = ceil(conn->egress.loss.rtt.minimum);
     } else {
@@ -6722,8 +6729,8 @@ static quicly_error_t handle_ack_frame(quicly_conn_t *conn, struct st_quicly_han
     QUICLY_LOG_CONN(ack_delay_received, conn, { PTLS_LOG_ELEMENT_NUMBER(ack_delay, frame.ack_delay); });
 
     if (largest_newly_acked.pn != UINT64_MAX)
-        quicly_ratemeter_on_ack(&conn->egress.ratemeter, conn->stash.now, conn->super.stats.num_bytes.ack_received,
-                                largest_newly_acked.pn);
+        quicly_ratemeter_on_ack(&conn->egress.ratemeter, conn->stash.now_double, conn->super.stats.num_bytes.ack_received,
+                                largest_newly_acked.pn, conn->egress.packet_number);
 
     /* ECN feedback is processed before the loss detection engine updates the largest acknowledged, and before OnPacketAckedCC, as
      * L4S feeds it to the marking estimator. */

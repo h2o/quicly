@@ -24,133 +24,54 @@
 #include "picotls.h"
 #include "quicly/rate.h"
 
-static void start_sampling(quicly_ratemeter_t *meter, int64_t now, uint64_t bytes_acked)
-{
-    meter->current.start.at = now;
-    meter->current.start.bytes_acked = bytes_acked;
-}
-
-static void commit_sample(quicly_ratemeter_t *meter)
-{
-    ++meter->past_samples.latest;
-    if (meter->past_samples.latest >= PTLS_ELEMENTSOF(meter->past_samples.entries))
-        meter->past_samples.latest = 0;
-    meter->past_samples.entries[meter->past_samples.latest] = meter->current.sample;
-
-    meter->current.start.at = INT64_MAX;
-    meter->current.sample = (struct st_quicly_rate_sample_t){};
-}
-
 void quicly_ratemeter_init(quicly_ratemeter_t *meter)
 {
     *meter = (quicly_ratemeter_t){
-        .past_samples = {.latest = PTLS_ELEMENTSOF(meter->past_samples.entries) - 1},
-        .pn_cwnd_limited = {.start = UINT64_MAX, .end = UINT64_MAX},
-        .current = {.start = {.at = INT64_MAX}},
+        .estimate = {.smoothed = NAN},
+        .window = {.end_pn = UINT64_MAX},
     };
 }
 
-void quicly_ratemeter_enter_cc_limited(quicly_ratemeter_t *meter, uint64_t pn)
+void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, double now, uint64_t bytes_acked, uint64_t largest_pn_acked,
+                             uint64_t next_pn)
 {
-    assert(!quicly_ratemeter_is_cc_limited(meter));
-
-    /* if the estimator was waiting for the end of the previous phase, and if a valid partial sample exists, commit it now */
-    if (meter->pn_cwnd_limited.end != UINT64_MAX && meter->current.sample.elapsed != 0)
-        commit_sample(meter);
-
-    /* begin new cwnd-limited phase */
-    meter->pn_cwnd_limited = (quicly_range_t){.start = pn, .end = UINT64_MAX};
-}
-
-void quicly_ratemeter_exit_cc_limited(quicly_ratemeter_t *meter, uint64_t pn)
-{
-    assert(quicly_ratemeter_is_cc_limited(meter));
-
-    meter->pn_cwnd_limited.end = pn;
-}
-
-void quicly_ratemeter_on_ack(quicly_ratemeter_t *meter, int64_t now, uint64_t bytes_acked, uint64_t pn)
-{
-    if (meter->pn_cwnd_limited.start <= pn && pn < meter->pn_cwnd_limited.end) {
-        /* At the moment, the flow is CWND-limited. Either start the timer or update. */
-        if (meter->current.start.at == INT64_MAX) {
-            start_sampling(meter, now, bytes_acked);
-        } else {
-            /* Update current sample whenever receiving an ACK, so that the sample can be committed other than when receiving an ACK
-             * (i.e., when opening a new CWND-limited phase). */
-            meter->current.sample = (struct st_quicly_rate_sample_t){
-                .elapsed = (uint32_t)(now - meter->current.start.at),
-                .bytes_acked = (uint32_t)(bytes_acked - meter->current.start.bytes_acked),
-            };
-            if (meter->current.sample.elapsed >= QUICLY_DELIVERY_RATE_SAMPLE_PERIOD) {
-                commit_sample(meter);
-                start_sampling(meter, now, bytes_acked);
+    if (meter->window.end_pn != UINT64_MAX) {
+        if (largest_pn_acked < meter->window.end_pn)
+            return;
+        /* The window has ended; update the estimate using the window as a sample, unless it is an application-limited one that is
+         * not higher than the latest sample. The estimate is updated in the same way as smoothed_rtt and rttvar of RFC 9002. */
+        double sample = (bytes_acked - meter->window.bytes_acked) * 1000 / (now - meter->window.at);
+        int app_limited = meter->window.app_limited.send_side || meter->window.app_limited.receive_side;
+        if (!app_limited || isnan(meter->estimate.smoothed) || sample > meter->estimate.latest) {
+            if (isnan(meter->estimate.smoothed)) {
+                meter->estimate.smoothed = sample;
+                meter->estimate.variation = sample / 2;
+            } else {
+                meter->estimate.variation = meter->estimate.variation * 3 / 4 + fabs(meter->estimate.smoothed - sample) / 4;
+                meter->estimate.smoothed = meter->estimate.smoothed * 7 / 8 + sample / 8;
             }
-        }
-    } else if (meter->pn_cwnd_limited.end <= pn) {
-        /* We have exited CWND-limited state. Save current value, if any. */
-        if (meter->current.start.at != INT64_MAX) {
-            if (meter->current.sample.elapsed != 0)
-                commit_sample(meter);
-            meter->pn_cwnd_limited = (quicly_range_t){.start = UINT64_MAX, .end = UINT64_MAX};
-            meter->current.start.at = INT64_MAX;
+            meter->estimate.latest = sample;
         }
     }
-}
 
-static uint64_t to_speed(uint64_t bytes_acked, uint32_t elapsed)
-{
-    return bytes_acked * 1000 / elapsed;
+    /* start the next window, which ends at the ACK for the next packet to be sent */
+    meter->window = (struct st_quicly_ratemeter_window_t){
+        .end_pn = next_pn,
+        .at = now,
+        .bytes_acked = bytes_acked,
+        .app_limited = {.send_side = meter->window.app_limited.receive_side},
+    };
 }
 
 void quicly_ratemeter_report(quicly_ratemeter_t *meter, quicly_rate_t *rate)
 {
-    { /* Calculate latest, or return if there are no samples at all. `latest` being reported will be the most recent "full" sample
-       * if available, or else a partial sample. */
-        const struct st_quicly_rate_sample_t *latest_sample = &meter->past_samples.entries[meter->past_samples.latest];
-        if (latest_sample->elapsed == 0) {
-            latest_sample = &meter->current.sample;
-            if (latest_sample->elapsed == 0) {
-                rate->latest = rate->smoothed = rate->stdev = 0;
-                return;
-            }
-        }
-        rate->latest = to_speed(latest_sample->bytes_acked, latest_sample->elapsed);
+    if (isnan(meter->estimate.smoothed)) {
+        *rate = (quicly_rate_t){};
+        return;
     }
-
-#define FOREACH_SAMPLE(func)                                                                                                       \
-    do {                                                                                                                           \
-        const struct st_quicly_rate_sample_t *sample;                                                                              \
-        for (size_t i = 0; i < PTLS_ELEMENTSOF(meter->past_samples.entries); ++i) {                                                \
-            if ((sample = &meter->past_samples.entries[i])->elapsed != 0) {                                                        \
-                func                                                                                                               \
-            }                                                                                                                      \
-        }                                                                                                                          \
-        if ((sample = &meter->current.sample)->elapsed != 0) {                                                                     \
-            func                                                                                                                   \
-        }                                                                                                                          \
-    } while (0)
-
-    { /* calculate average */
-        uint64_t total_acked = 0;
-        uint32_t total_elapsed = 0;
-        FOREACH_SAMPLE({
-            total_acked += sample->bytes_acked;
-            total_elapsed += sample->elapsed;
-        });
-        rate->smoothed = to_speed(total_acked, total_elapsed);
-    }
-
-    { /* calculate stdev */
-        uint64_t sum = 0;
-        size_t count = 0;
-        FOREACH_SAMPLE({
-            uint64_t sample_speed = to_speed(sample->bytes_acked, sample->elapsed);
-            sum += (sample_speed - rate->smoothed) * (sample_speed - rate->smoothed);
-            ++count;
-        });
-        rate->stdev = sqrt(sum / count);
-    }
-
-#undef FOREACH_SAMPLE
+    *rate = (quicly_rate_t){
+        .latest = (uint64_t)round(meter->estimate.latest),
+        .smoothed = (uint64_t)round(meter->estimate.smoothed),
+        .variation = (uint64_t)round(meter->estimate.variation),
+    };
 }
