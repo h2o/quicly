@@ -8014,16 +8014,21 @@ Exit:
                  get_egress_context(conn)->max_jumpstart_packets != 0) &&
                 ps->recovery->cc.num_loss_episodes == 0) {
                 ps->recovery->jumpstart.new_rtt = ceil(ps->recovery->loss.rtt.minimum);
+                /* match path 0 initial CWND sizing while clamping secondary paths to their validated MTU */
+                uint16_t js_mtu = ps == conn->path_spaces[0] ? conn->super.ctx->transport_params.max_udp_payload_size
+                                                             : ps->recovery->max_udp_payload_size;
+                if (js_mtu > conn->super.remote.transport_params.max_udp_payload_size)
+                    js_mtu = conn->super.remote.transport_params.max_udp_payload_size;
                 if (get_egress_context(conn)->max_jumpstart_packets != 0 && ps->recovery->jumpstart.prev_rate != 0 &&
                     ps->recovery->jumpstart.prev_rtt != 0) {
                     /* Careful Resume */
                     ps->recovery->jumpstart.cwnd = derive_jumpstart_cwnd(
-                        get_egress_context(conn)->max_jumpstart_packets, ps->recovery->max_udp_payload_size,
-                        ps->recovery->loss.rtt.minimum, ps->recovery->jumpstart.prev_rate, ps->recovery->jumpstart.prev_rtt);
+                        get_egress_context(conn)->max_jumpstart_packets, js_mtu, ps->recovery->loss.rtt.minimum,
+                        ps->recovery->jumpstart.prev_rate, ps->recovery->jumpstart.prev_rtt);
                 } else if (get_egress_context(conn)->default_jumpstart_packets != 0) {
                     /* jumpstart without previous information */
-                    ps->recovery->jumpstart.cwnd = quicly_cc_calc_initial_cwnd(get_egress_context(conn)->default_jumpstart_packets,
-                                                                               ps->recovery->max_udp_payload_size);
+                    ps->recovery->jumpstart.cwnd =
+                        quicly_cc_calc_initial_cwnd(get_egress_context(conn)->default_jumpstart_packets, js_mtu);
                 }
                 /* Jumpstart only if the amount that can be sent in 1 RTT would be higher than without. Comparison target is CWND +
                  * inflight, as that is the amount that can be sent at most. Note the flow rate can become smaller due to packets
