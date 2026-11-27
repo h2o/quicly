@@ -56,14 +56,11 @@ extern "C" {
 #define QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE 4
 
 /**
- * Default pacing multiplier used during congestion avoidance, scaled by 1024 (i.e., 2x).
- */
-#define QUICLY_DEFAULT_PACING_MULTIPLIER 2048
-/**
  * 3 * ln(1.5) scaled by 1024; under a fluid model, minimum multiplier that stasifies per-CWND growth of x is
  * `K(x) = x / (x - 1) * ln(x)`, where Cubic and ABBA both use x = 1.5.
  */
-#define QUICLY_DEFAULT_PACING_MULTIPLIER_L4S 1246
+#define QUICLY_DEFAULT_PACING_MULTIPLIER 1246
+#define QUICLY_DEFAULT_PACING_MULTIPLIER_L4S QUICLY_DEFAULT_PACING_MULTIPLIER
 
 #define QUICLY_AEAD_TAG_SIZE 16
 
