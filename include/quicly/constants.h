@@ -56,13 +56,7 @@ extern "C" {
 #define QUICLY_FIRST_ACK_FREQUENCY_LOSS_EPISODE 4
 
 /**
- * 2x multiplied by the scaling factor of 1024.
- * We use of 2x during congestion avoidance, which is different from Linux using 1.25x. The rationale behind this choice is that
- * 1.25x is not sufficiently aggressive immediately after a loss event. Following a loss event, the congestion window (CWND) is
- * halved (i.e., beta), but the RTT remains high for one RTT and SRTT can remain high even loger, since it is a moving average
- * adjusted with each ACK received. Consequently, if the multiplier is set to 1.25x, the calculated send rate could drop to as low
- * as 1.25 * 1/2 = 0.625. By using a 2x multiplier, the send rate is guaranteed to become no less than that immediately before the
- * loss event, which would have been the link throughput. (TODO evaluate if 1.25x (or 1.216 below) is actually better)
+ * Default pacing multiplier used during congestion avoidance, scaled by 1024 (i.e., 2x).
  */
 #define QUICLY_DEFAULT_PACING_MULTIPLIER 2048
 /**
