@@ -1599,6 +1599,12 @@ static int scheduler_can_send(quicly_conn_t *conn)
     return conn->super.ctx->stream_scheduler->can_send(conn->super.ctx->stream_scheduler, conn, conn_is_saturated);
 }
 
+static int in_recovery(quicly_conn_t *conn)
+{
+    uint64_t largest_acked_plus1 = conn->egress.loss.largest_acked_packet_plus1.all_;
+    return largest_acked_plus1 != 0 && largest_acked_plus1 - 1 < conn->egress.cc.recovery_end;
+}
+
 static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int is_after_send)
 {
     int has_outstanding = conn->egress.loss.sentmap.bytes_in_flight != 0 || conn->super.remote.address_validation.send_probe,
@@ -1607,10 +1613,8 @@ static void update_send_alarm(quicly_conn_t *conn, int can_send_stream_data, int
     /* During recovery, the alarm respects time-threshold loss detection only if bytes in flight is below CWND plus one packet;
      * i.e., when the detection causes a packet to be sent (see `do_allocate_frame`). Otherwise, the loss is detected when the next
      * ACK is processed. Outside of recovery, the alarm always respects time-threshold loss detection. */
-    uint64_t largest_acked_plus1 = conn->egress.loss.largest_acked_packet_plus1.all_;
-    int in_recovery = largest_acked_plus1 != 0 && largest_acked_plus1 - 1 < conn->egress.cc.recovery_end;
-    int use_loss_time = !in_recovery || conn->egress.loss.sentmap.bytes_in_flight <
-                                            (uint64_t)conn->egress.cc.cwnd + conn->egress.max_udp_payload_size;
+    int use_loss_time = !in_recovery(conn) || conn->egress.loss.sentmap.bytes_in_flight <
+                                                  (uint64_t)conn->egress.cc.cwnd + conn->egress.max_udp_payload_size;
 
     quicly_loss_update_alarm(&conn->egress.loss, conn->stash.now, conn->egress.last_retransmittable_sent_at, has_outstanding,
                              can_send_stream_data, handshake_is_in_progress, conn->egress.max_data.sent, is_after_send,
@@ -3727,6 +3731,13 @@ static uint32_t calc_pacer_send_rate(quicly_conn_t *conn)
         } else {
             multiplier = quicly_cc_rapid_start_use_3x(&conn->egress.cc.rapid_start, &conn->egress.loss.rtt) ? 3072 : 2048;
         }
+    } else if (in_recovery(conn)) {
+        /* 2x during recovery: when slow start overflows the bottleneck queue, up to half of the packets in the last round are
+         * lost. Once inflight falls below the reduced CWND, each delivered packet then frees about two packets of inflight (one
+         * acked, one declared lost), so an ACK-clocked sender would transmit at up to 2x the bottleneck rate. Pacing at 2x keeps
+         * the sender no slower than that. Losses in congestion avoidance are fewer, so ACK clocking alone does not reach 2x there.
+         */
+        multiplier = 2048;
     } else {
         struct st_quicly_context_egress_t *ctx = get_egress_context(conn);
         multiplier = is_l4s(conn) ? ctx->pacing_multiplier_l4s : ctx->pacing_multiplier;
